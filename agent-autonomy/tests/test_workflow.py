@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from engine import Controller, Hermes, OpenCode, OpenCodeHTTPError, ReviewConflict, Settings, Store, review_packet, validate_answers, snapshot, evidence
+from engine import transcript, Controller, Hermes, OpenCode, OpenCodeHTTPError, ReviewConflict, Settings, Store, review_packet, validate_answers, snapshot, evidence
 from app import handler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
@@ -579,6 +579,16 @@ else:
         self.assertEqual(stats['added.py']['change'],'new')
         self.assertEqual(stats['removed.py']['change'],'deleted')
 
+    def test_step_records_transcript_and_planning_context(self):
+        c, manager = self.controller([coding('Write useful.py.'), complete()])
+        run = c.new('Build a useful script')
+        self.done(c, run['id'])
+        step = c.store.steps(run['id'])[0]
+        self.assertEqual(step['transcript'][-1], {'type':'text','text':'Implementation done.'})
+        self.assertEqual(step['plan_summary'], 'Implement the next part.')
+        self.assertEqual(step['plan'], ['Implement', 'Verify'])
+        self.assertEqual(step['kind'], 'task')
+
     def test_agent_readiness_is_independent_and_does_not_claim_model_online(self):
         c,_=self.controller([])
         with patch.object(self.api,'health',side_effect=OSError('Offline')):
@@ -608,6 +618,36 @@ else:
                 self.assertEqual(json.load(response)['state'],'confirmed')
             self.assertEqual(len(self.api.decisions),1)
         finally: server.shutdown();server.server_close()
+
+
+class TranscriptTests(unittest.TestCase):
+    def test_parts_keep_order_and_running_tool_output(self):
+        messages=[{'info':{'id':'a1'},'parts':[
+            {'type':'text','text':'Reading files.'},
+            {'type':'tool','id':'t1','tool':'read','state':{'status':'completed','input':{'filePath':'todo.py'},'output':'x=1'}},
+            {'type':'reasoning','text':'hidden'},
+            {'type':'tool','id':'t2','tool':'bash','state':{'status':'running','input':{'command':'python3 -m unittest'},'metadata':{'output':'test_add ... ok'}}},
+            {'type':'tool','id':'t3','tool':'edit','state':{'status':'error','input':{'filePath':'a.py'},'error':'denied'}}]}]
+        parts,omitted=transcript(messages)
+        self.assertEqual(omitted,0)
+        self.assertEqual([p['type'] for p in parts],['text','tool','tool','tool'])
+        self.assertEqual(parts[1]['summary'],'todo.py')
+        self.assertEqual((parts[2]['status'],parts[2]['summary'],parts[2]['output']),('running','python3 -m unittest','test_add ... ok'))
+        self.assertEqual(parts[3]['output'],'denied')
+        self.assertNotIn('hidden',json.dumps(parts))
+
+    def test_transcript_is_bounded_from_the_start(self):
+        messages=[{'info':{},'parts':[{'type':'text','text':f'line {i} '+'x'*1000} for i in range(400)]}]
+        parts,omitted=transcript(messages,max_parts=300,max_chars=50_000)
+        self.assertLessEqual(sum(len(p['text']) for p in parts),50_000)
+        self.assertTrue(parts[-1]['text'].startswith('line 399'))
+        self.assertEqual(omitted,400-len(parts))
+
+    def test_controller_files_are_not_project_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'agent-autonomy').mkdir();(root/'agent-autonomy'/'app.py').write_text('x')
+            (root/'main.py').write_text('y')
+            self.assertEqual(list(snapshot(root)['files']),['main.py'])
 
 
 if __name__=='__main__':

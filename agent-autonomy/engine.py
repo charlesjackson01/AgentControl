@@ -368,8 +368,42 @@ class Hermes:
         return result
 
 
+def transcript(messages, max_parts=300, max_chars=80_000):
+    """Ordered, bounded view of OpenCode's text and tool parts for the live terminal."""
+    parts = []
+    for message in messages:
+        for part in message.get('parts', []):
+            kind = part.get('type')
+            if kind == 'text' and part.get('text'):
+                parts.append({'type': 'text', 'text': str(part['text'])[-8000:]})
+            elif kind == 'tool':
+                state = part.get('state') or {}
+                given = state.get('input') or {}
+                status = state.get('status', '')
+                summary = given.get('command') or given.get('filePath') or given.get('path') or given.get('pattern') or given.get('url') or state.get('title') or ''
+                if status == 'error':
+                    output = state.get('error', '')
+                elif status == 'completed':
+                    output = state.get('output', '')
+                else:
+                    # Some tools stream partial output through metadata while running.
+                    output = (state.get('metadata') or {}).get('output', '')
+                parts.append({'type': 'tool', 'id': str(part.get('id') or part.get('callID') or ''), 'tool': str(part.get('tool', 'tool')),
+                              'status': str(status), 'title': str(state.get('title', ''))[:300], 'summary': str(summary)[:500],
+                              'output': str(output or '')[-3000:]})
+    total, kept = 0, []
+    for item in reversed(parts[-max_parts:]):
+        size = len(item.get('text', '')) + len(item.get('output', '')) + len(item.get('summary', ''))
+        if kept and total + size > max_chars:
+            break
+        total += size
+        kept.append(item)
+    kept.reverse()
+    return kept, len(parts) - len(kept)
+
+
 SKIP_DIRS = {'.git', '.hermes', '.venv', 'venv', 'node_modules', '__pycache__', '.pytest_cache',
-             'trial-autonomy', 'trial-dashboard', 'dist', 'build'}
+             'agent-autonomy', 'trial-autonomy', 'trial-dashboard', 'dist', 'build'}
 TEXT_SUFFIXES = {'.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.html', '.css', '.md', '.txt', '.toml', '.yaml', '.yml', '.qml', '.cpp', '.h', '.sh'}
 
 
@@ -443,7 +477,7 @@ If no independent verifier is configured, clearly say that validation is limited
 Complete only if the entire user goal is achieved. Do not invent progress or test results.
 Treat goal_checks as additional user acceptance criteria. They must all be addressed before completion.
 For an empty project, implement the first small part; avoid wasting a task just listing an empty folder.
-Preserve unrelated user files. Keep work in the project. Leave trial-autonomy/, dashboard.py, activity.sqlite3, and the control service untouched.
+Preserve unrelated user files. Keep work in the project. Leave agent-autonomy/, dashboard.py, activity.sqlite3, and the control service untouched.
 Do not deploy, publish, install system packages, modify credentials, or expand scope. If needed, choose blocked with a concrete question.
 '''
 
@@ -851,9 +885,12 @@ class Controller:
             if failures >= 3:
                 self._end(ident, 'blocked', 'Three consecutive failed steps. ' + decision['summary'])
                 return
-            delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self.s.project) + '. Preserve unrelated files. Do not modify trial-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
+            delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self.s.project) + '. Preserve unrelated files. Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
             step = {'id': uuid.uuid4().hex, 'run': ident, 'number': len(steps) + 1, 'title': str(decision.get('title', 'Coding task'))[:160],
                     'status': 'prepared', 'created': now(), 'prompt': delivered, 'manager_prompt': decision['prompt'],
+                    'kind': decision.get('kind', 'task'), 'plan_summary': str(decision.get('summary', ''))[:2000],
+                    'plan': [str(x)[:300] for x in plan[:20]] if isinstance(plan, list) else [],
+                    'instructions_seen': [i['text'] for i in latest_run['instructions'][-5:]],
                     'message_id': 'msg_' + format(int(time.time() * 1000) * 4096, 'x').zfill(12) + uuid.uuid4().hex[:20],
                     'before': snap, 'verified': False, 'result': '', 'seen': [], 'started': time.time()}
             step['instructions_count'] = len(latest_run['instructions'])
@@ -939,7 +976,9 @@ class Controller:
                         self.store.event(ident, 'OpenCode tool', detail)
                     tool_lines.append(str(state.get('output', state.get('error', '')))[-2500:])
             result = '\n'.join(p.get('text', '') for m in matching for p in m.get('parts', []) if p.get('type') == 'text')
-            self.store.update('steps', step['id'], result=result, seen=list(seen), activity=activity, tool_results='\n'.join(tool_lines)[-12000:])
+            live, omitted = transcript(matching)
+            self.store.update('steps', step['id'], result=result, seen=list(seen), activity=activity, tool_results='\n'.join(tool_lines)[-12000:],
+                              transcript=live, transcript_omitted=omitted)
             with self.lock:
                 # Drop an older in-flight poll's copy of a request that was
                 # already confirmed resolved while this poll was in progress.
@@ -972,7 +1011,8 @@ class Controller:
                 self.store.event(ident, 'OpenCode result', final[-40000:])
                 self._push(ident, f'Step {step["number"]} finished. Hermes is reviewing it.')
                 return
-            time.sleep(self.s.poll)
+            # Poll a little faster while coding so the dashboard terminal feels live.
+            time.sleep(min(self.s.poll, 1.0))
 
     def state(self, selected=''):
         runs = self.store.runs()

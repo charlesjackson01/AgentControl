@@ -812,11 +812,9 @@ class Controller:
             if not run.get('preview'):
                 raise ValueError('Save preview settings for this run first.')
             spec = dict(run['preview'])
-            extra = body.get('args')
-            if extra and spec['mode'] == 'cli':
-                if not isinstance(extra, str) or len(extra) > 1000:
-                    raise ValueError('Arguments must be text of at most 1,000 characters')
-                spec['command'] = spec['command'] + ' ' + extra
+            if 'args' in body and spec['mode'] == 'cli':
+                # Arguments typed in the Project tab replace the saved defaults for this start only.
+                spec['args'] = body['args']
             status = self.preview.start(ident, spec)
             self.store.event(ident, 'preview', f'Preview started: {spec.get("command") or spec.get("path")}')
             return status

@@ -280,3 +280,22 @@
   }
   :root:not([data-theme="terminal"]):not([data-theme="xp"]) { color-scheme: dark; }
 }
+
+/* ---------- Live project preview ---------- */
+:root {
+  --ac-preview-frame-bg: #FFFFFF;
+  --ac-preview-stage-bg: #E9E9EE;
+  --ac-preview-screen-bg: #000000;
+  --ac-preview-height: 70dvh;
+}
+:root[data-theme="terminal"] {
+  --ac-preview-stage-bg: #151A16;
+}
+:root[data-theme="xp"] {
+  --ac-preview-stage-bg: #D4D0C8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="terminal"]):not([data-theme="xp"]) {
+    --ac-preview-stage-bg: #161618;
+  }
+}

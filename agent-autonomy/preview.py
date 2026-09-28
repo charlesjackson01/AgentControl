@@ -62,6 +62,16 @@ def validate_spec(spec, project):
         if not argv:
             raise ValueError('Enter the command that starts the preview')
         result.update(command=command.strip(), argv=argv)
+    if mode == 'cli':
+        args = spec.get('args') or ''
+        if not isinstance(args, str) or len(args) > 1000:
+            raise ValueError('Preview arguments must be text of at most 1,000 characters')
+        try:
+            result['argv'] = argv + shlex.split(args)
+        except ValueError as exc:
+            raise ValueError(f'Preview arguments could not be parsed: {exc}')
+        if args.strip():
+            result['args'] = args.strip()
     if mode == 'web':
         port = spec.get('port')
         if type(port) is not int or not 1024 <= port <= 65535:
@@ -82,6 +92,14 @@ def validate_spec(spec, project):
             raise ValueError('Desktop screen size must be between 320×240 and 3840×2160')
         result.update(width=width, height=height)
     return result
+
+
+def _port_open(port):
+    try:
+        with socket.create_connection(('127.0.0.1', port), timeout=.5):
+            return True
+    except OSError:
+        return False
 
 
 def desktop_missing():
@@ -156,6 +174,11 @@ class PreviewManager:
                 if mode == 'cli':
                     self._start_cli(env, generation)
                 elif mode == 'web':
+                    if _port_open(spec['port']):
+                        self.state = 'failed'
+                        self.error = (f'Port {spec["port"]} is already in use, so the preview would show some other program. '
+                                      'Stop whatever is using it (perhaps an earlier preview) or choose another port.')
+                        return self.status()
                     env.update(PORT=str(spec['port']), HOST='127.0.0.1')
                     self._start_piped(env, generation)
                     threading.Thread(target=self._wait_for_port, args=(generation,), daemon=True).start()
@@ -167,7 +190,7 @@ class PreviewManager:
                 return self.status()
             if mode != 'web':
                 self.state = 'running'
-            self._log(f'$ {spec["command"]}\n')
+            self._log(f'$ {spec["command"]}{" " + spec["args"] if spec.get("args") else ""}\n')
         return self.status()
 
     def _start_cli(self, env, generation):
@@ -364,7 +387,7 @@ class PreviewManager:
     def status(self):
         with self.lock:
             spec = self.spec or {}
-            return {'state': self.state, 'run': self.run, 'mode': spec.get('mode'), 'command': spec.get('command', ''),
+            return {'state': self.state, 'run': self.run, 'mode': spec.get('mode'), 'command': spec.get('command', ''), 'args': spec.get('args', ''),
                     'port': spec.get('port'), 'path': spec.get('path'), 'width': spec.get('width'), 'height': spec.get('height'),
                     'started': self.started, 'exit_code': self.exit_code, 'error': self.error, 'offset': self.offset,
                     'listen_port': self.listen_port, 'pid': self.proc.pid if self.proc and self.proc.poll() is None else None}

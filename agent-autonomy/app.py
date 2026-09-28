@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import signal
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -121,6 +122,10 @@ def preview_handler(manager, dashboard_port):
     return PreviewHandler
 
 
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--host', default=os.environ.get('DASHBOARD_HOST', '127.0.0.1'))
@@ -178,6 +183,8 @@ def main():
             print(f'Live preview disabled: cannot bind {a.host}:{preview_port}: {exc}. Use --preview-port to choose another.')
     print(f'AgentControl: http://{a.host}:{server.server_port}\nProject: {project}\nOpenCode: {a.opencode}\nHermes profile: {a.profile or "current"}\nLive preview port: {controller.preview.listen_port or "off"}\nDashboard key: {key}', flush=True)
     threading.Thread(target=controller.check, daemon=True).start()
+    # Treat `kill` like Ctrl+C so previews and their child processes are cleaned up.
+    signal.signal(signal.SIGTERM, _interrupt)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

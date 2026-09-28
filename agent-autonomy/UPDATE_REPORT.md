@@ -38,6 +38,14 @@
 - Steps store the Hermes summary, plan, and kind that produced them.
 - Project snapshots now exclude `agent-autonomy/`. Previously the exclusion list still named `trial-autonomy/`, so the controller's own files could be captured as evidence.
 
+**Live project preview (Project tab):**
+- A run can save a preview: a web dev server, a static page, a command-line program, or a desktop app on an Xvfb virtual screen.
+- It starts when the run completes, and the Project tab opens with the project running next to its verification and change summary.
+- `preview.py` runs the saved argv in the project folder, in its own process group.
+- Web and static content is served on a separate preview port (a different origin, entered with a one-time ticket that becomes an HttpOnly cookie). Frame headers are rewritten, so only the dashboard can embed it.
+- Command-line previews use a real pseudo-terminal. Desktop previews stream PNG frames and forward clicks and keys through `xdotool`.
+- Tested with real subprocesses and in Chromium: a Python web server, the demo todo CLI, and `xclock`.
+
 **Maintenance:**
 - `app.css` is readable, sectioned source; a CSSOM comparison confirmed the reformat changed no rules.
 - `app.js` is split into small render helpers and an action map.

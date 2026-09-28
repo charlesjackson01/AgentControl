@@ -22,6 +22,9 @@ const scenarios = {
   active: {state: fx.richActive},
   running: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding'; return s; }},
   completed: {state: fx.richCompleted},
+  project: {state: () => { const s = fx.richCompleted(); s.run.preview = {mode: 'cli', command: 'python3 demo_app/todo.py', args: 'list'};
+    s.preview = {state: 'exited', run: s.run.id, mode: 'cli', command: 'python3 demo_app/todo.py', args: 'list', exit_code: 0, offset: 0, started: 1790600000, error: ''}; return s; },
+    click: '.nav [data-view="project"]'},
   approvals: {state: fx.richActive, click: '[data-view="approvals"]'},
   activity: {state: fx.richActive, click: '[data-view="activity"]'},
   review: {state: fx.richActive, click: '#inline-approvals [data-intent="approve"]'},

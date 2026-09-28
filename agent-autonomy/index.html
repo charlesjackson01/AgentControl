@@ -25,6 +25,7 @@
   <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
   <symbol id="icon-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></symbol>
   <symbol id="icon-terminal" viewBox="0 0 24 24"><path d="m5 6 6 6-6 6m9 0h6"/></symbol>
+  <symbol id="icon-window" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.1M10 6.5h.1"/></symbol>
   <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></symbol>
 </defs></svg>
 <div id="boot" class="boot-screen hidden" role="status"><span class="brand">AgentControl</span><span class="muted small">Connecting to your workspace…</span></div>
@@ -45,7 +46,7 @@
     <nav class="xp-menu xp-only" aria-label="Window menu">
       <details><summary>File</summary><div><button data-action="new">New run</button><button data-action="followup">Start follow-up run</button></div></details>
       <details><summary>Edit</summary><div><button data-action="focus-steer">Write a steering note</button></div></details>
-      <details><summary>View</summary><div><button data-view="runs">Runs</button><button data-view="approvals">Approvals</button><button data-view="activity">Activity</button></div></details>
+      <details><summary>View</summary><div><button data-view="runs">Runs</button><button data-view="approvals">Approvals</button><button data-view="activity">Activity</button><button data-view="project">Project preview</button></div></details>
       <details><summary>Run</summary><div><button data-action="pause">Pause / Resume</button><button data-action="stop">Stop…</button></div></details>
       <details><summary>Tools</summary><div><button data-action="connections">Connections</button></div></details>
       <details><summary>Help</summary><div><button data-action="help">How AgentControl works</button></div></details>
@@ -58,6 +59,7 @@
           <button data-view="runs" class="active"><svg class="icon"><use href="#icon-runs"/></svg>Runs</button>
           <button data-view="approvals"><svg class="icon"><use href="#icon-shield"/></svg>Approvals<span id="nav-count" class="badge hidden">0</span></button>
           <button data-view="activity"><svg class="icon"><use href="#icon-activity"/></svg>Activity</button>
+          <button data-view="project"><svg class="icon"><use href="#icon-window"/></svg>Project<span id="preview-dot" class="preview-dot hidden" aria-label="Preview running"></span></button>
         </nav></section>
         <section class="nav-group recent"><h2 class="section-label">Recent runs</h2><div id="run-filter-row" class="filter-row hidden"><label for="run-filter" class="sr-only">Filter runs</label><input id="run-filter" type="search" placeholder="Filter runs" autocomplete="off"></div><div id="recent-runs"></div></section>
         <section class="nav-group xp-tasks xp-only"><h2 class="section-label">Run Tasks</h2><button data-action="pause">Pause / Resume</button><button data-action="focus-steer">Send a note to Hermes</button><button data-action="stop">Stop this run…</button></section>
@@ -107,6 +109,44 @@
         </section>
         <section id="view-approvals" class="view hidden"><div class="page-heading"><div><div class="eyebrow">Your decisions</div><h1>Approvals</h1><p class="muted">Requests from runs managed by AgentControl.</p></div><span id="approval-total" class="ac-status attention"></span></div><div id="approval-list" class="approval-list"></div><section class="ac-panel"><h2 class="ac-panel__title">Decision history <span class="muted small">· selected run</span></h2><div id="decision-history"></div></section></section>
         <section id="view-activity" class="view hidden"><div class="page-heading"><div><div class="eyebrow">Selected run</div><h1>Activity</h1><p class="muted">The recorded prompts, decisions, and results.</p></div><div class="row wrap filter-row"><label for="event-search" class="sr-only">Search activity</label><input id="event-search" type="search" placeholder="Search activity" autocomplete="off"><select id="event-filter" aria-label="Filter activity"><option value="all">All activity</option><option value="Hermes">Hermes</option><option value="OpenCode">OpenCode</option><option value="approval">Approvals</option><option value="verification">Verification</option></select></div></div><div id="activity-list" class="ac-panel"></div></section>
+        <section id="view-project" class="view hidden">
+          <div class="page-heading"><div><div class="eyebrow">Live preview</div><h1 id="project-title">Project</h1><p id="project-sub" class="muted">See the finished project running.</p></div><div id="preview-controls" class="row wrap preview-controls"></div></div>
+          <div id="preview-banner" class="notice hidden" role="status"></div>
+          <div id="preview-strip" class="preview-strip"></div>
+          <section id="preview-stage" class="preview-stage">
+            <div id="preview-web" class="preview-web hidden">
+              <div class="preview-toolbar"><span class="preview-address mono" id="preview-address"></span><span class="row preview-widths" role="group" aria-label="Preview width"><button class="ac-btn compact" data-preview-width="100%" aria-pressed="true">Full</button><button class="ac-btn compact" data-preview-width="768px" aria-pressed="false">Tablet</button><button class="ac-btn compact" data-preview-width="390px" aria-pressed="false">Phone</button></span><button class="ac-btn compact" data-action="preview-reload">Reload</button><button class="ac-btn compact" data-action="preview-open">Open in new tab</button></div>
+              <div class="preview-viewport"><iframe id="preview-frame" title="Live preview of the project" referrerpolicy="no-referrer" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals allow-downloads"></iframe></div>
+            </div>
+            <div id="preview-cli" class="preview-cli hidden">
+              <div class="term running" id="preview-term"><div class="term-bar"><span class="term-lights" aria-hidden="true"><i></i><i></i><i></i></span><strong class="term-title" id="preview-term-title">project</strong><span class="term-meta" id="preview-term-meta"></span><span class="term-actions"><button class="term-button" data-action="preview-clear">Clear</button></span></div><pre id="preview-term-body" class="term-body preview-term-body" role="log" aria-label="Program output" tabindex="0"></pre></div>
+              <form id="preview-input-form" class="preview-input"><label for="preview-input" class="sr-only">Type into the program</label><input id="preview-input" autocomplete="off" placeholder="Type input for the program and press Enter"><button class="ac-btn primary compact">Send</button><button type="button" class="ac-btn compact" data-preview-key="&#3;" title="Send Ctrl+C">Ctrl+C</button><button type="button" class="ac-btn compact" data-preview-key="&#4;" title="Send end of input">EOF</button></form>
+              <form id="preview-args-form" class="preview-input"><label for="preview-args" class="sr-only">Arguments for this start</label><input id="preview-args" autocomplete="off" placeholder="Arguments for this start, e.g. add &quot;Buy milk&quot;"><button class="ac-btn compact">Run with arguments</button></form>
+            </div>
+            <div id="preview-desktop" class="preview-desktop hidden">
+              <div class="desktop-screen"><img id="preview-screen" alt="Live screen of the desktop preview. Click to click inside it."></div>
+              <form id="desktop-type-form" class="preview-input"><label for="desktop-type" class="sr-only">Type into the desktop app</label><input id="desktop-type" autocomplete="off" placeholder="Type text into the focused window"><button class="ac-btn compact">Type</button>
+                <span class="row wrap desktop-keys"><button type="button" class="ac-btn compact" data-desktop-key="Return">Enter</button><button type="button" class="ac-btn compact" data-desktop-key="Escape">Esc</button><button type="button" class="ac-btn compact" data-desktop-key="Tab">Tab</button><button type="button" class="ac-btn compact" data-desktop-key="BackSpace">⌫</button><button type="button" class="ac-btn compact" data-desktop-key="Up">↑</button><button type="button" class="ac-btn compact" data-desktop-key="Down">↓</button><button type="button" class="ac-btn compact" data-desktop-key="Left">←</button><button type="button" class="ac-btn compact" data-desktop-key="Right">→</button></span></form>
+            </div>
+            <div id="preview-empty" class="ac-panel preview-empty hidden"></div>
+          </section>
+          <details id="preview-log-wrap" class="ac-panel preview-log-wrap"><summary>Process log</summary><pre id="preview-log" class="preview-log"></pre></details>
+          <section class="ac-panel" id="preview-settings"><h2 class="ac-panel__title">Preview settings <span class="muted small">· this run</span></h2><div class="preview-fields" data-preview-form="cfg">
+                <label for="cfg-preview-mode">Preview type</label>
+                <select id="cfg-preview-mode" data-preview-mode>
+                  <option value="none">No live preview</option><option value="web">Web app (dev server)</option><option value="static">Static page</option><option value="cli">Command-line app</option><option value="desktop">Desktop app (virtual screen)</option>
+                </select>
+                <div class="preview-field" data-for="web cli desktop"><label for="cfg-preview-command">Command</label><input id="cfg-preview-command" maxlength="2000" placeholder="npm run dev -- --port 5173"></div>
+                <div class="preview-field" data-for="cli"><label for="cfg-preview-args">Default arguments <span class="muted">· optional</span></label><input id="cfg-preview-args" maxlength="1000" placeholder="list"></div>
+                <div class="preview-field" data-for="web"><label for="cfg-preview-port">Port it listens on</label><input id="cfg-preview-port" type="number" min="1024" max="65535" placeholder="5173"></div>
+                <div class="preview-field" data-for="static"><label for="cfg-preview-path">Folder or HTML file</label><input id="cfg-preview-path" maxlength="500" placeholder="index.html or site/"></div>
+                <div class="preview-field row" data-for="desktop"><label>Screen <input id="cfg-preview-width" type="number" min="320" max="3840" value="1280" aria-label="Screen width"></label><span>×</span><label class="sr-only" for="cfg-preview-height">Screen height</label><input id="cfg-preview-height" type="number" min="240" max="2160" value="800"></div>
+                <p class="small muted preview-hint" data-for="web">AgentControl starts this command in the project folder and shows the site through a separate, key-protected preview port. <code>PORT</code> is set for you.</p>
+                <p class="small muted preview-hint" data-for="static">Served directly. Nothing is executed.</p>
+                <p class="small muted preview-hint" data-for="cli">Runs in a terminal you can type into. Below the terminal you can run it again with different arguments.</p>
+                <p class="small muted preview-hint" data-for="desktop">Runs inside a virtual screen. You see it refresh about once a second and can click and type into it. <span class="preview-missing"></span></p>
+              </div><p id="preview-settings-error" class="error" role="alert"></p><button class="ac-btn primary" data-action="preview-save">Save settings</button></section>
+        </section>
         <section id="view-new" class="view hidden">
           <div class="page-heading"><div><div class="eyebrow">A new direction</div><h1>Start a new run</h1><p class="muted">Describe the outcome. Hermes chooses the coding prompts and reviews each result.</p></div><button class="ac-btn" data-view="runs">Cancel</button></div>
           <form id="new-form" class="new-grid"><div class="new-main">
@@ -114,6 +154,21 @@
             <section class="ac-panel"><label for="goal" class="ac-panel__title">Brief</label><textarea id="goal" rows="7" maxlength="12000" required placeholder="What should be built, and how will you know it’s finished?"></textarea><p class="small muted">Say when it’s finished; Hermes uses that as the stop condition.</p><button type="button" id="example" class="text-button">Try the Python todo-app brief</button><p id="followup-context" class="small muted hidden"></p></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Goal checks</h2><p class="small muted">Add your acceptance criteria. Automatic extraction and individual check results are not available yet.</p><div id="new-checks"></div><button type="button" class="text-button" data-action="new-check">+ Add a check</button></section>
             <section class="ac-panel"><label for="working-folder" class="ac-panel__title">Working folder</label><input id="working-folder" readonly><p class="small muted">Fixed by this controller’s startup settings. File access follows your OpenCode configuration.</p></section>
+            <section class="ac-panel"><h2 class="ac-panel__title">Live preview <span class="muted small">· optional</span></h2><p class="small muted">Starts automatically when the run completes, in the Project tab.</p><div class="preview-fields" data-preview-form="new">
+                <label for="new-preview-mode">Preview type</label>
+                <select id="new-preview-mode" data-preview-mode>
+                  <option value="none">No live preview</option><option value="web">Web app (dev server)</option><option value="static">Static page</option><option value="cli">Command-line app</option><option value="desktop">Desktop app (virtual screen)</option>
+                </select>
+                <div class="preview-field" data-for="web cli desktop"><label for="new-preview-command">Command</label><input id="new-preview-command" maxlength="2000" placeholder="npm run dev -- --port 5173"></div>
+                <div class="preview-field" data-for="cli"><label for="new-preview-args">Default arguments <span class="muted">· optional</span></label><input id="new-preview-args" maxlength="1000" placeholder="list"></div>
+                <div class="preview-field" data-for="web"><label for="new-preview-port">Port it listens on</label><input id="new-preview-port" type="number" min="1024" max="65535" placeholder="5173"></div>
+                <div class="preview-field" data-for="static"><label for="new-preview-path">Folder or HTML file</label><input id="new-preview-path" maxlength="500" placeholder="index.html or site/"></div>
+                <div class="preview-field row" data-for="desktop"><label>Screen <input id="new-preview-width" type="number" min="320" max="3840" value="1280" aria-label="Screen width"></label><span>×</span><label class="sr-only" for="new-preview-height">Screen height</label><input id="new-preview-height" type="number" min="240" max="2160" value="800"></div>
+                <p class="small muted preview-hint" data-for="web">AgentControl starts this command in the project folder and shows the site through a separate, key-protected preview port. <code>PORT</code> is set for you.</p>
+                <p class="small muted preview-hint" data-for="static">Served directly. Nothing is executed.</p>
+                <p class="small muted preview-hint" data-for="cli">Runs in a terminal you can type into. Below the terminal you can run it again with different arguments.</p>
+                <p class="small muted preview-hint" data-for="desktop">Runs inside a virtual screen. You see it refresh about once a second and can click and type into it. <span class="preview-missing"></span></p>
+              </div></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Independent verification</h2><label class="switch-row" for="verify-enabled"><span>Run a verification command after each coding turn</span><input id="verify-enabled" type="checkbox" checked></label><label for="verify">Command</label><input id="verify" maxlength="2000" required placeholder="python3 -m unittest discover -s demo_app"><p class="small muted">AgentControl runs this command; Hermes reviews its output. Shell pipes and redirects are not interpreted.</p></section>
           </div><aside class="new-side">
             <section class="ac-panel"><h2 class="ac-panel__title">Agents</h2><p><span class="agent-avatar hermes">H</span> <strong>Hermes</strong> · orchestrator</p><p id="new-profile" class="small muted"></p><p><span class="agent-avatar opencode">O</span> <strong>OpenCode</strong> · coder</p><p class="small muted">Uses the model configured on your OpenCode server.</p></section>

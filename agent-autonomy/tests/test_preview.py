@@ -76,6 +76,8 @@ class SpecTests(PreviewTestCase):
         self.assertIsNone(validate_spec({'mode': 'none'}, self.project))
         self.assertIsNone(validate_spec(None, self.project))
         self.assertEqual(validate_spec({'mode': 'cli', 'command': 'python3 app.py "a b"'}, self.project)['argv'], ['python3', 'app.py', 'a b'])
+        spec = validate_spec({'mode': 'cli', 'command': 'python3 todo.py', 'args': 'add "Buy milk"'}, self.project)
+        self.assertEqual((spec['argv'], spec['args']), (['python3', 'todo.py', 'add', 'Buy milk'], 'add "Buy milk"'))
         for bad in ({'mode': 'web', 'command': 'npm run dev', 'port': 80}, {'mode': 'web', 'command': 'x', 'port': '5173'},
                     {'mode': 'static', 'path': '../outside'}, {'mode': 'static', 'path': '/etc'}, {'mode': 'cli', 'command': ''},
                     {'mode': 'desktop', 'command': 'app', 'width': 10, 'height': 10}, {'mode': 'shell', 'command': 'ls'}):
@@ -160,6 +162,18 @@ class WebTests(PreviewTestCase):
         self.wait(lambda: not Path(f'/proc/{pid}').exists() or 'zombie' in Path(f'/proc/{pid}/status').read_text().lower())
         r, _ = self.request('/', cookie)
         self.assertEqual(r.status, 503)
+
+    def test_web_preview_refuses_a_port_something_else_uses(self):
+        busy = socket.socket()
+        busy.bind(('127.0.0.1', 0))
+        busy.listen()
+        try:
+            status = self.manager.start('run1', {'mode': 'web', 'command': f'{sys.executable} -c pass', 'port': busy.getsockname()[1]})
+            self.assertEqual(status['state'], 'failed')
+            self.assertIn('already in use', status['error'])
+            self.assertIsNone(status['pid'])
+        finally:
+            busy.close()
 
     def test_web_preview_that_never_listens_fails_clearly(self):
         port = free_port()
@@ -271,6 +285,13 @@ class ControllerPreviewTests(unittest.TestCase):
                 while 'echo me\r\necho me' not in c.preview.output(0)['text'] and time.monotonic() < deadline:
                     time.sleep(.05)
                 self.assertIn('echo me\r\necho me', c.preview.output(0)['text'])
+                c.preview_action(run['id'], 'config', {'preview': {'mode': 'cli', 'command': f'{sys.executable} -c "import sys; print(sys.argv[1:])"', 'args': 'saved'}})
+                c.preview_action(run['id'], 'start', {'args': 'typed "two words"'})
+                deadline = time.monotonic() + 5
+                while "['typed', 'two words']" not in c.preview.output(0)['text'] and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertIn("['typed', 'two words']", c.preview.output(0)['text'])
+                self.assertEqual(c.store.get('runs', run['id'])['preview']['args'], 'saved', 'typed arguments do not overwrite the saved defaults')
                 c.preview.run = 'a-different-run'
                 with self.assertRaisesRegex(ValueError, 'another run'):
                     c.preview_action(run['id'], 'input', {'text': 'x'})

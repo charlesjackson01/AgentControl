@@ -20,7 +20,7 @@ async function harness(state=fixture(),savedTheme='mac') {
  // Select value is read-only in linkedom, unlike browsers.
  for(const s of document.querySelectorAll('select'))Object.defineProperty(s,'value',{value:s.querySelector('option')?.value || '',writable:true});
  const storage=new Map([['ac-theme',savedTheme]]),calls=[],intervals=[];
- const context=vm.createContext({document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
+ const context=vm.createContext({location:{protocol:'http:',hostname:'100.1.2.3'},document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
   sessionStorage:{getItem:()=> 'test-dashboard-key',setItem:()=>{}},
   localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
   setInterval:fn=>intervals.push(fn),clearTimeout:()=>{},setTimeout:()=>1,
@@ -39,6 +39,14 @@ async function harness(state=fixture(),savedTheme='mac') {
     if(body.action==='goal_check')state.run.goal_checks.push({criterion:body.text,status:'pending'});
     result=state.run;
    }else if(url==='/api/runs'){result={id:'new_run'};state.run={...state.run,id:'new_run',goal:body.goal,status:'planning',goal_checks:body.goal_checks.map(criterion=>({criterion,status:'pending'}))};state.inbox=[];state.steps=[];state.runs=[{...state.run,prompt_count:0}];}
+   else if(url==='/api/preview/ticket')result={ticket:'tkt',port:9999};
+   else if(url.startsWith('/api/preview/output'))result={offset:(state.previewOutput||'').length,from:Number(url.split('since=')[1]||0),text:(state.previewOutput||'').slice(Number(url.split('since=')[1]||0)),status:state.preview};
+   else if(url==='/api/preview'){
+    if(body.action==='config')state.run.preview=body.preview.mode==='none'?null:body.preview;
+    if(['start','restart'].includes(body.action))state.preview={...state.preview,state:'running',run:body.run,mode:state.run.preview.mode,started:1790600000,offset:0,width:640,height:400};
+    if(body.action==='stop')state.preview={...state.preview,state:'idle'};
+    result=state.preview;
+   }
    else result={ok:true};
    return {status:200,ok:true,json:async()=>clone(result)};
   }});
@@ -215,5 +223,62 @@ test('polling speeds up while coding, slows when hidden, and backs off when offl
  assert.equal(run('failures=9;nextDelay()'),30000);
  assert.equal(unit.relTime('2026-09-28T16:00:00Z',Date.parse('2026-09-28T16:10:00Z')),'10 min ago');
  assert.equal(unit.runTitle({goal:'word '.repeat(60)},20),'word word word word…');
+});
+function previewState(mode='cli',run='run_test'){const s=richCompleted();s.run.preview=mode==='web'?{mode,command:'npm run dev',port:5173}:mode==='static'?{mode,path:'site'}:mode==='desktop'?{mode,command:'xclock',width:640,height:400}:{mode,command:'python3 demo_app/todo.py list'};s.preview={state:'running',run,mode,command:s.run.preview.command||'',port:s.run.preview.port,path:s.run.preview.path,width:640,height:400,started:1790600000,offset:12,listen_port:9999,error:''};s.previewOutput='[ ] 1. milk\n';s.capabilities={preview_modes:['web','static','cli','desktop'],preview_missing:[]};return s}
+test('project tab shows a running command-line preview and sends typed input',async()=>{
+ const h=await harness(previewState('cli'));const d=h.document;
+ await h.click('.nav [data-view="project"]');await tick();await tick();
+ assert(!d.getElementById('view-project').classList.contains('hidden'));
+ assert(!d.getElementById('preview-cli').classList.contains('hidden'));
+ assert(d.getElementById('preview-web').classList.contains('hidden'));
+ assert.match(d.getElementById('preview-term-body').textContent,/1\. milk/);
+ assert.match(d.getElementById('preview-controls').textContent,/Running/);
+ d.getElementById('preview-input').value='add eggs';
+ await d.getElementById('preview-input-form').onsubmit({preventDefault(){}});
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/preview').at(-1).body,{run:'run_test',action:'input',text:'add eggs\n'});
+ await h.click('[data-preview-key]');assert.equal(h.calls.filter(c=>c.url==='/api/preview').at(-1).body.text,'\u0003');
+ d.getElementById('preview-args').value='add "Buy milk"';
+ await d.getElementById('preview-args-form').onsubmit({preventDefault(){}});
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/preview').at(-1).body,{run:'run_test',action:'restart',args:'add "Buy milk"'});
+ assert.equal(unit.stripAnsi('\u001b[32mok\u001b[0m\r\n'),'ok\n');
+});
+test('web preview loads through a one-time ticket on the preview port',async()=>{
+ const h=await harness(previewState('web'));const d=h.document;
+ await h.click('.nav [data-view="project"]');await tick();await tick();
+ assert(!d.getElementById('preview-web').classList.contains('hidden'));
+ assert.match(d.getElementById('preview-frame').getAttribute('src')||d.getElementById('preview-frame').src,/:9999\/__ac\/enter\?ticket=tkt/);
+ assert(h.calls.some(c=>c.url==='/api/preview/ticket'));
+ await h.click('[data-preview-width="390px"]');assert.equal(d.getElementById('preview-frame').style.width,'390px');
+});
+test('project tab offers start when stopped and saves preview settings',async()=>{
+ const state=previewState('static');state.preview={state:'idle',offset:0};
+ const h=await harness(state);const d=h.document;
+ await h.click('.nav [data-view="project"]');
+ assert.match(d.getElementById('preview-empty').textContent,/not running/);
+ await h.click('[data-action="preview-start"]');
+ assert.equal(h.calls.filter(c=>c.url==='/api/preview').at(-1).body.action,'start');
+ d.getElementById('cfg-preview-mode').value='web';d.getElementById('cfg-preview-command').value='npm run dev';d.getElementById('cfg-preview-port').value='5173';
+ await h.click('[data-action="preview-save"]');
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/preview').at(-1).body.preview,{mode:'web',command:'npm run dev',port:5173});
+});
+test('desktop clicks are mapped back to the virtual screen size',async()=>{
+ const h=await harness(previewState('desktop'));const d=h.document;
+ await h.click('.nav [data-view="project"]');
+ const img=d.getElementById('preview-screen');img.getBoundingClientRect=()=>({left:100,top:50,width:320,height:200});
+ h.context.screenClick({clientX:260,clientY:150,button:0});await tick();
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/preview').at(-1).body,{run:'run_test',action:'click',x:320,y:200,button:1});
+});
+test('new-run form submits the preview spec and completion opens the Project tab',async()=>{
+ const state=richActive();state.inbox=[];state.run.status='coding';state.run.preview={mode:'cli',command:'python3 x.py'};state.capabilities={preview_modes:['web','static','cli'],preview_missing:['Xvfb']};
+ const h=await harness(state);const d=h.document;
+ assert(d.querySelector('#new-preview-mode option[value="desktop"]').disabled);
+ state.run.status='completed';state.runs[0].status='completed';state.preview={state:'running',run:'run_test',mode:'cli',offset:0};
+ await h.poll();assert(!d.getElementById('view-project').classList.contains('hidden'),'completion opens the preview');
+ const next=await harness(Object.assign(richCompleted(),{runs:[]}));
+ await next.click('[data-action="followup"]');
+ next.document.getElementById('goal').value='Another goal';next.document.getElementById('new-preview-mode').value='web';
+ next.document.getElementById('new-preview-command').value='python3 -m http.server 8123';next.document.getElementById('new-preview-port').value='8123';
+ await next.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ assert.deepEqual(next.calls.find(c=>c.url==='/api/runs').body.preview,{mode:'web',command:'python3 -m http.server 8123',port:8123});
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

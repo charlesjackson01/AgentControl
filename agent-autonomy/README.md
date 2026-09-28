@@ -244,6 +244,24 @@ Window decorations are decorative and contain no real OS logos.
 Shortcuts are ignored in editable fields, while a modifier key is held, and
 inside unrelated dialogs. Reduced-motion preferences disable the terminal cursor.
 
+## Live project preview (Project tab)
+
+In **New run → Live preview**, choose how to run what gets built. You can also set this later in the **Project** tab. The preview starts automatically when the run completes, and the Project tab opens.
+
+| Type | You enter | What you see |
+| --- | --- | --- |
+| Web app | the dev-server command and its port, e.g. `npm run dev -- --port 5173` and `5173` | the site in an embedded frame, with Full/Tablet/Phone widths, Reload, and Open in new tab |
+| Static page | a folder or HTML file, e.g. `site/` or `index.html` | the page in the frame; nothing is executed |
+| Command-line app | a command and optional default arguments, e.g. `python3 demo_app/todo.py` + `list` | a terminal you can type into (with Ctrl+C and EOF) and a field to run it again with other arguments |
+| Desktop app | a command and screen size | the app on a virtual screen, refreshed about once a second; click it and type into it |
+
+How it works and what to know:
+- **What runs, and when.** Only the command saved on the run is executed. It runs in the project folder, without a shell, in its own process group. **Stop preview**, a new preview, stopping the controller (Ctrl+C or `kill`), and 30 idle minutes (`--preview-idle-minutes`) all end it.
+- **The preview port.** Web and static previews are served on a separate port, `--preview-port`, which defaults to the dashboard port + 1. Previewed pages are then a different origin and cannot read the dashboard key. Opening that port needs a one-time ticket from the dashboard. Keep both ports on your tailnet.
+- **HTTP only.** If you reach the dashboard through HTTPS (for example `tailscale serve`), the plain-HTTP preview frame will be blocked. Open the preview port directly instead.
+- **Web limits.** The proxy passes normal HTTP requests. Websocket live-reload (for example Vite HMR) does not update through it, so press Reload. A port already used by another program is refused, so the preview can't show the wrong app.
+- **Desktop tools.** Desktop previews need `Xvfb`, `xdotool`, and ImageMagick's `import` on the server, for example `sudo apt install xvfb xdotool imagemagick`. The option is disabled, and the missing tools are named, until they are installed. Without a window manager, windows open at the top-left of a black screen.
+
 ## Goal checks and follow-ups
 
 Goal checks are saved acceptance criteria, entered by you and supplied to Hermes.

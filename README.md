@@ -39,6 +39,10 @@ Hermes CLI and the OpenCode API without starting a model.
   scroll up. Press `t` for full screen.
 - **Approvals.** Requests appear as a banner above the board and in the terminal
   with a Review button. Approve once, or deny and redirect Hermes.
+- **Project tab (live preview).** When a run completes, AgentControl starts the
+  preview you saved and shows the project running. It can be a web app in a
+  frame, a static page, a command-line program you can type into, or a desktop
+  app on a virtual screen. See `agent-autonomy/README.md` for setup.
 - **Themes.** Mac (follows the system light/dark setting), Terminal, and XP.
 
 ## Tests

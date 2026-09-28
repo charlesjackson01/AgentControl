@@ -293,8 +293,10 @@ async function refresh() {
 // Rendering: shell
 // ---------------------------------------------------------------------------
 function render() {
+  autoOpenProject();
   renderShell();
   renderRun();
+  renderProject();
   renderApprovals();
   renderActivity();
   refreshReview();
@@ -323,8 +325,9 @@ function renderShell() {
   $('start-reason').textContent = blocker;
   $('start-reason').classList.toggle('hidden', !blocker);
   document.querySelectorAll('[data-capability]').forEach(e => e.classList.toggle('hidden', !data.capabilities?.[e.dataset.capability]));
+  togglePreviewFields('new');
 
-  const crumbs = [project, view === 'new' ? 'New run' : view === 'runs' ? 'Runs' : view === 'approvals' ? 'Approvals' : 'Activity'];
+  const crumbs = [project, {new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project'}[view]];
   if (current && view !== 'new') crumbs.push('#' + current.id.slice(0, 6));
   $('breadcrumb').textContent = crumbs.join(' / ');
   $('xp-address').textContent = crumbs.join('\\');
@@ -711,6 +714,190 @@ function renderActivity() {
   }).join('') || '<p class="small muted">No activity matches this view.</p>');
 }
 
+
+// ---------------------------------------------------------------------------
+// Live project preview (Project tab)
+// ---------------------------------------------------------------------------
+const preview = {offset: 0, frameKey: '', timer: null, screenURL: '', lastStatus: {}, opened: new Set(), width: '100%'};
+function previewStatus() { return data?.preview || {state: 'idle'}; }
+function previewForCurrent() { const p = previewStatus(); return !!current && p.run === current.id; }
+function previewLive(p = previewStatus()) { return ['starting', 'running'].includes(p.state); }
+function stripAnsi(text) {
+  return text.replace(/\x1b\][^\x07]*(\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/\x1b[()][A-Z0-9]/g, '')
+    .replace(/\r\n/g, '\n').replace(/\r/g, '').replace(/[^\n]\x08/g, '');
+}
+function readPreviewSpec(prefix) {
+  const mode = $(`${prefix}-preview-mode`).value;
+  if (mode === 'none') return {mode: 'none'};
+  const spec = {mode};
+  if (mode !== 'static') spec.command = $(`${prefix}-preview-command`).value.trim();
+  if (mode === 'cli' && $(`${prefix}-preview-args`).value.trim()) spec.args = $(`${prefix}-preview-args`).value.trim();
+  if (mode === 'web') spec.port = Number($(`${prefix}-preview-port`).value) || 0;
+  if (mode === 'static') spec.path = $(`${prefix}-preview-path`).value.trim() || '.';
+  if (mode === 'desktop') { spec.width = Number($(`${prefix}-preview-width`).value) || 1280; spec.height = Number($(`${prefix}-preview-height`).value) || 800; }
+  return spec;
+}
+function fillPreviewSpec(prefix, spec) {
+  $(`${prefix}-preview-mode`).value = spec?.mode || 'none';
+  $(`${prefix}-preview-command`).value = spec?.command || '';
+  $(`${prefix}-preview-port`).value = spec?.port || '';
+  $(`${prefix}-preview-args`).value = spec?.args || '';
+  $(`${prefix}-preview-path`).value = spec?.path || '';
+  $(`${prefix}-preview-width`).value = spec?.width || 1280;
+  $(`${prefix}-preview-height`).value = spec?.height || 800;
+  togglePreviewFields(prefix);
+}
+function togglePreviewFields(prefix) {
+  const form = document.querySelector(`[data-preview-form="${prefix}"]`), mode = $(`${prefix}-preview-mode`).value;
+  form.querySelectorAll('[data-for]').forEach(e => e.classList.toggle('hidden', !e.dataset.for.split(' ').includes(mode)));
+  const modes = data?.capabilities?.preview_modes;
+  const desktop = form.querySelector('option[value="desktop"]');
+  if (modes && desktop) desktop.disabled = !modes.includes('desktop');
+  const missing = data?.capabilities?.preview_missing || [];
+  form.querySelector('.preview-missing').textContent = missing.length ? `Needs ${missing.join(', ')} installed on the server.` : '';
+}
+function previewControlsHTML(p, mine) {
+  if (!current?.preview) return '';
+  const running = mine && previewLive(p);
+  return running
+    ? `<button class="ac-btn" data-action="preview-restart">${icon('play')}<span>Restart</span></button><button class="ac-btn danger-button" data-action="preview-stop">${icon('stop')}<span>Stop preview</span></button>`
+    : `<button class="ac-btn primary" data-action="preview-start">${icon('play')}<span>Start preview</span></button>`;
+}
+function previewStateHTML(p, mine) {
+  const labels = {idle: 'Not running', starting: 'Starting…', running: 'Running', exited: 'Exited', failed: 'Failed'};
+  const tone = {running: 'completed', starting: 'running', failed: 'failed', exited: ''}[p.state] || '';
+  return mine ? `<span class="ac-status ${tone}"><span class="dot"></span>${labels[p.state] || p.state}</span>` : `<span class="ac-status"><span class="dot"></span>Not running</span>`;
+}
+function renderProject() {
+  if (!data) return;
+  const p = previewStatus(), mine = previewForCurrent(), spec = current?.preview;
+  $('preview-dot').classList.toggle('hidden', !previewLive(p));
+  $('project-title').textContent = current ? runTitle(current, 90) : 'Project';
+  const modeNames = {web: 'Web app', static: 'Static page', cli: 'Command-line app', desktop: 'Desktop app'};
+  $('project-sub').innerHTML = !current ? 'Start a run to preview what it builds.'
+    : spec ? `${esc(modeNames[spec.mode])} · <span class="mono">${esc(spec.command || spec.path)}</span>${mine && p.started ? ' · started ' + when(new Date(p.started * 1000).toISOString()) : ''}`
+    : 'No preview is configured for this run yet. Add one below.';
+  setHTML($('preview-controls'), current ? previewStateHTML(p, mine) + previewControlsHTML(p, mine) : '');
+  const other = previewLive(p) && !mine;
+  const banner = other ? `A preview from run #${esc(p.run.slice(0, 6))} is running. Starting this one stops it.` : mine && p.error ? p.error : '';
+  $('preview-banner').textContent = banner;
+  $('preview-banner').className = 'notice ' + (mine && p.error ? 'danger' : '') + (banner ? '' : ' hidden');
+  renderPreviewStrip();
+  const mode = mine ? p.mode : null, live = mine && previewLive(p);
+  const show = {web: live && ['web', 'static'].includes(mode), cli: mine && mode === 'cli' && p.state !== 'idle', desktop: live && mode === 'desktop'};
+  $('preview-web').classList.toggle('hidden', !show.web);
+  $('preview-cli').classList.toggle('hidden', !show.cli);
+  $('preview-desktop').classList.toggle('hidden', !show.desktop);
+  const empty = !show.web && !show.cli && !show.desktop;
+  $('preview-empty').classList.toggle('hidden', !empty);
+  if (empty) setHTML($('preview-empty'), !current ? '<p class="muted">No run selected.</p>'
+    : !spec ? '<h2>Nothing to preview yet</h2><p class="small muted">Choose how to run this project in <strong>Preview settings</strong>. The preview runs your saved command in the project folder.</p>'
+    : mine && p.state === 'starting' ? '<h2>Starting the preview…</h2><p class="small muted">Waiting for it to answer. The process log below shows its output.</p>'
+    : `<h2>${mine && p.state === 'failed' ? 'The preview stopped' : 'Preview is not running'}</h2><p class="small muted">Press <strong>Start preview</strong> to run <span class="mono">${esc(spec.command || spec.path)}</span>.</p>`);
+  $('preview-term-title').textContent = spec?.command ? spec.command.split(' ').slice(0, 3).join(' ') : 'program';
+  $('preview-term-meta').textContent = mine ? `${p.state}${p.exit_code !== null && p.exit_code !== undefined ? ' · exit ' + p.exit_code : ''}` : '';
+  $('preview-term').classList.toggle('running', live);
+  $('preview-input').disabled = !live;
+  $('preview-log-wrap').classList.toggle('hidden', !mine || mode === 'cli' || mode === 'static');
+  if (show.web) ensurePreviewFrame(p);
+  if (view === 'project' && !$('preview-settings').contains(document.activeElement) && $('preview-settings').dataset.run !== current?.id) {
+    $('preview-settings').dataset.run = current?.id || '';
+    fillPreviewSpec('cfg', spec);
+    $('preview-args').value = spec?.args || '';
+  }
+  togglePreviewFields('cfg');
+}
+function renderPreviewStrip() {
+  if (!current) { setHTML($('preview-strip'), ''); return; }
+  const last = [...(data.steps || [])].reverse().find(s => s.verification)?.verification, files = fileStats(data.steps), checks = current.goal_checks || [];
+  const manual = current.manual_verification;
+  const v = manual && (!last || manual.created > (last.created || '')) ? manual : last;
+  setHTML($('preview-strip'), `<div class="strip-item"><small>Run</small>${statusHTML(current, runRequests())}</div>
+    <div class="strip-item"><small>Verification</small><span class="ac-status ${v?.status === 'passed' ? 'completed' : v?.status === 'failed' ? 'failed' : ''}">${esc(v?.status || 'not run')}</span></div>
+    <div class="strip-item"><small>Files changed</small><strong>${files.length}</strong></div>
+    <div class="strip-item"><small>Goal checks</small><strong>${checks.length}</strong></div>
+    <div class="strip-item"><button class="text-button" data-view="runs">Open the run</button>${files.length ? '<button class="text-button" data-action="diff">View changes</button>' : ''}</div>`);
+}
+async function ensurePreviewFrame(p) {
+  const key = `${p.run}:${p.started}`;
+  if (preview.frameKey === key) return;
+  preview.frameKey = key;
+  try {
+    const {ticket, port} = await api('/api/preview/ticket', 'POST', {});
+    const base = `${location.protocol}//${location.hostname}:${port}`;
+    $('preview-frame').src = `${base}/__ac/enter?ticket=${encodeURIComponent(ticket)}`;
+    $('preview-address').textContent = base + '/';
+  } catch (error) { preview.frameKey = ''; pageError(error.message); }
+}
+function appendPreviewOutput(text, reset) {
+  const clean = stripAnsi(text);
+  for (const target of [$('preview-term-body'), $('preview-log')]) {
+    const atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 24;
+    if (reset) target.textContent = '';
+    if (clean) target.append(clean);
+    if (target.textContent.length > 250000) target.textContent = target.textContent.slice(-200000);
+    if (atBottom || reset) target.scrollTop = target.scrollHeight;
+  }
+}
+async function pollPreview() {
+  clearTimeout(preview.timer);
+  const p = previewStatus();
+  let delay = 1500;
+  try {
+    if (key && connected && view === 'project' && previewForCurrent() && !document.hidden) {
+      if (previewLive(p) || preview.offset < (p.offset || 0)) {
+        const result = await api('/api/preview/output?since=' + preview.offset);
+        if (typeof result.text === 'string') {
+          // A smaller offset than ours means the preview restarted elsewhere; start the view over.
+          appendPreviewOutput(result.text, result.from < preview.offset);
+          preview.offset = result.offset;
+          if (result.status) {
+            const changed = result.status.state !== data.preview?.state || result.status.exit_code !== data.preview?.exit_code;
+            data.preview = result.status;
+            if (changed) renderProject();
+          }
+        }
+        delay = 1000;
+      }
+      if (previewLive(p) && p.mode === 'desktop') await refreshScreen();
+    }
+  } catch {}
+  preview.timer = setTimeout(pollPreview, delay);
+}
+async function refreshScreen() {
+  const response = await fetch('/api/preview/frame', {headers: {Authorization: 'Bearer ' + key}});
+  if (!response.ok) return;
+  const url = URL.createObjectURL(await response.blob());
+  $('preview-screen').src = url;
+  if (preview.screenURL) URL.revokeObjectURL(preview.screenURL);
+  preview.screenURL = url;
+}
+function resetPreviewOutput() { preview.offset = 0; $('preview-term-body').textContent = ''; $('preview-log').textContent = ''; }
+async function previewAction(action, extra = {}) {
+  const status = await api('/api/preview', 'POST', {run: current.id, action, ...extra});
+  if (status && status.state) data.preview = status;
+  if (['start', 'restart'].includes(action)) { resetPreviewOutput(); preview.frameKey = ''; }
+  renderProject();
+  pollPreview();
+  return status;
+}
+function autoOpenProject() {
+  if (!current) return;
+  const before = preview.lastStatus[current.id];
+  preview.lastStatus[current.id] = current.status;
+  if (before && before !== 'completed' && current.status === 'completed' && current.preview && !preview.opened.has(current.id)) {
+    preview.opened.add(current.id);
+    showView('project');
+    toast('Run complete. Opening the live preview.');
+  }
+}
+function screenClick(event) {
+  const p = previewStatus(), img = $('preview-screen'), rect = img.getBoundingClientRect();
+  if (!rect.width || !p.width) return;
+  const x = Math.round((event.clientX - rect.left) / rect.width * p.width), y = Math.round((event.clientY - rect.top) / rect.height * p.height);
+  previewAction('click', {x: Math.max(0, x), y: Math.max(0, y), button: event.button === 2 ? 3 : 1}).then(refreshScreen).catch(e => pageError(e.message));
+}
+
 // ---------------------------------------------------------------------------
 // Review dialog
 // ---------------------------------------------------------------------------
@@ -815,12 +1002,12 @@ async function submitReview(action) {
 // Navigation and actions
 // ---------------------------------------------------------------------------
 function showView(next) {
-  if (!['runs', 'approvals', 'activity', 'new'].includes(next)) return;
+  if (!['runs', 'approvals', 'activity', 'new', 'project'].includes(next)) return;
   view = next;
   document.querySelectorAll('.view').forEach(e => e.classList.toggle('hidden', e.id !== 'view-' + next));
   document.querySelectorAll('.nav [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
   closeDrawer();
-  if (data) renderShell();
+  if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } }
 }
 function openNew(followup = false) {
   if (followup && !current) return;
@@ -951,6 +1138,20 @@ const ACTIONS = {
   'term-follow': () => setFollow(!term.follow),
   'term-jump': () => setFollow(true),
   'term-copy': async () => { try { await navigator.clipboard.writeText(terminalText()); toast('Terminal output copied.'); } catch { toast('Copy is unavailable in this browser.'); } },
+  'preview-start': () => previewAction('start'),
+  'preview-restart': () => previewAction('restart'),
+  'preview-stop': () => previewAction('stop'),
+  'preview-reload': () => { preview.frameKey = ''; ensurePreviewFrame(previewStatus()); },
+  'preview-open': async () => {
+    const {ticket, port} = await api('/api/preview/ticket', 'POST', {});
+    window.open(`${location.protocol}//${location.hostname}:${port}/__ac/enter?ticket=${encodeURIComponent(ticket)}`, '_blank', 'noopener');
+  },
+  'preview-clear': () => { $('preview-term-body').textContent = ''; },
+  'preview-save': async () => {
+    $('preview-settings-error').textContent = '';
+    try { await api('/api/preview', 'POST', {run: current.id, action: 'config', preview: readPreviewSpec('cfg')}); toast('Preview settings saved.'); $('preview-settings').dataset.run = ''; await refresh(); }
+    catch (error) { $('preview-settings-error').textContent = error.message; }
+  },
   'term-expand': () => { if ($('terminal-dialog').open) $('terminal-dialog').close(); else expandTerminal(true); },
 };
 async function act(action, button) { await ACTIONS[action]?.(button); }
@@ -991,6 +1192,13 @@ async function onClick(event) {
     if (b.dataset.run) { selected = b.dataset.run; selectedTurn = null; termReset(null); showView('runs'); await refresh(); }
     if (b.dataset.turn) { selectedTurn = ['latest'].includes(b.dataset.turn) ? null : b.dataset.turn; if (data) renderRun(); }
     if (b.dataset.stageTab) showStage(b.dataset.stageTab);
+    if (b.dataset.previewWidth) {
+      preview.width = b.dataset.previewWidth;
+      $('preview-frame').style.width = preview.width;
+      document.querySelectorAll('[data-preview-width]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    }
+    if (b.dataset.previewKey) await previewAction('input', {text: b.dataset.previewKey});
+    if (b.dataset.desktopKey) { await previewAction('key', {key: b.dataset.desktopKey}); await refreshScreen(); }
     if (b.dataset.review) openReview(b.dataset.review, b.dataset.intent);
     if (b.dataset.diff) openDiff(b.dataset.diff);
     if (b.dataset.dismiss) { dismissedReceipts.add(b.dataset.dismiss); renderRun(); }
@@ -1017,6 +1225,7 @@ function fillExample() {
   $('verify-enabled').checked = true; $('verify').disabled = false; $('verify').required = true;
   $('verify').value = "python3 -m unittest discover -s demo_app -p 'test_*.py'";
   $('new-checks').innerHTML = '';
+  fillPreviewSpec('new', {mode: 'cli', command: 'python3 demo_app/todo.py', args: 'list'});
   ['Add, list, and complete tasks from the command line.', 'Save tasks to JSON and reload them.', 'Tests cover adding, completing, and save/reload behavior.', 'Document usage in demo_app/README.md.'].forEach(addCheckInput);
 }
 function init() {
@@ -1046,7 +1255,8 @@ function init() {
       const result = await api('/api/runs', 'POST', {goal: $('goal').value, verifier: $('verify-enabled').checked ? $('verify').value : '',
         max_steps: Number($('max-prompts').value), run_minutes: Number($('run-minutes').value),
         goal_checks: [...$('new-checks').querySelectorAll('textarea')].map(e => e.value.trim()), parent_run: parentRun,
-        ...($('run-title').value.trim() ? {title: $('run-title').value.trim()} : {})});
+        ...($('run-title').value.trim() ? {title: $('run-title').value.trim()} : {}),
+        ...(readPreviewSpec('new').mode !== 'none' ? {preview: readPreviewSpec('new')} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');
       await refresh();
@@ -1094,6 +1304,23 @@ function init() {
   $('event-search').addEventListener('input', () => data && renderActivity());
   $('run-filter').addEventListener('input', () => data && renderRecentRuns(data.inbox || []));
   $('example').onclick = fillExample;
+  document.querySelectorAll('[data-preview-mode]').forEach(select => select.addEventListener('change', () => togglePreviewFields(select.id.split('-')[0])));
+  togglePreviewFields('new');
+  $('preview-input-form').onsubmit = async event => {
+    event.preventDefault();
+    try { await previewAction('input', {text: $('preview-input').value + '\n'}); $('preview-input').value = ''; } catch (error) { pageError(error.message); }
+  };
+  $('preview-args-form').onsubmit = async event => {
+    event.preventDefault();
+    try { await previewAction(previewLive() && previewForCurrent() ? 'restart' : 'start', {args: $('preview-args').value.trim()}); } catch (error) { pageError(error.message); }
+  };
+  $('desktop-type-form').onsubmit = async event => {
+    event.preventDefault();
+    if (!$('desktop-type').value) return;
+    try { await previewAction('type', {text: $('desktop-type').value}); $('desktop-type').value = ''; await refreshScreen(); } catch (error) { pageError(error.message); }
+  };
+  $('preview-screen').addEventListener('click', screenClick);
+  $('preview-screen').addEventListener('contextmenu', event => { event.preventDefault(); screenClick(event); });
   $('term-body').addEventListener('scroll', () => {
     const body = $('term-body'), atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
     if (atBottom !== term.follow) { term.follow = atBottom; $('term-follow').setAttribute('aria-pressed', String(atBottom)); }
@@ -1110,4 +1337,4 @@ function init() {
   refresh().then(() => schedule());
 }
 if (typeof document !== 'undefined') init();
-if (typeof module !== 'undefined' && module.exports) module.exports = {esc, duration, budget, stateLabel, requestKey, requestTitle, requestText, receiptLabel, verificationLabel, fileStats, phaseIndex, ignoresShortcut, shellQuote, relTime, runTitle, stageStates, transcriptOf, planningNext, nextDelay};
+if (typeof module !== 'undefined' && module.exports) module.exports = {stripAnsi, esc, duration, budget, stateLabel, requestKey, requestTitle, requestText, receiptLabel, verificationLabel, fileStats, phaseIndex, ignoresShortcut, shellQuote, relTime, runTitle, stageStates, transcriptOf, planningNext, nextDelay};

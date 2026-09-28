@@ -18,6 +18,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -64,6 +66,7 @@ class Settings:
     password: str = ''
     username: str = 'opencode'
     notifications: bool = True
+    preview_idle: float = 1800
 
 
 class Store:
@@ -494,6 +497,7 @@ class Controller:
         self.threads = {}
         self.verifying = set()
         self.shutdown = threading.Event()
+        self.preview = PreviewManager(self.s.project, self.s.preview_idle)
         self.health = {'ready': False, 'message': 'Checking connections…'}
         for run in self.store.runs():
             if (run.get('manual_verification') or {}).get('status') == 'running':
@@ -525,10 +529,11 @@ class Controller:
                        'opencode_version': info.get('version'), 'agents': agents, 'checked_at': now()}
         return self.health
 
-    def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None):
+    def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
         title = self._title(title)
+        preview = validate_spec(preview, self.s.project)
         if not isinstance(verifier, str) or len(verifier) > 2000:
             raise ValueError('Verification command is too long')
         argv = shlex.split(verifier) if verifier.strip() else []
@@ -559,7 +564,7 @@ class Controller:
                    'max_steps': max_steps, 'corrections': 0, 'plan': [], 'instructions': [], 'decision_count': 0,
                    'verifier': argv, 'deadline': time.time() + duration, 'time_limit_seconds': duration, 'pending': [],
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
-                   'parent_run': parent_run or None, 'title': title,
+                   'parent_run': parent_run or None, 'title': title, 'preview': preview,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None}
             self.store.put('runs', run)
             self.store.event(ident, 'goal', goal)
@@ -787,6 +792,49 @@ class Controller:
         self.store.update('runs', ident, status=status, summary=summary, ended=now(), pending=[])
         self.store.event(ident, status, summary)
         self._push(ident, summary[:250])
+        run = self.store.get('runs', ident)
+        if status == 'completed' and run.get('preview'):
+            try:
+                self.preview.start(ident, run['preview'])
+                self.store.event(ident, 'preview', 'Live preview started after completion.')
+            except Exception as exc:
+                self.store.event(ident, 'preview', f'Live preview could not start: {exc}')
+
+    def preview_action(self, ident, action, body):
+        """Start, stop, configure, or interact with the live preview for one run."""
+        run = self.store.get('runs', ident)
+        if action == 'config':
+            spec = validate_spec(body.get('preview'), self.s.project)
+            self.store.update('runs', ident, preview=spec)
+            self.store.event(ident, 'preview', 'Preview settings saved.' if spec else 'Preview removed.')
+            return {'preview': spec, 'status': self.preview.status()}
+        if action in ('start', 'restart'):
+            if not run.get('preview'):
+                raise ValueError('Save preview settings for this run first.')
+            spec = dict(run['preview'])
+            extra = body.get('args')
+            if extra and spec['mode'] == 'cli':
+                if not isinstance(extra, str) or len(extra) > 1000:
+                    raise ValueError('Arguments must be text of at most 1,000 characters')
+                spec['command'] = spec['command'] + ' ' + extra
+            status = self.preview.start(ident, spec)
+            self.store.event(ident, 'preview', f'Preview started: {spec.get("command") or spec.get("path")}')
+            return status
+        if self.preview.run != ident:
+            raise ValueError('The live preview belongs to another run.')
+        if action == 'stop':
+            return self.preview.stop()
+        if action == 'input':
+            self.preview.send_input(body.get('text', ''))
+        elif action == 'click':
+            self.preview.click(body.get('x'), body.get('y'), body.get('button', 1))
+        elif action == 'type':
+            self.preview.type_text(body.get('text', ''))
+        elif action == 'key':
+            self.preview.key(body.get('key', ''))
+        else:
+            raise ValueError('Unknown preview action')
+        return self.preview.status()
 
     def _abort(self, ident):
         run = self.store.get('runs', ident)
@@ -1092,8 +1140,11 @@ class Controller:
         return {'version': '5.0', 'product': 'AgentControl', 'health': self.health, 'project': str(self.s.project), 'profile': self.s.profile,
                 'limits': {'max_prompts': 20, 'max_run_seconds': self.s.run_timeout},
                 'capabilities': {'goal_check_results': False, 'approval_recommendations': False, 'undo': False, 'verify_now': True, 'run_titles': True,
-                                 'policy_editor': False, 'followups': True, 'goal_check_input': True, 'redirect': True},
+                                 'policy_editor': False, 'followups': True,
+                                 'preview_modes': ['web', 'static', 'cli'] + ([] if desktop_missing() else ['desktop']),
+                                 'preview_missing': desktop_missing(), 'goal_check_input': True, 'redirect': True},
                 'opencode_url': self.s.opencode_url, 'runs': [{'id': r['id'], 'goal': r['goal'][:120], 'title': r.get('title', ''), 'status': r['status'],
                     'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id'])} for r in runs[:30]],
+                'preview': self.preview.status(),
                 'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],
                 'inbox': inbox, 'reviews': self.store.reviews(ident) if run else []}

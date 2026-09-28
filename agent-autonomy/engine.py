@@ -492,9 +492,14 @@ class Controller:
         self.manager = manager or Hermes(settings)
         self.lock = threading.RLock()
         self.threads = {}
+        self.verifying = set()
         self.shutdown = threading.Event()
         self.health = {'ready': False, 'message': 'Checking connections…'}
         for run in self.store.runs():
+            if (run.get('manual_verification') or {}).get('status') == 'running':
+                self.store.update('runs', run['id'], manual_verification={**run['manual_verification'], 'status': 'interrupted',
+                                  'output': 'The controller restarted before this verification finished.'})
+                run = self.store.get('runs', run['id'])
             if run['status'] not in TERMINAL:
                 self.store.update('runs', run['id'], status='interrupted', pause=True,
                     summary='Controller restarted. Resume will reconcile the current session before continuing.')
@@ -520,9 +525,10 @@ class Controller:
                        'opencode_version': info.get('version'), 'agents': agents, 'checked_at': now()}
         return self.health
 
-    def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None):
+    def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
+        title = self._title(title)
         if not isinstance(verifier, str) or len(verifier) > 2000:
             raise ValueError('Verification command is too long')
         argv = shlex.split(verifier) if verifier.strip() else []
@@ -553,7 +559,7 @@ class Controller:
                    'max_steps': max_steps, 'corrections': 0, 'plan': [], 'instructions': [], 'decision_count': 0,
                    'verifier': argv, 'deadline': time.time() + duration, 'time_limit_seconds': duration, 'pending': [],
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
-                   'parent_run': parent_run or None,
+                   'parent_run': parent_run or None, 'title': title,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None}
             self.store.put('runs', run)
             self.store.event(ident, 'goal', goal)
@@ -568,7 +574,57 @@ class Controller:
         self.threads[ident] = thread
         thread.start()
 
+    @staticmethod
+    def _title(title):
+        if title is None:
+            return ''
+        if not isinstance(title, str) or len(title.strip()) > 120:
+            raise ValueError('A run title can have at most 120 characters')
+        return ' '.join(title.split())
+
+    def _verify_now(self, ident):
+        """Run the saved verifier on demand, only while no coding turn can race it."""
+        with self.lock:
+            run = self.store.get('runs', ident)
+            if not run['verifier']:
+                raise ValueError('This run has no verification command to run.')
+            if ident in self.verifying:
+                raise ValueError('Verification is already running for this run.')
+            if run['status'] not in TERMINAL and run['status'] not in ('paused', 'interrupted', 'attention'):
+                raise ValueError('Verify now runs while the run is paused or finished, so it cannot overlap a coding turn. Pause first.')
+            self.verifying.add(ident)
+            started = now()
+            self.store.update('runs', ident, manual_verification={'status': 'running', 'created': started, 'argv': run['verifier'], 'output': ''})
+            self.store.event(ident, 'control', 'Verify now requested.')
+
+        def verify():
+            try:
+                code, out, err = process(run['verifier'], self.s.project, self.s.verify_timeout, self.shutdown.is_set)
+                result = {'status': 'passed' if code == 0 else 'failed', 'exit_code': code, 'output': (out + '\n' + err)[-16000:]}
+            except (TimeoutError, OSError) as exc:
+                result = {'status': 'failed', 'output': str(exc)}
+            except Exception as exc:
+                result = {'status': 'failed', 'output': f'Verification could not run: {exc}'}
+            try:
+                result.update(created=started, ended=now(), argv=run['verifier'])
+                self.store.update('runs', ident, manual_verification=result)
+                self.store.event(ident, 'verification (on demand)', result)
+            finally:
+                with self.lock:
+                    self.verifying.discard(ident)
+
+        thread = threading.Thread(target=verify, daemon=True)
+        self.threads[ident + ':verify'] = thread
+        thread.start()
+        return self.store.get('runs', ident)
+
     def control(self, ident, action, text=''):
+        if action == 'verify':
+            return self._verify_now(ident)
+        if action == 'title':
+            with self.lock:
+                self.store.update('runs', ident, title=self._title(text))
+            return self.store.get('runs', ident)
         with self.lock:
             run = self.store.get('runs', ident)
             if run['status'] in TERMINAL:
@@ -1033,11 +1089,11 @@ class Controller:
                     packet = {**packet, 'request_id': packet.get('id') or packet.get('requestID', ''), 'fingerprint': ''}
                 inbox.append({**packet, 'run': active['id'], 'goal': active['goal'],
                               'receipt': self.store.review(active['id'], packet['kind'], packet['request_id'])})
-        return {'version': '4.0', 'product': 'AgentControl', 'health': self.health, 'project': str(self.s.project), 'profile': self.s.profile,
+        return {'version': '5.0', 'product': 'AgentControl', 'health': self.health, 'project': str(self.s.project), 'profile': self.s.profile,
                 'limits': {'max_prompts': 20, 'max_run_seconds': self.s.run_timeout},
-                'capabilities': {'goal_check_results': False, 'approval_recommendations': False, 'undo': False, 'verify_now': False,
+                'capabilities': {'goal_check_results': False, 'approval_recommendations': False, 'undo': False, 'verify_now': True, 'run_titles': True,
                                  'policy_editor': False, 'followups': True, 'goal_check_input': True, 'redirect': True},
-                'opencode_url': self.s.opencode_url, 'runs': [{'id': r['id'], 'goal': r['goal'][:120], 'status': r['status'],
+                'opencode_url': self.s.opencode_url, 'runs': [{'id': r['id'], 'goal': r['goal'][:120], 'title': r.get('title', ''), 'status': r['status'],
                     'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id'])} for r in runs[:30]],
                 'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],
                 'inbox': inbox, 'reviews': self.store.reviews(ident) if run else []}

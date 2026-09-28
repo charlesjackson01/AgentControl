@@ -3,9 +3,11 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>AgentControl</title>
-  <script>try{const t=localStorage.getItem('ac-theme');if(['mac','terminal','xp'].includes(t))document.documentElement.dataset.theme=t}catch{}</script>
-  <link rel="stylesheet" href="/themes.css?v=4"><link rel="stylesheet" href="/app.css?v=4">
-  <script src="/app.js?v=4" defer></script>
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" id="favicon" href="data:,">
+  <script>try{const t=localStorage.getItem('ac-theme');if(['mac','terminal','xp'].includes(t))document.documentElement.dataset.theme=t}catch{}try{if(localStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('trial-dashboard-key'))document.documentElement.classList.add('has-key')}catch{}</script>
+  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5">
+  <script src="/app.js?v=5" defer></script>
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true"><defs>
@@ -25,11 +27,13 @@
   <symbol id="icon-terminal" viewBox="0 0 24 24"><path d="m5 6 6 6-6 6m9 0h6"/></symbol>
   <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/></symbol>
 </defs></svg>
+<div id="boot" class="boot-screen hidden" role="status"><span class="brand">AgentControl</span><span class="muted small">Connecting to your workspace…</span></div>
 <section id="auth" class="auth-screen">
   <form id="auth-form" class="ac-panel auth-panel">
     <div class="brand">AgentControl<span class="brand-mark">A</span></div>
     <h1>Your agents. Your call.</h1><p class="muted">Connect to follow a run, review requests, and steer the next turn.</p>
     <label for="key">Dashboard key</label><input id="key" type="password" autocomplete="off" placeholder="From your server terminal" required>
+    <label class="switch-row remember" for="remember-key"><span>Remember on this device</span><input id="remember-key" type="checkbox"></label>
     <button class="ac-btn primary wide" id="connect">Connect to workspace</button>
     <p id="auth-error" class="error" role="alert"></p>
   </form>
@@ -50,12 +54,12 @@
       <aside id="sidebar" class="sidebar" aria-label="Workspace navigation">
         <div class="mac-dots mac-only" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="brand sidebar-brand"><span>AgentControl</span><button class="icon-button drawer-close" data-action="drawer-close" aria-label="Close navigation">×</button></div>
-        <section class="nav-group"><h2 class="section-label" id="project-name">TrialProject</h2><nav class="nav" aria-label="Main navigation">
+        <section class="nav-group"><h2 class="section-label" id="project-name">Project</h2><nav class="nav" aria-label="Main navigation">
           <button data-view="runs" class="active"><svg class="icon"><use href="#icon-runs"/></svg>Runs</button>
           <button data-view="approvals"><svg class="icon"><use href="#icon-shield"/></svg>Approvals<span id="nav-count" class="badge hidden">0</span></button>
           <button data-view="activity"><svg class="icon"><use href="#icon-activity"/></svg>Activity</button>
         </nav></section>
-        <section class="nav-group recent"><h2 class="section-label">Recent runs</h2><div id="recent-runs"></div></section>
+        <section class="nav-group recent"><h2 class="section-label">Recent runs</h2><div id="run-filter-row" class="filter-row hidden"><label for="run-filter" class="sr-only">Filter runs</label><input id="run-filter" type="search" placeholder="Filter runs" autocomplete="off"></div><div id="recent-runs"></div></section>
         <section class="nav-group xp-tasks xp-only"><h2 class="section-label">Run Tasks</h2><button data-action="pause">Pause / Resume</button><button data-action="focus-steer">Send a note to Hermes</button><button data-action="stop">Stop this run…</button></section>
         <section class="agents nav-group"><h2 class="section-label">Agents · last check</h2><div id="agent-list"></div><button class="text-button" data-action="connections">Connections</button></section>
       </aside>
@@ -63,29 +67,50 @@
         <button class="icon-button drawer-toggle" data-action="drawer" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><svg class="icon"><use href="#icon-menu"/></svg></button>
         <strong class="terminal-brand terminal-only">AgentControl</strong><strong class="mobile-brand">AgentControl</strong>
         <div id="xp-run-controls" class="toolbar-run-controls xp-only"></div>
-        <div id="breadcrumb" class="breadcrumb">TrialProject / Runs</div>
+        <div id="breadcrumb" class="breadcrumb">Runs</div>
         <span id="terminal-status" class="terminal-only terminal-status"></span><span id="terminal-budget" class="terminal-only terminal-budget"></span>
         <div class="theme-control" role="group" aria-label="Color theme"><span class="theme-label">Theme<span class="xp-only">:</span></span><div class="theme-buttons"><button data-theme="terminal" aria-pressed="false"><span class="theme-full">Terminal</span><span class="terminal-only theme-short">term</span></button><button data-theme="mac" aria-pressed="true">Mac</button><button data-theme="xp" aria-pressed="false">XP</button></div></div>
         <button class="ac-btn primary compact" data-action="new"><svg class="icon"><use href="#icon-plus"/></svg><span>New run</span></button>
       </header>
-      <div class="addressbar xp-only"><span>Address</span><span id="xp-address" class="address-value">TrialProject\Runs</span></div>
+      <div class="addressbar xp-only"><span>Address</span><span id="xp-address" class="address-value">Runs</span></div>
       <main id="workspace" class="workspace">
-        <div id="connection-banner" class="notice hidden" role="status"></div><div id="page-error" class="notice danger hidden" role="alert"></div>
+        <div id="connection-banner" class="notice hidden" role="status"></div><div id="page-error" class="notice danger hidden row between" role="alert"><span id="page-error-text"></span><button class="icon-button" data-action="dismiss-error" aria-label="Dismiss error">×</button></div>
         <section id="view-runs" class="view">
           <div id="empty-state" class="ac-panel empty-state hidden"><div class="eyebrow">AgentControl</div><h1>Give the work a direction.</h1><p>Write a brief. Hermes plans the next turn, OpenCode builds it, and AgentControl keeps the work and your decisions in view.</p><button class="ac-btn primary" data-action="new">Start a new run</button></div>
           <div id="run-layout" class="run-layout hidden">
-            <div class="run-main"><div id="run-header"></div><div id="outcome"></div><div id="loop-strip"></div><div id="turns"></div>
-              <form id="steering-form" class="steering"><div class="steering-line"><label for="steering" class="steer-label"><span class="terminal-only">steer&gt;</span><span class="not-terminal sr-only">Note for Hermes</span></label><textarea id="steering" rows="1" maxlength="5000" placeholder="Tell Hermes something. It goes into the next prompt." required></textarea><span class="terminal-cursor terminal-only" aria-hidden="true"></span><button class="ac-btn primary send-button" aria-label="Send note to Hermes"><svg class="icon"><use href="#icon-arrow"/></svg><span class="send-word">Send</span></button></div><div class="steering-tools"><button type="button" class="text-button" data-action="add-check">+ Add a goal check</button><button type="button" class="text-button" data-action="ask-status">Ask for a status</button><button type="button" class="text-button" disabled title="On-demand verification is not supported yet">Verify now · unavailable</button></div><p id="steering-feedback" class="small muted" role="status"></p></form>
-              <div id="run-timeline"></div>
+            <div class="run-top"><div id="run-header"></div><div id="outcome"></div><div id="inline-approvals" class="inline-approvals"></div>
+              <section id="workflow" class="workflow" aria-label="Workflow">
+                <div id="turn-rail" class="turn-rail"></div>
+                <div id="stage-board" class="stage-board">
+                  <div class="stage-tabs" role="tablist" aria-label="Workflow stages"><button class="stage-tab" data-stage-tab="plan" role="tab">Plan</button><button class="stage-tab" data-stage-tab="prompt" role="tab">Prompt</button><button class="stage-tab" data-stage-tab="code" role="tab">Code</button><button class="stage-tab" data-stage-tab="verify" role="tab">Verify</button></div>
+                  <div id="stage-track" class="stage-track">
+                    <section id="stage-plan" class="stage" aria-labelledby="stage-plan-head"><header id="stage-plan-head" class="stage-head"></header><div id="stage-plan-body" class="stage-body"></div></section>
+                    <section id="stage-prompt" class="stage" aria-labelledby="stage-prompt-head"><header id="stage-prompt-head" class="stage-head"></header><div id="stage-prompt-body" class="stage-body"></div></section>
+                    <section id="stage-code" class="stage" aria-labelledby="stage-code-head"><header id="stage-code-head" class="stage-head"></header><div id="term-home" class="stage-body">
+                      <div id="term" class="term" data-state="pending">
+                        <div class="term-bar"><span class="term-lights" aria-hidden="true"><i></i><i></i><i></i></span><strong id="term-title" class="term-title">opencode</strong><span id="term-meta" class="term-meta"></span>
+                          <span class="term-actions"><button id="term-follow" class="term-button" data-action="term-follow" aria-pressed="true" title="Keep the newest output in view">Follow</button><button class="term-button" data-action="term-copy" title="Copy this turn's output">Copy</button><button id="term-expand" class="term-button" data-action="term-expand" aria-label="Open terminal full screen" aria-keyshortcuts="t">⤢</button></span></div>
+                        <div id="term-body" class="term-body" role="log" aria-label="OpenCode output" tabindex="0"></div>
+                        <div id="term-held"></div><p id="term-empty" class="term-empty hidden"></p>
+                        <button id="term-jump" class="term-jump hidden" data-action="term-jump">↓ New output</button>
+                      </div>
+                    </div></section>
+                    <section id="stage-verify" class="stage" aria-labelledby="stage-verify-head"><header id="stage-verify-head" class="stage-head"></header><div id="stage-verify-body" class="stage-body"></div></section>
+                  </div>
+                </div>
+              </section>
+              <form id="steering-form" class="steering"><div class="steering-line"><label for="steering" class="steer-label"><span class="terminal-only">steer&gt;</span><span class="not-terminal sr-only">Note for Hermes</span></label><textarea id="steering" rows="1" maxlength="5000" placeholder="Tell Hermes something. It goes into the next prompt." required aria-describedby="steering-hint"></textarea><span class="terminal-cursor terminal-only" aria-hidden="true"></span><button class="ac-btn primary send-button" aria-label="Send note to Hermes"><svg class="icon"><use href="#icon-arrow"/></svg><span class="send-word">Send</span></button></div><div class="steering-tools"><button type="button" class="text-button" data-action="add-check">+ Add a goal check</button><button type="button" class="text-button" data-action="ask-status">Ask for a status</button><button type="button" class="text-button hidden" data-action="verify-now" data-capability="verify_now" aria-keyshortcuts="v">Verify now</button></div><p id="steering-hint" class="small muted steering-hint">Enter sends · Shift+Enter adds a line</p><p id="steering-feedback" class="small muted" role="status"></p></form>
             </div>
-            <aside class="run-side"><div id="inline-approvals"></div><div id="goal-checks"></div><div id="verification"></div><div id="changed-files"></div><div id="original-brief"></div></aside>
+            <div class="run-main"><div id="run-timeline"></div></div>
+            <aside class="run-side"><div id="goal-checks"></div><div id="verification"></div><div id="changed-files"></div><div id="original-brief"></div></aside>
           </div>
         </section>
         <section id="view-approvals" class="view hidden"><div class="page-heading"><div><div class="eyebrow">Your decisions</div><h1>Approvals</h1><p class="muted">Requests from runs managed by AgentControl.</p></div><span id="approval-total" class="ac-status attention"></span></div><div id="approval-list" class="approval-list"></div><section class="ac-panel"><h2 class="ac-panel__title">Decision history <span class="muted small">· selected run</span></h2><div id="decision-history"></div></section></section>
-        <section id="view-activity" class="view hidden"><div class="page-heading"><div><div class="eyebrow">Selected run</div><h1>Activity</h1><p class="muted">The recorded prompts, decisions, and results.</p></div><select id="event-filter" aria-label="Filter activity"><option value="all">All activity</option><option value="Hermes">Hermes</option><option value="OpenCode">OpenCode</option><option value="approval">Approvals</option><option value="verification">Verification</option></select></div><div id="activity-list" class="ac-panel"></div></section>
+        <section id="view-activity" class="view hidden"><div class="page-heading"><div><div class="eyebrow">Selected run</div><h1>Activity</h1><p class="muted">The recorded prompts, decisions, and results.</p></div><div class="row wrap filter-row"><label for="event-search" class="sr-only">Search activity</label><input id="event-search" type="search" placeholder="Search activity" autocomplete="off"><select id="event-filter" aria-label="Filter activity"><option value="all">All activity</option><option value="Hermes">Hermes</option><option value="OpenCode">OpenCode</option><option value="approval">Approvals</option><option value="verification">Verification</option></select></div></div><div id="activity-list" class="ac-panel"></div></section>
         <section id="view-new" class="view hidden">
           <div class="page-heading"><div><div class="eyebrow">A new direction</div><h1>Start a new run</h1><p class="muted">Describe the outcome. Hermes chooses the coding prompts and reviews each result.</p></div><button class="ac-btn" data-view="runs">Cancel</button></div>
           <form id="new-form" class="new-grid"><div class="new-main">
+            <section class="ac-panel"><label for="run-title" class="ac-panel__title">Title <span class="muted small">· optional</span></label><input id="run-title" maxlength="120" placeholder="A short name for this run"></section>
             <section class="ac-panel"><label for="goal" class="ac-panel__title">Brief</label><textarea id="goal" rows="7" maxlength="12000" required placeholder="What should be built, and how will you know it’s finished?"></textarea><p class="small muted">Say when it’s finished; Hermes uses that as the stop condition.</p><button type="button" id="example" class="text-button">Try the Python todo-app brief</button><p id="followup-context" class="small muted hidden"></p></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Goal checks</h2><p class="small muted">Add your acceptance criteria. Automatic extraction and individual check results are not available yet.</p><div id="new-checks"></div><button type="button" class="text-button" data-action="new-check">+ Add a check</button></section>
             <section class="ac-panel"><label for="working-folder" class="ac-panel__title">Working folder</label><input id="working-folder" readonly><p class="small muted">Fixed by this controller’s startup settings. File access follows your OpenCode configuration.</p></section>
@@ -94,7 +119,7 @@
             <section class="ac-panel"><h2 class="ac-panel__title">Agents</h2><p><span class="agent-avatar hermes">H</span> <strong>Hermes</strong> · orchestrator</p><p id="new-profile" class="small muted"></p><p><span class="agent-avatar opencode">O</span> <strong>OpenCode</strong> · coder</p><p class="small muted">Uses the model configured on your OpenCode server.</p></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Limits</h2><label for="max-prompts">Maximum coding prompts</label><div class="stepper"><button type="button" class="ac-btn" data-step="-1" aria-label="Fewer coding prompts">−</button><input id="max-prompts" type="number" min="1" max="20" value="6" required><button type="button" class="ac-btn" data-step="1" aria-label="More coding prompts">+</button></div><label for="run-minutes">Time limit · minutes</label><input id="run-minutes" type="number" min="1" max="120" value="30" required><p class="small muted">Includes time waiting for your approval.</p></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Permissions</h2><p class="small muted">OpenCode’s configured permissions apply. Requests it sends will appear for your review.</p><p class="small muted">Plan approval and per-run policy switches are not supported yet.</p></section>
-            <p id="start-error" class="error" role="alert"></p><button class="ac-btn primary wide" id="start-run">Start run</button>
+            <p id="start-reason" class="small warning-text hidden" role="status"></p><p id="start-error" class="error" role="alert"></p><button class="ac-btn primary wide" id="start-run">Start run</button>
           </aside></form>
         </section>
         <footer class="workspace-footer"><span id="footer-project"></span><span id="last-updated">AgentControl 4.0</span></footer>
@@ -102,15 +127,26 @@
     </div>
     <footer class="window-status xp-only"><span id="xp-status">Ready</span><span id="xp-budget"></span><span id="xp-folder"></span></footer>
   </div>
-  <div class="terminal-keybar terminal-only" aria-label="Keyboard shortcuts"><button data-action="key-approve"><kbd>a</kbd>approve</button><button data-action="key-deny"><kbd>d</kbd>deny + redirect</button><button disabled title="Approval undo is not supported"><kbd>u</kbd>undo</button><button data-action="pause" aria-keyshortcuts="p"><kbd>p</kbd>pause / resume</button><button disabled title="On-demand verification is not supported"><kbd>v</kbd>verify now</button><button data-action="stop" aria-keyshortcuts="x"><kbd>x</kbd>stop</button><button data-action="focus-steer" aria-keyshortcuts="/"><kbd>/</kbd>steer</button></div>
+  <div class="terminal-keybar terminal-only" aria-label="Keyboard shortcuts"><button data-action="key-approve"><kbd>a</kbd>approve</button><button data-action="key-deny"><kbd>d</kbd>deny + redirect</button><button data-action="pause" aria-keyshortcuts="p"><kbd>p</kbd>pause / resume</button><button class="hidden" data-action="verify-now" data-capability="verify_now" aria-keyshortcuts="v"><kbd>v</kbd>verify now</button><button data-action="term-expand" aria-keyshortcuts="t"><kbd>t</kbd>terminal</button><button data-action="help" aria-keyshortcuts="?"><kbd>?</kbd>help</button><button data-action="stop" aria-keyshortcuts="x"><kbd>x</kbd>stop</button><button data-action="focus-steer" aria-keyshortcuts="/"><kbd>/</kbd>steer</button></div>
   <div class="xp-taskbar xp-only"><button class="xp-agents" data-action="connections">◉ agents</button><button class="xp-task" data-view="runs">AgentControl</button><button id="xp-tray" class="xp-tray" data-action="focus-approval"><span id="tray-count"></span><time id="tray-clock"></time></button></div>
   <button id="xp-notification" class="xp-notification xp-only hidden" data-action="focus-approval"><strong>⚠ Approval needed</strong><span id="notification-text"></span><span>Click here to review.</span></button>
 </div>
 <dialog id="review-dialog" class="dialog" aria-labelledby="review-title"><header class="dialog-header"><h2 id="review-title">Review request</h2><button class="icon-button" data-close="review-dialog" aria-label="Close review">×</button></header><div id="review-body" class="dialog-body"></div><div id="review-footer" class="dialog-footer"></div></dialog>
 <dialog id="stop-dialog" class="dialog" aria-labelledby="stop-title"><header class="dialog-header"><h2 id="stop-title">Stop this run?</h2><button class="icon-button" data-close="stop-dialog" aria-label="Close stop confirmation">×</button></header><div class="dialog-body"><p>AgentControl will stop planning and ask OpenCode to abort this session. Existing file changes will remain.</p><p id="stop-error" class="error" role="alert"></p></div><footer class="dialog-footer"><button class="ac-btn" data-close="stop-dialog">Keep running</button><button id="confirm-stop" class="ac-btn danger-button">Stop run</button></footer></dialog>
 <dialog id="check-dialog" class="dialog" aria-labelledby="check-title"><header class="dialog-header"><h2 id="check-title">Add a goal check</h2><button class="icon-button" data-close="check-dialog" aria-label="Close goal check">×</button></header><form id="check-form"><div class="dialog-body"><label for="criterion">What needs to be true when this is finished?</label><textarea id="criterion" maxlength="1000" required></textarea><p class="small muted">This is saved to the run and included in the next Hermes prompt.</p><p id="check-error" class="error" role="alert"></p></div><footer class="dialog-footer"><button class="ac-btn primary">Add check</button></footer></form></dialog>
+<dialog id="rename-dialog" class="dialog" aria-labelledby="rename-title"><header class="dialog-header"><h2 id="rename-title">Rename this run</h2><button class="icon-button" data-close="rename-dialog" aria-label="Close rename">×</button></header><form id="rename-form"><div class="dialog-body"><label for="rename-input">Title</label><input id="rename-input" maxlength="120" placeholder="Leave empty to use the brief"><p class="small muted">Only the name shown in AgentControl changes. The brief sent to Hermes stays the same.</p><p id="rename-error" class="error" role="alert"></p></div><footer class="dialog-footer"><button class="ac-btn primary">Save title</button></footer></form></dialog>
 <dialog id="connection-dialog" class="dialog" aria-labelledby="connection-title"><header class="dialog-header"><h2 id="connection-title">Connections</h2><button class="icon-button" data-close="connection-dialog" aria-label="Close connections">×</button></header><div id="connection-details" class="dialog-body"></div><footer class="dialog-footer"><button class="ac-btn" data-action="check-connections">Check connections</button></footer></dialog>
+<dialog id="terminal-dialog" class="dialog terminal-dialog" aria-label="OpenCode terminal"><div id="terminal-dialog-body" class="terminal-dialog-body"></div></dialog>
 <dialog id="diff-dialog" class="dialog wide-dialog" aria-labelledby="diff-title"><header class="dialog-header"><h2 id="diff-title">Captured file changes</h2><button class="icon-button" data-close="diff-dialog" aria-label="Close diff">×</button></header><div id="diff-body" class="dialog-body"></div><footer class="dialog-footer"><button class="ac-btn" data-action="download-diff">Download recorded diff</button></footer></dialog>
-<dialog id="help-dialog" class="dialog" aria-labelledby="help-title"><header class="dialog-header"><h2 id="help-title">How AgentControl works</h2><button class="icon-button" data-close="help-dialog" aria-label="Close help">×</button></header><div class="dialog-body"><p>Hermes turns your brief into a coding prompt. OpenCode executes it. AgentControl collects file changes and runs your verification command, then Hermes decides the next turn.</p><p>You review permissions and answer questions. Steering notes enter the next planning turn. Pause waits at a turn boundary; Stop asks the active session to abort.</p><p>Goal checks are saved requirements. They remain pending until the backend can provide individual evidence. A passing verification command only proves what that command checks.</p><p class="small muted">Shortcuts: a review approval · d deny and redirect · p pause/resume · x stop confirmation · / focus steering. Shortcuts are ignored while typing.</p></div></dialog>
+<dialog id="help-dialog" class="dialog" aria-labelledby="help-title"><header class="dialog-header"><h2 id="help-title">How AgentControl works</h2><button class="icon-button" data-close="help-dialog" aria-label="Close help">×</button></header><div class="dialog-body"><p>Hermes turns your brief into a coding prompt. OpenCode executes it. AgentControl collects file changes and runs your verification command, then Hermes decides the next turn.</p><p>You review permissions and answer questions. Steering notes enter the next planning turn. Pause waits at a turn boundary; Stop asks the active session to abort.</p><p>Goal checks are saved requirements. They remain pending until the backend can provide individual evidence. A passing verification command only proves what that command checks.</p><h3>Keyboard shortcuts</h3><table class="shortcut-table"><tbody>
+  <tr><td><kbd>a</kbd></td><td>Review the waiting approval; approve inside the review window</td></tr>
+  <tr><td><kbd>d</kbd></td><td>Deny and redirect</td></tr>
+  <tr><td><kbd>p</kbd></td><td>Pause or resume the run</td></tr>
+  <tr><td><kbd>x</kbd></td><td>Stop the run (asks for confirmation)</td></tr>
+  <tr><td><kbd>/</kbd></td><td>Write a steering note for Hermes</td></tr>
+  <tr><td><kbd>t</kbd></td><td>Open the OpenCode terminal full screen</td></tr>
+  <tr><td><kbd>?</kbd></td><td>Show this help</td></tr>
+  <tr><td><kbd>Esc</kbd></td><td>Close a window or the navigation drawer</td></tr>
+</tbody></table><p class="small muted">Shortcuts are ignored while you are typing in a field.</p></div></dialog>
 <div id="approval-announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div><div id="toast" class="toast hidden" role="status"></div>
 </body></html>

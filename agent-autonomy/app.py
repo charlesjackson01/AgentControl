@@ -70,7 +70,7 @@ def handler(controller, key):
                     return self.reply(202, {'ok': True})
                 if self.path == '/api/runs':
                     run = controller.new(body.get('goal', ''), body.get('verifier', ''), body.get('max_steps', 8),
-                                         body.get('goal_checks'), body.get('run_minutes'), body.get('parent_run'))
+                                         body.get('goal_checks'), body.get('run_minutes'), body.get('parent_run'), body.get('title'))
                     return self.reply(201, {'id': run['id']})
                 if self.path == '/api/control':
                     return self.reply(200, controller.control(body['run'], body['action'], body.get('text', '')))

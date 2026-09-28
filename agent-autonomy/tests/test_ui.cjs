@@ -9,7 +9,7 @@ const root=path.resolve(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'app.js'),'utf8');
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
 const unit=require(path.join(root,'app.js'));
-const {clone,fixture}=require('./fixtures.cjs');
+const {clone,fixture,richActive,richCompleted,transcript}=require('./fixtures.cjs');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 async function harness(state=fixture(),savedTheme='mac') {
  const {window,document}=parseHTML(html);
@@ -46,7 +46,7 @@ async function harness(state=fixture(),savedTheme='mac') {
  vm.runInContext(source,context);await tick();
  assert.equal(document.getElementById('auth-error').textContent,'','Initial render must not throw');
  const click=async selector=>{const e=document.querySelector(selector);assert(e,selector);e.click();await tick();};
- return {document,state,calls,storage,context,click,poll:async()=>{await intervals[0]();await tick()}};
+ return {document,state,calls,storage,context,click,poll:async()=>{await context.refresh();await tick()}};
 }
 function runTime(){return '2026-09-28T16:01:00Z'}
 const tests=[];
@@ -138,5 +138,82 @@ test('styles parse and every component color uses a defined theme token',()=>{
  for(const m of styles.matchAll(/var\((--ac-[\w-]+)/g))assert(defined.has(m[1]),m[1]);
  for(const width of ['1279px','1099px','699px'])assert(styles.includes(width));
  assert(styles.includes('prefers-reduced-motion:reduce'));
+});
+test('workflow board shows four stages and the live terminal for the latest turn',async()=>{
+ const h=await harness(richActive());const d=h.document;
+ for(const name of ['plan','prompt','code','verify'])assert(d.getElementById('stage-'+name).className.includes('stage-'+name));
+ assert.match(d.getElementById('stage-code').className,/waiting/);
+ assert.match(d.getElementById('stage-plan').className,/done/);
+ assert.equal(d.querySelectorAll('.turn-chip').length,2);
+ assert.match(d.getElementById('term-title').textContent,/turn 2/);
+ assert.match(d.getElementById('term-body').textContent,/python3 -m unittest discover/);
+ assert.match(d.getElementById('term-held').textContent,/python3 -m unittest/);
+ assert.equal(d.querySelectorAll('#inline-approvals .approval-card').length,1);
+});
+test('turn rail switches the board and can return to the latest turn',async()=>{
+ const h=await harness(richActive());const d=h.document;
+ await h.click('[data-turn="step_1"]');
+ assert.match(d.getElementById('term-title').textContent,/turn 1/);
+ assert.match(d.getElementById('stage-verify-body').textContent,/Ran 4 tests/);
+ await h.poll();assert.match(d.getElementById('term-title').textContent,/turn 1/,'a pinned turn survives polling');
+ await h.click('[data-turn="latest"]');assert.match(d.getElementById('term-title').textContent,/turn 2/);
+});
+test('terminal appends new output without rebuilding earlier lines',async()=>{
+ const h=await harness(richActive());const d=h.document;
+ const first=d.querySelector('#term-body [data-entry="0"]');
+ h.state.steps[1].transcript=transcript(3);await h.poll();
+ assert.equal(d.querySelector('#term-body [data-entry="0"]'),first);
+ assert.equal(d.querySelectorAll('#term-body .term-entry').length,8);
+ assert.match(d.getElementById('term-body').textContent,/Progress line 3/);
+});
+test('steps recorded before transcripts fall back to activity and result',async()=>{
+ const h=await harness();const text=h.document.getElementById('term-body').textContent;
+ assert.match(text,/read tasks\.py/);assert.match(text,/Preparing the tests/);
+ assert.deepEqual(unit.transcriptOf({activity:[],result:''}),[]);
+});
+test('planning pseudo-turn appears while Hermes chooses the next prompt',async()=>{
+ const state=richActive();state.inbox=[];state.run.status='reviewing';state.run.phase='manager';Object.assign(state.steps[1],{status:'finished',verified:true});
+ const h=await harness(state);assert.equal(h.document.querySelectorAll('.turn-chip').length,3);
+ assert.match(h.document.getElementById('stage-plan').className,/active/);
+ assert.match(h.document.getElementById('stage-plan-body').textContent,/Turn 3/);
+});
+test('stored key skips the sign-in screen and remember saves to local storage',async()=>{
+ const h=await harness();const d=h.document;
+ assert(d.getElementById('auth').classList.contains('hidden'));assert(!d.getElementById('app').classList.contains('hidden'));
+ d.getElementById('key').value='new-key';d.getElementById('remember-key').checked=true;
+ await d.getElementById('auth-form').onsubmit({preventDefault(){}});
+ assert.equal(h.storage.get('ac-dashboard-key'),'new-key');
+});
+test('unsupported controls stay hidden and disabled states explain themselves',async()=>{
+ const h=await harness();const d=h.document;
+ assert([...d.querySelectorAll('[data-capability="verify_now"]')].every(e=>e.classList.contains('hidden')));
+ assert(!d.body.textContent.includes('unavailable'));
+ assert.match(d.getElementById('start-reason').textContent,/Finish or stop the active run/);
+ assert.equal(d.getElementById('start-run').disabled,true);
+ const state=richCompleted();state.capabilities={verify_now:true,run_titles:true};
+ const c=await harness(state);assert(!c.document.querySelector('#verification [data-action="verify-now"]').disabled);
+ assert(c.document.querySelector('[data-action="rename"]'));
+ assert.equal(c.document.getElementById('inline-approvals').textContent.trim(),'','finished runs do not show stale receipts');
+ await c.click('#verification [data-action="verify-now"]');
+ assert.equal(c.calls.find(x=>x.url==='/api/control').body.action,'verify');
+});
+test('question mark opens help and filters narrow runs and activity',async()=>{
+ const state=richActive();state.runs.push(...[1,2,3,4].map(i=>({id:'r'+i,goal:'Older goal '+i,status:'completed',created:'2026-09-20T10:00:00Z',prompt_count:1})));
+ const h=await harness(state);const d=h.document;
+ h.context.handleShortcut({key:'?',target:d.body,preventDefault(){}});assert(d.getElementById('help-dialog').open);
+ assert(!d.getElementById('run-filter-row').classList.contains('hidden'));
+ d.getElementById('run-filter').value='older goal 2';h.context.renderRecentRuns([]);
+ assert.equal(d.querySelectorAll('#recent-runs .recent-run').length,1);
+ d.getElementById('event-search').value='verification';h.context.renderActivity();
+ assert.equal(d.querySelectorAll('#activity-list .event').length,1);
+});
+test('polling speeds up while coding, slows when hidden, and backs off when offline',async()=>{
+ const h=await harness(richActive());const run=code=>vm.runInContext(code,h.context);
+ assert.equal(run('nextDelay()'),1000);
+ h.document.hidden=true;assert.equal(run('nextDelay()'),10000);h.document.hidden=false;
+ assert.equal(run('connected=false;failures=3;nextDelay()'),16000);
+ assert.equal(run('failures=9;nextDelay()'),30000);
+ assert.equal(unit.relTime('2026-09-28T16:00:00Z',Date.parse('2026-09-28T16:10:00Z')),'10 min ago');
+ assert.equal(unit.runTitle({goal:'word '.repeat(60)},20),'word word word word…');
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

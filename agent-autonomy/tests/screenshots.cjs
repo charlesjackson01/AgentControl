@@ -20,6 +20,7 @@ const scenarios = {
   login: {state: fx.richActive, key: false},
   empty: {state: fx.empty},
   active: {state: fx.richActive},
+  running: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding'; return s; }},
   completed: {state: fx.richCompleted},
   approvals: {state: fx.richActive, click: '[data-view="approvals"]'},
   activity: {state: fx.richActive, click: '[data-view="activity"]'},

@@ -589,6 +589,47 @@ else:
         self.assertEqual(step['plan'], ['Implement', 'Verify'])
         self.assertEqual(step['kind'], 'task')
 
+    def test_verify_now_runs_saved_command_only_at_a_safe_boundary(self):
+        c, manager = self.controller([coding(), complete()])
+        self.api.on_submit = lambda n: (self.project/'ok.py').write_text('print(1)\n')
+        run = c.new('Build ok.py', f'{sys.executable} ok.py')
+        self.done(c, run['id'])
+        c.control(run['id'], 'verify')
+        self.wait(lambda: c.store.get('runs', run['id'])['manual_verification']['status'] != 'running')
+        result = c.store.get('runs', run['id'])['manual_verification']
+        self.assertEqual((result['status'], result['exit_code']), ('passed', 0))
+        self.assertIn('verification (on demand)', [e['kind'] for e in c.store.events(run['id'])])
+        (self.project/'ok.py').write_text('raise SystemExit(3)\n')
+        c.control(run['id'], 'verify')
+        self.wait(lambda: c.store.get('runs', run['id'])['manual_verification']['status'] != 'running')
+        self.assertEqual(c.store.get('runs', run['id'])['manual_verification']['exit_code'], 3)
+
+    def test_verify_now_is_refused_during_work_or_without_a_command(self):
+        c, manager = self.controller([coding(), complete()])
+        self.api.hold = True
+        run = c.new('Build something', f'{sys.executable} -c pass')
+        self.wait(lambda: c.store.get('runs', run['id'])['status'] == 'coding')
+        with self.assertRaisesRegex(ValueError, 'paused or finished'):
+            c.control(run['id'], 'verify')
+        self.api.hold = False
+        self.api.finish()
+        self.done(c, run['id'])
+        c.store.update('runs', run['id'], verifier=[])
+        with self.assertRaisesRegex(ValueError, 'no verification command'):
+            c.control(run['id'], 'verify')
+
+    def test_run_title_is_optional_validated_and_editable(self):
+        c, manager = self.controller([coding(), complete()])
+        with self.assertRaisesRegex(ValueError, '120'):
+            c.new('Goal', title='x' * 121)
+        run = c.new('A long goal that needs a short name', title='  Todo   app ')
+        self.assertEqual(run['title'], 'Todo app')
+        self.assertEqual(c.state(run['id'])['runs'][0]['title'], 'Todo app')
+        c.control(run['id'], 'title', 'Renamed')
+        self.assertEqual(c.store.get('runs', run['id'])['title'], 'Renamed')
+        self.done(c, run['id'])
+        self.assertTrue(c.state()['capabilities']['verify_now'])
+
     def test_agent_readiness_is_independent_and_does_not_claim_model_online(self):
         c,_=self.controller([])
         with patch.object(self.api,'health',side_effect=OSError('Offline')):

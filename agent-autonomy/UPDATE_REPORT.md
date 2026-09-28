@@ -1,3 +1,51 @@
+# AgentControl update — version 5
+
+## What changed in version 5
+
+**Horizontal workflow.** The run view reads left to right:
+- A **turn rail** lists every coding turn with its result and line counts.
+- A four-stage **board** shows the selected turn: Plan (Hermes's recorded summary, plan, and the notes it used), Prompt (the exact text sent), Code, and Verify (command, output tail, captured files, and Hermes's review).
+- The board follows the latest turn until you pick an older one, and a "Next turn" chip appears while Hermes plans.
+- Below 1280px the board wraps to two columns. On phones it becomes a swipeable carousel with stage tabs that opens on the stage needing attention.
+- Pending approvals show as a full-width banner above the board. Supporting cards (goal checks, verification, files, brief) sit in a responsive row below it.
+
+**Live OpenCode terminal.** The Code stage is a contained, always-dark terminal:
+- It shows OpenCode's ordered text and tool calls, with running tool output when OpenCode streams it.
+- It appends incrementally, so scroll position and expanded outputs survive polling.
+- It has Follow, Copy, and full-screen (`t`) controls, a "New output" pill after you scroll up, and inline Review buttons for held requests.
+- The engine records a bounded `transcript` per step (last 300 parts, about 80 KB) and polls OpenCode at most every second while coding. The browser polls every second during a coding turn, every 2s otherwise, every 10s in a background tab, and backs off to 30s when disconnected.
+
+**Phone and approval flow:**
+- No sign-in flash when a key is stored.
+- An optional "Remember on this device" setting, and "Forget key and sign out".
+- A favicon badge for pending requests and opt-in browser notifications.
+- Full-height review dialogs with sticky action buttons, and Approve once as the primary action.
+
+**Clarity:**
+- Unsupported controls are hidden instead of shown disabled.
+- Start run explains why it is disabled.
+- Errors can be dismissed and clear themselves.
+- Times are relative, with the exact time on hover.
+- Recent runs and Activity can be filtered or searched.
+- `?` opens a shortcut table.
+- Diffs are grouped per file.
+- Enter sends a steering note, and the note field grows as you type.
+- Mac follows the system dark appearance.
+
+**Small backend additions:**
+- **Verify now** runs the saved command while a run is paused or finished, so it never overlaps a coding turn. The result is stored as `manual_verification` with an event.
+- Optional run **titles**, editable with **Rename**.
+- Steps store the Hermes summary, plan, and kind that produced them.
+- Project snapshots now exclude `agent-autonomy/`. Previously the exclusion list still named `trial-autonomy/`, so the controller's own files could be captured as evidence.
+
+**Maintenance:**
+- `app.css` is readable, sectioned source; a CSSOM comparison confirmed the reformat changed no rules.
+- `app.js` is split into small render helpers and an action map.
+- The legacy single-file `dashboard.py` is retired.
+- `tests/screenshots.cjs` renders every theme at three widths with simulated data.
+
+The version 4 report follows for reference.
+
 # AgentControl UI/UX update — version 4
 
 The dashboard is now branded **AgentControl**. It uses the supplied Mac, Terminal,
@@ -15,12 +63,12 @@ there is no websocket or SSE transport.
 
 | File / route | Role |
 | --- | --- |
-| `trial-autonomy/index.html` | Shared shell, screens, forms, dialogs, and the pre-paint theme bootstrap. |
-| `trial-autonomy/themes.css` | Supplied theme tokens, plus supporting component/chrome tokens. |
-| `trial-autonomy/app.css` | Shared layout, responsive rules, and small theme-specific styling. |
-| `trial-autonomy/app.js` | State rendering, polling, themes, approvals, steering, shortcuts, and form handling. |
-| `trial-autonomy/app.py` | HTTP server, authentication, explicit static asset allowlist, and API routing. |
-| `trial-autonomy/engine.py` | Existing controller, durable records, OpenCode/Hermes adapters, and added UI metadata. |
+| `agent-autonomy/index.html` | Shared shell, screens, forms, dialogs, and the pre-paint theme bootstrap. |
+| `agent-autonomy/themes.css` | Supplied theme tokens, plus supporting component/chrome tokens. |
+| `agent-autonomy/app.css` | Shared layout, responsive rules, and small theme-specific styling. |
+| `agent-autonomy/app.js` | State rendering, polling, themes, approvals, steering, shortcuts, and form handling. |
+| `agent-autonomy/app.py` | HTTP server, authentication, explicit static asset allowlist, and API routing. |
+| `agent-autonomy/engine.py` | Existing controller, durable records, OpenCode/Hermes adapters, and added UI metadata. |
 | `GET /api/state` | Current run, history, turns, events, pending requests, decisions, readiness, and supported capabilities. |
 | `POST /api/runs` | Start a bounded run; now accepts goal checks, minutes, and an optional parent run. |
 | `POST /api/control` | Pause, resume, stop, steering instructions, and adding a goal check. |
@@ -149,7 +197,7 @@ check.
 
 Keep the existing launch command, project path, and Tailscale bind address. Download
 the updated archive, stop the dashboard, extract it over the current installation,
-and restart `trial-autonomy/app.py`. Keep the OpenCode server running. If a run was
+and restart `agent-autonomy/app.py`. Keep the OpenCode server running. If a run was
 interrupted, Resume reconciles its existing session without replaying its prompt.
 
 `100.79.242.24` is the user's Tailscale address, not a public internet address.

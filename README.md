@@ -1,61 +1,59 @@
 # AgentControl
 
-A local dashboard and control plane for agent tasks. It records the exact prompt sent to OpenCode,
-shows task activity and responses, and asks Hermes to send a push alert when a
-task completes, fails to submit, or times out. It does not yet ask Hermes to
-generate prompts automatically; the API below is the handoff Hermes will use.
+A local control plane for autonomous coding runs. You write one goal. Hermes
+plans each coding turn, OpenCode carries it out, and AgentControl captures file
+changes, runs your verification command, and keeps every prompt, tool call, and
+approval in view. You approve requests and steer from any browser on your
+tailnet, including your phone.
+
+The app lives in [`agent-autonomy/`](agent-autonomy/). Its README covers the
+controls, limits, and recovery behavior in detail.
 
 ## Start
 
-Keep your working OpenCode server running in one terminal. From another:
+Keep your OpenCode server running. From the repository root:
 
 ```bash
-cd /home/charlesjackson/AgentControl
-python3 dashboard.py
+python3 agent-autonomy/app.py \
+  --host 127.0.0.1 --port 8766 \
+  --project /path/to/your/project \
+  --opencode http://127.0.0.1:45381 \
+  --profile ai-arch-dev
 ```
 
-If OpenCode restarts on a different port, set it first:
+Open the printed address and enter the **dashboard key** shown in the terminal.
+Tick **Remember on this device** so you don't have to type it again on that
+browser. To reach the dashboard from your phone, bind `--host` to your Tailscale
+address and keep it on the tailnet. Do not expose the port publicly without
+HTTPS and authentication.
+
+`python3 agent-autonomy/app.py --doctor --project … --opencode …` checks the
+Hermes CLI and the OpenCode API without starting a model.
+
+## What you see
+
+- **Turns rail and workflow board.** Each coding turn reads left to right: Plan
+  (Hermes) → Prompt → Code (OpenCode) → Verify (your command).
+- **Live OpenCode terminal.** The Code stage streams OpenCode's text, tool
+  calls, and command output while it works. It follows new output until you
+  scroll up. Press `t` for full screen.
+- **Approvals.** Requests appear as a banner above the board and in the terminal
+  with a Review button. Approve once, or deny and redirect Hermes.
+- **Themes.** Mac (follows the system light/dark setting), Terminal, and XP.
+
+## Tests
 
 ```bash
-OPENCODE_URL=http://127.0.0.1:45381 python3 dashboard.py
+python3 -m unittest discover -s agent-autonomy/tests -v
+# optional browser-free DOM tests and rendered screenshots
+npm install --prefix /tmp/ac-tests --no-save linkedom cssom playwright-core
+NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs
+NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/screenshots.cjs
 ```
 
-On the server, open `http://127.0.0.1:8765`. Both services intentionally bind
-only to localhost. To view the dashboard on your iPhone, SSH from a device on
-your Tailnet with local forwarding `-L 8765:127.0.0.1:8765`, then open
-`http://127.0.0.1:8765` **on that same device**. An iPhone SSH app must support
-local port forwarding to use this approach. Do not publish port 8765 without
-adding authentication first.
+## The retired single-file dashboard
 
-## First task
-
-Paste this into the dashboard form:
-
-> Describe the files in this project. Do not edit files, run commands, install
-> dependencies, or start another agent. If it is empty, say so.
-
-To have Hermes submit a prompt, tell Hermes to POST to the local endpoint. The
-exact request shape is:
-
-```bash
-curl -fsS -X POST http://127.0.0.1:8765/api/tasks \
-  -H 'Content-Type: application/json' \
-  --data '{"prompt":"Describe the files in this project. Do not edit files."}'
-```
-
-Hermes should generate its own prompt, show it to you if desired, then call
-this endpoint once. The server saves the submitted prompt before sending it to
-OpenCode. Press **Pause new tasks** to reject new submissions. It does not
-interrupt a task already running. The SQLite journal lives beside the script.
-
-## Limits
-
-- This is a local trial, with no login, no durable job queue, and no automatic
-  restart. Restarting during a task does not resume monitoring it.
-- A submitted prompt starts a fresh OpenCode session. Persistent session reuse
-  and editable task queues are next steps after this smoke test.
-- The page refreshes every two seconds. Tool names and states come from
-  OpenCode messages; it does not expose private model reasoning.
-- Tool activity can appear more than once as its status changes. Task output
-  is shown when OpenCode becomes idle. A task still running after 15 minutes
-  is marked timed out for monitoring purposes, but is not aborted in OpenCode.
+The original prompt journal `dashboard.py` was removed in version 5. Every one of
+its features exists in `agent-autonomy/`. If you still have its local
+`activity.sqlite3` journal, it is untouched. It is plain SQLite, so you can open
+it with `sqlite3 activity.sqlite3 'select * from tasks'`.

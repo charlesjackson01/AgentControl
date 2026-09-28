@@ -1,4 +1,4 @@
-# AgentControl — version 4
+# AgentControl — version 5
 
 ## What this version does
 
@@ -13,62 +13,46 @@ The dashboard shows each submitted prompt, OpenCode's response as it grows, tool
 activity, Hermes's decisions, file diffs, and test output. Hermes's existing
 `push` channel sends step-finished, needs-input, completion, and error alerts.
 
-Version 4 implements the supplied UI/UX handoff in the existing Python and
-vanilla JavaScript stack. **Mac** is the default theme; **Terminal** and **XP**
-are available in the toolbar. The theme is saved under `ac-theme` and applied
-before styles load. Switching themes preserves your active run and form drafts.
+Version 5 lays each run out horizontally. A **turn rail** lists every coding
+turn. The **workflow board** shows the selected turn as Plan → Prompt → Code →
+Verify, and the Code stage is a **live OpenCode terminal**: text, tool calls,
+and running command output stream in as OpenCode works. **Mac** (following the
+system light/dark setting) is the default theme; **Terminal** and **XP** are in
+the toolbar. Read `UPDATE_REPORT.md` for the change log and known gaps.
 
-The Runs screen shows the brief, budget, Plan → Prompt → Code → Verify loop,
-collapsible turns, live tool activity, inline approvals, steering, verification,
-and captured file changes. Completed runs get a review screen and a follow-up
-action. New runs can include manual goal checks and a time limit.
+## Start or update
 
-Read `UPDATE_REPORT.md` for the file map, backend gaps, deliberate differences
-from the mockups, and verification limits. The supplied reference mockups were
-used as design targets; sample run data is not included in the live UI.
-
-## Update your current installation
-
-1. Download the new `TrialProject-dashboard.zip` into
-   `/home/charlesjackson/Downloads/`, replacing the older downloaded zip.
-2. Press **Ctrl+C in the terminal running the old dashboard** on port 8766.
-   Keep your OpenCode server running on port 45381.
-3. Run:
+Stop the old dashboard with Ctrl+C in its terminal and keep your OpenCode
+server running. Then, from the repository root:
 
 ```bash
-cd /home/charlesjackson/TrialProject
-unzip -o /home/charlesjackson/Downloads/TrialProject-dashboard.zip
-python3 trial-autonomy/app.py \
+python3 agent-autonomy/app.py \
   --host 100.79.242.24 \
   --port 8766 \
-  --project /home/charlesjackson/TrialProject \
+  --project /path/to/your/project \
   --opencode http://127.0.0.1:45381 \
   --profile ai-arch-dev
 ```
 
-The archive contains a `trial-autonomy/` directory. It does not replace the
-original `dashboard.py`, old activity journal, or project files. On later
-updates, the archive excludes `trial-autonomy/state/`, so it preserves run
-history and the dashboard key.
+Run history and the dashboard key live in `agent-autonomy/state/`, which is not
+tracked by git, so updating the code preserves them.
 
-4. On your phone, with Tailscale connected, visit:
-   **http://100.79.242.24:8766**
-5. Enter the **Dashboard key** printed in the server terminal. The key stays the
-   same across restarts; the browser retains it for the tab. It protects the
-   controls that can initiate coding work.
-6. Open **Connections** and wait for **Hermes CLI and OpenCode API ready**. Startup checks the installed Hermes
-   CLI's flags without invoking a model. If a check fails, the error is shown
-   at the top of the page. Open **Connections** for details.
-7. Click **New run**, then **Try the Python todo-app brief** and **Start run**. This fills in a
-   small Python todo-app goal under `demo_app/` and a unittest command. It uses
-   your configured Hermes and OpenCode models; configured provider usage may
-   incur charges.
+1. With Tailscale connected, open **http://100.79.242.24:8766** on your phone.
+2. Enter the **Dashboard key** printed in the server terminal. Tick
+   **Remember on this device** to keep it in that browser; otherwise it lasts
+   for the tab. **Connections → Forget key and sign out** removes it.
+3. Open **Connections** and wait for **Hermes CLI and OpenCode API ready**. The
+   startup check reads the installed Hermes CLI's flags without invoking a
+   model. If a check fails, the error appears at the top of the page.
+4. Click **New run**, then **Try the Python todo-app brief** and **Start run**.
+   This fills in a small Python todo-app goal under `demo_app/` and a unittest
+   command. It uses your configured Hermes and OpenCode models, and configured
+   provider usage may incur charges.
 
-You do not have to type the follow-up prompts. Expand a turn in **Runs** and
-expand **Hermes decision** in **Activity** to see how it chooses the next
-step.
+You don't have to type the follow-up prompts. Each turn shows Hermes's plan and
+exact prompt next to OpenCode's live terminal.
 
-If a run was active when you stopped the old dashboard, it will appear as
+If a run was active when you stopped the dashboard, it will appear as
 **Interrupted**. Press **Resume** to reconnect to the same OpenCode session;
 this does not resend its coding prompt.
 
@@ -211,14 +195,14 @@ These tests simulate OpenCode and Hermes; they make no paid model calls and send
 no notifications:
 
 ```bash
-python3 -m unittest discover -s trial-autonomy/tests -v
+python3 -m unittest discover -s agent-autonomy/tests -v
 ```
 
 To check the actual local connections without starting a model:
 
 ```bash
-python3 trial-autonomy/app.py --doctor \
-  --project /home/charlesjackson/TrialProject \
+python3 agent-autonomy/app.py --doctor \
+  --project /path/to/your/project \
   --opencode http://127.0.0.1:45381 --profile ai-arch-dev
 ```
 
@@ -236,9 +220,9 @@ checks while it is running.
 The complete live integration still needs to be exercised on your server. This
 package was checked with simulated services and real local subprocesses; it has
 not called your Hermes model or your OpenCode instance from the build workspace.
-The browser environment blocked the local preview, so the responsive styling
-has not been visually verified here. DOM tests validate interactions without
-rendering a browser layout.
+The interface has been rendered in Chromium with simulated state in every
+theme at 1440, 1024, and 390px (`tests/screenshots.cjs`). Those screenshots
+use fixtures, not your real runs.
 
 ## Themes and keyboard controls
 
@@ -252,7 +236,10 @@ Window decorations are decorative and contain no real OS logos.
 - `p`: pause/resume.
 - `x`: open Stop confirmation; stopping still needs confirmation.
 - `/`: focus the steering field.
-- `u` and `v` are unavailable because undo and on-demand verification are not supported.
+- `v`: Verify now (runs your saved command while the run is paused or finished).
+- `t`: open the OpenCode terminal full screen.
+- `?`: show the shortcut table.
+- `Enter` sends a steering note on devices with a keyboard; `Shift+Enter` adds a line.
 
 Shortcuts are ignored in editable fields, while a modifier key is held, and
 inside unrelated dialogs. Reduced-motion preferences disable the terminal cursor.
@@ -275,8 +262,10 @@ DOM tests use Node and a small test-only dependency; they do not render screensh
 contact your services, call a model, or send notifications:
 
 ```bash
-npm install --prefix /tmp/agentcontrol-ui-tests --no-save --ignore-scripts linkedom
-NODE_PATH=/tmp/agentcontrol-ui-tests/node_modules node trial-autonomy/tests/test_ui.cjs
+npm install --prefix /tmp/agentcontrol-ui-tests --no-save --ignore-scripts linkedom cssom playwright-core
+NODE_PATH=/tmp/agentcontrol-ui-tests/node_modules node agent-autonomy/tests/test_ui.cjs
+# rendered screenshots of every theme at 1440, 1024, and 390px (uses the preinstalled Chromium)
+NODE_PATH=/tmp/agentcontrol-ui-tests/node_modules node agent-autonomy/tests/screenshots.cjs
 ```
 
 The test suite also parses the component CSS and verifies that component colors

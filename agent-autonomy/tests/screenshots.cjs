@@ -29,7 +29,7 @@ const scenarios = {
 };
 
 async function open(browser, theme, [width, height], scenario) {
-  const context = await browser.newContext({viewport: {width, height}, deviceScaleFactor: 1, reducedMotion: 'reduce'});
+  const context = await browser.newContext({viewport: {width, height}, deviceScaleFactor: 1, reducedMotion: 'reduce', colorScheme: process.env.COLOR_SCHEME || 'light'});
   const page = await context.newPage();
   const state = scenario.state();
   await page.addInitScript(([theme, key]) => {
@@ -74,7 +74,7 @@ async function overflow(page) {
   });
 }
 
-(async () => {
+async function main() {
   if (!executablePath) throw Error('Chromium not found; set CHROMIUM_PATH.');
   fs.mkdirSync(out, {recursive: true});
   const browser = await chromium.launch({executablePath});
@@ -92,6 +92,7 @@ async function overflow(page) {
   await browser.close();
   fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
   console.log(`${report.length} screenshots in ${out}; ${report.filter(r => r.wide || r.errors.length).length} with warnings.`);
-})().catch(error => { console.error(error); process.exitCode = 1; });
+}
 
-module.exports = {scenarios, open};
+if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1; });
+module.exports = {scenarios, open, executablePath};

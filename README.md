@@ -1,6 +1,6 @@
-# TrialProject dashboard
+# AgentControl
 
-This is a small local prototype. It records the exact prompt sent to OpenCode,
+A local dashboard and control plane for agent tasks. It records the exact prompt sent to OpenCode,
 shows task activity and responses, and asks Hermes to send a push alert when a
 task completes, fails to submit, or times out. It does not yet ask Hermes to
 generate prompts automatically; the API below is the handoff Hermes will use.
@@ -10,7 +10,7 @@ generate prompts automatically; the API below is the handoff Hermes will use.
 Keep your working OpenCode server running in one terminal. From another:
 
 ```bash
-cd /home/charlesjackson/TrialProject
+cd /home/charlesjackson/AgentControl
 python3 dashboard.py
 ```
 

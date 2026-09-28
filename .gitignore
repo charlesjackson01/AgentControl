@@ -3,3 +3,4 @@ __pycache__/
 __pycache__/
 agent-autonomy/state/
 activity.sqlite3
+agent-autonomy/tests/screenshots/

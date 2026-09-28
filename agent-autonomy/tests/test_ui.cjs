@@ -9,14 +9,8 @@ const root=path.resolve(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'app.js'),'utf8');
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
 const unit=require(path.join(root,'app.js'));
-const clone=value=>JSON.parse(JSON.stringify(value));
+const {clone,fixture}=require('./fixtures.cjs');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function fixture(question=false) {
- const run={id:'run_test',goal:'Exercise the dashboard with simulated data.',created:'2026-09-28T16:00:00Z',deadline:1790613000,time_limit_seconds:1800,max_steps:6,status:'waiting',phase:'code',session:'ses_test',pause:false,stop:false,summary:'A test permission is waiting.',verifier:['python3','-m','unittest'],instructions:[],decision_count:1,goal_checks:[{criterion:'Persist a saved task',status:'pending',evidence:null}]};
- const request={run:run.id,goal:run.goal,sessionID:run.session,kind:question?'question':'permission',id:'req_test',request_id:'req_test',fingerprint:'fingerprint-original',permission:'bash',patterns:['python3 -m unittest'],context:{input:{command:'python3 -m unittest'}},metadata:{},receipt:null};
- if(question)request.questions=[{header:'Storage',question:'Which format?',options:[{label:'JSON',description:'Use a local file'},{label:'SQLite',description:'Use a database'}],custom:true}];
- return {version:'4.0',product:'AgentControl',profile:'test-profile',project:'/tmp/project',opencode_url:'http://127.0.0.1:4096',health:{ready:true,message:'Test services ready',agents:{hermes:{state:'ready',label:'CLI ready; model unchecked'},opencode:{state:'ready',label:'API reachable'}}},limits:{max_run_seconds:7200},capabilities:{},runs:[{...run,prompt_count:1}],run,steps:[{id:'step_test',number:1,title:'Implement task storage',created:run.created,status:'running',prompt:'Save tasks to JSON.',result:'Preparing the tests.',activity:[{created:run.created,kind:'read',detail:'tasks.py',status:'completed'}]}],inbox:[request],reviews:[],events:[]};
-}
 async function harness(state=fixture(),savedTheme='mac') {
  const {window,document}=parseHTML(html);
  // linkedom intentionally has no layout, focus management, or native dialogs.

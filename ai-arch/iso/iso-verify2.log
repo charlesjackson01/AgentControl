@@ -1,0 +1,16 @@
+=== [2026-08-23T09:12:23Z] fetch .sig from official mirror ===
+curl: (6) Could not resolve host: mirror.arizona.edu
+curl: (6) Could not resolve host: archlinux.org
+ls: cannot access 'archlinux-2026.08.01-x86_64.iso.sig': No such file or directory
+=== [2026-08-23T09:12:23Z] retry download from official mirror ===
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: mirror.arizona.edu
+Warning: Problem : timeout. Will retry in 5 seconds. 3 retries left.
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: mirror.arizona.edu
+Warning: Problem : timeout. Will retry in 5 seconds. 2 retries left.
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: mirror.arizona.edu
+Warning: Problem : timeout. Will retry in 5 seconds. 1 retries left.
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0curl: (6) Could not resolve host: mirror.arizona.edu
+download rc=6 size=
+MIRROR DOWNLOAD FAILED

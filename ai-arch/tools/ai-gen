@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""ai-gen: one-shot chat completion from the configured AI endpoint.
+
+Generalized from profile/layers/20-ai-client (Stage D, docs/AI-ARCHITECTURE.md
+§3). stdlib only. Reads config user -> distro -> legacy:
+  ~/.config/ai-arch/ai-arch.json
+  /etc/xdg/ai-arch/ai-arch.json
+  /etc/ai-arch/llama-server.json   (legacy { base_url, model, max_tokens })
+"""
+import json
+import os
+import sys
+import urllib.request
+
+USER_CFG = os.path.expanduser("~/.config/ai-arch/ai-arch.json")
+DISTRO_CFG = os.environ.get("AIARCH_DISTRO_CONFIG", "/etc/xdg/ai-arch/ai-arch.json")
+LEGACY_CFG = "/etc/ai-arch/llama-server.json"
+SECRETS_DIR = os.path.expanduser(
+    os.environ.get("AIARCH_DATA_DIR", os.path.expanduser("~/.local/share/ai-arch")) + "/secrets"
+)
+
+
+def _deep_merge(base, over):
+    out = dict(base)
+    for k, v in over.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge(out[k], v)
+        else:
+            out[k] = v
+    return out
+
+
+def load_config():
+    merged = {}
+    for path in (DISTRO_CFG, USER_CFG):
+        try:
+            with open(path) as f:
+                merged = _deep_merge(merged, json.load(f))
+        except (OSError, ValueError):
+            pass
+    if not merged:
+        try:
+            with open(LEGACY_CFG) as f:
+                legacy = json.load(f)
+            endpoint = {
+                "url": legacy.get("base_url", ""),
+                "model": legacy.get("model", ""),
+            }
+            if "max_tokens" in legacy:
+                endpoint["max_tokens_default"] = legacy["max_tokens"]
+            merged["endpoint"] = endpoint
+        except (OSError, ValueError):
+            pass
+    return merged
+
+
+def load_key(ref):
+    if not ref:
+        return ""
+    safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in ref)
+    path = os.path.join(SECRETS_DIR, safe)
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def call(url, key, payload, timeout):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    if key:
+        req.add_header("Authorization", "Bearer " + key)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.load(r)
+
+
+def main():
+    args = sys.argv[1:]
+    list_models = False
+    model = None
+    max_tokens = None
+    system = None
+    as_json = False
+    timeout = 600
+    prompt_parts = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--list":
+            list_models = True
+        elif a == "--model":
+            i += 1
+            model = args[i]
+        elif a == "--max-tokens":
+            i += 1
+            max_tokens = int(args[i])
+        elif a == "--system":
+            i += 1
+            system = args[i]
+        elif a == "--json":
+            as_json = True
+        elif a == "--timeout":
+            i += 1
+            timeout = int(args[i])
+        elif a in ("-h", "--help"):
+            print(__doc__)
+            return 0
+        else:
+            prompt_parts.append(a)
+        i += 1
+
+    cfg = load_config()
+    endpoint = cfg.get("endpoint", {})
+    base = endpoint.get("url", "").rstrip("/")
+    model = model or endpoint.get("model", "")
+    if not base:
+        print("ai-gen: no endpoint configured", file=sys.stderr)
+        return 2
+
+    key = load_key(endpoint.get("api_key_ref", ""))
+
+    if list_models:
+        with urllib.request.urlopen(base + "/v1/models", timeout=10) as r:
+            data = json.load(r)
+        for m in data.get("data", []):
+            print(m.get("id", ""))
+        return 0
+
+    prompt = " ".join(prompt_parts) or "hello"
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens if max_tokens is not None else int(endpoint.get("max_tokens_default", 256)),
+        "stream": False,
+    }
+    try:
+        d = call(base + "/v1/chat/completions", key, payload, timeout)
+    except Exception as e:
+        print("ai-gen: request failed: %s" % e, file=sys.stderr)
+        return 1
+
+    if as_json:
+        print(json.dumps(d, indent=2))
+    else:
+        print(d["choices"][0]["message"]["content"])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

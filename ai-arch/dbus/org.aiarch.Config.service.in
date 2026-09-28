@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.aiarch.Config
+Exec=@CMAKE_INSTALL_PREFIX@/bin/aiarch-configd

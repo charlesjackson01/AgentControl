@@ -1,0 +1,4 @@
+maxleaf=0x10 extmax=0x80000023
+CPUID.1:EAX=0x00a20f12 hypervisor_bit=0
+CPUID.80000001:EAX=0x00a20f12 SVM_bit=0
+LA57=0

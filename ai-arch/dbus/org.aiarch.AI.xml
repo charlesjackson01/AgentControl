@@ -1,0 +1,89 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!-- org.aiarch.AI — aid / gateway (docs/AI-ARCHITECTURE.md §4.2) -->
+<node>
+  <interface name="org.aiarch.AI">
+    <property name="State" type="s" access="read" emit="true"/>
+    <property name="EndpointUrl" type="s" access="read" emit="true"/>
+    <property name="Model" type="s" access="read" emit="true"/>
+    <property name="LatencyMs" type="i" access="read" emit="true"/>
+    <property name="QueueDepth" type="i" access="read" emit="true"/>
+    <property name="ActiveRequests" type="i" access="read" emit="true"/>
+    <property name="FailedRequests" type="i" access="read" emit="true"/>
+    <property name="QueuePaused" type="b" access="read" emit="true"/>
+    <property name="UsageToday" type="i" access="read" emit="true"/>
+    <property name="UsageMonth" type="i" access="read" emit="true"/>
+    <property name="UsageTodayCost" type="d" access="read" emit="true"/>
+    <property name="UsageMonthCost" type="d" access="read" emit="true"/>
+
+    <method name="Chat">
+      <!-- req: app s, chat_id s, messages a{sv}(role,content), model s?,
+           max_tokens i?, temperature d?, tools a{sv}?, context_scope s? -->
+      <arg name="req" type="a{sv}" direction="in"/>
+      <arg name="request_id" type="s" direction="out"/>
+    </method>
+    <method name="Cancel">
+      <arg name="request_id" type="s" direction="in"/>
+    </method>
+    <method name="Models">
+      <arg name="models" type="a{sv}" direction="out"/>
+    </method>
+    <method name="ReloadModel">
+      <arg name="model" type="s" direction="in"/>
+    </method>
+    <method name="UnloadModel"/>
+    <method name="SetDefaultModel">
+      <arg name="model" type="s" direction="in"/>
+    </method>
+    <method name="TestModel">
+      <arg name="model" type="s" direction="in"/>
+      <arg name="latency_ms" type="i" direction="out"/>
+    </method>
+    <method name="Diagnostics">
+      <arg name="diagnostics" type="a{sv}" direction="out"/>
+    </method>
+    <method name="UsageRange">
+      <arg name="start" type="t" direction="in"/>
+      <arg name="end" type="t" direction="in"/>
+      <arg name="rows" type="a{sv}" direction="out"/>
+    </method>
+    <method name="Logs">
+      <arg name="app" type="s" direction="in"/>
+      <arg name="n" type="i" direction="in"/>
+      <arg name="entries" type="a{sv}" direction="out"/>
+    </method>
+    <method name="PauseQueue"/>
+    <method name="ResumeQueue"/>
+
+    <signal name="StatusUpdated"/>
+    <signal name="StatusChanged">
+      <arg name="state" type="s"/>
+    </signal>
+    <signal name="RequestUpdated">
+      <arg name="request_id" type="s"/>
+      <arg name="state" type="s"/>
+    </signal>
+    <signal name="ChatDelta">
+      <arg name="request_id" type="s"/>
+      <arg name="delta" type="s"/>
+    </signal>
+    <signal name="ChatDone">
+      <arg name="request_id" type="s"/>
+      <arg name="reply" type="s"/>
+      <arg name="tool_calls" type="a{sv}"/>
+      <arg name="usage" type="a{sv}"/>
+    </signal>
+    <signal name="ChatError">
+      <arg name="request_id" type="s"/>
+      <arg name="code" type="s"/>
+      <arg name="message" type="s"/>
+    </signal>
+    <signal name="ModelsReady">
+      <arg name="models" type="a{sv}"/>
+    </signal>
+    <signal name="TestModelDone">
+      <arg name="model" type="s"/>
+      <arg name="latency_ms" type="i"/>
+    </signal>
+  </interface>
+</node>

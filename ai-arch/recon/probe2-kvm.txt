@@ -1,0 +1,41 @@
+=== /dev/kvm (before) ===
+ls: cannot access '/dev/kvm': No such file or directory
+=== kvm modules in /proc/modules ===
+kvm 1413120 0 - Live 0x0000000000000000
+=== /dev/kvm via find ===
+=== modules available (kvm_amd) ===
+filename:       /lib/modules/6.8.0-107-generic/kernel/arch/x86/kvm/kvm-amd.ko
+license:        GPL
+author:         Qumranet
+srcversion:     AB91B0D722CF49AAFAB3907
+alias:          cpu:type:x86,ven*fam*mod*:feature:*00C2*
+=== libvirt daemon ===
+active
+enabled
+=== virsh connection (as user, no sudo) ===
+ Id   Name   State
+--------------------
+
+=== virsh with sudo ===
+ Id   Name   State
+--------------------
+
+=== libvirt URI / sockets ===
+srw-rw---- 1 root libvirt 0 May 23 08:09 /var/run/libvirt/libvirt-sock
+srw-rw-rw- 1 root root    0 May 23 08:09 /var/run/libvirt/libvirt-sock-ro
+=== sudo -n check ===
+passwordless sudo: YES
+=== ovmf firmware ===
+total 2072
+drwxr-xr-x   2 root root    4096 Apr 22 14:15 .
+drwxr-xr-x 343 root root   12288 Aug 19 14:54 ..
+-rw-r--r--   1 root root 2097152 Nov 27  2025 OVMF.fd
+-rw-r--r--   1 root root    1854 Feb 12  2024 PkKek-1-snakeoil.key
+-rw-r--r--   1 root root    1261 Feb 12  2024 PkKek-1-snakeoil.pem
+ls: cannot access '/usr/share/edk2': No such file or directory
+=== arch iso present? ===
+ls: cannot access '/home/charlesjackson/*.iso': No such file or directory
+ls: cannot access '/var/lib/libvirt/images/*.iso': No such file or directory
+=== libvirt images dir ===
+ls: cannot open directory '/var/lib/libvirt/images': Permission denied
+=== END ===

@@ -1,0 +1,22 @@
+# AI-Arch repo: heavy + secret artifacts stay out of git.
+
+# Virtual machine images (multi-GB)
+vms/*.qcow2
+vms/*.iso
+vms/*.log
+vms/*.fd
+iso/*.iso
+
+# Per-build working directory (Phase 1 build pipeline renders artifacts here)
+build/
+
+# Install-time credentials (passwords)
+preseed/archinstall-creds.json
+
+# Deprioritized dashboard experiment (keep locally)
+weblog/
+
+# Python noise
+__pycache__/
+*.pyc
+.venv/

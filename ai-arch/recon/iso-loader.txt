@@ -1,0 +1,16 @@
+=== ISO9660 names (LOADER) ===
+/LOADER
+/LOADER/ENTRIES
+/LOADER/LOADER.CONF;1
+/LOADER/ENTRIES/01_ARCHISO_LINUX.CONF;1
+/LOADER/ENTRIES/02_ARCHISO_SPEECH_LINUX.CONF;1
+/LOADER/ENTRIES/03_ARCHISO_MEMTEST86_X64.CONF;1
+
+=== RockRidge names (LOADER) ===
+/loader
+/loader/entries
+/loader/loader.conf
+/loader/entries/01-archiso-linux.conf
+/loader/entries/02-archiso-speech-linux.conf
+/loader/entries/03-archiso-memtest86+x64.conf
+

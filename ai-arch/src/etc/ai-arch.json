@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "ai_enabled": true,
+  "endpoint": {
+    "url": "http://192.168.122.1:8080",
+    "model": "/home/charlesjackson/.cache/llama.cpp/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+    "api_key_ref": "ai-arch/endpoint-key",
+    "timeout_ms": 600000,
+    "max_tokens_default": 256
+  },
+  "privacy": {
+    "prefer_local": true,
+    "log_retention_days": 30,
+    "content_logging": false,
+    "excluded_paths": ["~/.ssh", "~/.gnupg", "~/.config/keepassxc", "/etc", "/boot"]
+  },
+  "permissions": {
+    "defaults": { "readonly": "allow", "low": "ask", "sensitive": "ask", "critical": "confirm" }
+  }
+}

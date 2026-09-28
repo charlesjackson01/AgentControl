@@ -1,0 +1,12 @@
+{
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "AI-Arch Project"
+            }
+        ],
+        "Id": "ai-arch",
+        "License": "CC-BY-SA-4.0",
+        "Name": "AI-Arch"
+    }
+}

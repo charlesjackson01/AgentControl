@@ -1,0 +1,822 @@
+archinstall(1) — Arch manual pages
+Arch Linux
+Home
+Packages
+Forums
+Wiki
+GitLab
+Security
+AUR
+Download
+ARCHINSTALL(1)
+python-archinstall
+ARCHINSTALL(1)
+NAME
+archinstall - archinstall Documentation
+archinstall is a library which can be used to install Arch
+Linux. The library comes packaged with different pre-configured installers,
+such as the default Guided installation <#guided> installer.
+Some of the features of Archinstall are:
+Context friendly. The library always executes calls in sequential
+order to ensure installation-steps don't overlap or execute in the wrong
+order. It also supports (and uses) context wrappers to ensure
+cleanup and final tasks such as mkinitcpio are called when
+needed.
+Full transparency Logs and insights can be found at
+/var/log/archinstall both in the live ISO and partially on the
+installed system.
+Accessibility friendly Archinstall works with espeakup and
+other accessibility tools thanks to the use of a TUI.
+GUIDED INSTALLATION
+Archinstall ships with a pre-programmed Guided Installer
+https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py
+guiding you through the mandatory steps as well as some optional
+configurations that can be done.
+Note:
+Other pre-programmed scripts can be invoked by executing
+archinstall --script <script> (without .py) . To see a
+complete list of scripts, run archinstall --script list or check the
+source code scripts
+https://github.com/archlinux/archinstall/tree/master/archinstall/scripts
+directory.
+Note:
+It's recommended to run archinstall from the
+official Arch Linux ISO.
+Warning:
+The installer will not configure WiFi before the
+installation begins. You need to read up on Arch Linux networking
+https://wiki.archlinux.org/index.php/Network_configuration before you
+continue.
+Running the guided installation
+To start the installer, run the following in the latest Arch Linux
+ISO:
+archinstall
+Since the Guided Installer
+https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py
+is the default script, this is the equivalent of running archinstall
+guided
+The guided installation also supports installing with
+pre-configured answers to all the guided steps. This can be a quick and
+convenient way to re-run one or several installations.
+There are two configuration files, both are optional.
+--config
+This parameter takes a local .json file as argument and
+contains the overall configuration and menu answers for the guided
+installer.
+--config-url
+This parameter takes a remote .json file as argument and
+contains the overall configuration and menu answers for the guided
+installer.
+Note:
+You can always get the latest options for this file with
+archinstall --dry-run , this executes the guided installer in a safe
+mode where no permanent actions will be taken on your system but simulate a
+run and save the configuration to disk.
+Example usage
+archinstall --config config.json
+archinstall --config-url https://domain.lan/config.json
+The contents of https://domain.lan/config.json :
+{
+"additional-repositories": [],
+"archinstall-language": "English",
+"audio_config": null,
+"bootloader_config": {
+"bootloader": "Systemd-boot",
+"uki": false,
+"removable": false
+},
+"bootloader": "Systemd-boot",
+"debug": false,
+"disk_config": {
+"config_type": "manual_partitioning",
+"device_modifications": [
+{
+"device": "/dev/sda",
+"partitions": [
+{
+"btrfs": [],
+"flags": [
+"boot"
+],
+"fs_type": "fat32",
+"length": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 99982592
+},
+"mount_options": [],
+"mountpoint": "/boot",
+"obj_id": "369f31a8-2781-4d6b-96e7-75680552b7c9",
+"start": {
+"sector_size": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 512
+},
+"total_size": null,
+"unit": "sectors",
+"value": 34
+},
+"status": "create",
+"type": "primary"
+},
+{
+"btrfs": [],
+"flags": [],
+"fs_type": "fat32",
+"length": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 100000000
+},
+"mount_options": [],
+"mountpoint": "/efi",
+"obj_id": "13cf2c96-8b0f-4ade-abaa-c530be589aad",
+"start": {
+"sector_size": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 512
+},
+"total_size": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 16106127360
+},
+"unit": "MB",
+"value": 100
+},
+"status": "create",
+"type": "primary"
+},
+{
+"btrfs": [],
+"flags": [],
+"fs_type": "ext4",
+"length": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 15805127360
+},
+"mount_options": [],
+"mountpoint": "/",
+"obj_id": "3e75d045-21a4-429d-897e-8ec19a006e8b",
+"start": {
+"sector_size": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 512
+},
+"total_size": {
+"sector_size": null,
+"total_size": null,
+"unit": "B",
+"value": 16106127360
+},
+"unit": "MB",
+"value": 301
+},
+"status": "create",
+"type": "primary"
+}
+],
+"wipe": false
+}
+]
+},
+"disk_encryption": {
+"encryption_type": "luks",
+"partitions": [
+"3e75d045-21a4-429d-897e-8ec19a006e8b"
+]
+},
+"hostname": "archlinux",
+"kernels": [
+"linux"
+],
+"locale_config": {
+"kb_layout": "us",
+"sys_enc": "UTF-8",
+"sys_lang": "en_US"
+},
+"mirror_config": {
+"custom_servers": [
+{
+"url": "https://mymirror.com/$repo/os/$arch"
+}
+],
+"mirror_regions": {
+"Australia": [
+"http://archlinux.mirror.digitalpacific.com.au/$repo/os/$arch"
+]
+},
+"optional_repositories": [
+"testing"
+],
+"custom_repositories": [
+{
+"name": "myrepo",
+"url": "https://myrepo.com/$repo/os/$arch",
+"sign_check": "Required",
+"sign_option": "TrustAll"
+}
+]
+},
+"network_config": {},
+"no_pkg_lookups": false,
+"ntp": true,
+"offline": false,
+"packages": [],
+"parallel downloads": 0,
+"profile_config": null,
+"save_config": null,
+"script": "guided",
+"silent": false,
+"swap": true,
+"timezone": "UTC",
+"version": "2.6.0"
+}
+--config options
+Warning:
+All key and value entries must conform to the JSON
+standard. Below is human readable examples with links, effectively breaking
+the syntax. Adapt the descriptions below to suit your needs and the JSON
+format.
+Note:
+Scroll to the right in the table to see required
+options.
+JSON options
+Key
+Value(s)
+Description
+Required
+additional-repositories
+[ multilib
+https://wiki.archlinux.org/title/Official_repositories#multilib ,
+testing
+https://wiki.archlinux.org/title/Official_repositories#Testing_repositories
+]
+Enables one or more of the testing
+and multilib repositories before proceeding with installation
+No
+archinstall-language
+lang
+https://github.com/archlinux/archinstall/blob/master/archinstall/locales/languages.json
+Sets the TUI language used (make
+sure to use the ``lang`` value not the ``abbr``)
+No
+audio_config
+pipewire
+https://wiki.archlinux.org/title/PipeWire , pulseaudio
+https://wiki.archlinux.org/title/PulseAudio
+Audioserver to be installed
+No
+bootloader_config
+{ bootloader: Systemd-boot
+https://wiki.archlinux.org/title/Systemd-boot , grub
+https://wiki.archlinux.org/title/GRUB , limine
+https://wiki.archlinux.org/title/Limine , uki:
+true / false , removable: true / false }
+Bootloader configuration.
+bootloader selects which bootloader to install (grub/limine
+mandatory on BIOS) . uki enables unified kernel images (UEFI
+only, systemd-boot/limine only) . removable installs to default
+removable media path /EFI/BOOT/ instead of NVRAM (UEFI only,
+grub/limine only)
+Yes
+debug
+true , false
+Enables debug output
+No
+disk_config
+Read more under Disk
+Configuration <#disk-config>
+Contains the desired disk setup to be
+used during installation
+No
+disk_encryption
+Read more about under Disk
+Encryption <#disk-encryption>
+Parameters for disk encryption
+applied on top of disk_config
+No
+hostname
+str
+A string defining your machines
+hostname on the network (defaults to ``archinstall``)
+No
+kernels
+[ linux
+https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels ,
+linux-hardened
+https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels ,
+linux-lts
+https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels ,
+linux-rt
+https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels ,
+linux-rt-lts
+https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels ,
+linux-zen
+https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels
+]
+Defines which kernels should be
+installed and setup in the boot loader options
+Yes
+custom_commands
+Read more under Custom
+Commands <#custom-commands>
+Custom commands that will be run
+post-install chrooted inside the installed system
+No
+locale_config
+{kb_layout: lang
+https://wiki.archlinux.org/title/Linux_console/Keyboard_configuration ,
+sys_enc: Character encoding
+https://wiki.archlinux.org/title/Locale , sys_lang: locale
+https://wiki.archlinux.org/title/Locale }
+Defines the keyboard key map, system
+encoding and system locale
+No
+mirror_config
+{custom_mirrors: [
+<https://>... ], mirror_regions: { "Worldwide": [
+" https://geo.mirror.pkgbuild.com/$repo/os/$arch " ] }
+}
+Sets various mirrors (defaults to
+ISO's ``/etc/pacman.d/mirrors`` if not defined)
+No
+network_config
+`see options under Network
+Configuration`
+Sets which type of (if any)
+network configuration should be used
+No
+no_pkg_lookups
+true , false
+Disabled package checking against
+https://archlinux.org/packages/
+No
+ntp
+true , false
+enables or disables NTP
+https://wiki.archlinux.org/title/Network_Time_Protocol_daemon
+during installation
+No
+offline
+true , false
+enables or disables certain online
+checks such as mirror reachability etc
+No
+packages
+[ <package1>, <package2>,
+... ]
+A list of packages to install during
+installation
+No
+parallel downloads
+0-∞
+sets a given number of parallel
+downloads to be used by pacman
+https://wiki.archlinux.org/title/Pacman#Enabling_parallel_downloads
+No
+profile_config
+`read more under the profiles
+section`
+Installs a given profile if
+defined
+No
+script
+guided
+https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py
+(default) , minimal
+https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/minimal.py ,
+only_hdd
+https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/only_hdd.py ,
+When used to autorun an installation, this sets which script to autorun
+with
+No
+silent
+true , false
+disables or enables user questions
+using the TUI
+No
+swap
+true , false
+enables or disables swap
+No
+timezone
+timezone
+https://wiki.archlinux.org/title/System_time#Time_zone
+sets a timezone for the installed
+system
+No
+Note:
+If no entries are found in disk_config ,
+archinstall guided installation will use whatever is mounted currently under
+/mnt/archinstall without performing any disk operations.
+Options for --creds
+Creds is a separate configuration file to separate normal options
+from more sensitive data like passwords. Below is an example of how to set
+the root password and below that are description of other values that can be
+set.
+{
+"root_enc_password" : "SecretSanta2022"
+}
+--creds options
+Key
+Values
+Description
+Required
+!encryption-password
+str
+Password to encrypt disk, not
+encrypted if password not provided
+No
+root_enc_password
+str
+The root account password
+No
+users
+0.0 3.5 { "username":
+"<USERNAME>", "enc_password":
+"<PASSWORD_HASH>", "sudo": false } 168u
+168u
+List of regular user credentials, see
+configuration for reference
+Maybe
+Note:
+users is optional only if root_enc_password
+was set. users will be enforced otherwise and the minimum amount of
+users with sudo privileges required will be set to 1.
+KNOWN ISSUES
+Some issues are out of the archinstall
+https://github.com/archlinux/archinstall/ projects scope, and the
+ones we know of are listed below.
+Waiting for time sync #2144 <https://github.com/archlinux/archinstall/issues/2144>
+The usual root cause of this is the network topology. More
+specifically timedatectl show
+https://github.com/archlinux/archinstall/blob/e6344f93f7e476d05bbcd642f2ed91fdde545870/archinstall/lib/installer.py#L136
+cannot perform a proper time sync against the default servers.
+Restarting systemd-timesyncd.service might work but most
+often you need to configure /etc/systemd/timesyncd.conf to match your
+network design.
+Note:
+If you know your time is correct on the machine, you can
+run archinstall --skip-ntp to ignore time sync.
+Waiting for Arch Linux keyring sync (archlinux-keyring-wkd-sync) to complete. #2679 <https://github.com/archlinux/archinstall/issues/2679>
+The archlinux-keyring-wkd-sync.service or
+archlinux-keyring-wkd-sync.timer can hang "indefinitely"
+sometimes. This is usually due to an inability to reach the key servers, or
+a slow connection towards key servers.
+The script /usr/bin/archlinux-keyring-wkd-sync can be run
+manually, to verify if it's executing slowly or not.
+If systemctl show --property=ActiveEnterTimestamp --no-pager
+archlinux-keyring-wkd-sync.timer shows nothing, it means the built-in
+sync never finished. Likewise systemctl show --no-pager -p SubState
+--value archlinux-keyring-wkd-sync.service most likely shows
+dead , which means the service never completed.
+To fix this, try the following:
+# killall gpg-agent
+# rm -rf /etc/pacman.d/gnupg
+# pacman-key --init
+# pacman-key --populate
+# pacman -Sy archlinux-keyring
+# systemctl restart archlinux-keyring-wkd-sync.timer
+Note:
+If you know the ISO is the latest, and that you have
+valid GPG keys, try archinstall --skip-wkd to ignore waiting for the
+sync.
+If you skip WKD sync, you might end up with:
+> error: archinstall: signature from "Anton Hvornum (Torxed) <torxed@archlinux.org>" is unknown trust
+> :: File /var/cache/pacman/pkg/archinstall-1.2.3-4-x86_64.pkg.tar.xz is corrupted (invalid or corrupted package (PGP signature)).
+> Do you want to delete it? [Y/n]
+Missing Nvidia Proprietary Driver #2002 <https://github.com/archlinux/archinstall/issues/2002>
+In some instances, the nvidia driver might not have all the
+necessary packages installed. This is due to the kernel selection and/or
+hardware setups requiring additional packages to work properly.
+A common workaround is to install the package linux-headers
+https://archlinux.org/packages/core/x86_64/linux-headers/ and
+nvidia-dkms
+https://archlinux.org/packages/extra/x86_64/nvidia-dkms/
+ARM, 32bit and other CPU types error out #1686 <https://github.com/archlinux/archinstall/issues/1686>, #2185 <https://github.com/archlinux/archinstall/issues/2185>
+This is a bit of a catch-all known issue. Officially x86_64
+< https://wiki.archlinux.org/title/Frequently_asked_questions#What_architectures_does_Arch_support ?>
+is only supported by Arch Linux. Hence little effort has been put into
+supporting other platforms.
+In theory, other architectures should work but small quirks might
+arise.
+PR's are welcome but please be respectful of the delays in
+merging. Other fixes, issues or features will be prioritized for the above
+reasons.
+Keyring is out of date #2213 <https://github.com/archlinux/archinstall/issues/2213>
+Missing key-issues tend to be that the archlinux-keyring
+https://archlinux.org/packages/core/any/archlinux-keyring/ package
+is out of date, usually as a result of an outdated ISO. There is an attempt
+from upstream to fix this issue, and it's the
+archlinux-keyring-wkd-sync.service
+https://gitlab.archlinux.org/archlinux/archlinux-keyring/-/blob/7e672dad10652a80d1cc575d75cdb46442cd7f96/wkd_sync/archlinux-keyring-wkd-sync.service.in
+The service starts almost immediately during boot, and if network
+is not configured in time — the service will fail. Subsequently the
+archinstall run might operate on an old keyring despite there being
+an update service for this.
+There is really no way to reliably over time work around this
+issue in archinstall . Instead, efforts to the upstream service should
+be considered the way forward. And/or keys not expiring between a sane
+amount of ISOs.
+Note:
+The issue can happen on new ISO's too even as little as a
+few days after release, as some keys might expire right after the keyring is
+"burnt in" to the ISO.
+Note:
+Another common issue relating to the network not being
+configured, is that time might not be set correctly - resulting in the keyring
+not being able to update. See Waiting for time sync #2144.
+AUR packages
+This is also a catch-all issue. AUR is unsupported
+https://wiki.archlinux.org/title/Arch_User_Repository#Updating_packages ,
+and until that changes we cannot use AUR packages to solve feature requests
+in archinstall .
+This means that feature requests like supporting filesystems such
+as ZFS https://aur.archlinux.org/packages/zfs-linux can not be
+added, and issues cannot be solved by using AUR packages either.
+Note:
+But in spirit of giving the community options,
+archinstall supports Python Plugins <#archinstall-plugins>, which
+means you can run archinstall --plugin <url> and source an AUR
+plugin.
+torxed/archinstall-aur
+https://github.com/torxed/archinstall-aur is a reference
+implementation for plugins:
+# archinstall --plugin https://archlinux.life/aur-plugin
+phisch/archinstall-aur
+https://github.com/phisch/archinstall-aur is another
+alternative:
+# archinstall --plugin https://raw.githubusercontent.com/phisch/archinstall-aur/master/archinstall-aur.py
+Warning:
+This will allow for unsupported usage of AUR during
+installation.
+REPORT ISSUES & BUGS
+Issues and bugs should be reported over at
+https://github.com/archlinux/archinstall/issues .
+General questions, enhancements and security issues can be
+reported over there too. For quick issues or if you need help, head over to
+the Discord server which has a help channel.
+Log files
+When submitting a help ticket, please include the
+/var/log/archinstall/install.log . It can be found both on the live
+ISO but also in the installed filesystem if the base packages were strapped
+in.
+Tip:
+An easy way to submit logs is archinstall share-log , which uploads install.log to paste.rs and prints a shareable URL.
+Use caution when submitting other log files, but archinstall pledges to keep install.log safe for posting publicly!
+There are additional log files under /var/log/archinstall/
+that can be useful:
+/var/log/archinstall/user_configuration.json - Stores most of the
+guided answers in the installer
+/var/log/archinstall/user_credentials.json - Stores any usernames
+or passwords, can be passed to --creds
+/var/log/archinstall/user_disk_layouts.json - Stores the chosen
+disks and their layouts
+/var/log/archinstall/install.log - A log file over what steps were
+taken by archinstall
+/var/log/archinstall/cmd_history.txt - A complete command history,
+command by command in order
+/var/log/archinstall/cmd_output.txt - A raw output from all the
+commands that were executed by archinstall
+Warning:
+We only try to guarantee that
+/var/log/archinstall/install.log is free from sensitive information.
+Any other log file should be pasted with utmost care !
+DISCORD
+There's a discord channel which is frequented by some contributors
+https://github.com/archlinux/archinstall/graphs/contributors .
+To join the server, head over to
+https://discord.gg/aDeMffrxNg and join in. There's not many rules
+other than common sense and to treat others with respect. The general chat
+is for off-topic things as well.
+There's the @Party Animals role if you want notifications
+of new releases which is posted in the #Release Party channel.
+Another thing is the @Contributors role can be activated by
+contributors by writing !verify and follow the verification
+process.
+Hop in, we hope to see you there! : )
+PYTHON LIBRARY
+Archinstall ships on PyPi https://pypi.org/ as archinstall
+<pypi.org/project/archinstall/>. But the library can be installed
+manually as well.
+Warning:
+These steps are not required if you want to use
+archinstall on the official Arch Linux ISO.
+Installing with pacman
+Archinstall is on the official repositories
+https://wiki.archlinux.org/index.php/Official_repositories . And it
+will also install archinstall as a python library.
+To install both the library and the archinstall script:
+pacman -S archinstall
+Alternatively, you can install only the library and not the helper
+executable using the python-archinstall package.
+Installing from PyPI
+The basic concept of PyPI applies using pip .
+pip install archinstall
+Install using source code
+You can also install using the source code. For sake of simplicity
+we will use git clone in this example.
+git clone https://github.com/archlinux/archinstall
+You can either move the folder into your project and simply do
+import archinstall
+Or you can PyPa's build https://github.com/pypa/build and
+installer https://github.com/pypa/installer to install it into
+pythons module path.
+$ cd archinstall
+$ python -m build .
+$ python -m installer dist/*.whl
+PYTHON MODULE
+Archinstall supports running in module mode
+https://docs.python.org/3/library/__main__.html . The way the library
+is invoked in module mode is limited to executing scripts under the scripts
+https://github.com/archlinux/archinstall/tree/master/archinstall/scripts
+folder.
+It's therefore important to place any script or profile you wish
+to invoke in the examples folder prior to building and installing.
+Pre-requisites
+We'll assume you've followed the Install using source code
+<#installing-python-manual> method. Before actually installing the
+library, you will need to place your custom installer-scripts under scripts
+https://github.com/archlinux/archinstall/tree/master/archinstall/scripts
+as a python file.
+More on how you create these in the next section.
+Warning:
+This is subject to change in the future as this method is
+currently a bit stiff. The script path will become a parameter. But for now,
+this is by design.
+Creating a script
+Lets create a test_installer - installer as an example.
+This is assuming that the folder ./archinstall is a git-clone of the
+main repo. We begin by creating "scripts
+https://github.com/archlinux/archinstall/tree/master/archinstall/scripts /test_installer.py ".
+The placement here is important later.
+This script can now already be called using python -m
+archinstall --script test_installer after a successful installation of
+the library itself. But the script won't do much. So we'll do something
+simple like list all the hard drives as an example.
+To do this, we'll begin by importing archinstall in our
+"scripts
+https://github.com/archlinux/archinstall/tree/master/archinstall/scripts /test_installer.py "
+and call a function within archinstall .
+from archinstall.lib.disk.device_handler import device_handler
+from pprint import pprint
+pprint(device_handler.devices)
+Now, go ahead and reference the Install using source code
+<#installing-python-manual> installation method. After running
+python -m archinstall test_installer it should print something that
+looks like:
+[
+BDevice(
+disk=<parted.disk.Disk object at 0x7fbe17156050>,
+device_info=_DeviceInfo(
+model='PC801 NVMe SK hynix 512GB',
+path=PosixPath('/dev/nvme0n1'),
+type='nvme',
+total_size=Size(value=512110190592, unit=<Unit.B: 1>,
+sector_size=SectorSize(value=512, unit=<Unit.B: 1>)),
+free_space_regions=[
+<archinstall.lib.disk.device.DeviceGeometry object at 0x7fbe166c4250>,
+<archinstall.lib.disk.device.DeviceGeometry object at 0x7fbe166c4c50>,
+<archinstall.lib.disk.device.DeviceGeometry object at 0x7fbe166c4a10>],
+sector_size=SectorSize(value=512, unit=<Unit.B: 1>),
+read_only=False,
+dirty=False
+),
+partition_infos=[
+_PartitionInfo(
+partition=<parted.partition.Partition object at 0x7fbe166c4a90>,
+name='primary',
+type=<PartitionType.PRIMARY: 'primary'>,
+fs_type=<FilesystemType.FAT32: 'fat32'>,
+path='/dev/nvme0n1p1',
+start=Size(value=2048, unit=<Unit.sectors: 'sectors'>, sector_size=SectorSize(value=512, unit=<Unit.B: 1>)),
+length=Size(value=535822336, unit=<Unit.B: 1>, sector_size=SectorSize(value=512, unit=<Unit.B: 1>)),
+flags=[
+<PartitionFlag.BOOT: flag_id=1, alias=None>,
+<PartitionFlag.ESP: flag_id=18, alias=None>
+],
+partn=1,
+partuuid='a26be943-c193-41f4-9930-9341cf5f6b19',
+uuid='6EE9-2C00',
+disk=<parted.disk.Disk object at 0x7fbe17156050>,
+mountpoints=[
+PosixPath('/boot')
+],
+btrfs_subvol_infos=[]
+),
+_PartitionInfo(...)
+]
+)
+]
+That means your script is in the right place, and
+archinstall is working as intended.
+Note:
+Most calls, including the one above requires root
+https://en.wikipedia.org/wiki/Superuser privileges.
+PYTHON PLUGINS
+archinstall supports plugins via two methods.
+First method is directly via the --plugin parameter when
+running as a CLI tool. This will load a specific plugin locally or remotely
+via a path.
+The second method is via Python's built in plugin discovery
+https://packaging.python.org/en/latest/specifications/entry-points/
+using entry points
+https://docs.python.org/3/library/importlib.metadata.html#entry-points
+categorized as archinstall.plugin .
+--plugin parameter
+The parameter has the benefit of being stored in the --conf
+state, meaning when re-running an installation — the plugin will
+automatically be loaded. It's limitation is that it requires an initial path
+to be known and written and be cumbersome.
+Plugin Discovery
+This method allows for multiple plugins to be loaded with the
+drawback that they have to be installed beforehand on the system running
+archinstall . This mainly targets those who build their own ISO's and
+package specific setups for their needs.
+What's supported?
+Currently the documentation for this is scarse. Until that is
+resolved, the best way to find supported features is to search the source
+code for plugin.on_
+< https://github.com/search?q=repo%3Aarchlinux%2Farchinstall+%22plugin.on_%22 &type=code>
+as this will give a clear indication of which calls are made to plugins.
+How does it work?
+archinstall plugins use a discovery-driven approach where
+plugins are queried for certain functions. As an example, if a plugin has
+the following function:
+def on_pacstrap(*packages):
+...
+The function archinstall.Pacman().strap(["some
+packages"]) is hardcoded to iterate plugins and look for
+on_pacstrap in the plugin. If the function exists, .strap()
+will call the plugin's function and replace the initial package list with
+the result from the plugin.
+The best way to document these calls is currently undecided, as
+it's hard to document this behavior dynamically.
+Writing your own?
+The simplest way currently is to look at a reference
+implementation or the community. Two of these are:
+torxed/archinstall-aur
+https://github.com/torxed/archinstall-aur
+phisch/archinstall-aur
+https://github.com/phisch/archinstall-aur
+And search for plugin.on_
+< https://github.com/search?q=repo%3Aarchlinux%2Farchinstall+%22plugin.on_%22 &type=code>
+in the code base to find what archinstall will look for. PR's are
+welcome to widen the support for this.
+ARCHINSTALL.INSTALLER
+The installer is the main class for accessing an
+installation-instance. You can look at this class as the installation you
+have or will perform.
+Anything related to inside the installation, will be found
+in this class.
+Author
+Anton Hvornum
+Copyright
+2022, Anton Hvornum
+June 28, 2026
+Package information:
+Package name:
+extra/archinstall
+Version:
+4.4-1
+Upstream:
+https://github.com/archlinux/archinstall
+Licenses:
+GPL-3.0-only
+Manuals:
+/listing/extra/archinstall/
+Table of contents
+NAME
+GUIDED INSTALLATION
+KNOWN ISSUES
+REPORT ISSUES & BUGS
+DISCORD
+PYTHON LIBRARY
+PYTHON MODULE
+PYTHON PLUGINS
+ARCHINSTALL.INSTALLER
+Author
+Copyright
+In other languages:
+ar
+ro
+Other formats:
+txt ,
+raw
+Powered by archmanweb ,
+using mandoc for the conversion of manual pages.
+The website is available under the terms of the GPL-3.0
+license, except for the contents of the manual pages, which have their own license
+specified in the corresponding Arch Linux package.

@@ -1,0 +1,1196 @@
+
+
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>archinstall(1) — Arch manual pages</title>
+        <link rel="stylesheet" type="text/css" href="/static/archlinux_common_style/navbar.css">
+        <link rel="stylesheet" type="text/css" href="/static/archmanweb/base.css">
+        <link rel="icon" type="image/x-icon" href="/static/archlinux_common_style/favicon.ico" />
+        <link rel="shortcut icon" type="image/x-icon" href="/static/archlinux_common_style/favicon.ico" />
+        
+    <link rel="stylesheet" type="text/css" href="/static/archmanweb/man_page.css">
+    
+        <link rel="alternate" href="/man/archinstall.1.ar" hreflang="ar">
+    
+        <link rel="alternate" href="/man/archinstall.1.ro" hreflang="ro">
+    
+
+    </head>
+    <body>
+        <header>
+            <div id="archnavbar">
+	<div id="logo"><a href="https://archlinux.org" title="Return to the main page">Arch Linux</a></div>
+	<div id="archnavbarmenu">
+		<ul id="archnavbarlist">
+			<li id="anb-home"><a href="https://archlinux.org" title="Arch news, packages, projects and more">Home</a></li>
+			<li id="anb-packages"><a href="https://archlinux.org/packages/" title="Arch Package Database">Packages</a></li>
+			<li id="anb-forums"><a href="https://bbs.archlinux.org/" title="Community forums">Forums</a></li>
+			<li id="anb-wiki"><a href="https://wiki.archlinux.org/" title="Community documentation">Wiki</a></li>
+			<li id="anb-gitlab"><a href="https://gitlab.archlinux.org/archlinux" title="GitLab">GitLab</a></li>
+			<li id="anb-security"><a href="https://security.archlinux.org/" title="Arch Linux Security Tracker">Security</a></li>
+			<li id="anb-aur"><a href="https://aur.archlinux.org/" title="Arch Linux User Repository">AUR</a></li>
+			<li id="anb-download"><a href="https://archlinux.org/download/" title="Get Arch Linux">Download</a></li>
+		</ul>
+	</div>
+</div>
+
+        </header>
+        <main id="content">
+            
+            <article id="content-left">
+                
+<section class="man-page-content">
+    <table class="head">
+  <tr>
+    <td class="head-ltitle">ARCHINSTALL(1)</td>
+    <td class="head-vol">python-archinstall</td>
+    <td class="head-rtitle">ARCHINSTALL(1)</td>
+  </tr>
+</table>
+<div class="manual-text">
+<section class="Sh">
+<h1 class="Sh" id='NAME'><a class='permalink' href='#NAME'>NAME</a></h1>
+<p class="Pp">archinstall - archinstall Documentation</p>
+<p class="Pp"><b>archinstall</b> is a library which can be used to install Arch
+    Linux. The library comes packaged with different pre-configured installers,
+    such as the default Guided installation &lt;#guided&gt; installer.</p>
+<p class="Pp">Some of the features of Archinstall are:</p>
+<div class="Bd-indent">
+<ul class="Bl-bullet">
+  <li><b>Context friendly.</b> The library always executes calls in sequential
+      order to ensure installation-steps don't overlap or execute in the wrong
+      order. It also supports <i>(and uses)</i> context wrappers to ensure
+      cleanup and final tasks such as <b>mkinitcpio</b> are called when
+    needed.</li>
+  <li><b>Full transparency</b> Logs and insights can be found at
+      <b>/var/log/archinstall</b> both in the live ISO and partially on the
+      installed system.</li>
+  <li><b>Accessibility friendly</b> Archinstall works with <b>espeakup</b> and
+      other accessibility tools thanks to the use of a TUI.</li>
+</ul>
+</div>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='GUIDED_INSTALLATION'><a class='permalink' href='#GUIDED_INSTALLATION'>GUIDED   INSTALLATION</a></h1>
+<p class="Pp">Archinstall ships with a pre-programmed Guided Installer
+    <a href='https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py'>https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py</a>
+    guiding you through the mandatory steps as well as some optional
+    configurations that can be done.</p>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">Other pre-programmed scripts can be invoked by executing
+  <b>archinstall --script &lt;script&gt;</b> <i>(without .py)</i>. To see a
+  complete list of scripts, run <b>archinstall --script list</b> or check the
+  source code scripts
+  <a href='https://github.com/archlinux/archinstall/tree/master/archinstall/scripts'>https://github.com/archlinux/archinstall/tree/master/archinstall/scripts</a>
+  directory.</div>
+</div>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">It's recommended to run <b>archinstall</b> from the
+  official Arch Linux ISO.</div>
+</div>
+<p class="Pp"><b>Warning:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">The installer will not configure WiFi before the
+  installation begins. You need to read up on Arch Linux networking
+  <a href='https://wiki.archlinux.org/index.php/Network_configuration'>https://wiki.archlinux.org/index.php/Network_configuration</a> before you
+  continue.</div>
+</div>
+<section class="Ss">
+<h2 class="Ss" id='Running_the_guided_installation'><a class='permalink' href='#Running_the_guided_installation'>Running   the guided installation</a></h2>
+<p class="Pp">To start the installer, run the following in the latest Arch Linux
+    ISO:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>archinstall</pre>
+</div>
+</div>
+<p class="Pp">Since the Guided Installer
+    <a href='https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py'>https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py</a>
+    is the default script, this is the equivalent of running <b>archinstall
+    guided</b></p>
+<p class="Pp">The guided installation also supports installing with
+    pre-configured answers to all the guided steps. This can be a quick and
+    convenient way to re-run one or several installations.</p>
+<p class="Pp">There are two configuration files, both are optional.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss"><b>--config</b></h2>
+<p class="Pp">This parameter takes a local <b>.json</b> file as argument and
+    contains the overall configuration and menu answers for the guided
+    installer.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss"><b>--config-url</b></h2>
+<p class="Pp">This parameter takes a remote <b>.json</b> file as argument and
+    contains the overall configuration and menu answers for the guided
+    installer.</p>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">You can always get the latest options for this file with
+  <b>archinstall --dry-run</b>, this executes the guided installer in a safe
+  mode where no permanent actions will be taken on your system but simulate a
+  run and save the configuration to disk.</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Example_usage'><a class='permalink' href='#Example_usage'>Example   usage</a></h2>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>archinstall --config config.json</pre>
+</div>
+</div>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>archinstall --config-url https://domain.lan/config.json</pre>
+</div>
+</div>
+<p class="Pp">The contents of <a href='https://domain.lan/config.json'>https://domain.lan/config.json</a>:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>{
+  &quot;additional-repositories&quot;: [],
+  &quot;archinstall-language&quot;: &quot;English&quot;,
+  &quot;audio_config&quot;: null,
+  &quot;bootloader_config&quot;: {
+    &quot;bootloader&quot;: &quot;Systemd-boot&quot;,
+    &quot;uki&quot;: false,
+    &quot;removable&quot;: false
+  },
+  &quot;bootloader&quot;: &quot;Systemd-boot&quot;,
+  &quot;debug&quot;: false,
+  &quot;disk_config&quot;: {
+    &quot;config_type&quot;: &quot;manual_partitioning&quot;,
+    &quot;device_modifications&quot;: [
+      {
+        &quot;device&quot;: &quot;/dev/sda&quot;,
+        &quot;partitions&quot;: [
+          {
+            &quot;btrfs&quot;: [],
+            &quot;flags&quot;: [
+              &quot;boot&quot;
+            ],
+            &quot;fs_type&quot;: &quot;fat32&quot;,
+            &quot;length&quot;: {
+              &quot;sector_size&quot;: null,
+              &quot;total_size&quot;: null,
+              &quot;unit&quot;: &quot;B&quot;,
+              &quot;value&quot;: 99982592
+            },
+            &quot;mount_options&quot;: [],
+            &quot;mountpoint&quot;: &quot;/boot&quot;,
+            &quot;obj_id&quot;: &quot;369f31a8-2781-4d6b-96e7-75680552b7c9&quot;,
+            &quot;start&quot;: {
+              &quot;sector_size&quot;: {
+                &quot;sector_size&quot;: null,
+                &quot;total_size&quot;: null,
+                &quot;unit&quot;: &quot;B&quot;,
+                &quot;value&quot;: 512
+              },
+              &quot;total_size&quot;: null,
+              &quot;unit&quot;: &quot;sectors&quot;,
+              &quot;value&quot;: 34
+            },
+            &quot;status&quot;: &quot;create&quot;,
+            &quot;type&quot;: &quot;primary&quot;
+          },
+          {
+            &quot;btrfs&quot;: [],
+            &quot;flags&quot;: [],
+            &quot;fs_type&quot;: &quot;fat32&quot;,
+            &quot;length&quot;: {
+              &quot;sector_size&quot;: null,
+              &quot;total_size&quot;: null,
+              &quot;unit&quot;: &quot;B&quot;,
+              &quot;value&quot;: 100000000
+            },
+            &quot;mount_options&quot;: [],
+            &quot;mountpoint&quot;: &quot;/efi&quot;,
+            &quot;obj_id&quot;: &quot;13cf2c96-8b0f-4ade-abaa-c530be589aad&quot;,
+            &quot;start&quot;: {
+              &quot;sector_size&quot;: {
+                &quot;sector_size&quot;: null,
+                &quot;total_size&quot;: null,
+                &quot;unit&quot;: &quot;B&quot;,
+                &quot;value&quot;: 512
+              },
+              &quot;total_size&quot;: {
+                &quot;sector_size&quot;: null,
+                &quot;total_size&quot;: null,
+                &quot;unit&quot;: &quot;B&quot;,
+                &quot;value&quot;: 16106127360
+              },
+              &quot;unit&quot;: &quot;MB&quot;,
+              &quot;value&quot;: 100
+            },
+            &quot;status&quot;: &quot;create&quot;,
+            &quot;type&quot;: &quot;primary&quot;
+          },
+          {
+            &quot;btrfs&quot;: [],
+            &quot;flags&quot;: [],
+            &quot;fs_type&quot;: &quot;ext4&quot;,
+            &quot;length&quot;: {
+              &quot;sector_size&quot;: null,
+              &quot;total_size&quot;: null,
+              &quot;unit&quot;: &quot;B&quot;,
+              &quot;value&quot;: 15805127360
+            },
+            &quot;mount_options&quot;: [],
+            &quot;mountpoint&quot;: &quot;/&quot;,
+            &quot;obj_id&quot;: &quot;3e75d045-21a4-429d-897e-8ec19a006e8b&quot;,
+            &quot;start&quot;: {
+              &quot;sector_size&quot;: {
+                &quot;sector_size&quot;: null,
+                &quot;total_size&quot;: null,
+                &quot;unit&quot;: &quot;B&quot;,
+                &quot;value&quot;: 512
+              },
+              &quot;total_size&quot;: {
+                &quot;sector_size&quot;: null,
+                &quot;total_size&quot;: null,
+                &quot;unit&quot;: &quot;B&quot;,
+                &quot;value&quot;: 16106127360
+              },
+              &quot;unit&quot;: &quot;MB&quot;,
+              &quot;value&quot;: 301
+            },
+            &quot;status&quot;: &quot;create&quot;,
+            &quot;type&quot;: &quot;primary&quot;
+          }
+        ],
+        &quot;wipe&quot;: false
+      }
+    ]
+  },
+  &quot;disk_encryption&quot;: {
+    &quot;encryption_type&quot;: &quot;luks&quot;,
+    &quot;partitions&quot;: [
+      &quot;3e75d045-21a4-429d-897e-8ec19a006e8b&quot;
+    ]
+  },
+  &quot;hostname&quot;: &quot;archlinux&quot;,
+  &quot;kernels&quot;: [
+    &quot;linux&quot;
+  ],
+  &quot;locale_config&quot;: {
+    &quot;kb_layout&quot;: &quot;us&quot;,
+    &quot;sys_enc&quot;: &quot;UTF-8&quot;,
+    &quot;sys_lang&quot;: &quot;en_US&quot;
+  },
+  &quot;mirror_config&quot;: {
+    &quot;custom_servers&quot;: [
+      {
+        &quot;url&quot;: &quot;https://mymirror.com/$repo/os/$arch&quot;
+      }
+    ],
+    &quot;mirror_regions&quot;: {
+      &quot;Australia&quot;: [
+        &quot;http://archlinux.mirror.digitalpacific.com.au/$repo/os/$arch&quot;
+      ]
+    },
+    &quot;optional_repositories&quot;: [
+      &quot;testing&quot;
+    ],
+    &quot;custom_repositories&quot;: [
+      {
+        &quot;name&quot;: &quot;myrepo&quot;,
+        &quot;url&quot;: &quot;https://myrepo.com/$repo/os/$arch&quot;,
+        &quot;sign_check&quot;: &quot;Required&quot;,
+        &quot;sign_option&quot;: &quot;TrustAll&quot;
+      }
+    ]
+  },
+  &quot;network_config&quot;: {},
+  &quot;no_pkg_lookups&quot;: false,
+  &quot;ntp&quot;: true,
+  &quot;offline&quot;: false,
+  &quot;packages&quot;: [],
+  &quot;parallel downloads&quot;: 0,
+  &quot;profile_config&quot;: null,
+  &quot;save_config&quot;: null,
+  &quot;script&quot;: &quot;guided&quot;,
+  &quot;silent&quot;: false,
+  &quot;swap&quot;: true,
+  &quot;timezone&quot;: &quot;UTC&quot;,
+  &quot;version&quot;: &quot;2.6.0&quot;
+}</pre>
+</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss"><b>--config</b> options</h2>
+<p class="Pp"><b>Warning:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">All key and value entries must conform to the JSON
+  standard. Below is human readable examples with links, effectively breaking
+  the syntax. Adapt the descriptions below to suit your needs and the JSON
+  format.</div>
+</div>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">Scroll to the right in the table to see required
+  options.</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='JSON_options'><a class='permalink' href='#JSON_options'>JSON   options</a></h2>
+<table class="tbl" style="border-style: solid;">
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">Key</td>
+    <td style="border-right-style: solid;">Value(s)</td>
+    <td style="border-right-style: solid;">Description</td>
+    <td>Required</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">additional-repositories</td>
+    <td style="border-right-style: solid;">[ multilib
+      <a href='https://wiki.archlinux.org/title/Official_repositories#multilib'>https://wiki.archlinux.org/title/Official_repositories#multilib</a>,
+      testing
+      <a href='https://wiki.archlinux.org/title/Official_repositories#Testing_repositories'>https://wiki.archlinux.org/title/Official_repositories#Testing_repositories</a>
+      ]</td>
+    <td style="border-right-style: solid;">Enables one or more of the testing
+      and multilib repositories before proceeding with installation</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">archinstall-language</td>
+    <td style="border-right-style: solid;">lang
+      <a href='https://github.com/archlinux/archinstall/blob/master/archinstall/locales/languages.json'>https://github.com/archlinux/archinstall/blob/master/archinstall/locales/languages.json</a></td>
+    <td style="border-right-style: solid;">Sets the TUI language used <i>(make
+      sure to use the ``lang`` value not the ``abbr``)</i></td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">audio_config</td>
+    <td style="border-right-style: solid;">pipewire
+      <a href='https://wiki.archlinux.org/title/PipeWire'>https://wiki.archlinux.org/title/PipeWire</a>, pulseaudio
+      <a href='https://wiki.archlinux.org/title/PulseAudio'>https://wiki.archlinux.org/title/PulseAudio</a></td>
+    <td style="border-right-style: solid;">Audioserver to be installed</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">bootloader_config</td>
+    <td style="border-right-style: solid;">{ bootloader: Systemd-boot
+      <a href='https://wiki.archlinux.org/title/Systemd-boot'>https://wiki.archlinux.org/title/Systemd-boot</a>, grub
+      <a href='https://wiki.archlinux.org/title/GRUB'>https://wiki.archlinux.org/title/GRUB</a>, limine
+      <a href='https://wiki.archlinux.org/title/Limine'>https://wiki.archlinux.org/title/Limine</a>, uki:
+      <b>true</b>/<b>false</b>, removable: <b>true</b>/<b>false</b> }</td>
+    <td style="border-right-style: solid;">Bootloader configuration.
+      <b>bootloader</b> selects which bootloader to install <i>(grub/limine
+      mandatory on BIOS)</i>. <b>uki</b> enables unified kernel images <i>(UEFI
+      only, systemd-boot/limine only)</i>. <b>removable</b> installs to default
+      removable media path /EFI/BOOT/ instead of NVRAM <i>(UEFI only,
+      grub/limine only)</i></td>
+    <td>Yes</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">debug</td>
+    <td style="border-right-style: solid;"><b>true</b>, <b>false</b></td>
+    <td style="border-right-style: solid;">Enables debug output</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">disk_config</td>
+    <td style="border-right-style: solid;"><i>Read more under</i> Disk
+      Configuration &lt;#disk-config&gt;</td>
+    <td style="border-right-style: solid;">Contains the desired disk setup to be
+      used during installation</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">disk_encryption</td>
+    <td style="border-right-style: solid;"><i>Read more about under</i> Disk
+      Encryption &lt;#disk-encryption&gt;</td>
+    <td style="border-right-style: solid;">Parameters for disk encryption
+      applied on top of <b>disk_config</b></td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">hostname</td>
+    <td style="border-right-style: solid;"><b>str</b></td>
+    <td style="border-right-style: solid;">A string defining your machines
+      hostname on the network <i>(defaults to ``archinstall``)</i></td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">kernels</td>
+    <td style="border-right-style: solid;">[ linux
+      <a href='https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels'>https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels</a>,
+      linux-hardened
+      <a href='https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels'>https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels</a>,
+      linux-lts
+      <a href='https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels'>https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels</a>,
+      linux-rt
+      <a href='https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels'>https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels</a>,
+      linux-rt-lts
+      <a href='https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels'>https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels</a>,
+      linux-zen
+      <a href='https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels'>https://wiki.archlinux.org/title/Kernel#Officially_supported_kernels</a>
+      ]</td>
+    <td style="border-right-style: solid;">Defines which kernels should be
+      installed and setup in the boot loader options</td>
+    <td>Yes</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">custom_commands</td>
+    <td style="border-right-style: solid;"><i>Read more under</i> Custom
+      Commands &lt;#custom-commands&gt;</td>
+    <td style="border-right-style: solid;">Custom commands that will be run
+      post-install chrooted inside the installed system</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">locale_config</td>
+    <td style="border-right-style: solid;">{kb_layout: lang
+      <a href='https://wiki.archlinux.org/title/Linux_console/Keyboard_configuration'>https://wiki.archlinux.org/title/Linux_console/Keyboard_configuration</a>,
+      sys_enc: Character encoding
+      <a href='https://wiki.archlinux.org/title/Locale'>https://wiki.archlinux.org/title/Locale</a>, sys_lang: locale
+      <a href='https://wiki.archlinux.org/title/Locale'>https://wiki.archlinux.org/title/Locale</a>}</td>
+    <td style="border-right-style: solid;">Defines the keyboard key map, system
+      encoding and system locale</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">mirror_config</td>
+    <td style="border-right-style: solid;">{custom_mirrors: [
+      &lt;https://&gt;... ], mirror_regions: { &quot;Worldwide&quot;: [
+      &quot;<a href='https://geo.mirror.pkgbuild.com/$repo/os/$arch'>https://geo.mirror.pkgbuild.com/$repo/os/$arch</a>&quot; ] }
+      }</td>
+    <td style="border-right-style: solid;">Sets various mirrors <i>(defaults to
+      ISO's ``/etc/pacman.d/mirrors`` if not defined)</i></td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">network_config</td>
+    <td style="border-right-style: solid;"><i>`see options under Network
+      Configuration`</i></td>
+    <td style="border-right-style: solid;">Sets which type of <i>(if any)</i>
+      network configuration should be used</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">no_pkg_lookups</td>
+    <td style="border-right-style: solid;"><b>true</b>, <b>false</b></td>
+    <td style="border-right-style: solid;">Disabled package checking against
+      <a href='https://archlinux.org/packages/'>https://archlinux.org/packages/</a></td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">ntp</td>
+    <td style="border-right-style: solid;"><b>true</b>, <b>false</b></td>
+    <td style="border-right-style: solid;">enables or disables NTP
+      <a href='https://wiki.archlinux.org/title/Network_Time_Protocol_daemon'>https://wiki.archlinux.org/title/Network_Time_Protocol_daemon</a>
+      during installation</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">offline</td>
+    <td style="border-right-style: solid;"><b>true</b>, <b>false</b></td>
+    <td style="border-right-style: solid;">enables or disables certain online
+      checks such as mirror reachability etc</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">packages</td>
+    <td style="border-right-style: solid;">[ &lt;package1&gt;, &lt;package2&gt;,
+      ... ]</td>
+    <td style="border-right-style: solid;">A list of packages to install during
+      installation</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">parallel downloads</td>
+    <td style="border-right-style: solid;">0-&#x221E;</td>
+    <td style="border-right-style: solid;">sets a given number of parallel
+      downloads to be used by pacman
+      <a href='https://wiki.archlinux.org/title/Pacman#Enabling_parallel_downloads'>https://wiki.archlinux.org/title/Pacman#Enabling_parallel_downloads</a></td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">profile_config</td>
+    <td style="border-right-style: solid;"><i>`read more under the profiles
+      section`</i></td>
+    <td style="border-right-style: solid;">Installs a given profile if
+      defined</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">script</td>
+    <td style="border-right-style: solid;">guided
+      <a href='https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py'>https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/guided.py</a>
+      <i>(default)</i>, minimal
+      <a href='https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/minimal.py'>https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/minimal.py</a>,
+      only_hdd
+      <a href='https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/only_hdd.py'>https://github.com/archlinux/archinstall/blob/master/archinstall/scripts/only_hdd.py</a>,
+      When used to autorun an installation, this sets which script to autorun
+      with</td>
+    <td style="border-right-style: solid;">No</td>
+    <td></td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">silent</td>
+    <td style="border-right-style: solid;"><b>true</b>, <b>false</b></td>
+    <td style="border-right-style: solid;">disables or enables user questions
+      using the TUI</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">swap</td>
+    <td style="border-right-style: solid;"><b>true</b>, <b>false</b></td>
+    <td style="border-right-style: solid;">enables or disables swap</td>
+    <td>No</td>
+  </tr>
+  <tr>
+    <td style="border-right-style: solid;">timezone</td>
+    <td style="border-right-style: solid;">timezone
+      <a href='https://wiki.archlinux.org/title/System_time#Time_zone'>https://wiki.archlinux.org/title/System_time#Time_zone</a></td>
+    <td style="border-right-style: solid;">sets a timezone for the installed
+      system</td>
+    <td>No</td>
+  </tr>
+</table>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">If no entries are found in <b>disk_config</b>,
+  archinstall guided installation will use whatever is mounted currently under
+  <b>/mnt/archinstall</b> without performing any disk operations.</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Options_for_&lt;b&gt;--creds&lt;/b&gt;'><a class='permalink' href='#Options_for_&lt;b&gt;--creds&lt;/b&gt;'>Options   for <b>--creds</b></a></h2>
+<p class="Pp">Creds is a separate configuration file to separate normal options
+    from more sensitive data like passwords. Below is an example of how to set
+    the root password and below that are description of other values that can be
+    set.</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>{
+    &quot;root_enc_password&quot; : &quot;SecretSanta2022&quot;
+}</pre>
+</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss"><b>--creds</b> options</h2>
+<table class="tbl" style="border-style: solid;">
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;">Key</td>
+    <td style="border-right-style: solid;">Values</td>
+    <td style="border-right-style: solid;">Description</td>
+    <td>Required</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;"><b>!encryption-password</b></td>
+    <td style="border-right-style: solid;"><b>str</b></td>
+    <td style="border-right-style: solid;">Password to encrypt disk, not
+      encrypted if password not provided</td>
+    <td>No</td>
+  </tr>
+  <tr style="border-bottom-style: solid;">
+    <td style="border-right-style: solid;"><b>root_enc_password</b></td>
+    <td style="border-right-style: solid;"><b>str</b></td>
+    <td style="border-right-style: solid;">The root account password</td>
+    <td>No</td>
+  </tr>
+  <tr>
+    <td style="border-right-style: solid;"><b>users</b></td>
+    <td style="border-right-style: solid;">0.0 3.5 { &quot;username&quot;:
+      &quot;&lt;USERNAME&gt;&quot;, &quot;enc_password&quot;:
+      &quot;&lt;PASSWORD_HASH&gt;&quot;, &quot;sudo&quot;: false } 168u
+      168u</td>
+    <td style="border-right-style: solid;">List of regular user credentials, see
+      configuration for reference</td>
+    <td>Maybe</td>
+  </tr>
+</table>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent"><b>users</b> is optional only if <b>root_enc_password</b>
+  was set. <b>users</b> will be enforced otherwise and the minimum amount of
+  users with sudo privileges required will be set to 1.</div>
+</div>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='KNOWN_ISSUES'><a class='permalink' href='#KNOWN_ISSUES'>KNOWN   ISSUES</a></h1>
+<p class="Pp">Some issues are out of the archinstall
+    <a href='https://github.com/archlinux/archinstall/'>https://github.com/archlinux/archinstall/</a> projects scope, and the
+    ones we know of are listed below.</p>
+<section class="Ss">
+<h2 class="Ss" id='Waiting_for_time_sync_#2144_&amp;lt;https://github.com/archlinux/archinstall/issues/2144&amp;gt;'><a class='permalink' href='#Waiting_for_time_sync_#2144_&amp;lt;https://github.com/archlinux/archinstall/issues/2144&amp;gt;'>Waiting   for time sync #2144   &lt;https://github.com/archlinux/archinstall/issues/2144&gt;</a></h2>
+<p class="Pp">The usual root cause of this is the network topology. More
+    specifically timedatectl show
+    <a href='https://github.com/archlinux/archinstall/blob/e6344f93f7e476d05bbcd642f2ed91fdde545870/archinstall/lib/installer.py#L136'>https://github.com/archlinux/archinstall/blob/e6344f93f7e476d05bbcd642f2ed91fdde545870/archinstall/lib/installer.py#L136</a>
+    cannot perform a proper time sync against the default servers.</p>
+<p class="Pp">Restarting <b>systemd-timesyncd.service</b> might work but most
+    often you need to configure <b>/etc/systemd/timesyncd.conf</b> to match your
+    network design.</p>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">If you know your time is correct on the machine, you can
+  run <b>archinstall --skip-ntp</b> to ignore time sync.</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Waiting_for_Arch_Linux_keyring_sync_(archlinux-keyring-wkd-sync)_to_complete._#2679_&amp;lt;https://github.com/archlinux/archinstall/issues/2679&amp;gt;'><a class='permalink' href='#Waiting_for_Arch_Linux_keyring_sync_(archlinux-keyring-wkd-sync)_to_complete._#2679_&amp;lt;https://github.com/archlinux/archinstall/issues/2679&amp;gt;'>Waiting   for Arch Linux keyring sync (archlinux-keyring-wkd-sync) to complete. #2679   &lt;https://github.com/archlinux/archinstall/issues/2679&gt;</a></h2>
+<p class="Pp">The <b>archlinux-keyring-wkd-sync.service</b> or
+    <b>archlinux-keyring-wkd-sync.timer</b> can hang &quot;indefinitely&quot;
+    sometimes. This is usually due to an inability to reach the key servers, or
+    a slow connection towards key servers.</p>
+<p class="Pp">The script <b>/usr/bin/archlinux-keyring-wkd-sync</b> can be run
+    manually, to verify if it's executing slowly or not.</p>
+<p class="Pp">If <b>systemctl show --property=ActiveEnterTimestamp --no-pager
+    archlinux-keyring-wkd-sync.timer</b> shows nothing, it means the built-in
+    sync never finished. Likewise <b>systemctl show --no-pager -p SubState
+    --value archlinux-keyring-wkd-sync.service</b> most likely shows
+    <b>dead</b>, which means the service never completed.</p>
+<p class="Pp">To fix this, try the following:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre># killall gpg-agent
+# rm -rf /etc/pacman.d/gnupg
+# pacman-key --init
+# pacman-key --populate
+# pacman -Sy archlinux-keyring
+# systemctl restart archlinux-keyring-wkd-sync.timer</pre>
+</div>
+</div>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">If you know the ISO is the latest, and that you have
+  valid GPG keys, try <b>archinstall --skip-wkd</b> to ignore waiting for the
+  sync.
+<p class="Pp">If you skip WKD sync, you might end up with:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>&gt; error: archinstall: signature from &quot;Anton Hvornum (Torxed) &lt;torxed@archlinux.org&gt;&quot; is unknown trust
+&gt; :: File /var/cache/pacman/pkg/archinstall-1.2.3-4-x86_64.pkg.tar.xz is corrupted (invalid or corrupted package (PGP signature)).
+&gt; Do you want to delete it? [Y/n]</pre>
+</div>
+</div>
+</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Missing_Nvidia_Proprietary_Driver_#2002_&amp;lt;https://github.com/archlinux/archinstall/issues/2002&amp;gt;'><a class='permalink' href='#Missing_Nvidia_Proprietary_Driver_#2002_&amp;lt;https://github.com/archlinux/archinstall/issues/2002&amp;gt;'>Missing   Nvidia Proprietary Driver #2002   &lt;https://github.com/archlinux/archinstall/issues/2002&gt;</a></h2>
+<p class="Pp">In some instances, the nvidia driver might not have all the
+    necessary packages installed. This is due to the kernel selection and/or
+    hardware setups requiring additional packages to work properly.</p>
+<p class="Pp">A common workaround is to install the package linux-headers
+    <a href='https://archlinux.org/packages/core/x86_64/linux-headers/'>https://archlinux.org/packages/core/x86_64/linux-headers/</a> and
+    nvidia-dkms
+  <a href='https://archlinux.org/packages/extra/x86_64/nvidia-dkms/'>https://archlinux.org/packages/extra/x86_64/nvidia-dkms/</a></p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='ARM,_32bit_and_other_CPU_types_error_out_#1686_&amp;lt;https://github.com/archlinux/archinstall/issues/1686&amp;gt;,_#2185_&amp;lt;https://github.com/archlinux/archinstall/issues/2185&amp;gt;'><a class='permalink' href='#ARM,_32bit_and_other_CPU_types_error_out_#1686_&amp;lt;https://github.com/archlinux/archinstall/issues/1686&amp;gt;,_#2185_&amp;lt;https://github.com/archlinux/archinstall/issues/2185&amp;gt;'>ARM,   32bit and other CPU types error out #1686   &lt;https://github.com/archlinux/archinstall/issues/1686&gt;, #2185   &lt;https://github.com/archlinux/archinstall/issues/2185&gt;</a></h2>
+<p class="Pp">This is a bit of a catch-all known issue. Officially x86_64
+    &lt;<a href='https://wiki.archlinux.org/title/Frequently_asked_questions#What_architectures_does_Arch_support'>https://wiki.archlinux.org/title/Frequently_asked_questions#What_architectures_does_Arch_support</a>?&gt;
+    is only supported by Arch Linux. Hence little effort has been put into
+    supporting other platforms.</p>
+<p class="Pp">In theory, other architectures should work but small quirks might
+    arise.</p>
+<p class="Pp">PR's are welcome but please be respectful of the delays in
+    merging. Other fixes, issues or features will be prioritized for the above
+    reasons.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Keyring_is_out_of_date_#2213_&amp;lt;https://github.com/archlinux/archinstall/issues/2213&amp;gt;'><a class='permalink' href='#Keyring_is_out_of_date_#2213_&amp;lt;https://github.com/archlinux/archinstall/issues/2213&amp;gt;'>Keyring   is out of date #2213   &lt;https://github.com/archlinux/archinstall/issues/2213&gt;</a></h2>
+<p class="Pp">Missing key-issues tend to be that the archlinux-keyring
+    <a href='https://archlinux.org/packages/core/any/archlinux-keyring/'>https://archlinux.org/packages/core/any/archlinux-keyring/</a> package
+    is out of date, usually as a result of an outdated ISO. There is an attempt
+    from upstream to fix this issue, and it's the
+    archlinux-keyring-wkd-sync.service
+    <a href='https://gitlab.archlinux.org/archlinux/archlinux-keyring/-/blob/7e672dad10652a80d1cc575d75cdb46442cd7f96/wkd_sync/archlinux-keyring-wkd-sync.service.in'>https://gitlab.archlinux.org/archlinux/archlinux-keyring/-/blob/7e672dad10652a80d1cc575d75cdb46442cd7f96/wkd_sync/archlinux-keyring-wkd-sync.service.in</a></p>
+<p class="Pp">The service starts almost immediately during boot, and if network
+    is not configured in time &#x2014; the service will fail. Subsequently the
+    <b>archinstall</b> run might operate on an old keyring despite there being
+    an update service for this.</p>
+<p class="Pp">There is really no way to reliably over time work around this
+    issue in <b>archinstall</b>. Instead, efforts to the upstream service should
+    be considered the way forward. And/or keys not expiring between a sane
+    amount of ISOs.</p>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">The issue can happen on new ISO's too even as little as a
+  few days after release, as some keys might expire right after the keyring is
+  <i>&quot;burnt in&quot;</i> to the ISO.</div>
+</div>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">Another common issue relating to the network not being
+  configured, is that time might not be set correctly - resulting in the keyring
+  not being able to update. See Waiting for time sync #2144.</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='AUR_packages'><a class='permalink' href='#AUR_packages'>AUR   packages</a></h2>
+<p class="Pp">This is also a catch-all issue. AUR is unsupported
+    <a href='https://wiki.archlinux.org/title/Arch_User_Repository#Updating_packages'>https://wiki.archlinux.org/title/Arch_User_Repository#Updating_packages</a>,
+    and until that changes we cannot use AUR packages to solve feature requests
+    in <b>archinstall</b>.</p>
+<p class="Pp">This means that feature requests like supporting filesystems such
+    as ZFS <a href='https://aur.archlinux.org/packages/zfs-linux'>https://aur.archlinux.org/packages/zfs-linux</a> can not be
+    added, and issues cannot be solved by using AUR packages either.</p>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">But in spirit of giving the community options,
+  <b>archinstall</b> supports Python Plugins &lt;#archinstall-plugins&gt;, which
+  means you can run <b>archinstall --plugin &lt;url&gt;</b> and source an AUR
+  plugin.
+<p class="Pp">torxed/archinstall-aur
+    <a href='https://github.com/torxed/archinstall-aur'>https://github.com/torxed/archinstall-aur</a> is a reference
+    implementation for plugins:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre># archinstall --plugin https://archlinux.life/aur-plugin</pre>
+</div>
+</div>
+<p class="Pp">phisch/archinstall-aur
+    <a href='https://github.com/phisch/archinstall-aur'>https://github.com/phisch/archinstall-aur</a> is another
+  alternative:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre># archinstall --plugin https://raw.githubusercontent.com/phisch/archinstall-aur/master/archinstall-aur.py</pre>
+</div>
+</div>
+<p class="Pp"><b>Warning:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">This will allow for unsupported usage of AUR during
+  installation.</div>
+</div>
+</div>
+</div>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='REPORT_ISSUES_&amp;amp;_BUGS'><a class='permalink' href='#REPORT_ISSUES_&amp;amp;_BUGS'>REPORT   ISSUES &amp; BUGS</a></h1>
+<p class="Pp">Issues and bugs should be reported over at
+    <a href='https://github.com/archlinux/archinstall/issues'>https://github.com/archlinux/archinstall/issues</a>.</p>
+<p class="Pp">General questions, enhancements and security issues can be
+    reported over there too. For quick issues or if you need help, head over to
+    the Discord server which has a help channel.</p>
+<section class="Ss">
+<h2 class="Ss" id='Log_files'><a class='permalink' href='#Log_files'>Log   files</a></h2>
+<p class="Pp">When submitting a help ticket, please include the
+    <b>/var/log/archinstall/install.log</b>. It can be found both on the live
+    ISO but also in the installed filesystem if the base packages were strapped
+    in.</p>
+<p class="Pp"><b>Tip:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>An easy way to submit logs is <b>archinstall share-log</b>, which uploads <b>install.log</b> to paste.rs and prints a shareable URL.
+Use caution when submitting other log files, but <b>archinstall</b> pledges to keep <b>install.log</b> safe for posting publicly!</pre>
+</div>
+</div>
+<p class="Pp">There are additional log files under <b>/var/log/archinstall/</b>
+    that can be useful:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<div class="Bd-indent">
+<ul class="Bl-bullet">
+  <li><b>/var/log/archinstall/user_configuration.json</b> - Stores most of the
+      guided answers in the installer</li>
+  <li><b>/var/log/archinstall/user_credentials.json</b> - Stores any usernames
+      or passwords, can be passed to <b>--creds</b></li>
+  <li><b>/var/log/archinstall/user_disk_layouts.json</b> - Stores the chosen
+      disks and their layouts</li>
+  <li><b>/var/log/archinstall/install.log</b> - A log file over what steps were
+      taken by archinstall</li>
+  <li><b>/var/log/archinstall/cmd_history.txt</b> - A complete command history,
+      command by command in order</li>
+  <li><b>/var/log/archinstall/cmd_output.txt</b> - A raw output from all the
+      commands that were executed by archinstall</li>
+</ul>
+</div>
+</div>
+</div>
+<p class="Pp"><b>Warning:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">We only try to guarantee that
+  <b>/var/log/archinstall/install.log</b> is free from sensitive information.
+  Any other log file should be pasted with <b>utmost care</b>!</div>
+</div>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='DISCORD'><a class='permalink' href='#DISCORD'>DISCORD</a></h1>
+<p class="Pp">There's a discord channel which is frequented by some contributors
+    <a href='https://github.com/archlinux/archinstall/graphs/contributors'>https://github.com/archlinux/archinstall/graphs/contributors</a>.</p>
+<p class="Pp">To join the server, head over to
+    <a href='https://discord.gg/aDeMffrxNg'>https://discord.gg/aDeMffrxNg</a> and join in. There's not many rules
+    other than common sense and to treat others with respect. The general chat
+    is for off-topic things as well.</p>
+<p class="Pp">There's the <b>@Party Animals</b> role if you want notifications
+    of new releases which is posted in the <b>#Release Party</b> channel.
+    Another thing is the <b>@Contributors</b> role can be activated by
+    contributors by writing <b>!verify</b> and follow the verification
+  process.</p>
+<p class="Pp">Hop in, we hope to see you there! : )</p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='PYTHON_LIBRARY'><a class='permalink' href='#PYTHON_LIBRARY'>PYTHON   LIBRARY</a></h1>
+<p class="Pp">Archinstall ships on PyPi <a href='https://pypi.org/'>https://pypi.org/</a> as archinstall
+    &lt;pypi.org/project/archinstall/&gt;. But the library can be installed
+    manually as well.</p>
+<p class="Pp"><b>Warning:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">These steps are not required if you want to use
+  archinstall on the official Arch Linux ISO.</div>
+</div>
+<section class="Ss">
+<h2 class="Ss" id='Installing_with_pacman'><a class='permalink' href='#Installing_with_pacman'>Installing   with pacman</a></h2>
+<p class="Pp">Archinstall is on the official repositories
+    <a href='https://wiki.archlinux.org/index.php/Official_repositories'>https://wiki.archlinux.org/index.php/Official_repositories</a>. And it
+    will also install archinstall as a python library.</p>
+<p class="Pp">To install both the library and the archinstall script:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>pacman -S archinstall</pre>
+</div>
+</div>
+<p class="Pp">Alternatively, you can install only the library and not the helper
+    executable using the <b>python-archinstall</b> package.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Installing_from_PyPI'><a class='permalink' href='#Installing_from_PyPI'>Installing   from PyPI</a></h2>
+<p class="Pp">The basic concept of PyPI applies using <i>pip</i>.</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>pip install archinstall</pre>
+</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Install_using_source_code'><a class='permalink' href='#Install_using_source_code'>Install   using source code</a></h2>
+<p class="Pp">You can also install using the source code. For sake of simplicity
+    we will use <b>git clone</b> in this example.</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>git clone https://github.com/archlinux/archinstall</pre>
+</div>
+</div>
+<p class="Pp">You can either move the folder into your project and simply do</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>import archinstall</pre>
+</div>
+</div>
+<p class="Pp">Or you can PyPa's build <a href='https://github.com/pypa/build'>https://github.com/pypa/build</a> and
+    installer <a href='https://github.com/pypa/installer'>https://github.com/pypa/installer</a> to install it into
+    pythons module path.</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>$ cd archinstall
+$ python -m build .
+$ python -m installer dist/*.whl</pre>
+</div>
+</div>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='PYTHON_MODULE'><a class='permalink' href='#PYTHON_MODULE'>PYTHON   MODULE</a></h1>
+<p class="Pp">Archinstall supports running in module mode
+    <a href='https://docs.python.org/3/library/__main__.html'>https://docs.python.org/3/library/__main__.html</a>. The way the library
+    is invoked in module mode is limited to executing scripts under the scripts
+    <a href='https://github.com/archlinux/archinstall/tree/master/archinstall/scripts'>https://github.com/archlinux/archinstall/tree/master/archinstall/scripts</a>
+    folder.</p>
+<p class="Pp">It's therefore important to place any script or profile you wish
+    to invoke in the examples folder prior to building and installing.</p>
+<section class="Ss">
+<h2 class="Ss" id='Pre-requisites'><a class='permalink' href='#Pre-requisites'>Pre-requisites</a></h2>
+<p class="Pp">We'll assume you've followed the Install using source code
+    &lt;#installing-python-manual&gt; method. Before actually installing the
+    library, you will need to place your custom installer-scripts under scripts
+    <a href='https://github.com/archlinux/archinstall/tree/master/archinstall/scripts'>https://github.com/archlinux/archinstall/tree/master/archinstall/scripts</a>
+    as a python file.</p>
+<p class="Pp">More on how you create these in the next section.</p>
+<p class="Pp"><b>Warning:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">This is subject to change in the future as this method is
+  currently a bit stiff. The script path will become a parameter. But for now,
+  this is by design.</div>
+</div>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Creating_a_script'><a class='permalink' href='#Creating_a_script'>Creating   a script</a></h2>
+<p class="Pp">Lets create a <i>test_installer</i> - installer as an example.
+    This is assuming that the folder <i>./archinstall</i> is a git-clone of the
+    main repo. We begin by creating &quot;scripts
+    <a href='https://github.com/archlinux/archinstall/tree/master/archinstall/scripts'>https://github.com/archlinux/archinstall/tree/master/archinstall/scripts</a><b>/test_installer.py</b>&quot;.
+    The placement here is important later.</p>
+<p class="Pp">This script can now already be called using <b>python -m
+    archinstall --script test_installer</b> after a successful installation of
+    the library itself. But the script won't do much. So we'll do something
+    simple like list all the hard drives as an example.</p>
+<p class="Pp">To do this, we'll begin by importing <b>archinstall</b> in our
+    &quot;scripts
+    <a href='https://github.com/archlinux/archinstall/tree/master/archinstall/scripts'>https://github.com/archlinux/archinstall/tree/master/archinstall/scripts</a><b>/test_installer.py</b>&quot;
+    and call a function within <b>archinstall</b>.</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>from archinstall.lib.disk.device_handler import device_handler
+from pprint import pprint
+pprint(device_handler.devices)</pre>
+</div>
+</div>
+<p class="Pp">Now, go ahead and reference the Install using source code
+    &lt;#installing-python-manual&gt; installation method. After running
+    <b>python -m archinstall test_installer</b> it should print something that
+    looks like:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>[
+    BDevice(
+        disk=&lt;parted.disk.Disk object at 0x7fbe17156050&gt;,
+        device_info=_DeviceInfo(
+            model='PC801 NVMe SK hynix 512GB',
+            path=PosixPath('/dev/nvme0n1'),
+            type='nvme',
+            total_size=Size(value=512110190592, unit=&lt;Unit.B: 1&gt;,
+            sector_size=SectorSize(value=512, unit=&lt;Unit.B: 1&gt;)),
+            free_space_regions=[
+                &lt;archinstall.lib.disk.device.DeviceGeometry object at 0x7fbe166c4250&gt;,
+                &lt;archinstall.lib.disk.device.DeviceGeometry object at 0x7fbe166c4c50&gt;,
+                &lt;archinstall.lib.disk.device.DeviceGeometry object at 0x7fbe166c4a10&gt;],
+            sector_size=SectorSize(value=512, unit=&lt;Unit.B: 1&gt;),
+            read_only=False,
+            dirty=False
+        ),
+        partition_infos=[
+            _PartitionInfo(
+                partition=&lt;parted.partition.Partition object at 0x7fbe166c4a90&gt;,
+                name='primary',
+                type=&lt;PartitionType.PRIMARY: 'primary'&gt;,
+                fs_type=&lt;FilesystemType.FAT32: 'fat32'&gt;,
+                path='/dev/nvme0n1p1',
+                start=Size(value=2048, unit=&lt;Unit.sectors: 'sectors'&gt;, sector_size=SectorSize(value=512, unit=&lt;Unit.B: 1&gt;)),
+                length=Size(value=535822336, unit=&lt;Unit.B: 1&gt;, sector_size=SectorSize(value=512, unit=&lt;Unit.B: 1&gt;)),
+                flags=[
+                    &lt;PartitionFlag.BOOT: flag_id=1, alias=None&gt;,
+                    &lt;PartitionFlag.ESP: flag_id=18, alias=None&gt;
+                ],
+                partn=1,
+                partuuid='a26be943-c193-41f4-9930-9341cf5f6b19',
+                uuid='6EE9-2C00',
+                disk=&lt;parted.disk.Disk object at 0x7fbe17156050&gt;,
+                mountpoints=[
+                    PosixPath('/boot')
+                ],
+                btrfs_subvol_infos=[]
+            ),
+            _PartitionInfo(...)
+        ]
+    )
+]</pre>
+</div>
+</div>
+<p class="Pp">That means your script is in the right place, and
+    <b>archinstall</b> is working as intended.</p>
+<p class="Pp"><b>Note:</b></p>
+<div class="Bd-indent">
+<div class="Bd-indent">Most calls, including the one above requires root
+  <a href='https://en.wikipedia.org/wiki/Superuser'>https://en.wikipedia.org/wiki/Superuser</a> privileges.</div>
+</div>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='PYTHON_PLUGINS'><a class='permalink' href='#PYTHON_PLUGINS'>PYTHON   PLUGINS</a></h1>
+<p class="Pp"><b>archinstall</b> supports plugins via two methods.</p>
+<p class="Pp">First method is directly via the <b>--plugin</b> parameter when
+    running as a CLI tool. This will load a specific plugin locally or remotely
+    via a path.</p>
+<p class="Pp">The second method is via Python's built in plugin discovery
+    <a href='https://packaging.python.org/en/latest/specifications/entry-points/'>https://packaging.python.org/en/latest/specifications/entry-points/</a>
+    using entry points
+    <a href='https://docs.python.org/3/library/importlib.metadata.html#entry-points'>https://docs.python.org/3/library/importlib.metadata.html#entry-points</a>
+    categorized as <b>archinstall.plugin</b>.</p>
+<section class="Ss">
+<h2 class="Ss"><b>--plugin</b> parameter</h2>
+<p class="Pp">The parameter has the benefit of being stored in the <b>--conf</b>
+    state, meaning when re-running an installation &#x2014; the plugin will
+    automatically be loaded. It's limitation is that it requires an initial path
+    to be known and written and be cumbersome.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Plugin_Discovery'><a class='permalink' href='#Plugin_Discovery'>Plugin   Discovery</a></h2>
+<p class="Pp">This method allows for multiple plugins to be loaded with the
+    drawback that they have to be installed beforehand on the system running
+    <b>archinstall</b>. This mainly targets those who build their own ISO's and
+    package specific setups for their needs.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='What&apos;s_supported?'><a class='permalink' href='#What&apos;s_supported?'>What's   supported?</a></h2>
+<p class="Pp">Currently the documentation for this is scarse. Until that is
+    resolved, the best way to find supported features is to search the source
+    code for plugin.on_
+    &lt;<a href='https://github.com/search?q=repo%3Aarchlinux%2Farchinstall+%22plugin.on_%22'>https://github.com/search?q=repo%3Aarchlinux%2Farchinstall+%22plugin.on_%22</a>&amp;type=code&gt;
+    as this will give a clear indication of which calls are made to plugins.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='How_does_it_work?'><a class='permalink' href='#How_does_it_work?'>How   does it work?</a></h2>
+<p class="Pp"><b>archinstall</b> plugins use a discovery-driven approach where
+    plugins are queried for certain functions. As an example, if a plugin has
+    the following function:</p>
+<div class="Bd-indent">
+<div class="Bd-indent">
+<pre>def on_pacstrap(*packages):
+    ...</pre>
+</div>
+</div>
+<p class="Pp">The function <b>archinstall.Pacman().strap([&quot;some
+    packages&quot;])</b> is hardcoded to iterate plugins and look for
+    <b>on_pacstrap</b> in the plugin. If the function exists, <b>.strap()</b>
+    will call the plugin's function and replace the initial package list with
+    the result from the plugin.</p>
+<p class="Pp">The best way to document these calls is currently undecided, as
+    it's hard to document this behavior dynamically.</p>
+</section>
+<section class="Ss">
+<h2 class="Ss" id='Writing_your_own?'><a class='permalink' href='#Writing_your_own?'>Writing   your own?</a></h2>
+<p class="Pp">The simplest way currently is to look at a reference
+    implementation or the community. Two of these are:</p>
+<div class="Bd-indent">
+<ul class="Bl-bullet">
+  <li>torxed/archinstall-aur
+    <a href='https://github.com/torxed/archinstall-aur'>https://github.com/torxed/archinstall-aur</a></li>
+  <li>phisch/archinstall-aur
+    <a href='https://github.com/phisch/archinstall-aur'>https://github.com/phisch/archinstall-aur</a></li>
+</ul>
+</div>
+<p class="Pp">And search for plugin.on_
+    &lt;<a href='https://github.com/search?q=repo%3Aarchlinux%2Farchinstall+%22plugin.on_%22'>https://github.com/search?q=repo%3Aarchlinux%2Farchinstall+%22plugin.on_%22</a>&amp;type=code&gt;
+    in the code base to find what <b>archinstall</b> will look for. PR's are
+    welcome to widen the support for this.</p>
+</section>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='ARCHINSTALL.INSTALLER'><a class='permalink' href='#ARCHINSTALL.INSTALLER'>ARCHINSTALL.INSTALLER</a></h1>
+<p class="Pp">The installer is the main class for accessing an
+    installation-instance. You can look at this class as the installation you
+    have or will perform.</p>
+<p class="Pp">Anything related to <b>inside</b> the installation, will be found
+    in this class.</p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='Author'><a class='permalink' href='#Author'>Author</a></h1>
+<p class="Pp">Anton Hvornum</p>
+</section>
+<section class="Sh">
+<h1 class="Sh" id='Copyright'><a class='permalink' href='#Copyright'>Copyright</a></h1>
+<p class="Pp">2022, Anton Hvornum</p>
+</section>
+</div>
+<table class="foot">
+  <tr>
+    <td class="foot-date">June 28, 2026</td>
+    <td class="foot-os"></td>
+  </tr>
+</table>
+
+</section>
+
+            </article>
+            <aside id="sidebar">
+                
+<section class="search">
+    <form action="/search" class="search direct-search" role="search">
+    <input type="search" placeholder="Search manual page" name="q" value=""
+         />
+    <input type="submit" name="go" value="Go" />
+</form>
+
+</section>
+
+<section class="package-info">
+    <p>Package information:</p>
+    <dl>
+        <dt>Package name:</dt>
+        <dd><a href="https://www.archlinux.org/packages/extra/any/archinstall/">extra/archinstall</a></dd>
+        <dt>Version:</dt>
+        <dd>4.4-1</dd>
+        <dt>Upstream:</dt>
+        <dd><a href="https://github.com/archlinux/archinstall">https://github.com/archlinux/archinstall</a></dd>
+        <dt>Licenses:</dt>
+        <dd>GPL-3.0-only</dd>
+        <dt>Manuals:</dt>
+        <dd><a href="/listing/extra/archinstall/">/listing/extra/archinstall/</a></dd>
+    </dl>
+</section>
+
+<details>
+    <summary>Table of contents</summary>
+    <nav class="toc">
+        <ul>
+        
+            <li><a href="#NAME">NAME</a></li>
+        
+            <li><a href="#GUIDED_INSTALLATION">GUIDED INSTALLATION</a></li>
+        
+            <li><a href="#KNOWN_ISSUES">KNOWN ISSUES</a></li>
+        
+            <li><a href="#REPORT_ISSUES_&amp;amp;_BUGS">REPORT ISSUES &amp; BUGS</a></li>
+        
+            <li><a href="#DISCORD">DISCORD</a></li>
+        
+            <li><a href="#PYTHON_LIBRARY">PYTHON LIBRARY</a></li>
+        
+            <li><a href="#PYTHON_MODULE">PYTHON MODULE</a></li>
+        
+            <li><a href="#PYTHON_PLUGINS">PYTHON PLUGINS</a></li>
+        
+            <li><a href="#ARCHINSTALL.INSTALLER">ARCHINSTALL.INSTALLER</a></li>
+        
+            <li><a href="#Author">Author</a></li>
+        
+            <li><a href="#Copyright">Copyright</a></li>
+        
+        </ul>
+    </nav>
+</details>
+
+
+
+
+<nav class="other-languages">
+    <p>In other languages:</p>
+    <ul>
+    
+        <li><a href="/man/archinstall.1.ar">ar</a></li>
+    
+        <li><a href="/man/archinstall.1.ro">ro</a></li>
+    
+    </ul>
+</nav>
+
+
+
+
+<nav class="other-formats">
+    <p>Other formats:
+        
+            <a href="/man/archinstall.1.en.txt">txt</a>, 
+        
+            <a href="/man/archinstall.1.en.raw">raw</a>
+        
+    </p>
+</nav>
+
+            </aside>
+            
+        </main>
+        <footer>
+            <p>Powered by <a href="https://gitlab.archlinux.org/archlinux/archmanweb">archmanweb</a>,
+               using <a href="https://mandoc.bsd.lv/">mandoc</a> for the conversion of manual pages.
+            </p>
+            <p>The website is available under the terms of the <a href="https://www.gnu.org/licenses/gpl-3.0.en.html">GPL-3.0</a>
+               license, except for the contents of the manual pages, which have their own license
+               specified in the corresponding Arch Linux package.
+            </p>
+        </footer>
+    </body>
+</html>

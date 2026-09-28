@@ -1,0 +1,210 @@
+/* ==========================================================================
+   AgentControl — theme tokens (Terminal · Mac · XP)
+   --------------------------------------------------------------------------
+   Drop-in starting point. Set the theme on the root element:
+     <html data-theme="mac">   (default)
+     <html data-theme="terminal">
+     <html data-theme="xp">
+   Components should only reference the --ac-* tokens and the .ac-* classes
+   below. Theme-specific chrome (XP title bar, terminal key bar, etc.) is
+   described in HANDOFF.md, Part 2.
+   Values are taken from the reference mockups in /reference.
+   ========================================================================== */
+
+/* ---------- Mac (default) ---------- */
+:root,
+:root[data-theme="mac"] {
+  --ac-font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --ac-font-display: var(--ac-font-ui);
+  --ac-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ac-font-size: 14px;
+
+  --ac-bg: #F5F5F7;              /* app background */
+  --ac-surface: #FFFFFF;         /* cards, panels */
+  --ac-surface-2: #F5F5F7;       /* inset rows, code, activity log */
+  --ac-sidebar-bg: #EAEAEE;
+  --ac-toolbar-bg: #FBFBFD;
+  --ac-border: #E5E5EA;
+  --ac-border-strong: #D8D8DD;
+
+  --ac-text: #1D1D1F;
+  --ac-text-muted: #6E6E73;
+  --ac-link: #0066CC;
+
+  --ac-accent: #0071E3;          /* primary buttons, selection */
+  --ac-on-accent: #FFFFFF;
+  --ac-selection-bg: #0071E3;
+  --ac-selection-text: #FFFFFF;
+
+  --ac-success: #34C759;         /* icons, bars */
+  --ac-success-text: #248A3D;
+  --ac-danger: #FF3B30;
+  --ac-danger-text: #D70015;
+  --ac-warning: #FF9500;         /* "needs you" */
+  --ac-warning-text: #B54A00;
+  --ac-warning-soft: #FFF1E0;
+  --ac-on-warning: #FFFFFF;
+
+  --ac-hermes: #7D5BD8;
+  --ac-hermes-soft: #F1EDFB;
+  --ac-opencode: #1D8FC4;
+  --ac-opencode-soft: #E6F3FA;
+
+  --ac-radius-sm: 7px;
+  --ac-radius: 12px;
+  --ac-radius-lg: 16px;
+  --ac-shadow-card: 0 0 0 .5px rgba(0,0,0,.08), 0 1px 3px rgba(0,0,0,.05);
+  --ac-shadow-dialog: 0 0 0 .5px rgba(0,0,0,.08), 0 8px 28px rgba(0,0,0,.10);
+  --ac-focus: 0 0 0 3px rgba(0,113,227,.45);
+}
+
+/* ---------- Terminal ---------- */
+:root[data-theme="terminal"] {
+  --ac-font-ui: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ac-font-display: var(--ac-font-ui);
+  --ac-font-mono: var(--ac-font-ui);
+  --ac-font-size: 13.5px;
+
+  --ac-bg: #0B0C0B;
+  --ac-surface: #0B0C0B;         /* panels are outlined boxes, same fill as bg */
+  --ac-surface-2: #151A16;       /* status bar, key bar, code blocks */
+  --ac-sidebar-bg: #0B0C0B;
+  --ac-toolbar-bg: #151A16;
+  --ac-border: #33403A;
+  --ac-border-strong: #4A5A51;
+
+  --ac-text: #D4D8D2;
+  --ac-text-muted: #7F8A83;
+  --ac-link: #7EE787;
+
+  --ac-accent: #7EE787;
+  --ac-on-accent: #0B0C0B;
+  --ac-selection-bg: #1A211C;
+  --ac-selection-text: #D4D8D2;
+
+  --ac-success: #7EE787;
+  --ac-success-text: #7EE787;
+  --ac-danger: #FF7B72;
+  --ac-danger-text: #FF7B72;
+  --ac-warning: #F0B429;
+  --ac-warning-text: #F0B429;
+  --ac-warning-soft: transparent;
+  --ac-on-warning: #0B0C0B;
+
+  --ac-hermes: #D78AFF;
+  --ac-hermes-soft: transparent;
+  --ac-opencode: #5FD7FF;
+  --ac-opencode-soft: transparent;
+
+  --ac-radius-sm: 0;
+  --ac-radius: 0;
+  --ac-radius-lg: 0;
+  --ac-shadow-card: none;
+  --ac-shadow-dialog: none;
+  --ac-focus: 0 0 0 2px #7EE787;
+}
+
+/* ---------- XP era ---------- */
+:root[data-theme="xp"] {
+  --ac-font-ui: Tahoma, Verdana, "Segoe UI", sans-serif;
+  --ac-font-display: "Trebuchet MS", Tahoma, sans-serif;
+  --ac-font-mono: "Lucida Console", "Courier New", monospace;
+  --ac-font-size: 13px;
+
+  --ac-bg: #3A6EA5;              /* "desktop" behind the window frame */
+  --ac-surface: #FFFFFF;         /* content area, list views */
+  --ac-surface-2: #ECE9D8;       /* window body, menu/tool bars, dialogs */
+  --ac-sidebar-bg: linear-gradient(180deg, #7BA2E7, #6375D6); /* task pane */
+  --ac-toolbar-bg: #ECE9D8;
+  --ac-border: #D0D0BF;          /* group boxes */
+  --ac-border-strong: #7F9DB9;   /* inputs, list views */
+
+  --ac-text: #000000;
+  --ac-text-muted: #5C5A51;
+  --ac-link: #215DC6;
+
+  --ac-accent: #316AC5;          /* list selection blue */
+  --ac-on-accent: #FFFFFF;
+  --ac-selection-bg: #316AC5;
+  --ac-selection-text: #FFFFFF;
+
+  --ac-success: #2BAF2B;
+  --ac-success-text: #1C6A0E;
+  --ac-danger: #D22A12;
+  --ac-danger-text: #B00000;
+  --ac-warning: #FFD21F;         /* warning triangle fill */
+  --ac-warning-text: #7A4B00;
+  --ac-warning-soft: #FFFFE1;    /* tooltip / balloon yellow */
+  --ac-on-warning: #000000;
+
+  --ac-hermes: #5B3FA8;
+  --ac-hermes-soft: #EEE9FA;
+  --ac-opencode: #1D5F80;
+  --ac-opencode-soft: #E3F0F7;
+
+  --ac-radius-sm: 3px;
+  --ac-radius: 4px;
+  --ac-radius-lg: 8px;           /* window title bar top corners */
+  --ac-shadow-card: none;
+  --ac-shadow-dialog: 2px 3px 8px rgba(0,0,0,.35);
+  --ac-focus: 0 0 0 1px #000000; /* pair with outline: 1px dotted */
+
+  /* XP-only chrome */
+  --ac-xp-frame: #0054E3;
+  --ac-xp-titlebar: linear-gradient(180deg, #3C8CF7 0%, #0A5EF0 10%, #0054E3 45%, #0061F7 88%, #003CC8 100%);
+  --ac-xp-close: linear-gradient(#F08A6E, #D8401C 60%, #C23512);
+  --ac-xp-button: linear-gradient(#FFFFFF, #ECEBE6 85%, #D6D0C5);
+  --ac-xp-button-border: #003C74;
+  --ac-xp-taskpane-header: linear-gradient(90deg, #FFFFFF 30%, #C6D3F7);
+  --ac-xp-taskpane-body: #D6DFF7;
+  --ac-xp-taskpane-title: #215DC6;
+  --ac-xp-groupbox-legend: #0046D5;
+  --ac-xp-progress: linear-gradient(#ACEDAD, #3DC03D 50%, #2BAF2B);
+  --ac-xp-taskbar: linear-gradient(180deg, #3F8CF3 0%, #245EDC 12%, #245EDC 60%, #1941A5 100%);
+  --ac-xp-start: linear-gradient(180deg, #5EB95E 0%, #3C9E3C 15%, #3C9E3C 70%, #2A7D2A 100%);
+  --ac-xp-tray: linear-gradient(180deg, #19B9F3, #0C92E0 20%, #0C92E0 80%, #0A6FC2);
+}
+
+
+/* Additional component tokens. Keep visual values here, never in components. */
+:root {
+  --ac-button-bg: #E8E8ED;
+  --ac-backdrop: rgba(12, 17, 25, .45);
+  --ac-chrome-text: #FFFFFF;
+  --ac-title-text: var(--ac-text);
+  --ac-title-size: 28px;
+  --ac-text-xs: 11px;
+  --ac-text-sm: 12px;
+  --ac-text-lg: 17px;
+  --ac-text-xl: 20px;
+  --ac-radius-round: 999px;
+  --ac-radius-circle: 50%;
+  --ac-dot-red: #FF5F57;
+  --ac-dot-yellow: #FFBD2E;
+  --ac-dot-green: #28C840;
+  --ac-input-bg: var(--ac-surface);
+  --ac-default-ring: inset 0 0 0 2px #98B8EA;
+  --ac-subtle-shadow: 0 2px 8px rgba(0,0,0,.04);
+}
+:root[data-theme="terminal"] {
+  --ac-button-bg: transparent;
+  --ac-title-size: 20px;
+  --ac-title-text: var(--ac-accent);
+  --ac-subtle-shadow: none;
+  --ac-radius-round: 0;
+}
+:root[data-theme="xp"] {
+  --ac-button-bg: var(--ac-xp-button);
+  --ac-title-size: 24px;
+  --ac-title-text: #143BA0;
+  --ac-subtle-shadow: none;
+  --ac-radius-round: 3px;
+}
+/* Darker role/chrome text backgrounds keep small text legible. */
+:root{--ac-opencode-text:#166B94}
+:root[data-theme="terminal"]{--ac-opencode-text:var(--ac-opencode)}
+:root[data-theme="xp"]{
+  --ac-opencode-text:var(--ac-opencode);
+  --ac-xp-start:linear-gradient(180deg,#347D34 0%,#267426 20%,#267426 70%,#1B5A1B 100%);
+  --ac-xp-tray:linear-gradient(180deg,#126FA2,#075C99 20%,#075C99 80%,#084E83);
+}

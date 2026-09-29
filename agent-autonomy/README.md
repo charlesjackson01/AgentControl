@@ -559,6 +559,11 @@ python3 agent-autonomy/spikes/hermes_research_probe.py --try web  # optional: on
 ```
 Then start AgentControl with `--research-toolsets <names>`, for example `--research-toolsets web`. Until then, the researcher is shown as unavailable, with the reason, and Hermes is not offered it.
 
+On the ai-arch server (Hermes v0.21.4), the probe lists `web` (search and scraping) and `browser` (browser automation), and every flag the researcher uses is present. The chosen setting there is `--research-toolsets web,browser`.
+- `web` only reads.
+- `browser` can also click, fill in and submit forms on the sites it visits. The research approval card says so whenever `browser` is configured.
+- Each question still waits for your typed `approve`.
+
 ## Paid models (optional), spend caps and usage
 
 Everything works with no paid provider. If you want one, for example OpenRouter for Hermes's planning, list it in `models.json` next to your local model:

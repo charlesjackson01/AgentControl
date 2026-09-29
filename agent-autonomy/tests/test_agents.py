@@ -1,4 +1,5 @@
 """Agent identity (M3): every run records its agents, and their live state follows the run."""
+import gzip
 import json
 from pathlib import Path
 import sqlite3
@@ -256,6 +257,48 @@ class ControllerLifecycleTests(ControllerAgentTests):
         self.assertIn(('tester-1', None, 'idle'), self.lifecycle(run))
         self.api.hold = False
         self.api.finish()
+
+
+class StateDeltaTests(ControllerAgentTests):
+    """W3: turns the dashboard already holds are sent as stubs; large replies are gzipped."""
+
+    def test_unchanged_turns_are_stubs_and_changed_ones_are_sent_in_full(self):
+        run = self.c.new('Build a thing')
+        self.wait(lambda: self.c.store.get('runs', run['id'])['status'] == 'completed')   # a finished run's turns hold still
+        full = self.c.state(run['id'])['steps']
+        step = full[0]
+        self.assertIsInstance(step['rev'], int)
+        again = self.c.state(run['id'], known={step['id']: step['rev']})['steps']
+        self.assertEqual(again, [{'id': step['id'], 'number': step['number'], 'rev': step['rev'], 'same': True}])
+        self.c.store.update('steps', step['id'], result='new output')
+        changed = self.c.state(run['id'], known={step['id']: step['rev']})['steps'][0]
+        self.assertNotIn('same', changed)
+        self.assertNotEqual(changed['rev'], step['rev'])
+        self.assertEqual(changed['result'], 'new output')
+        self.assertEqual(self.c.state(run['id'], known={'other': 1})['steps'][0]['id'], step['id'], 'unknown ids change nothing')
+
+    def test_api_parses_known_and_gzips_large_replies(self):
+        self.assertEqual(app.parse_known('s1:12,s2:x,:3,bad,s_3:44'), {'s1': 12, 's_3': 44})
+        run = self.c.new('Build a thing')
+        self.wait(lambda: self.c.store.get('runs', run['id'])['status'] == 'completed')   # a finished run's turns hold still
+        step = self.c.store.steps(run['id'])[0]
+        self.c.store.update('steps', step['id'], result='x' * 40000)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), app.handler(self.c, 'k'))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        base = f'http://127.0.0.1:{server.server_port}/api/state?run={run["id"]}'
+        try:
+            reply = urllib.request.urlopen(urllib.request.Request(base, headers={'Authorization': 'Bearer k', 'Accept-Encoding': 'gzip'}))
+            self.assertEqual(reply.headers['Content-Encoding'], 'gzip')
+            body = reply.read()
+            state = json.loads(gzip.decompress(body))
+            self.assertLess(len(body), 16000)
+            rev = state['steps'][0]['rev']
+            plain = urllib.request.urlopen(urllib.request.Request(f'{base}&known={step["id"]}:{rev}', headers={'Authorization': 'Bearer k'}))
+            self.assertIsNone(plain.headers['Content-Encoding'], 'no gzip unless the client asks')
+            self.assertTrue(json.loads(plain.read())['steps'][0]['same'])
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 class MigrationTests(unittest.TestCase):

@@ -2,6 +2,7 @@
 """Local and Tailscale dashboard for the autonomous controller."""
 import argparse
 import fcntl
+import gzip
 import hmac
 import json
 import os
@@ -25,17 +26,34 @@ MAX_EVENT_STREAMS = 12       # each open dashboard tab holds one thread
 KEEPALIVE_SECONDS = 15       # comment lines keep proxies and phones from dropping an idle stream
 
 
+def parse_known(text):
+    """'step_1:123,step_2:456' -> {'step_1': 123, ...}: the turn revisions the dashboard already holds."""
+    known = {}
+    for item in text.split(',')[:2000]:
+        ident, _, rev = item.rpartition(':')
+        if ident and rev.isdigit():
+            known[ident] = int(rev)
+    return known
+
+
 def handler(controller, key):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             # Never log credentials or goal text.
-            if self.command != 'GET' or self.path != '/api/state':
+            if self.command != 'GET' or urllib.parse.urlsplit(self.path).path != '/api/state':
                 print(f'{self.client_address[0]} {self.command} {urllib.parse.urlsplit(self.path).path}', flush=True)
 
         def reply(self, code, value, content_type='application/json'):
             raw = value if isinstance(value, bytes) else value.encode() if isinstance(value, str) else json.dumps(value).encode()
+            # Large JSON (a run's transcripts) compresses about tenfold; worth it over Tailscale to a phone.
+            packed = content_type == 'application/json' and len(raw) > 16384 and 'gzip' in self.headers.get('Accept-Encoding', '')
+            if packed:
+                raw = gzip.compress(raw, 5)
             self.send_response(code)
             self.send_header('Content-Type', content_type)
+            if packed:
+                self.send_header('Content-Encoding', 'gzip')
+                self.send_header('Vary', 'Accept-Encoding')
             self.send_header('Content-Length', str(len(raw)))
             self.send_header('Cache-Control', 'no-store')
             self.send_header('X-Content-Type-Options', 'nosniff')
@@ -103,7 +121,8 @@ def handler(controller, key):
                 return self.reply(200, {'run': ident, 'agents': controller.agents(run), 'types': agent_registry.types()})
             if path.path == '/api/state':
                 query = urllib.parse.parse_qs(path.query)
-                return self.reply(200, controller.state(query.get('run', [''])[0], (query.get('scope') or ['current'])[0]))
+                return self.reply(200, controller.state(query.get('run', [''])[0], (query.get('scope') or ['current'])[0],
+                                                        known=parse_known((query.get('known') or [''])[0])))
             if path.path == '/api/projects/browse':
                 try:
                     return self.reply(200, controller.browse_projects((urllib.parse.parse_qs(path.query).get('path') or [''])[0]))

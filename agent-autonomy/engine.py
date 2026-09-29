@@ -2880,13 +2880,15 @@ class Controller:
             folder = projects.create(self.projects_root(), name)
         return self.select_project(folder)
 
-    def state(self, selected='', scope='current'):
+    def state(self, selected='', scope='current', known=None):
+        """The dashboard's snapshot. `known` maps step ids to the revisions the client already holds;
+        those turns are sent as small stubs ({id, number, rev, same}) instead of in full."""
         everything = self.store.runs()
         here = str(self.s.project)
         runs = everything if scope == 'all' else [r for r in everything if self.run_project(r) == here or r['status'] not in TERMINAL]
         ident = selected or (runs[0]['id'] if runs else '')
         run = next((r for r in everything if r['id'] == ident), None)   # a run picked from another project still opens
-        steps = self.store.steps(ident) if run else []
+        steps = self.store.steps(ident, revisions=True) if run else []
         for step in steps:
             step.pop('before', None)
             step.pop('seen', None)
@@ -2930,5 +2932,6 @@ class Controller:
                 'skills': self.skills_status(run),
                 'usage': self.store.usage_summary(ident) if run else None,
                 'agents': self.agents(run, steps, inbox) if run else [],
-                'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],
+                'run': run, 'steps': [{'id': s['id'], 'number': s.get('number'), 'rev': s['rev'], 'same': True}
+                                      if known and known.get(s['id']) == s['rev'] else s for s in steps], 'events': self.store.events(ident) if run else [],
                 'inbox': inbox, 'reviews': self.store.reviews(ident) if run else []}

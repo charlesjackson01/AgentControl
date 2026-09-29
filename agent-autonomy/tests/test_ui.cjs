@@ -38,7 +38,10 @@ async function harness(state=fixture(),savedTheme='mac') {
     entries:at==='/home/me'?[{name:'ac-demo',path:'/home/me/ac-demo',git:true},{name:'notes',path:'/home/me/notes',git:false}]:[]};}
    else if(url==='/api/projects/select'){state.project=body.path;result={project:body.path,git:true};}
    else if(url==='/api/projects/create'){state.project='/home/me/'+body.name;result={project:state.project,git:true};}
-   else if(url.startsWith('/api/state'))result=clone(state);
+   else if(url.startsWith('/api/state')){result=clone(state);
+    // W3: like the server, send turns the page already holds as stubs.
+    const known=decodeURIComponent((url.match(/known=([^&]*)/)||[])[1]||'').split(',').filter(Boolean);
+    if(state.deltas)result.steps=result.steps.map(s=>known.includes(s.id+':'+s.rev)||(state.staleStub&&known.length)?{id:s.id,number:s.number,rev:s.rev,same:true}:s);}
    else if(url==='/api/review'){
     const p=state.inbox.find(p=>p.request_id===body.request_id);
     assert(p);assert.equal(body.fingerprint,p.fingerprint);
@@ -1075,6 +1078,27 @@ test('lifecycle: since, a changed mark on background tabs, the state history, an
  await h.click('[data-view="activity"]');
  assert.match(h.document.getElementById('activity-list').textContent,/coder-2: working → waiting on you · t2: HTML list/);
  assert.equal(h.calls.filter(c=>c.method==='POST').length,0,'nothing is sent to the server');
+});
+test('W3: unchanged turns come back as stubs and the page keeps what it holds; a stale stub triggers one full reload',async()=>{
+ const s=richActive();s.steps.forEach((x,i)=>x.rev=100+i);s.deltas=true;
+ const h=await harness(s);
+ const text=()=>h.document.getElementById('term-body').textContent;
+ const stateCalls=()=>h.calls.filter(c=>c.url.startsWith('/api/state'));
+ const before=text();assert.match(before,/python3 -m unittest discover/);
+ await h.poll();
+ assert.match(decodeURIComponent(stateCalls().at(-1).url),/known=step_1:100,step_2:101/,'the page tells the server which turns it holds');
+ assert.equal(text(),before,'stubs are replaced with the held turns');
+ assert.equal(vmRun(h,'data.steps.some(s=>s.same)'),false);
+ // A stub for a revision the page does not hold: it asks once more, in full.
+ const count=stateCalls().length;
+ h.state.steps[1].rev=999;h.state.staleStub=true;
+ await h.poll();
+ const calls=stateCalls().slice(count);
+ assert.equal(calls.length,2);
+ assert.match(calls[0].url,/known=/);assert.doesNotMatch(calls[1].url,/known=/,'the retry asks for everything');
+ assert.equal(vmRun(h,'data.steps.some(s=>s.same)'),false,'no stub is ever shown');
+ assert.equal(vmRun(h,'data.steps[1].rev'),999);
+ assert.match(text(),/python3 -m unittest discover/);
 });
 function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

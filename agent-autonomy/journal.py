@@ -3,6 +3,7 @@ import contextlib
 from datetime import datetime, timezone
 import hashlib
 import json
+import zlib
 from pathlib import Path
 import sqlite3
 import threading
@@ -144,10 +145,12 @@ class Store:
             rows = [json.loads(row[0]) for row in c.execute('SELECT value FROM runs ORDER BY rowid DESC')]
         return sorted(rows, key=lambda r: r.get('created', ''), reverse=True)
 
-    def steps(self, run):
-        """Steps in turn order."""
+    def steps(self, run, revisions=False):
+        """Steps in turn order. With `revisions`, each step carries `rev`, a checksum of its stored
+        row, so a client can tell which turns changed since it last asked (W3 deltas)."""
         with self.connection() as c:
-            rows = [json.loads(row[0]) for row in c.execute('SELECT value FROM steps WHERE run=? ORDER BY rowid', (run,))]
+            raw = [row[0] for row in c.execute('SELECT value FROM steps WHERE run=? ORDER BY rowid', (run,))]
+        rows = [json.loads(text) | ({'rev': zlib.crc32(text.encode())} if revisions else {}) for text in raw]
         return sorted(rows, key=lambda s: s.get('number', 0))
 
     def step_count(self, run):

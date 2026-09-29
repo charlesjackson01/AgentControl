@@ -333,6 +333,11 @@ Live team run in the dashboard: worked, once the OpenCode server was running. Th
 - W2 is complete: every change of an agent's derived state is recorded as an `agent state` event (`lifecycle.py`, debounced to at most two samples a second, with no history added to older runs).
   - The API reports how long each agent has been in its state.
   - Workspaces show that duration, a state history, and a changed mark on background tabs.
-- Next: W3, measured transport deltas.
+- W3 is complete. It was measured first:
+  - A 40-turn team run re-sent 4.1 MB on every change notice.
+  - Drawing took 2–3 ms, so no terminal DOM cap was needed.
+  - Turns now carry a revision (the checksum of the stored row), and unchanged turns come back as stubs. Large replies are gzipped.
+  - The same refresh now sends about 6 KB, with no new infrastructure.
+- Next: W4, split mode.
 
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

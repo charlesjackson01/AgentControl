@@ -692,6 +692,9 @@ States are worked out from the run's own record, so they always agree with it. R
 The dashboard gets changes pushed to it the moment they happen: new turns, OpenCode output, approvals, activity, and preview status. It uses a Server-Sent Events stream at `/api/events`, protected by the dashboard key like every other API call.
 - The page footer shows **· live** when streaming and **· polling** when it has fallen back to checking every few seconds (older browser, network hiccup, or more than 12 open tabs). The fallback is automatic, and the stream reconnects by itself.
 - Measured in Chromium: a server-side change reached the terminal view in about 0.2 s over the stream, versus 0.7–1 s with polling. An idle tab now re-reads the full state every 15 s instead of every 1–2 s.
+- Each refresh sends only the turns that changed. Every turn has a revision; the page says which ones it already holds, and unchanged turns come back as small stubs. Large replies are gzip-compressed when the browser accepts it.
+  - Measured on a 40-turn team run with full transcripts: 4.1 MB per refresh before, about 6 KB while one turn is changing.
+  - Drawing the page was already cheap (2–3 ms, the terminal capped at one turn's 300 entries), so only the transport changed.
 
 ## Live project preview (Project tab)
 

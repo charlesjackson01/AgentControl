@@ -269,6 +269,14 @@ function schedule(delay = nextDelay()) {
   clearTimeout(pollTimer);
   if (key) pollTimer = setTimeout(async () => { await refresh(); schedule(); }, delay);
 }
+/* Replace each {same: true} stub with the turn already held. False when one is missing. */
+function mergeSteps(result) {
+  if (!(result.steps || []).some(s => s.same)) return true;
+  const held = new Map((data?.steps || []).map(s => [s.id, s]));
+  if (result.steps.some(s => s.same && held.get(s.id)?.rev !== s.rev)) return false;
+  result.steps = result.steps.map(s => s.same ? held.get(s.id) : s);
+  return true;
+}
 async function refresh() {
   if (!key) return;
   // A change notice that arrives mid-refresh must not be lost: remember it and refresh once more.
@@ -276,9 +284,16 @@ async function refresh() {
   refreshing = true;
   const requestedRun = selected;
   try {
-    const query = [selected && 'run=' + encodeURIComponent(selected), runScope === 'all' && 'scope=all'].filter(Boolean).join('&');
-    const result = await api('/api/state' + (query ? '?' + query : ''));
+    // Turns the dashboard already holds are sent back as small stubs when unchanged (see mergeSteps).
+    const known = data?.run && (!selected || data.run.id === selected) ? (data.steps || []).filter(s => s.rev !== undefined).map(s => s.id + ':' + s.rev).join(',') : '';
+    const query = [selected && 'run=' + encodeURIComponent(selected), runScope === 'all' && 'scope=all', known && 'known=' + encodeURIComponent(known)].filter(Boolean).join('&');
+    let result = await api('/api/state' + (query ? '?' + query : ''));
     if (requestedRun !== selected) return;
+    if (!mergeSteps(result)) {
+      // A stub for a turn this page no longer holds: ask once more, in full.
+      result = await api('/api/state' + (query ? '?' + query.replace(/&?known=[^&]*/, '') : ''));
+      if (requestedRun !== selected) return;
+    }
     data = result; current = data.run; connected = true; failures = 0; lastStateTime = Date.now();
     $('auth').classList.add('hidden');
     $('boot').classList.add('hidden');

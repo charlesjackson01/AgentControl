@@ -89,9 +89,9 @@ def validate(p):
     return problems
 
 
-def run_hermes(hermes, settings, prompt):
+def run_hermes(hermes, settings, prompt, max_turns=4, log_path=None):
     caps = hermes.inspect()
-    argv = hermes.prefix() + ['chat', '--quiet', '--toolsets', 'todo', '--max-turns', '4']
+    argv = hermes.prefix() + ['chat', '--quiet', '--toolsets', 'todo', '--max-turns', str(max_turns)]
     if caps['--oneshot']:
         argv.append('--oneshot')
     if caps['--ignore-rules']:
@@ -103,8 +103,12 @@ def run_hermes(hermes, settings, prompt):
         path.write_text(prompt)
         argv += ['--query-file', str(path)] if caps['--query-file'] else ['--query', prompt]
         code, out, err = process(argv, settings.project, settings.manager_timeout, env=dict(os.environ, HERMES_TUI='0', NO_COLOR='1'))
+    if log_path:
+        # Keep everything Hermes printed: the terminal summary alone hides why it failed.
+        log_path.write_text(f'COMMAND: {argv}\nEXIT: {code}\nCAPABILITIES: {caps}\n\n--- STDOUT ---\n{out}\n\n--- STDERR ---\n{err}\n')
     if code:
-        raise RuntimeError(f'hermes exited {code}: {(err or out)[-600:]}')
+        raise RuntimeError(f'hermes exited {code}. Last stdout: {out.strip()[-700:]!r}. Last stderr: {err.strip()[-700:]!r}'
+                           + (f'. Full output: {log_path}' if log_path else ''))
     if caps['stream-json']:
         results = [json.loads(line) for line in out.splitlines() if line.strip().startswith('{') and '"type"' in line]
         results = [r for r in results if isinstance(r, dict) and r.get('type') == 'result']
@@ -121,8 +125,12 @@ def main():
     p.add_argument('--goal', default=DEFAULT_GOAL)
     p.add_argument('--trials', type=int, default=3)
     p.add_argument('--timeout', type=int, default=900, help='seconds per Hermes call')
+    p.add_argument('--max-turns', type=int, default=4, help='same as the engine (4); raise it to test whether turns run out')
+    p.add_argument('--logs', default='hermes-probe-logs', help='folder for full Hermes output per trial')
     p.add_argument('--json', action='store_true')
     a = p.parse_args()
+    logs = Path(a.logs).resolve()
+    logs.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='hermes-probe-') as work:
         settings = Settings(project=Path(work), data=Path(work) / 'state', hermes=a.hermes, profile=a.profile, manager_timeout=a.timeout)
         hermes = Hermes(settings)
@@ -130,7 +138,7 @@ def main():
         for i in range(a.trials):
             start = time.monotonic()
             try:
-                proposal, raw = run_hermes(hermes, settings, PROMPT + a.goal)
+                proposal, raw = run_hermes(hermes, settings, PROMPT + a.goal, a.max_turns, logs / f'trial-{i + 1}.log')
                 problems = validate(proposal)
                 trials.append({'ok': not problems, 'seconds': round(time.monotonic() - start, 1), 'problems': problems,
                                'mode': proposal.get('mode'), 'agents': [x.get('id') for x in proposal.get('agents', []) if isinstance(x, dict)],
@@ -146,7 +154,7 @@ def main():
     if a.json:
         print(json.dumps({'goal': a.goal, 'valid': valid, 'trials': trials}, indent=2))
     else:
-        print(f'\n{valid}/{len(trials)} proposals valid. Re-run with --json to see the full proposals.')
+        print(f'\n{valid}/{len(trials)} proposals valid. Full Hermes output per trial: {logs}/')
 
 
 if __name__ == '__main__':

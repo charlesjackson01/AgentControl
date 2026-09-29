@@ -39,6 +39,8 @@ class Store:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.lock = threading.RLock()
+        # Optional callback(kind, run_id) after every write; the controller wires it to the event bus.
+        self.listener = None
         with self.connection() as c:
             c.execute('PRAGMA journal_mode=WAL')
             migrate(c)
@@ -53,6 +55,13 @@ class Store:
             finally:
                 c.close()
 
+    def _changed(self, kind, run):
+        if self.listener:
+            try:
+                self.listener(kind, run)
+            except Exception:
+                pass  # live updates are best effort; never fail a journal write because of them
+
     def put(self, table, value):
         assert table in ('runs', 'steps')
         with self.connection() as c:
@@ -64,6 +73,7 @@ class Store:
             else:
                 c.execute('INSERT INTO steps VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET run=excluded.run, value=excluded.value',
                           (value['id'], value['run'], json.dumps(value)))
+        self._changed('run' if table == 'runs' else 'step', value['id'] if table == 'runs' else value['run'])
         return value
 
     def get(self, table, ident):
@@ -86,6 +96,7 @@ class Store:
             if item['status'] != 'prepared':
                 raise ValueError('Only an unsubmitted draft may be discarded')
             c.execute('DELETE FROM steps WHERE id=?', (ident,))
+        self._changed('step', item.get('run'))
 
     def runs(self):
         """Newest run first, by creation time (journals written before v2 may have shuffled rowids)."""
@@ -108,6 +119,7 @@ class Store:
             detail = json.dumps(detail, ensure_ascii=False)
         with self.connection() as c:
             c.execute('INSERT INTO events(run,created,kind,detail) VALUES(?,?,?,?)', (run, now(), kind, detail))
+        self._changed('event', run)
 
     def events(self, run, limit=100):
         with self.connection() as c:
@@ -125,6 +137,7 @@ class Store:
         with self.connection() as c:
             c.execute('INSERT INTO reviews VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET run=excluded.run, value=excluded.value',
                       (key, item['run'], json.dumps(item)))
+        self._changed('review', item['run'])
         return item
 
     def reviews(self, run):

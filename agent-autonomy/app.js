@@ -15,6 +15,7 @@ const KEY_NAME = 'ac-dashboard-key', LEGACY_KEY_NAME = 'trial-dashboard-key';
 
 let key = readKey(), selected = '', data = null, current = null, view = 'runs';
 let refreshing = false, connected = false, reviewBusy = false, reviewing = null, stopRunId = '', parentRun = null;
+let refreshAgain = false;
 let toastTimer, errorTimer, pollTimer, failures = 0, announcedRequests = '', diffText = '', lastStateTime = null;
 let selectedTurn = null, shownStage = '';
 const seenRequests = new Set();
@@ -257,6 +258,7 @@ function isLive() {
 }
 function nextDelay() {
   if (!connected) return Math.min(30000, 2000 * 2 ** Math.min(failures, 4));
+  if (live.state === 'live') return 15000;  // changes arrive over the stream; this is only a safety net
   if (document.hidden) return 10000;
   return isLive() && view === 'runs' ? 1000 : 2000;
 }
@@ -265,7 +267,9 @@ function schedule(delay = nextDelay()) {
   if (key) pollTimer = setTimeout(async () => { await refresh(); schedule(); }, delay);
 }
 async function refresh() {
-  if (!key || refreshing) return;
+  if (!key) return;
+  // A change notice that arrives mid-refresh must not be lost: remember it and refresh once more.
+  if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
   const requestedRun = selected;
   try {
@@ -285,8 +289,64 @@ async function refresh() {
     refreshReview();
   } finally {
     refreshing = false;
-    if (requestedRun !== selected) refresh();
+    if (requestedRun !== selected || refreshAgain) { refreshAgain = false; refresh(); }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Live updates: the server streams small change notices (Server-Sent Events) and the
+// dashboard re-reads /api/state on each. Uses fetch so the dashboard key stays in a header,
+// never in a URL. If streaming is unavailable, polling (above) carries on as before.
+// ---------------------------------------------------------------------------
+const live = {state: 'off', abort: null, failures: 0, retry: null};
+function setLive(state) {
+  live.state = state;
+  if (data) renderShell();
+}
+function handleEventBlock(block) {
+  const name = (block.match(/^event: (.*)$/m) || [])[1];
+  if (name === 'change' || name === 'hello') refresh();
+}
+async function connectEvents() {
+  clearTimeout(live.retry);
+  if (!key || live.state !== 'off' || typeof fetch !== 'function' || typeof TextDecoder === 'undefined') return;
+  live.state = 'connecting';
+  const abort = typeof AbortController === 'function' ? new AbortController() : null;
+  live.abort = abort;
+  let status = 0;
+  try {
+    const response = await fetch('/api/events', {headers: {Authorization: 'Bearer ' + key}, cache: 'no-store', signal: abort?.signal});
+    status = response.status;
+    if (!response.ok || !response.body || typeof response.body.getReader !== 'function') throw Error('Live updates unavailable');
+    const reader = response.body.getReader(), decoder = new TextDecoder();
+    let buffer = '';
+    live.failures = 0;
+    setLive('live');
+    schedule();
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true}).replace(/\r\n/g, '\n');
+      let end;
+      while ((end = buffer.indexOf('\n\n')) >= 0) {
+        handleEventBlock(buffer.slice(0, end));
+        buffer = buffer.slice(end + 2);
+      }
+    }
+  } catch {}
+  const wasAborted = abort?.signal.aborted;
+  live.abort = null;
+  setLive('off');
+  schedule();
+  // Reconnect with backoff, except after sign-out or a rejected key (polling shows the sign-in).
+  if (key && !wasAborted && status !== 401) {
+    live.failures++;
+    live.retry = setTimeout(connectEvents, Math.min(30000, 1000 * 2 ** Math.min(live.failures, 5)));
+  }
+}
+function disconnectEvents() {
+  clearTimeout(live.retry);
+  live.abort?.abort();
 }
 
 // ---------------------------------------------------------------------------
@@ -362,7 +422,9 @@ function renderShell() {
   const healthMessage = !connected ? 'Disconnected. Reconnecting…' : !data.health.ready ? data.health.message : '';
   $('connection-banner').textContent = healthMessage;
   $('connection-banner').classList.toggle('hidden', !healthMessage);
-  $('last-updated').textContent = 'Updated ' + new Date(lastStateTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+  $('last-updated').textContent = 'Updated ' + new Date(lastStateTime).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit', second: '2-digit'})
+    + (live.state === 'live' ? ' · live' : ' · polling');
+  $('last-updated').title = live.state === 'live' ? 'Changes stream in as they happen.' : 'Checking for changes every few seconds.';
   renderRecentRuns(inbox);
   renderAgents(project);
   renderConnections();
@@ -1134,7 +1196,7 @@ const ACTIONS = {
   'check-connections': async () => { await api('/api/check', 'POST', {}); toast('Checking the Hermes CLI and OpenCode API…'); await refresh(); },
   'dismiss-error': () => pageError(''),
   notifications: toggleNotifications,
-  'sign-out': () => { forgetKey(); clearTimeout(pollTimer); $('connection-dialog').close(); $('key').value = ''; showAuth('Signed out. The key was removed from this browser.'); },
+  'sign-out': () => { forgetKey(); clearTimeout(pollTimer); disconnectEvents(); $('connection-dialog').close(); $('key').value = ''; showAuth('Signed out. The key was removed from this browser.'); },
   'term-follow': () => setFollow(!term.follow),
   'term-jump': () => setFollow(true),
   'term-copy': async () => { try { await navigator.clipboard.writeText(terminalText()); toast('Terminal output copied.'); } catch { toast('Copy is unavailable in this browser.'); } },
@@ -1236,7 +1298,7 @@ function init() {
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', handleShortcut);
   document.addEventListener('keydown', trapDrawerFocus);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); schedule(); } });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) { refresh(); schedule(); connectEvents(); } });
   $('drawer-scrim').onclick = closeDrawer;
   $('auth-form').onsubmit = async event => {
     event.preventDefault();
@@ -1245,6 +1307,7 @@ function init() {
     $('auth-error').textContent = 'Connecting…';
     await refresh();
     schedule();
+    connectEvents();
   };
   $('new-form').onsubmit = async event => {
     event.preventDefault();
@@ -1334,7 +1397,7 @@ function init() {
     const name = STAGES[Math.min(STAGES.length - 1, index)][0];
     document.querySelectorAll('[data-stage-tab]').forEach(t => t.setAttribute('aria-selected', String(t.dataset.stageTab === name)));
   });
-  refresh().then(() => schedule());
+  refresh().then(() => { schedule(); connectEvents(); });
 }
 if (typeof document !== 'undefined') init();
 if (typeof module !== 'undefined' && module.exports) module.exports = {stripAnsi, esc, duration, budget, stateLabel, requestKey, requestTitle, requestText, receiptLabel, verificationLabel, fileStats, phaseIndex, ignoresShortcut, shellQuote, relTime, runTitle, stageStates, transcriptOf, planningNext, nextDelay};

@@ -13,6 +13,7 @@ from adapters.opencode import OpenCode
 from adapters.hermes import Hermes
 from proc import process
 from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
+from events import EventBus
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
@@ -106,7 +107,9 @@ class Controller:
         self.s = settings
         self.s.project = self.s.project.resolve()
         self.s.data = self.s.data.resolve()
+        self.events = EventBus()
         self.store = Store(self.s.data / 'autonomy.sqlite3')
+        self.store.listener = self.events.publish
         self.api = api or OpenCode(settings)
         self.manager = manager or Hermes(settings)
         self.lock = threading.RLock()
@@ -114,6 +117,7 @@ class Controller:
         self.verifying = set()
         self.shutdown = threading.Event()
         self.preview = PreviewManager(self.s.project, self.s.preview_idle)
+        self.preview.on_change = lambda: self.events.publish('preview', self.preview.run or None)
         self.health = {'ready': False, 'message': 'Checking connections…'}
         for run in self.store.runs():
             if (run.get('manual_verification') or {}).get('status') == 'running':
@@ -143,6 +147,7 @@ class Controller:
             errors.append(str(exc))
         self.health = {'ready': not errors, 'message': '; '.join(errors) if errors else 'Hermes CLI and OpenCode API ready',
                        'opencode_version': info.get('version'), 'agents': agents, 'checked_at': now()}
+        self.events.publish('health')
         return self.health
 
     def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None):

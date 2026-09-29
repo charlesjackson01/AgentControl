@@ -130,6 +130,7 @@ class PreviewManager:
         self.clock = clock
         self.lock = threading.RLock()
         self.listen_port = None
+        self.on_change = None  # optional callback when the preview state changes (live dashboard updates)
         self.generation = 0
         self.proc = self.xvfb = None
         self.master = None
@@ -147,6 +148,20 @@ class PreviewManager:
         self.last_activity = clock()
         self.closed = threading.Event()
         threading.Thread(target=self._idle_watch, daemon=True).start()
+
+    @property
+    def state(self):
+        return self._state
+
+    @state.setter
+    def state(self, value):
+        changed = getattr(self, '_state', None) != value
+        self._state = value
+        if changed and self.on_change:
+            try:
+                self.on_change()
+            except Exception:
+                pass
 
     # ---- lifecycle -------------------------------------------------------
     def start(self, run, spec):

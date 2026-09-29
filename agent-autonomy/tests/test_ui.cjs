@@ -20,7 +20,7 @@ async function harness(state=fixture(),savedTheme='mac') {
  // Select value is read-only in linkedom, unlike browsers.
  for(const s of document.querySelectorAll('select'))Object.defineProperty(s,'value',{value:s.querySelector('option')?.value || '',writable:true});
  const storage=new Map([['ac-theme',savedTheme]]),calls=[],intervals=[];
- const context=vm.createContext({location:{protocol:'http:',hostname:'100.1.2.3'},document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
+ const context=vm.createContext({TextDecoder,TextEncoder,AbortController,location:{protocol:'http:',hostname:'100.1.2.3'},document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
   sessionStorage:{getItem:()=> 'test-dashboard-key',setItem:()=>{}},
   localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
   setInterval:fn=>intervals.push(fn),clearTimeout:()=>{},setTimeout:()=>1,
@@ -39,6 +39,10 @@ async function harness(state=fixture(),savedTheme='mac') {
     if(body.action==='goal_check')state.run.goal_checks.push({criterion:body.text,status:'pending'});
     result=state.run;
    }else if(url==='/api/runs'){result={id:'new_run'};state.run={...state.run,id:'new_run',goal:body.goal,status:'planning',goal_checks:body.goal_checks.map(criterion=>({criterion,status:'pending'}))};state.inbox=[];state.steps=[];state.runs=[{...state.run,prompt_count:0}];}
+   else if(url==='/api/events'&&state.stream){
+    const s=state.stream;
+    return {status:200,ok:true,body:{getReader:()=>({read:()=>s.chunks.length?Promise.resolve({value:new TextEncoder().encode(s.chunks.shift()),done:false}):new Promise(r=>{s.wake=()=>{s.wake=null;r(s.chunks.length?{value:new TextEncoder().encode(s.chunks.shift()),done:false}:{done:true})}})})}};
+   }
    else if(url==='/api/preview/ticket')result={ticket:'tkt',port:9999};
    else if(url.startsWith('/api/preview/output'))result={offset:(state.previewOutput||'').length,from:Number(url.split('since=')[1]||0),text:(state.previewOutput||'').slice(Number(url.split('since=')[1]||0)),status:state.preview};
    else if(url==='/api/preview'){
@@ -280,5 +284,36 @@ test('new-run form submits the preview spec and completion opens the Project tab
  next.document.getElementById('new-preview-command').value='python3 -m http.server 8123';next.document.getElementById('new-preview-port').value='8123';
  await next.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
  assert.deepEqual(next.calls.find(c=>c.url==='/api/runs').body.preview,{mode:'web',command:'python3 -m http.server 8123',port:8123});
+});
+test('live stream switches the dashboard from polling to pushed updates',async()=>{
+ const state=richActive();state.stream={chunks:['retry: 3000\nevent: hello\ndata: {"seq":1}\n\n'],wake:null};
+ const h=await harness(state);const run=code=>vm.runInContext(code,h.context);
+ for(let i=0;i<6;i++)await tick();
+ assert.equal(run('live.state'),'live');
+ assert.equal(run('nextDelay()'),15000,'polling becomes a slow safety net while live');
+ assert.match(h.document.getElementById('last-updated').textContent,/· live/);
+ const before=h.calls.filter(c=>c.url.startsWith('/api/state')).length;
+ state.steps[1].transcript.push({type:'text',text:'Pushed line from the stream'});
+ state.stream.chunks.push('id: 2\nevent: change\ndata: {"seq":2,"kind":"step","run":"run_test"}\n\n');state.stream.wake();
+ for(let i=0;i<6;i++)await tick();
+ assert(h.calls.filter(c=>c.url.startsWith('/api/state')).length>before,'a change notice triggers a state refresh');
+ assert.match(h.document.getElementById('term-body').textContent,/Pushed line from the stream/);
+ state.stream.wake();for(let i=0;i<4;i++)await tick();
+ assert.equal(run('live.state'),'off','a closed stream falls back to polling');
+ assert.match(h.document.getElementById('last-updated').textContent,/· polling/);
+});
+test('without a stream the dashboard keeps polling as before',async()=>{
+ const h=await harness(richActive());for(let i=0;i<4;i++)await tick();
+ assert.equal(vm.runInContext('live.state',h.context),'off');
+ assert.equal(vm.runInContext('nextDelay()',h.context),1000);
+ assert.match(h.document.getElementById('last-updated').textContent,/· polling/);
+});
+test('a notice during a refresh is not lost',async()=>{
+ const h=await harness(richActive());const run=code=>vm.runInContext(code,h.context);
+ const count=()=>h.calls.filter(c=>c.url.startsWith('/api/state')).length;
+ const before=count();
+ const first=run('refresh()');run('refresh()');run('refresh()');  // two notices arrive while the first refresh is in flight
+ await first;for(let i=0;i<6;i++)await tick();
+ assert.equal(count()-before,2,'one follow-up refresh covers every notice that arrived meanwhile');
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

@@ -5,6 +5,9 @@ import fcntl
 import hmac
 import json
 import os
+import queue
+import select
+import socket
 from pathlib import Path
 import secrets
 import signal
@@ -15,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from engine import Controller, ReviewConflict, Settings
 
 ROOT = Path(__file__).resolve().parent
+MAX_EVENT_STREAMS = 12       # each open dashboard tab holds one thread
+KEEPALIVE_SECONDS = 15       # comment lines keep proxies and phones from dropping an idle stream
 
 
 def handler(controller, key):
@@ -51,6 +56,8 @@ def handler(controller, key):
                 return self.reply(200, (ROOT / path.path[1:]).read_text(), assets[path.path])
             if not self.allowed():
                 return self.reply(401, {'error': 'Enter the dashboard key printed in your server terminal.'})
+            if path.path == '/api/events':
+                return self.stream_events()
             if path.path == '/api/state':
                 selected = urllib.parse.parse_qs(path.query).get('run', [''])[0]
                 return self.reply(200, controller.state(selected))
@@ -63,6 +70,51 @@ def handler(controller, key):
                 except ValueError as exc:
                     return self.reply(409, {'error': str(exc)})
             self.reply(404, {'error': 'Not found'})
+
+        def client_gone(self):
+            """True once the browser has closed the stream (the socket reads as EOF), so a closed tab
+            frees its slot within a second instead of at the next keepalive."""
+            try:
+                readable, _, _ = select.select([self.connection], [], [], 0)
+                return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b''
+            except (OSError, ValueError):
+                return True
+
+        def stream_events(self):
+            """Server-Sent Events: small change notices; the dashboard re-reads /api/state on each."""
+            subscriber = controller.events.subscribe(limit=MAX_EVENT_STREAMS)
+            if subscriber is None:
+                return self.reply(503, {'error': 'Too many live connections; this tab will poll instead.'})
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Accel-Buffering', 'no')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.end_headers()
+                self.close_connection = True
+                self.wfile.write(f'retry: 3000\nevent: hello\ndata: {json.dumps({"seq": controller.events.seq})}\n\n'.encode())
+                self.wfile.flush()
+                quiet = 0.0
+                while not controller.shutdown.is_set():
+                    try:
+                        event = subscriber.get(timeout=1)
+                    except queue.Empty:
+                        if self.client_gone():
+                            break
+                        quiet += 1
+                        if quiet >= KEEPALIVE_SECONDS:
+                            self.wfile.write(b': keepalive\n\n')
+                            self.wfile.flush()
+                            quiet = 0
+                        continue
+                    quiet = 0
+                    self.wfile.write(f'id: {event["seq"]}\nevent: change\ndata: {json.dumps(event)}\n\n'.encode())
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass  # the tab closed or the network dropped
+            finally:
+                controller.events.unsubscribe(subscriber)
 
         def do_POST(self):
             if not self.allowed():

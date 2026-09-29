@@ -244,6 +244,12 @@ Window decorations are decorative and contain no real OS logos.
 Shortcuts are ignored in editable fields, while a modifier key is held, and
 inside unrelated dialogs. Reduced-motion preferences disable the terminal cursor.
 
+## Live updates
+
+The dashboard gets changes pushed to it the moment they happen: new turns, OpenCode output, approvals, activity, and preview status. It uses a Server-Sent Events stream at `/api/events`, protected by the dashboard key like every other API call.
+- The page footer shows **· live** when streaming and **· polling** when it has fallen back to checking every few seconds (older browser, network hiccup, or more than 12 open tabs). The fallback is automatic, and the stream reconnects by itself.
+- Measured in Chromium: a server-side change reached the terminal view in about 0.2 s over the stream, versus 0.7–1 s with polling. An idle tab now re-reads the full state every 15 s instead of every 1–2 s.
+
 ## Live project preview (Project tab)
 
 In **New run → Live preview**, choose how to run what gets built. You can also set this later in the **Project** tab. The preview starts automatically when the run completes, and the Project tab opens.

@@ -117,7 +117,11 @@ class ContainerRunE2E(unittest.TestCase):
         self.assertIn('0000000000000000', out)
         self.assertIn('Read-only file system', out)
         # The desktop preview runs in the container: a real frame, and clicks go through.
-        self.wait(lambda: c.preview.status()['state'] == 'running', 60)
+        try:
+            self.wait(lambda: c.preview.status()['state'] == 'running', 60)
+        except AssertionError:
+            preview_events = [e['detail'][:300] for e in c.store.events(ident) if e['kind'] == 'preview']
+            self.fail(f'the preview did not run: {c.preview.status()} events={preview_events}')
         frame = c.preview.frame()
         self.assertTrue(frame.startswith(b'\x89PNG'))
         c.preview.click(10, 10)

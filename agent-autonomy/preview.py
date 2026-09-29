@@ -173,7 +173,8 @@ class PreviewManager:
         spec = validate_spec(spec, cwd)
         if not spec:
             raise ValueError('This run has no preview configured')
-        if spec['mode'] == 'desktop' and desktop_missing():
+        # Inside a container or VM the tools come with the image or provisioning, not from this host.
+        if spec['mode'] == 'desktop' and not runner and desktop_missing():
             raise ValueError('Desktop preview needs ' + ', '.join(desktop_missing()) + ' installed on the server')
         with self.lock:
             self.stop()

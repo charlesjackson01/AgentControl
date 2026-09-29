@@ -259,6 +259,28 @@ class DesktopToolMessageTests(unittest.TestCase):
             finally:
                 manager.close()
 
+    def test_a_container_desktop_needs_no_tools_on_this_host(self):
+        class Runner:   # stands in for the run container; Xvfb and the app are "inside"
+            display = ':90'
+            def __init__(self):
+                self.commands = []
+            def wrap(self, argv, cwd, env=None, tty=False, detach=False):
+                self.commands.append(list(argv))
+                return [sys.executable, '-c', 'import time; time.sleep(30)']
+            def exists(self, path):
+                return True
+            def kill(self):
+                pass
+        with tempfile.TemporaryDirectory() as temp:
+            manager, runner = PreviewManager(temp), Runner()
+            try:
+                with unittest.mock.patch('preview.desktop_missing', return_value=['Xvfb', 'xdotool', 'import']):
+                    status = manager.start('run1', {'mode': 'desktop', 'command': 'app'}, runner=runner)
+                self.assertEqual(status['state'], 'running', status['error'])
+                self.assertEqual(runner.commands[0][0], 'Xvfb', 'Xvfb was started inside the container')
+            finally:
+                manager.close()
+
 
 class ControllerPreviewTests(unittest.TestCase):
     def test_completed_run_starts_its_preview_and_api_controls_it(self):

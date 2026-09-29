@@ -48,6 +48,9 @@ Hermes CLI and the OpenCode API without starting a model.
 - **Runs work on their own branch** (git projects). Your checkout is not
   touched until you press **Apply**, which merges the run's branch with a merge
   commit. Verification runs on the merged result.
+- **Team runs.** Hermes proposes a small team of coders and a task plan; after
+  you approve it, the coders work in parallel on their own branches and their
+  work is merged and verified. Every agent's approvals still come to you.
 - **Model server.** Optionally describe your model server (for example
   llama-server) in `state/models.json`. AgentControl checks that it answers
   before sending work, records token usage per agent, and can run a local

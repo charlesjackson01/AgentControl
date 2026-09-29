@@ -108,7 +108,7 @@ function stateLabel(run, pending = []) {
   if (!run) return {text: 'Ready', tone: ''};
   if (!ended.has(run.status) && pending.length) return {text: pending.some(p => p.kind === 'permission') ? 'Needs your approval' : 'Needs your answer', tone: 'attention'};
   if (run.status === 'waiting') return {text: 'Resuming', tone: 'running'};
-  const map = {planning: ['Planning', 'running'], coding: ['Running', 'running'], reviewing: ['Verifying', 'running'], resuming: ['Resuming', 'running'],
+  const map = {awaiting_approval: ['Needs your decision', 'attention'], planning: ['Planning', 'running'], coding: ['Running', 'running'], reviewing: ['Verifying', 'running'], resuming: ['Resuming', 'running'],
     paused: ['Paused', ''], interrupted: ['Interrupted', 'attention'], attention: ['Needs attention', 'attention'], completed: ['Completed', 'completed'],
     failed: ['Failed', 'failed'], stopped: ['Stopped', ''], blocked: ['Blocked', 'attention'], limit_reached: ['Budget exhausted', 'attention']};
   const pair = map[run.status] || [run.status, ''];
@@ -479,6 +479,7 @@ function renderRun() {
   $('steering-form').classList.toggle('hidden', finished);
   $('steering-form').querySelectorAll('button').forEach(button => { button.disabled = !connected || (button.dataset.action === 'verify-now' && !canVerifyNow()); });
   setHTML($('inline-approvals'), pending.map(approvalCard).join('') || (finished ? '' : recentDecisionHTML()));
+  renderTeam();
   renderChecks();
   renderVerification();
   renderModelUsage();
@@ -539,7 +540,7 @@ function renderRail(steps, pending, next, turnId) {
     const counts = stepCounts(s);
     return `<button class="turn-chip ${s.id === turnId ? 'selected' : ''}" data-turn="${esc(s.id)}" aria-pressed="${s.id === turnId}">
       <span class="chip-number">${s.number}</span>
-      <span class="chip-text"><strong>${esc(s.title)}</strong><small><span class="${tone}">${esc(result)}</span>${counts ? ' · ' + counts : ''}</small></span>
+      <span class="chip-text"><strong>${esc(s.title)}</strong><small>${isTeam() ? `<span class="agent-tag">${esc(agentName(s.agent))}</span> · ` : ''}<span class="${tone}">${esc(result)}</span>${counts ? ' · ' + counts : ''}</small></span>
     </button>`;
   });
   if (next) chips.push(`<button class="turn-chip planning ${turnId === 'next' ? 'selected' : ''}" data-turn="next" aria-pressed="${turnId === 'next'}">
@@ -559,7 +560,8 @@ function renderStages(step, states, nextNumber, pending, finished) {
   for (const [name, label, who] of STAGES) {
     const section = $('stage-' + name);
     section.className = `stage stage-${name} ${states[name]}`;
-    setHTML($(`stage-${name}-head`), stageHead(name, label, who, states[name]));
+    const by = name === 'code' && step && isTeam() ? `${who} · ${agentName(step.agent)}` : who;
+    setHTML($(`stage-${name}-head`), stageHead(name, label, by, states[name]));
     const tab = document.querySelector(`[data-stage-tab="${name}"]`);
     tab.className = `stage-tab ${states[name]}`;
   }
@@ -727,6 +729,62 @@ function renderModelUsage() {
     ${agents || '<p class="small muted">Token counts appear after Hermes or OpenCode finish a call.</p>'}
     <p class="small muted">${total.cost > 0 ? `Spend on paid providers: $${total.cost.toFixed(4)}` : 'Local model · no spend'}</p></section>`);
 }
+function isTeam(run = current) { return run?.mode === 'team'; }
+function agentName(name = 'coder-1') {
+  const label = current?.team?.agents?.[name]?.label;
+  return label ? `${name} (${label})` : name;
+}
+const TASK_TONE = {done: 'success-text', running: 'warning-text', failed: 'error', blocked: 'error', waiting: 'muted'};
+function taskRows(tasks, withStatus) {
+  return tasks.map(t => `<tr>
+    <td class="mono">${withStatus && t.steps?.length ? `<button class="text-button mono" data-turn="${esc(t.steps.at(-1))}" aria-label="Show the latest turn of task ${esc(t.id)}">${esc(t.id)}</button>` : esc(t.id)}</td><td>${esc(t.title)}${t.reason && withStatus ? `<small class="muted">${esc(t.reason)}</small>` : ''}</td>
+    <td>${esc(agentName(t.agent))}</td><td class="small">${t.depends_on?.length ? esc(t.depends_on.join(', ')) : '—'}</td>
+    ${withStatus ? `<td class="${TASK_TONE[t.status] || ''}">${esc(t.status)}${t.attempts > 1 ? ` · ${t.attempts} tries` : ''}</td>` : `<td class="small mono">${esc((t.files || []).join(', ') || '—')}</td>`}</tr>`).join('');
+}
+function renderTeam() {
+  const team = current.team;
+  if (!isTeam() || !team) { setHTML($('team-panel'), ''); return; }
+  const finished = ended.has(current.status);
+  if (team.state === 'proposing') {
+    setHTML($('team-panel'), finished ? '' : '<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team plan</h2><p class="small muted">Hermes is proposing a team. Nothing runs until you approve it.</p></section>');
+    return;
+  }
+  if (['proposed', 'unusable'].includes(team.state) && !finished) {
+    const p = team.proposal, usable = team.state === 'proposed';
+    const agents = usable ? Object.entries(p.agents).map(([name, a]) => `<li><strong>${esc(name)}</strong> <span class="muted">(${esc(a.label)})</span> · ${esc(a.responsibility)}</li>`).join('') : '';
+    const left = 3 - (team.proposals || 0);
+    setHTML($('team-panel'), `<section class="ac-panel team-panel proposal" aria-live="polite"><h2 class="ac-panel__title">Team plan <span class="ac-status attention">needs your decision</span></h2>
+      ${usable ? `<p class="small">${esc(p.reason || '')}</p><h3 class="small">Agents</h3><ul class="small team-agents">${agents}</ul>
+        <h3 class="small">Tasks</h3><div class="table-wrap"><table class="team-table"><thead><tr><th>Task</th><th>What</th><th>Agent</th><th>After</th><th>Files</th></tr></thead><tbody>${taskRows(p.tasks, false)}</tbody></table></div>
+        ${(team.warnings || []).map(w => `<p class="small warning-text">⚠ ${esc(w)}</p>`).join('')}
+        <p class="small muted">Each agent works in its own worktree; finished tasks are merged and verified. Every agent's approvals still come to you.</p>`
+      : `<p class="small error">Hermes could not produce a usable team plan:</p><ul class="small">${(team.problems || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>`}
+      <div class="row wrap team-actions">
+        <button class="ac-btn primary" data-action="approve-team" ${usable && connected ? '' : 'disabled'}>Approve plan</button>
+        <button class="ac-btn" data-action="single-agent" ${connected ? '' : 'disabled'}>Run as a single agent</button>
+      </div>
+      <label for="team-note" class="small">Ask for a different plan <span class="muted">· ${left > 0 ? `${left} left` : 'none left'}</span></label>
+      <textarea id="team-note" rows="2" maxlength="2000" placeholder="e.g. Use two agents and keep the tests with the API" ${left > 0 ? '' : 'disabled'}></textarea>
+      <button class="ac-btn compact" data-action="repropose" ${left > 0 && connected ? '' : 'disabled'}>Ask again</button>
+      <p id="team-error" class="error small" role="alert"></p></section>`);
+    return;
+  }
+  if (team.state === 'single') {
+    setHTML($('team-panel'), '<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team plan</h2><p class="small muted">Running with one agent, as chosen.</p></section>');
+    return;
+  }
+  const tasks = team.tasks || [], done = tasks.filter(t => t.status === 'done').length;
+  const states = Object.fromEntries((data.agents || []).map(a => [a.name, a]));
+  const agents = Object.keys(team.agents || {}).map(name => {
+    const a = states[name] || {};
+    const tone = a.state === 'working' ? 'running' : a.state === 'waiting_on_you' ? 'attention' : '';
+    return `<li><span class="ac-status ${tone}">${esc((a.state || 'idle').replaceAll('_', ' '))}</span> <strong>${esc(agentName(name))}</strong>${a.task ? ` · <span class="small">${esc(a.task)}</span>` : ''}</li>`;
+  }).join('');
+  setHTML($('team-panel'), `<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team <span class="muted small">· ${done} of ${tasks.length} tasks done${team.state === 'review' ? ' · Hermes reviews the merged result' : ''}</span></h2>
+    <ul class="team-agents live">${agents}</ul>
+    <div class="table-wrap"><table class="team-table"><thead><tr><th>Task</th><th>What</th><th>Agent</th><th>After</th><th>Status</th></tr></thead><tbody>${taskRows(tasks, true)}</tbody></table></div>
+    <p class="small muted">Select a task to follow its latest turn.</p></section>`);
+}
 function renderBranch() {
   const w = data.workspace, ws = current.workspace;
   if (!w || !ws || ws.mode !== 'worktree') { setHTML($('branch-panel'), ''); return; }
@@ -791,7 +849,7 @@ function approvalCard(p) {
     ${receipt?.redirect_saved ? '<p class="small muted">Your redirection is saved for the next Hermes prompt.</p>' : ''}
     <div class="approval-actions">${actions}</div>
     <button class="text-button" data-review="${id}">Inspect full request</button>
-    <p class="policy-note">Run #${esc(p.run.slice(0, 6))} · ${question ? 'Clarification' : 'Permission: ' + esc(p.permission || 'unspecified')}<br>${riskNote(p.risk)}</p>
+    <p class="policy-note">Run #${esc(p.run.slice(0, 6))}${p.agent ? ' · ' + esc(p.agent) : ''} · ${question ? 'Clarification' : 'Permission: ' + esc(p.permission || 'unspecified')}<br>${riskNote(p.risk)}</p>
   </article>`;
 }
 // Risk comes from AgentControl's own registry (permissions.py), never from the model.
@@ -1173,6 +1231,12 @@ async function loadPreflight() {
 function renderPreflight() {
   const p = preflight, parent = parentRun && data?.runs ? current : null;
   $('setup-field').classList.toggle('hidden', !p?.usable);
+  const teamOption = $('mode-team');
+  if (teamOption) {
+    teamOption.disabled = !p?.usable;
+    if (!p?.usable) { teamOption.checked = false; $('mode-single').checked = true; }
+    $('team-mode-note').textContent = p?.usable ? 'Hermes proposes the agents and tasks; nothing runs until you approve the plan.' : 'Teams need a git project with at least one commit.';
+  }
   if (!p) { setHTML($('workspace-preflight'), ''); return; }
   if (!p.usable) {
     setHTML($('workspace-preflight'), `<p class="small muted">Works directly in the project folder${p.is_repo ? ': ' + esc(p.reason) : ' (not a git repository)'}.</p>`);
@@ -1301,6 +1365,14 @@ const ACTIONS = {
   pause: togglePause,
   'add-check': () => { if (!current || ended.has(current.status)) return; $('check-error').textContent = ''; $('check-dialog').showModal(); $('criterion').focus(); },
   'ask-status': () => { focusSteer(); $('steering').value = 'At your next planning turn, summarize what is complete, what remains, and any blockers.'; $('steering').focus(); },
+  'approve-team': async () => { await control('approve_team'); toast('Plan approved. Starting the team.'); },
+  'single-agent': async () => { await control('single_agent'); toast('Running as a single agent.'); },
+  repropose: async () => {
+    const note = $('team-note').value.trim();
+    if (!note) { $('team-error').textContent = 'Tell Hermes what to change.'; return; }
+    await control('repropose', note);
+    toast('Asked Hermes for a different plan.');
+  },
   'apply-branch': () => {
     const ws = current.workspace, w = data.workspace, id = current.id;
     askConfirm(`Apply to ${ws.base_branch}?`, `<p>Merge <code>${esc(ws.integration.branch)}</code> into <strong>${esc(ws.base_branch)}</strong> with a merge commit.</p>
@@ -1454,6 +1526,7 @@ function init() {
         ...($('run-title').value.trim() ? {title: $('run-title').value.trim()} : {}),
         ...(readPreviewSpec('new').mode !== 'none' ? {preview: readPreviewSpec('new')} : {}),
         ...($('allow-dirty')?.checked ? {allow_dirty: true} : {}),
+        ...(document.querySelector('input[name="run-mode"]:checked')?.value === 'team' && preflight?.usable ? {mode: 'team', team_size: Number($('team-size').value)} : {}),
         ...(preflight?.usable && $('setup-cmd').value.trim() ? {setup: $('setup-cmd').value.trim()} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');

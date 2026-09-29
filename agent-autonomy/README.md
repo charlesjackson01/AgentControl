@@ -198,6 +198,8 @@ no notifications:
 python3 -m unittest discover -s agent-autonomy/tests -v
 ```
 
+`tests/test_team_e2e.py` runs a two-agent team on a real `opencode serve` with a scripted model, kills the controller mid-run and resumes it. It runs when an OpenCode binary is available (`OPENCODE_BIN=/path/to/opencode` or `opencode` on PATH) and is skipped otherwise.
+
 The model tests use ai-arch's scripted mock endpoint (`ai-arch/tests/mock-endpoint/server.py`) as the model server, so they need the `ai-arch/` folder next to `agent-autonomy/`.
 
 To check the actual local connections without starting a model:
@@ -282,6 +284,31 @@ before.
 - Apply and Discard are recorded in the audit log.
 
 AgentControl's own commits and merges on the run branches use an AgentControl identity and skip your repository's hooks, so they need no git configuration and never run project code.
+
+## Team runs (several coders)
+
+In New run, choose **A team** (git projects only) and the largest team you allow
+(2 or 3 agents). The run then goes like this:
+
+1. **Hermes proposes a plan.** It lists the agents, what each is responsible for, and the tasks with their dependencies and the files they will touch. AgentControl checks the plan first: every task has an agent and a prompt, dependencies exist and have no cycles, and the size limits hold. A plan that fails the checks gets one retry with the problems listed. Tasks for different agents that touch the same files without an order between them are flagged as likely conflicts.
+2. **You decide. Nothing runs before that.** You can:
+   - **Approve plan**
+   - **Run as a single agent**
+   - **Ask for a different plan**, with a note to Hermes (up to three proposals in all)
+
+   If Hermes proposes one agent, approving runs it as a normal single-agent run. The run waits for your decision; the time limit still applies. Your decision is recorded in the audit log.
+3. **Agents work in parallel.** Each approved agent gets its own worktree, branch (`agentcontrol/<run>/coder-N`) and OpenCode session.
+   - A task starts when its dependencies are done and its agent is free. The agent is first brought up to date with the merged work.
+   - Finished tasks are committed, merged into the integration branch and verified there.
+   - A task that conflicts with already-merged work, or ends in an OpenCode error, is retried automatically with a targeted prompt (for example, "resolve these conflict markers"). It gets at most 3 attempts in all; after that it is marked failed, and tasks that depend on it are marked blocked.
+   - Every agent's permission requests and questions come to your Approvals as usual, labelled with the agent.
+4. **Hermes reviews the merged result**, using the same loop as single-agent runs. It sees every task's status, can send a fix to a named agent, and marks the run complete only when your verification command passes on the integration branch.
+
+Every prompt and retry counts toward the run's prompt limit. The run page shows the plan while it waits for you. Once the team starts, the Team panel shows each agent's state and the task list; select a task to follow its latest turn. Turns and approvals show which agent they belong to. Stop aborts every working agent. After a controller restart, **Resume** carries on from the journal:
+- a plan waiting for you is not proposed again
+- a task that was running is followed to the end, not sent again
+
+Your model server answers one request at a time (M0: `-np 1`), so a team saves time mostly when agents spend time running tools and tests rather than generating text.
 
 ## Model server, usage, and the optional gateway
 

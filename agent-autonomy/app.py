@@ -158,7 +158,8 @@ def handler(controller, key):
                 if self.path == '/api/runs':
                     run = controller.new(body.get('goal', ''), body.get('verifier', ''), body.get('max_steps', 8),
                                          body.get('goal_checks'), body.get('run_minutes'), body.get('parent_run'), body.get('title'), body.get('preview'),
-                                         allow_dirty=body.get('allow_dirty') is True, setup=body.get('setup', ''))
+                                         allow_dirty=body.get('allow_dirty') is True, setup=body.get('setup', ''),
+                                         mode=body.get('mode', 'single'), **({'team_size': body['team_size']} if 'team_size' in body else {}))
                     return self.reply(201, {'id': run['id']})
                 if self.path == '/api/preview/ticket':
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})

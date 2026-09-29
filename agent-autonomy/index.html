@@ -80,7 +80,7 @@
         <section id="view-runs" class="view">
           <div id="empty-state" class="ac-panel empty-state hidden"><div class="eyebrow">AgentControl</div><h1>Give the work a direction.</h1><p>Write a brief. Hermes plans the next turn, OpenCode builds it, and AgentControl keeps the work and your decisions in view.</p><button class="ac-btn primary" data-action="new">Start a new run</button></div>
           <div id="run-layout" class="run-layout hidden">
-            <div class="run-top"><div id="run-header"></div><div id="outcome"></div><div id="inline-approvals" class="inline-approvals"></div>
+            <div class="run-top"><div id="run-header"></div><div id="outcome"></div><div id="inline-approvals" class="inline-approvals"></div><div id="team-panel"></div>
               <section id="workflow" class="workflow" aria-label="Workflow">
                 <div id="turn-rail" class="turn-rail"></div>
                 <div id="stage-board" class="stage-board">
@@ -171,7 +171,13 @@
               </div></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Independent verification</h2><label class="switch-row" for="verify-enabled"><span>Run a verification command after each coding turn</span><input id="verify-enabled" type="checkbox" checked></label><label for="verify">Command</label><input id="verify" maxlength="2000" required placeholder="python3 -m unittest discover -s demo_app"><p class="small muted">AgentControl runs this command; Hermes reviews its output. Shell pipes and redirects are not interpreted.</p></section>
           </div><aside class="new-side">
-            <section class="ac-panel"><h2 class="ac-panel__title">Agents</h2><p><span class="agent-avatar hermes">H</span> <strong>Hermes</strong> · orchestrator</p><p id="new-profile" class="small muted"></p><p><span class="agent-avatar opencode">O</span> <strong>OpenCode</strong> · coder</p><p class="small muted">Uses the model configured on your OpenCode server.</p></section>
+            <section class="ac-panel"><h2 class="ac-panel__title">Agents</h2><p><span class="agent-avatar hermes">H</span> <strong>Hermes</strong> · orchestrator</p><p id="new-profile" class="small muted"></p><p><span class="agent-avatar opencode">O</span> <strong>OpenCode</strong> · coder</p><p class="small muted">Uses the model configured on your OpenCode server.</p>
+              <fieldset class="mode-choice"><legend class="small"><strong>How many coders</strong></legend>
+                <label class="choice"><input type="radio" name="run-mode" id="mode-single" value="single" checked><span><strong>One agent</strong><small>Hermes plans each turn for a single coder.</small></span></label>
+                <label class="choice"><input type="radio" name="run-mode" id="mode-team" value="team"><span><strong>A team</strong><small id="team-mode-note">Hermes proposes the agents and tasks; nothing runs until you approve the plan.</small></span></label>
+                <label for="team-size" class="small">Largest team</label><select id="team-size"><option value="2">2 agents</option><option value="3" selected>3 agents</option></select>
+                <p class="small muted">Your model server answers one agent at a time, so a team helps most when time goes into tools and tests.</p>
+              </fieldset></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Limits</h2><label for="max-prompts">Maximum coding prompts</label><div class="stepper"><button type="button" class="ac-btn" data-step="-1" aria-label="Fewer coding prompts">−</button><input id="max-prompts" type="number" min="1" max="20" value="6" required><button type="button" class="ac-btn" data-step="1" aria-label="More coding prompts">+</button></div><label for="run-minutes">Time limit · minutes</label><input id="run-minutes" type="number" min="1" max="120" value="30" required><p class="small muted">Includes time waiting for your approval.</p></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Permissions</h2><p class="small muted">OpenCode’s configured permissions apply. Requests it sends will appear for your review.</p><p class="small muted">Plan approval and per-run policy switches are not supported yet.</p></section>
             <p id="start-reason" class="small warning-text hidden" role="status"></p><p id="start-error" class="error" role="alert"></p><button class="ac-btn primary wide" id="start-run">Start run</button>

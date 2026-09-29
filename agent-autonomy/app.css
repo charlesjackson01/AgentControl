@@ -4464,3 +4464,61 @@ kbd {
   gap:8px;
   margin:10px 0 6px;
 }
+
+/* Team runs (M7): proposal, task table, agent tags */
+.team-panel .team-agents {
+  margin:6px 0 10px;
+  padding-left:18px;
+}
+
+.team-panel .team-agents.live {
+  list-style:none;
+  padding:0;
+}
+
+.team-panel .team-agents.live li {
+  margin:4px 0;
+}
+
+.table-wrap {
+  overflow-x:auto;
+  max-width:100%;
+}
+
+.team-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:var(--ac-text-sm);
+}
+
+.team-table th,
+.team-table td {
+  text-align:left;
+  padding:6px 8px;
+  border-bottom:1px solid var(--ac-border);
+  vertical-align:top;
+}
+
+.team-table td small {
+  display:block;
+}
+
+.team-actions {
+  gap:8px;
+  margin:12px 0;
+}
+
+.team-panel textarea {
+  width:100%;
+  margin:4px 0 8px;
+}
+
+.agent-tag {
+  font-weight:600;
+}
+
+.mode-choice {
+  border:0;
+  padding:0;
+  margin:12px 0 0;
+}

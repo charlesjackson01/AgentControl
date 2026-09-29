@@ -34,6 +34,24 @@ const scenarios = {
     s.run.workspace = {mode: 'worktree', base_branch: 'main', base: 'abc123', integration: {branch: `agentcontrol/${s.run.id}/integration`}, agents: {'coder-1': {branch: `agentcontrol/${s.run.id}/coder-1`}}};
     s.workspace = {state: 'open', exists: true, commits: 2, shortstat: '2 files changed, 105 insertions(+)', apply_blocked: '', last_integration: {status: 'merged', files: []}};
     return s; }},
+  proposal: {state: () => { const s = fx.richActive(); s.inbox = []; s.steps = []; s.run.status = 'awaiting_approval'; s.run.mode = 'team';
+    s.run.summary = 'Hermes proposes 2 agents and 3 tasks. Review the plan.';
+    s.run.team = {state: 'proposed', max_agents: 3, proposals: 1, notes: [], agents: {}, tasks: [], problems: [],
+      warnings: ['t2 (coder-2) and t3 (coder-1) both touch demo_app/README.md and may conflict'],
+      proposal: {mode: 'multi', reason: 'Storage and the CLI are independent; the README and HTML view depend on both.',
+        agents: {'coder-1': {label: 'core', responsibility: 'Task storage and the command-line interface'}, 'coder-2': {label: 'docs-ui', responsibility: 'README and the static HTML view'}},
+        tasks: [{id: 't1', title: 'JSON storage with tests', agent: 'coder-1', depends_on: [], files: ['demo_app/store.py', 'demo_app/test_store.py']},
+                {id: 't2', title: 'Static HTML task list', agent: 'coder-2', depends_on: [], files: ['demo_app/index.html', 'demo_app/README.md']},
+                {id: 't3', title: 'CLI commands and README usage', agent: 'coder-1', depends_on: ['t1'], files: ['demo_app/todo.py', 'demo_app/README.md']}]}};
+    return s; }},
+  team: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding'; s.run.mode = 'team';
+    s.run.team = {state: 'running', agents: {'coder-1': {label: 'core'}, 'coder-2': {label: 'docs-ui'}},
+      tasks: [{id: 't1', title: 'JSON storage with tests', agent: 'coder-1', depends_on: [], status: 'done', attempts: 1, steps: [s.steps[0].id]},
+              {id: 't2', title: 'Static HTML task list', agent: 'coder-2', depends_on: [], status: 'running', attempts: 2, reason: 'conflicts with already-merged work in demo_app/README.md', steps: [s.steps[1].id]},
+              {id: 't3', title: 'CLI commands and README usage', agent: 'coder-1', depends_on: ['t1'], status: 'running', attempts: 1, steps: []}]};
+    s.steps[0].agent = 'coder-1'; s.steps[1].agent = 'coder-2'; s.steps[1].title = 't2: Static HTML task list';
+    s.agents = [{name: 'hermes', state: 'idle'}, {name: 'coder-1', state: 'working', task: 't3: CLI commands'}, {name: 'coder-2', state: 'working', task: 't2: Static HTML task list'}];
+    return s; }},
   dirty: {state: fx.empty, click: '#empty-state [data-action="new"]',
     preflight: {is_repo: true, usable: true, reason: '', branch: 'main', subdir: '', changes: ['demo_app/todo.py'], untracked: ['notes.txt'], dirty_count: 2}},
   rules: {state: () => withRisk(fx.richActive()), click: '[data-view="approvals"]'},

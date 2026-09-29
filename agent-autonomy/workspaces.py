@@ -119,6 +119,39 @@ def create(info, root, run_id, agents=('coder-1',), base=None):
             'integration': entry('integration'), 'agents': {a: entry(a) for a in agents}, 'turns': []}
 
 
+def add_agent(ws, agent):
+    """Give a new agent its own branch and worktree, starting from the current integration head."""
+    if agent in ws['agents']:
+        return ws
+    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,39}', agent):
+        raise WorkspaceError('Invalid agent name for a branch')
+    integ = ws['integration']
+    head = _out(integ['path'], 'rev-parse', 'HEAD')
+    run_root = Path(integ['path']).parent
+    branch = f"{integ['branch'].rsplit('/', 1)[0]}/{agent}"
+    path = run_root / agent
+    git(ws['toplevel'], 'worktree', 'add', '-q', '-b', branch, str(path), head)
+    sub = ws['subdir']
+    ws['agents'][agent] = {'branch': branch, 'path': str(path), 'dir': str(path / sub) if sub else str(path)}
+    return ws
+
+
+def sync_agent(ws, agent):
+    """Bring an agent's branch up to date with integration before its next task, so it builds on
+    the other agents' merged work. Returns {'status': current|updated|conflict, 'files'}."""
+    mine, integ = ws['agents'][agent], ws['integration']
+    if _merging(mine['path']):
+        return {'status': 'conflict', 'files': git(mine['path'], 'diff', '--name-only', '--diff-filter=U', check=False).stdout.split()}
+    head = _out(integ['path'], 'rev-parse', 'HEAD')
+    if git(mine['path'], 'merge-base', '--is-ancestor', head, 'HEAD', check=False).returncode == 0:
+        return {'status': 'current', 'files': []}
+    merged = git(mine['path'], 'merge', '--no-edit', '-m', 'Update from integration', integ['branch'], check=False)
+    if merged.returncode:
+        files = git(mine['path'], 'diff', '--name-only', '--diff-filter=U', check=False).stdout.split()
+        return {'status': 'conflict', 'files': files}
+    return {'status': 'updated', 'files': []}
+
+
 def _merging(path):
     return bool(git(path, 'rev-parse', '-q', '--verify', 'MERGE_HEAD', check=False).stdout.strip())
 

@@ -59,14 +59,18 @@ def live_state(agent, run, steps, pending):
         return 'paused', ''
     if status in ('interrupted', 'attention'):
         return 'needs_attention', run.get('summary', '')
-    last = steps[-1] if steps else None
     if agent['type'] == 'orchestrator':
+        if status == 'awaiting_approval':
+            return 'waiting_on_you', 'Waiting for your decision on the team plan'
         if run.get('phase') == 'manager' and status in ('planning', 'reviewing'):
+            if run.get('mode') == 'team' and (run.get('team') or {}).get('state') == 'proposing':
+                return 'working', 'Proposing a team'
             return 'working', 'Planning the next turn' if steps else 'Planning the first turn'
         return 'idle', ''
-    mine = last if last and last.get('agent', 'coder-1') == agent['name'] else None
+    # Each coder follows its own latest turn; several can be working at once in a team run.
+    mine = next((s for s in reversed(steps) if s.get('agent', 'coder-1') == agent['name']), None)
     if mine and mine.get('status') in ('prepared', 'dispatching', 'running', 'waiting'):
-        if pending:
+        if any(p.get('agent', 'coder-1') == agent['name'] for p in pending):
             return 'waiting_on_you', mine.get('title', '')
         return 'working', mine.get('title', '')
     if status == 'reviewing' and run.get('phase') == 'verify':

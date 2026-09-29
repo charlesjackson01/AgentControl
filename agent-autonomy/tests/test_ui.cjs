@@ -459,4 +459,71 @@ test('running worktree runs keep apply hidden, folder runs show no branch panel'
  h=await harness();
  assert.equal(h.document.getElementById('branch-panel').textContent,'');
 });
+function teamProposalFixture(state='proposed'){
+ const s=fixture();s.inbox=[];s.steps=[];s.run.status='awaiting_approval';s.run.mode='team';
+ s.run.team={state,max_agents:3,proposals:1,notes:[],agents:{},tasks:[],warnings:['t1 (coder-1) and t2 (coder-2) both touch app.py and may conflict'],problems:state==='unusable'?['task t2 is assigned to unknown agent']:[],
+  proposal:state==='proposed'?{mode:'multi',reason:'API and UI are independent',agents:{'coder-1':{label:'api',responsibility:'Backend'},'coder-2':{label:'ui',responsibility:'Frontend'}},
+   tasks:[{id:'t1',title:'API',agent:'coder-1',depends_on:[],files:['api.py']},{id:'t2',title:'UI',agent:'coder-2',depends_on:[],files:['ui.html']},{id:'t3',title:'Wire',agent:'coder-1',depends_on:['t1','t2'],files:[]}]}:null};
+ return s;
+}
+test('team plan waits for your decision with approve, single agent and ask again',async()=>{
+ const h=await harness(teamProposalFixture());
+ const panel=()=>h.document.getElementById('team-panel').textContent;
+ assert.match(h.document.getElementById('run-header').textContent,/Needs your decision/);
+ assert.match(panel(),/API and UI are independent/);assert.match(panel(),/coder-2 \(ui\) · Frontend/);
+ assert.match(panel(),/t3.*Wire.*t1, t2/s);assert.match(panel(),/may conflict/);assert.match(panel(),/2 left/);
+ await h.click('[data-action="repropose"]');
+ assert.match(h.document.getElementById('team-error').textContent,/Tell Hermes what to change/);
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').length,0);
+ h.document.getElementById('team-note').value='Keep tests with the API';
+ await h.click('[data-action="repropose"]');
+ let call=h.calls.filter(c=>c.url==='/api/control').pop();
+ assert.deepEqual([call.body.action,call.body.text],['repropose','Keep tests with the API']);
+ await h.click('[data-action="approve-team"]');
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').pop().body.action,'approve_team');
+ await h.click('[data-action="single-agent"]');
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').pop().body.action,'single_agent');
+});
+test('an unusable plan cannot be approved and shows why',async()=>{
+ const h=await harness(teamProposalFixture('unusable'));
+ assert(h.document.querySelector('[data-action="approve-team"]').disabled);
+ assert(!h.document.querySelector('[data-action="single-agent"]').disabled);
+ assert.match(h.document.getElementById('team-panel').textContent,/unknown agent/);
+});
+test('running team shows tasks, agent tags, and lets you jump to a task turn',async()=>{
+ const s=fixture();s.run.mode='team';s.run.status='coding';
+ s.run.team={state:'running',agents:{'coder-1':{label:'api'},'coder-2':{label:'ui'}},
+  tasks:[{id:'t1',title:'API',agent:'coder-1',depends_on:[],status:'done',attempts:1,steps:['step_one']},
+         {id:'t2',title:'UI',agent:'coder-2',depends_on:[],status:'running',attempts:2,reason:'conflicts with already-merged work in app.py',steps:['step_two']},
+         {id:'t3',title:'Wire',agent:'coder-1',depends_on:['t1','t2'],status:'waiting',attempts:0,steps:[]}]};
+ s.steps=[{...s.steps[0],id:'step_one',number:1,title:'t1: API',agent:'coder-1',status:'finished'},{...s.steps[0],id:'step_two',number:2,title:'t2: UI',agent:'coder-2',status:'running'}];
+ s.agents=[{name:'coder-1',state:'idle',task:''},{name:'coder-2',state:'working',task:'t2: UI'}];
+ s.inbox=[{...s.inbox[0],agent:'coder-2'}];
+ const h=await harness(s);
+ const panel=h.document.getElementById('team-panel').textContent;
+ assert.match(panel,/1 of 3 tasks done/);assert.match(panel,/working coder-2 \(ui\) · t2: UI/);
+ assert.match(panel,/running · 2 tries/);assert.match(panel,/conflicts with already-merged work/);
+ assert.match(h.document.getElementById('turn-rail').textContent,/coder-2 \(ui\)/);
+ assert.match(h.document.getElementById('stage-code-head').textContent,/OpenCode · coder-2 \(ui\)/);
+ assert.match(h.document.getElementById('inline-approvals').textContent,/coder-2/);
+ await h.click('[data-turn="step_one"]');
+ assert.match(h.document.getElementById('stage-code-head').textContent,/coder-1 \(api\)/);
+ assert(!h.document.querySelector('#team-panel [data-turn="t3"]'),'tasks that have not started have no turn');
+});
+test('new run offers a team only for usable git projects and sends the size',async()=>{
+ const s=fixture();s.run.status='completed';s.inbox=[];
+ let h=await harness(s);await h.click('[data-action="new"]');
+ assert(h.document.getElementById('mode-team').disabled);
+ assert.match(h.document.getElementById('team-mode-note').textContent,/git project/);
+ s.preflight={is_repo:true,usable:true,reason:'',branch:'main',subdir:'',changes:[],untracked:[],dirty_count:0};
+ h=await harness(s);await h.click('[data-action="new"]');
+ assert(!h.document.getElementById('mode-team').disabled);
+ const team=h.document.getElementById('mode-team');team.checked=true;team.setAttribute('checked','');
+ h.document.getElementById('mode-single').checked=false;h.document.getElementById('mode-single').removeAttribute('checked');
+ h.document.getElementById('team-size').value='2';
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const body=h.calls.find(c=>c.url==='/api/runs').body;
+ assert.equal(body.mode,'team');assert.equal(body.team_size,2);
+});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

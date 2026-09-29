@@ -18,10 +18,13 @@ import agents as agent_registry
 import permissions
 import models
 import workspaces
+import planner
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
 
+MAX_TASK_ATTEMPTS = 3      # a team task gets its first try plus two bounded retries
+MAX_PROPOSALS = 3          # Hermes proposes at most three times per run
 TERMINAL = {'completed', 'blocked', 'failed', 'stopped', 'limit_reached'}
 HUMAN = 'You, via dashboard'
 PENDING = {'prepared', 'dispatching', 'running', 'waiting'}
@@ -124,6 +127,7 @@ class Controller:
         self.lock = threading.RLock()
         self.threads = {}
         self.verifying = set()
+        self.pending_signatures = {}  # last approval list written per run, to avoid rewriting unchanged state
         self.shutdown = threading.Event()
         self.preview = PreviewManager(self.s.project, self.s.preview_idle)
         self.preview.on_change = lambda: self.events.publish('preview', self.preview.run or None)
@@ -182,7 +186,7 @@ class Controller:
         return self.health
 
     def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None,
-            allow_dirty=False, setup=''):
+            allow_dirty=False, setup='', mode='single', team_size=planner.MAX_AGENTS):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
         title = self._title(title)
@@ -193,6 +197,10 @@ class Controller:
         if not isinstance(setup, str) or len(setup) > 2000:
             raise ValueError('Setup command is too long')
         setup_argv = shlex.split(setup) if setup.strip() else []
+        if mode not in ('single', 'team'):
+            raise ValueError('Mode must be single or team')
+        if mode == 'team' and (type(team_size) is not int or not 2 <= team_size <= planner.MAX_AGENTS):
+            raise ValueError(f'Team size must be 2-{planner.MAX_AGENTS} agents')
         if type(max_steps) is not int or not 1 <= max_steps <= 20:
             raise ValueError('Prompt limit must be 1–20')
         checks = [] if goal_checks is None else goal_checks
@@ -215,6 +223,9 @@ class Controller:
             if not self.health.get('ready'):
                 raise ValueError('Connections are not ready. Use Check connections.')
             ident = uuid.uuid4().hex[:12]
+            if mode == 'team' and not workspaces.git_info(self.s.project)['usable']:
+                raise ValueError('Team runs need a git project, because each agent works in its own worktree. '
+                                 'Initialise a repository with a first commit, or start a single-agent run.')
             workspace = self._new_workspace(ident, parent, allow_dirty)
             run = {'id': ident, 'created': now(), 'goal': goal.strip(), 'status': 'planning', 'phase': 'manager',
                    'summary': 'Hermes is preparing the first task.', 'session': '', 'pause': False, 'stop': False,
@@ -223,7 +234,10 @@ class Controller:
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
                    'parent_run': parent_run or None, 'title': title, 'preview': preview,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
-                   'workspace': workspace, 'setup': setup_argv}
+                   'workspace': workspace, 'setup': setup_argv, 'mode': mode,
+                   'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': []} if mode == 'team' else None}
+            if mode == 'team':
+                run['summary'] = 'Hermes is proposing a team.'
             self.store.put('runs', run)
             for agent in agent_registry.default_agents(run, self.s.profile):
                 self.store.put_agent(agent)
@@ -399,6 +413,8 @@ class Controller:
             return self._apply(ident)
         if action == 'discard_workspace':
             return self._discard(ident)
+        if action in ('approve_team', 'single_agent', 'repropose'):
+            return self._team_decision(ident, action, text)
         if action == 'title':
             with self.lock:
                 self.store.update('runs', ident, title=self._title(text))
@@ -482,11 +498,16 @@ class Controller:
                 if previous['action'] == action and previous['fingerprint'] == fingerprint and previous.get('answers') == answers and previous.get('redirect') == redirect:
                     return previous  # Duplicate tap/retry never sends another decision.
                 raise ReviewConflict('A decision was already sent for this request. Refresh to see its status.')
-            pending = self.api.pending(run['session'], **self._oc(run))
-            candidate = next((p for p in pending if p['kind'] == kind and p.get('sessionID') == run['session'] and (p.get('id') or p.get('requestID')) == request_id), None)
+            candidate, agent, session = None, 'coder-1', run['session']
+            for name, sid in self._agent_sessions(run):
+                found = next((p for p in self.api.pending(sid, **self._oc(run, name)) if p['kind'] == kind and p.get('sessionID') == sid
+                              and (p.get('id') or p.get('requestID')) == request_id), None)
+                if found:
+                    candidate, agent, session = found, name, sid
+                    break
             if candidate is None:
                 raise ReviewConflict('This request is no longer pending. Refresh the approval list.')
-            messages = self.api.request(f"/session/{run['session']}/message", **self._oc(run)) or []
+            messages = self.api.request(f"/session/{session}/message", **self._oc(run, agent)) or []
             packet = review_packet(candidate, messages)
             if not hmac.compare_digest(packet['fingerprint'], fingerprint):
                 raise ReviewConflict('The requested action changed. Close this window and review the updated request.')
@@ -528,7 +549,7 @@ class Controller:
             self.store.event(ident, 'approval decision', {'request_id': request_id, 'kind': kind, 'action': action, 'answers': answers, 'redirect': redirect, 'actor': record['actor'],
                                                           'risk': risk['level']})
             try:
-                response = self.api.respond(run['session'], candidate, action, answers, **self._oc(run))
+                response = self.api.respond(session, candidate, action, answers, **self._oc(run, agent))
                 if response is False:
                     raise ValueError('OpenCode did not accept the decision')
             except (ValueError, OpenCodeHTTPError) as exc:
@@ -556,14 +577,16 @@ class Controller:
             # A 200 response alone is insufficient: old OpenCode versions could
             # acknowledge replies to the wrong directory without resolving them.
             try:
-                remaining = [review_packet(p, messages) for p in self.api.pending(run['session'], **self._oc(run))]
-                self._sync_reviews(ident, remaining)
-                self.store.update('runs', ident, pending=remaining)
+                remaining = [{**review_packet(p, messages), 'agent': agent} for p in self.api.pending(session, **self._oc(run, agent))]
+                # Other agents' requests stay as they were; only this agent's list is refreshed.
+                others = [p for p in self.store.get('runs', ident).get('pending', []) if p.get('sessionID') != session]
+                self._sync_reviews(ident, remaining + others)
+                self.store.update('runs', ident, pending=remaining + others)
             except Exception as exc:
                 self.store.event(ident, 'approval confirmation pending', str(exc))
             return self.store.review(ident, kind, request_id)
 
-    def _gate(self, ident, pending, audited):
+    def _gate(self, ident, pending, audited, agent='coder-1'):
         """Record each new request in the audit log once, and let a rule the person created approve
         an identical low or sensitive request. Everything else stays pending for the person."""
         grants = self.store.get('runs', ident).get('grants', [])
@@ -573,7 +596,7 @@ class Controller:
             if key not in audited:
                 audited.add(key)
                 risk = packet['risk']
-                self.store.audit_append(ident, {'action': 'requested', 'actor': 'coder-1', 'request_id': packet['request_id'],
+                self.store.audit_append(ident, {'action': 'requested', 'actor': agent, 'request_id': packet['request_id'],
                                                 'kind': packet['kind'], 'risk': risk['level'], 'permission': risk['permission'],
                                                 'target': permissions.rule_for(packet)['match'][:500], 'reasons': risk['reasons']})
             rule = permissions.matching_rule(packet, grants)
@@ -669,20 +692,28 @@ class Controller:
         return self.preview.status()
 
     def _abort(self, ident):
+        """Ask OpenCode to stop every agent that has a submitted, unfinished step."""
         run = self.store.get('runs', ident)
-        steps = self.store.steps(ident)
-        if not run['session'] or not any(s['status'] in PENDING - {'prepared'} for s in steps):
+        working = {s.get('agent', 'coder-1') for s in self.store.steps(ident) if s['status'] in PENDING - {'prepared'}}
+        if not run['session'] or not working:
             return True
-        try:
-            self.api.request(f"/session/{run['session']}/abort", 'POST', {}, **self._oc(run))
-            for _ in range(4):
-                status = (self.api.request('/session/status', **self._oc(run)) or {}).get(run['session'], {'type': 'idle'})
-                if status.get('type') == 'idle':
-                    return True
-                time.sleep(self.s.poll)
-        except Exception as exc:
-            self.store.event(ident, 'abort error', str(exc))
-        return False
+        stopped = True
+        for agent, session in self._agent_sessions(run):
+            if agent not in working:
+                continue
+            try:
+                self.api.request(f"/session/{session}/abort", 'POST', {}, **self._oc(run, agent))
+                for _ in range(4):
+                    status = (self.api.request('/session/status', **self._oc(run, agent)) or {}).get(session, {'type': 'idle'})
+                    if status.get('type') == 'idle':
+                        break
+                    time.sleep(self.s.poll)
+                else:
+                    stopped = False
+            except Exception as exc:
+                self.store.event(ident, 'abort error', f'{agent}: {exc}')
+                stopped = False
+        return stopped
 
     def _work(self, ident):
         try:
@@ -746,7 +777,7 @@ class Controller:
 
     def _manager_prompt(self, run, snap, steps):
         # Latest direct file evidence plus bounded history; full records remain on disk.
-        history = [{'number': x['number'], 'title': x['title'], 'prompt': x['prompt'][:1500], 'status': x['status'],
+        history = [{'number': x['number'], 'agent': x.get('agent', 'coder-1'), 'title': x['title'], 'prompt': x['prompt'][:1500], 'status': x['status'],
                     'result': x.get('result', '')[-3000:], 'verification': {k: (v[-3500:] if k == 'output' and isinstance(v, str) else v) for k,v in x.get('verification', {}).items()},
                     'tool_results': x.get('tool_results', '')[-3000:],
                     'changed_files': x.get('evidence', {}).get('changed_files', [])} for x in steps[-8:]]
@@ -770,6 +801,14 @@ class Controller:
                 note = 'Conflict markers are still present in these files; the next prompt must resolve them before anything else.'
             context['workspace'] = {'branch': ws['agents'][steps[-1].get('agent', 'coder-1') if steps else 'coder-1']['branch'],
                                     'integration_branch': ws['integration']['branch'], 'last_integration': last, 'note': note}
+        team = run.get('team') if run.get('mode') == 'team' else None
+        if team and team.get('agents'):
+            context['team'] = {
+                'note': ('This is a team run. The planned tasks below have run in parallel and were merged into the integration '
+                         'branch. Review the merged result. A code action may add "agent": one of '
+                         + ', '.join(sorted(team['agents'])) + ' to choose who does it (default coder-1).'),
+                'agents': {name: {'label': a.get('label'), 'responsibility': a.get('responsibility')} for name, a in team['agents'].items()},
+                'tasks': [{k: t.get(k) for k in ('id', 'title', 'agent', 'status', 'attempts', 'reason', 'depends_on')} for t in team.get('tasks', [])]}
         # Leave room for the reply on local models. Prioritize history and latest diff.
         encoded = json.dumps(context, ensure_ascii=False)
         while len(encoded) > 45_000 and context['current_file_previews']:
@@ -790,6 +829,8 @@ class Controller:
             session = self.api.request('/session', 'POST', {'title': 'AgentControl ' + ident}, **self._oc(run))
             self.store.update('runs', ident, session=session['id'])
             self.store.event(ident, 'session', session['id'])
+        if self.store.get('runs', ident).get('mode') == 'team':
+            self._team(ident)
         while True:
             run = self._boundary(ident)
             steps = self.store.steps(ident)
@@ -801,7 +842,7 @@ class Controller:
                 self._watch(ident, self.store.get('steps', step['id']))
                 steps = self.store.steps(ident)
             run = self._boundary(ident)
-            snap = snapshot(self._dir(run))
+            snap = snapshot(self._result_dir(run) if run.get('mode') == 'team' else self._dir(run))
             if steps and not steps[-1].get('verified'):
                 snap = self._verify(ident, steps[-1])
                 steps = self.store.steps(ident)
@@ -860,18 +901,305 @@ class Controller:
             if failures >= 3:
                 self._end(ident, 'blocked', 'Three consecutive failed steps. ' + decision['summary'])
                 return
-            delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self._dir(run)) + '. Preserve unrelated files. Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
-            step = {'id': uuid.uuid4().hex, 'run': ident, 'agent': 'coder-1', 'number': len(steps) + 1, 'title': str(decision.get('title', 'Coding task'))[:160],
+            agent = decision.get('agent') if decision.get('agent') in ((run.get('team') or {}).get('agents') or {}) else 'coder-1'
+            if run.get('mode') == 'team':
+                self._sync_agent(ident, agent)
+            delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self._dir(run, agent)) + '. Preserve unrelated files. Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
+            step = {'id': uuid.uuid4().hex, 'run': ident, 'agent': agent, 'number': len(steps) + 1, 'title': str(decision.get('title', 'Coding task'))[:160],
                     'status': 'prepared', 'created': now(), 'prompt': delivered, 'manager_prompt': decision['prompt'],
                     'kind': decision.get('kind', 'task'), 'plan_summary': str(decision.get('summary', ''))[:2000],
                     'plan': [str(x)[:300] for x in plan[:20]] if isinstance(plan, list) else [],
                     'instructions_seen': [i['text'] for i in latest_run['instructions'][-5:]],
                     'message_id': 'msg_' + format(int(time.time() * 1000) * 4096, 'x').zfill(12) + uuid.uuid4().hex[:20],
-                    'before': snap, 'before_commit': self._head(run), 'verified': False, 'result': '', 'seen': [], 'started': time.time()}
+                    'before': snap, 'before_commit': self._head(run, agent), 'verified': False, 'result': '', 'seen': [], 'started': time.time()}
             step['instructions_count'] = len(latest_run['instructions'])
             self.store.put('steps', step)
             self.store.update('runs', ident, phase='code', corrections=corrections)
             self._dispatch(ident, step)
+
+    # ---- team runs (M7) --------------------------------------------------------
+    def _team_update(self, ident, **changes):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            team = {**run['team'], **changes}
+            self.store.update('runs', ident, team=team)
+            return team
+
+    def _task_update(self, ident, task_id, **changes):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            team = run['team']
+            for task in team['tasks']:
+                if task['id'] == task_id:
+                    task.update(changes)
+            if changes.get('status') in ('failed', 'blocked'):
+                for blocked in planner.block_dependents(team['tasks']):
+                    self.store.event(ident, 'task blocked', f"{blocked['id']}: {blocked['reason']}")
+            self.store.update('runs', ident, team=team)
+            return next(t for t in team['tasks'] if t['id'] == task_id)
+
+    def _team(self, ident):
+        """Proposal -> your approval -> tasks in parallel. Afterwards the normal loop reviews the result."""
+        while True:
+            team = self.store.get('runs', ident)['team']
+            if team['state'] == 'proposing':
+                self._propose(ident)
+            elif team['state'] in ('proposed', 'unusable'):
+                self._await_team_decision(ident)
+            elif team['state'] == 'approved':
+                self._start_team(ident)
+            elif team['state'] == 'running':
+                self._run_tasks(ident)
+            else:  # 'single' (you chose one agent) or 'review' (tasks finished)
+                return
+
+    def _propose(self, ident):
+        run = self._boundary(ident)
+        team = run['team']
+        self._model_gate(ident, 'Hermes')
+        self.store.update('runs', ident, status='planning', phase='manager', summary='Hermes is proposing a team.')
+        folder = self._dir(run)
+        context = json.dumps({'project': str(folder), 'files': sorted(snapshot(folder)['files'])[:120],
+                              'verification_command': run['verifier'], 'goal_checks': run.get('goal_checks', []),
+                              'instructions': run['instructions'], 'parent_run_context': run.get('parent_context')}, ensure_ascii=False)
+        feedback = team['notes'][-1] if team['notes'] else None
+        max_tasks = run['max_steps']
+        proposal, problems, warnings = None, [], []
+        for attempt in range(2):
+            text = planner.prompt(run['goal'], context, team['max_agents'], max_tasks,
+                                  feedback if attempt == 0 else '\n'.join(filter(None, [feedback, 'These problems must be fixed: ' + '; '.join(problems)])))
+            self.store.event(ident, 'Hermes request', text)
+            try:
+                raw = self.manager.run_json(text, lambda: self._process_cancel(ident))
+            except RuntimeError as exc:
+                problems = [str(exc)[:600]]
+                continue
+            finally:
+                self._record_hermes_usage(ident)
+            self.store.event(ident, 'Hermes decision', raw)
+            proposal, problems, warnings = planner.validate(raw, team['max_agents'], max_tasks)
+            if proposal:
+                break
+            self.store.event(ident, 'proposal rejected', '; '.join(problems))
+        count = team['proposals'] + 1
+        if proposal:
+            self._team_update(ident, state='proposed', proposal=proposal, warnings=warnings, problems=[], proposals=count)
+            summary = (f"Hermes proposes {len(proposal['agents'])} agent{'s' if len(proposal['agents']) != 1 else ''} and "
+                       f"{len(proposal['tasks'])} task{'s' if len(proposal['tasks']) != 1 else ''}. Review the plan.")
+        else:
+            self._team_update(ident, state='unusable', proposal=None, warnings=[], problems=problems, proposals=count)
+            summary = 'Hermes could not produce a usable team plan. Run it as a single agent, ask again, or stop.'
+        self.store.update('runs', ident, status='awaiting_approval', phase='manager', summary=summary)
+        self.store.event(ident, 'team proposal', summary)
+        self._push(ident, summary)
+
+    def _await_team_decision(self, ident):
+        """The run waits here, doing nothing, until you approve, choose one agent, ask again, or stop."""
+        while True:
+            run = self.store.get('runs', ident)
+            if self._cancelled(ident):
+                raise Stopped()
+            if time.time() > run['deadline']:
+                raise TimeoutError('Run reached its total time limit while waiting for your decision on the team plan')
+            if run['team']['state'] not in ('proposed', 'unusable'):
+                return
+            if run['status'] != 'awaiting_approval':
+                self.store.update('runs', ident, status='awaiting_approval')
+            time.sleep(min(self.s.poll, 0.5))
+
+    def _team_decision(self, ident, action, text=''):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            team = run.get('team') or {}
+            if run.get('mode') != 'team' or team.get('state') not in ('proposed', 'unusable') or run['status'] in TERMINAL:
+                raise ValueError('There is no team plan waiting for your decision.')
+            if action == 'approve_team':
+                if team['state'] != 'proposed':
+                    raise ValueError('There is no usable plan to approve. Ask again or run as a single agent.')
+                single = len(team['proposal']['agents']) == 1
+                self._team_update(ident, state='single' if single else 'approved')
+                self.store.update('runs', ident, status='planning', summary='Plan approved. ' + ('Running with one agent.' if single else 'Starting the team.'))
+                self.store.audit_append(ident, {'action': 'team approved', 'actor': HUMAN, 'agents': sorted(team['proposal']['agents']),
+                                                'tasks': [t['id'] for t in team['proposal']['tasks']]})
+            elif action == 'single_agent':
+                self._team_update(ident, state='single')
+                self.store.update('runs', ident, status='planning', summary='Running as a single agent, as you chose.')
+                self.store.audit_append(ident, {'action': 'team declined: single agent', 'actor': HUMAN})
+            else:
+                note = (text or '').strip()
+                if not 1 <= len(note) <= 2000:
+                    raise ValueError('Tell Hermes what to change (1-2,000 characters).')
+                if team['proposals'] >= MAX_PROPOSALS:
+                    raise ValueError(f'Hermes has proposed {MAX_PROPOSALS} times. Approve, run as a single agent, or stop.')
+                self._team_update(ident, state='proposing', notes=team['notes'] + [note])
+                self.store.update('runs', ident, status='planning', summary='Hermes is revising the team plan.')
+                self.store.audit_append(ident, {'action': 'team plan sent back', 'actor': HUMAN, 'note': note[:500]})
+            self.store.event(ident, 'control', {'approve_team': 'Team plan approved.', 'single_agent': 'Run as a single agent.',
+                                                'repropose': 'Asked Hermes for a different plan.'}[action])
+            return self.store.get('runs', ident)
+
+    def _start_team(self, ident):
+        """Worktree, OpenCode session, and identity for each approved agent. Saved after each
+        agent, so a restart part-way through carries on where it stopped."""
+        run = self.store.get('runs', ident)
+        proposal = run['team']['proposal']
+        for name, info in proposal['agents'].items():
+            run = self.store.get('runs', ident)
+            ws, team = self._ws(run), run['team']
+            if name not in ws['agents']:
+                try:
+                    workspaces.add_agent(ws, name)
+                except workspaces.WorkspaceError as exc:
+                    raise Attention(f'Could not create the worktree for {name}: {exc}') from exc
+                self.store.update('runs', ident, workspace=ws)
+                if run.get('setup'):
+                    folder = ws['agents'][name]['dir']
+                    self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in {folder})")
+                    code, out, err = process(run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
+                    if code:
+                        raise Attention(f'The setup command failed for {name} (exit {code}): {(err or out)[-600:]}')
+            session = run['session'] if name == 'coder-1' else (team['agents'].get(name) or {}).get('session')
+            if not session:
+                created = self.api.request('/session', 'POST', {'title': f'AgentControl {ident} {name}'}, directory=ws['agents'][name]['dir'])
+                session = created['id']
+                self.store.event(ident, 'session', f'{name}: {session}')
+            self._team_update(ident, agents={**team['agents'], name: {**info, 'session': session}})
+            self.store.put_agent({'id': f'{ident}:{name}', 'run': ident, 'name': name, 'type': 'coder', 'label': info['label'],
+                                  'responsibility': info['responsibility'], 'model': "OpenCode server's configured model", 'created': now()})
+        self._team_update(ident, state='running', tasks=proposal['tasks'])
+        self.store.event(ident, 'team started', f"{len(proposal['agents'])} agents, {len(proposal['tasks'])} tasks.")
+
+    def _sync_agent(self, ident, agent):
+        """Bring an agent up to date with the merged work before it starts something new."""
+        run = self.store.get('runs', ident)
+        try:
+            result = workspaces.sync_agent(self._ws(run), agent)
+        except workspaces.WorkspaceError as exc:
+            raise Attention(f'Could not update {agent} from the integration branch: {exc}') from exc
+        if result['status'] != 'current':
+            self.store.event(ident, 'integration', {'agent': agent, **result})
+        return result
+
+    def _start_task(self, ident, task_id, prompt=None, kind='task'):
+        run = self.store.get('runs', ident)
+        task = next(t for t in run['team']['tasks'] if t['id'] == task_id)
+        agent = task['agent']
+        info = run['team']['agents'][agent]
+        sync = self._sync_agent(ident, agent)
+        body = prompt or task['prompt']
+        if sync['status'] == 'conflict':
+            body = (f"First: merging the other agents' latest work into your worktree left conflict markers in "
+                    f"{', '.join(sync['files'])}. Resolve them so both changes work, removing every marker. Then:\n\n" + body)
+        others = ', '.join(f"{n} ({a['label']})" for n, a in run['team']['agents'].items() if n != agent)
+        delivered = (body.strip() + f"\n\nTEAM CONTEXT:\nYou are {agent} ({info['label']}): {info['responsibility']} "
+                     f"Other agents ({others}) work in their own copies; do only this task ({task['id']}: {task['title']}).")
+        notes = [i['text'] for i in run['instructions'][-5:]]
+        if notes:
+            delivered += '\nNotes from the user: ' + ' | '.join(notes)
+        delivered += ('\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self._dir(run, agent)) + '. Preserve unrelated files. '
+                      'Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, '
+                      'or install system packages. Do not run git commands that change branches or history. '
+                      'Report changed files and actual checks, including failures.\n')
+        step = {'id': uuid.uuid4().hex, 'run': ident, 'agent': agent, 'task': task_id, 'number': self.store.step_count(ident) + 1,
+                'title': f"{task_id}: {task['title']}"[:160], 'status': 'prepared', 'created': now(), 'prompt': delivered,
+                'manager_prompt': body, 'kind': kind, 'plan_summary': run['team']['proposal'].get('reason', '')[:2000], 'plan': [],
+                'instructions_seen': notes, 'message_id': 'msg_' + format(int(time.time() * 1000) * 4096, 'x').zfill(12) + uuid.uuid4().hex[:20],
+                'before': {'files': {}, 'omitted_files': 0}, 'before_commit': self._head(run, agent), 'verified': False,
+                'result': '', 'seen': [], 'started': time.time()}
+        self.store.put('steps', step)
+        self._task_update(ident, task_id, status='running', attempts=task['attempts'] + 1, steps=task['steps'] + [step['id']])
+        self.store.event(ident, 'task started', f"{task_id} → {agent}" + (' (retry)' if kind == 'correction' else ''))
+        self._dispatch(ident, step)
+
+    def _settle_task(self, ident, task_id, step):
+        """A task is done when OpenCode finished it and it merged cleanly. Otherwise it is retried
+        with a targeted prompt, at most MAX_TASK_ATTEMPTS times in all, then marked failed."""
+        run = self.store.get('runs', ident)
+        task = next(t for t in run['team']['tasks'] if t['id'] == task_id)
+        integration = step.get('integration') or {}
+        if step['status'] == 'finished' and integration.get('status') in ('merged', 'unchanged'):
+            self._task_update(ident, task_id, status='done', reason='')
+            self.store.event(ident, 'task done', f"{task_id} ({task['agent']}) merged into the integration branch.")
+            return
+        files = ', '.join(integration.get('files') or [])
+        if integration.get('status') == 'conflict':
+            reason = f'conflicts with already-merged work in {files}'
+            retry = (f"Your change for task {task_id} conflicts with work already merged from other agents in {files}. "
+                     "Git merged that work into your worktree and left conflict markers there. Resolve every conflict so both "
+                     f"changes work together, remove all markers, and keep the goal of the task: {task['title']}.")
+        elif integration.get('status') == 'unresolved':
+            reason = f'conflict markers remain in {files}'
+            retry = f"Conflict markers are still present in {files}. Resolve them completely for task {task_id}: {task['title']}."
+        else:
+            reason = 'OpenCode reported an error'
+            retry = (f"Your previous attempt at task {task_id} ended with an error:\n{step.get('result', '')[-1500:]}\n\n"
+                     f"Try the task again:\n{task['prompt']}")
+        if task['attempts'] < MAX_TASK_ATTEMPTS and self.store.step_count(ident) < run['max_steps']:
+            self.store.event(ident, 'task retry', f'{task_id}: {reason}')
+            self._task_update(ident, task_id, reason=reason)
+            self._start_task(ident, task_id, retry, kind='correction')
+        else:
+            self._task_update(ident, task_id, status='failed', reason=reason)
+            self.store.event(ident, 'task failed', f'{task_id}: {reason}. Hermes will review it with the rest of the work.')
+
+    def _run_tasks(self, ident):
+        """Run ready tasks in parallel, one per agent, following the dependency graph."""
+        watchers = {}
+        self.pending_signatures.pop(ident, None)
+        publish = lambda: self._publish_pending(ident, list(watchers.values()))
+        while True:
+            run = self.store.get('runs', ident)
+            if self._cancelled(ident):
+                raise Stopped()
+            if time.time() > run['deadline']:
+                raise TimeoutError('Run reached its total time limit')
+            for task in [t for t in run['team']['tasks'] if t['status'] == 'running']:
+                step = self.store.get('steps', task['steps'][-1])
+                if step['status'] == 'prepared':
+                    if not run['pause']:
+                        self._dispatch(ident, step)
+                    continue
+                if step['status'] in PENDING:
+                    w = watchers.setdefault(step['id'], self._watcher(step))
+                    if not self._poll_step(ident, step, w, publish):
+                        continue
+                    watchers.pop(step['id'], None)
+                    publish()
+                    step = self.store.get('steps', step['id'])
+                if not step.get('verified'):
+                    self._verify(ident, step)
+                    step = self.store.get('steps', step['id'])
+                self._settle_task(ident, task['id'], step)
+            run = self.store.get('runs', ident)
+            tasks = run['team']['tasks']
+            if not run['pause']:
+                busy = {t['agent'] for t in tasks if t['status'] == 'running'}
+                for task in planner.ready(tasks):
+                    if task['agent'] in busy or self.store.step_count(ident) >= run['max_steps']:
+                        continue
+                    self._start_task(ident, task['id'])
+                    busy.add(task['agent'])
+            run = self.store.get('runs', ident)
+            tasks = run['team']['tasks']
+            running = [t for t in tasks if t['status'] == 'running']
+            if not running:
+                if run['pause']:
+                    self._boundary(ident)
+                    continue
+                if planner.ready(tasks) and self.store.step_count(ident) < run['max_steps']:
+                    continue
+                for task in tasks:
+                    if task['status'] == 'waiting':
+                        self._task_update(ident, task['id'], status='blocked', reason='the prompt limit was reached before it could start')
+                done = sum(t['status'] == 'done' for t in self.store.get('runs', ident)['team']['tasks'])
+                self._team_update(ident, state='review')
+                self.store.event(ident, 'team tasks finished', f'{done} of {len(tasks)} tasks done. Hermes reviews the merged result.')
+                return
+            working = ', '.join(f"{t['agent']}: {t['title']}" for t in running)[:300]
+            status = 'waiting' if run.get('pending') else 'coding'
+            if run['status'] != status or run['summary'] != working:
+                self.store.update('runs', ident, status=status, phase='code', summary=working)
+            time.sleep(min(self.s.poll, 1.0))
 
     def _model_gate(self, ident, target):
         """Before handing work to an agent, make sure the model server answers (M0: a stopped
@@ -955,7 +1283,8 @@ class Controller:
             self.store.event(ident, 'OpenCode prompt', {'step': step['number'], 'message_id': step['message_id'], 'text': step['prompt']})
             payload = {'messageID': step['message_id'], 'parts': [{'type': 'text', 'text': step['prompt']}]}
             try:
-                self.api.request(f"/session/{run['session']}/prompt_async", 'POST', payload, **self._oc(run, step.get('agent', 'coder-1')))
+                agent = step.get('agent', 'coder-1')
+                self.api.request(f"/session/{self._session(run, agent)}/prompt_async", 'POST', payload, **self._oc(run, agent))
             except Exception as exc:
                 # Request might have been accepted even if its acknowledgement was lost.
                 self.store.event(ident, 'submission uncertain', str(exc))
@@ -963,102 +1292,129 @@ class Controller:
                 self.store.update('steps', step['id'], status='running')
             return True
 
+    # ---- agent sessions (M7: one OpenCode session per agent) ----------------
+    def _session(self, run, agent='coder-1'):
+        if agent == 'coder-1':
+            return run['session']
+        return (((run.get('team') or {}).get('agents') or {}).get(agent) or {}).get('session', '')
+
+    def _agent_sessions(self, run):
+        """(agent, session) for every agent that has an OpenCode session."""
+        pairs = [('coder-1', run['session'])] if run.get('session') else []
+        for name, info in ((run.get('team') or {}).get('agents') or {}).items():
+            if name != 'coder-1' and info.get('session'):
+                pairs.append((name, info['session']))
+        return pairs
+
+    def _watcher(self, step):
+        return {'seen': set(step.get('seen', [])), 'audited': set(), 'activity': step.get('activity', []), 'failures': 0, 'pending': []}
+
+    def _publish_pending(self, ident, watchers):
+        """One approval list for the run, from every agent that is working."""
+        with self.lock:
+            pending = [p for w in watchers for p in w['pending']]
+            self._sync_reviews(ident, pending)
+            signature = json.dumps(pending, sort_keys=True)
+            if signature != self.pending_signatures.get(ident):
+                self.store.update('runs', ident, pending=pending, status='waiting' if pending else 'coding')
+                if pending:
+                    self.store.event(ident, 'OpenCode needs input', pending)
+                    self._push(ident, 'Your review is needed. Open Approvals in the dashboard.')
+                self.pending_signatures[ident] = signature
+
     def _watch(self, ident, step):
-        run = self.store.get('runs', ident)
-        session = run['session']
+        """Follow one step until OpenCode finishes it (single-agent runs and the review phase)."""
         if step['status'] == 'prepared':
             return
-        seen = set(step.get('seen', []))
-        audited = set()
-        activity = step.get('activity', [])
-        failures = 0
-        pending_previous = None
-        while True:
-            if self._cancelled(ident):
-                raise Stopped()
-            if time.time() > run['deadline']:
-                raise TimeoutError('Run reached its total time limit')
-            if time.time() - step['started'] > self.s.step_timeout:
-                raise TimeoutError('OpenCode step timed out')
-            try:
-                oc = self._oc(run, step.get('agent', 'coder-1'))
-                messages = self.api.request(f'/session/{session}/message', **oc) or []
-                statuses = self.api.request('/session/status', **oc) or {}
-                pending = [review_packet(p, messages) for p in self.api.pending(session, **oc)]
-                failures = 0
-            except Exception as exc:
-                failures += 1
-                if failures == 1:
-                    self.store.event(ident, 'connection retry', str(exc))
-                if failures >= 5:
-                    raise Attention('OpenCode connection lost. Restore the server and Resume; the submitted prompt will not be resent.')
-                time.sleep(self.s.poll)
-                continue
-            pending = self._gate(ident, pending, audited)
-            matching = [m for m in messages if m.get('info', {}).get('role') == 'assistant' and m.get('info', {}).get('parentID') == step['message_id']]
-            accepted = any(m.get('info', {}).get('id') == step['message_id'] for m in messages)
-            if accepted and step['status'] == 'dispatching':
-                step['status'] = 'running'
-                self.store.update('steps', step['id'], status='running')
-            if not accepted and not matching and time.time() - step['started'] > 45:
-                raise Attention('OpenCode has no record of this prompt after 45 seconds. Submission is uncertain; use Stop to end this run. It will not be resent automatically.')
-            tool_lines = []
-            for msg in matching:
-                for part in msg.get('parts', []):
-                    if part.get('type') != 'tool':
-                        continue
-                    state = part.get('state', {})
-                    key = json.dumps([msg['info'].get('id'), part.get('id'), state.get('status')])
-                    if key not in seen:
-                        seen.add(key)
-                        detail = {'tool': part.get('tool'), 'status': state.get('status'), 'title': state.get('title', '')}
-                        if state.get('status') in ('completed', 'error'):
-                            detail['output'] = str(state.get('output', state.get('error', '')))[-6000:]
-                        activity.append({'created': now(), 'kind': part.get('tool', 'tool'), 'status': state.get('status'),
-                                         'detail': state.get('title') or str((state.get('input') or {}).get('command', (state.get('input') or {}).get('filePath', ''))),
-                                         'output': detail.get('output', '')})
-                        activity = activity[-100:]
-                        self.store.event(ident, 'OpenCode tool', detail)
-                    tool_lines.append(str(state.get('output', state.get('error', '')))[-2500:])
-            result = '\n'.join(p.get('text', '') for m in matching for p in m.get('parts', []) if p.get('type') == 'text')
-            live, omitted = transcript(matching)
-            self.store.update('steps', step['id'], result=result, seen=list(seen), activity=activity, tool_results='\n'.join(tool_lines)[-12000:],
-                              transcript=live, transcript_omitted=omitted)
-            with self.lock:
-                # Drop an older in-flight poll's copy of a request that was
-                # already confirmed resolved while this poll was in progress.
-                filtered = []
-                for packet in pending:
-                    receipt = self.store.review(ident, packet['kind'], packet['request_id'])
-                    if receipt and receipt['state'] == 'confirmed' and receipt['fingerprint'] == packet['fingerprint']:
-                        continue
-                    filtered.append(packet)
-                pending = filtered
-                self._sync_reviews(ident, pending)
-                signature = json.dumps(pending, sort_keys=True)
-                if signature != pending_previous:
-                    self.store.update('runs', ident, pending=pending, status='waiting' if pending else 'coding')
-                    if pending:
-                        self.store.event(ident, 'OpenCode needs input', pending)
-                        self._push(ident, 'Your review is needed. Open Approvals in the dashboard.')
-                    pending_previous = signature
-            active = statuses.get(session, {'type': 'idle'}).get('type')
-            errors = [m['info'].get('error') for m in matching if m['info'].get('error')]
-            terminal_messages = [m for m in matching if m['info'].get('time', {}).get('completed') and m['info'].get('finish') and m['info'].get('finish') not in ('tool-calls', 'unknown')]
-            for message in terminal_messages:
-                if message['info'].get('finish') in ('length', 'content-filter', 'error'):
-                    errors.append({'finish': message['info']['finish']})
-            if not pending and active == 'idle' and (errors or terminal_messages):
-                final = result or '\n'.join(tool_lines) or '(No textual response)'
-                if errors:
-                    final += '\nOpenCode errors: ' + json.dumps(errors)
-                self._record_opencode_usage(ident, step, matching)
-                self.store.update('steps', step['id'], status='failed' if errors else 'finished', result=final[-40000:], ended=now())
-                self.store.event(ident, 'OpenCode result', final[-40000:])
-                self._push(ident, f'Step {step["number"]} finished. Hermes is reviewing it.')
-                return
+        self.pending_signatures.pop(ident, None)
+        w = self._watcher(step)
+        while not self._poll_step(ident, step, w, lambda: self._publish_pending(ident, [w])):
             # Poll a little faster while coding so the dashboard terminal feels live.
             time.sleep(min(self.s.poll, 1.0))
+
+    def _poll_step(self, ident, step, w, publish):
+        """One look at a running step. Returns True once OpenCode has finished it."""
+        run = self.store.get('runs', ident)
+        agent = step.get('agent', 'coder-1')
+        session = self._session(run, agent)
+        if self._cancelled(ident):
+            raise Stopped()
+        if time.time() > run['deadline']:
+            raise TimeoutError('Run reached its total time limit')
+        if time.time() - step['started'] > self.s.step_timeout:
+            raise TimeoutError(f'OpenCode step timed out ({agent})')
+        try:
+            oc = self._oc(run, agent)
+            messages = self.api.request(f'/session/{session}/message', **oc) or []
+            statuses = self.api.request('/session/status', **oc) or {}
+            pending = [review_packet(p, messages) for p in self.api.pending(session, **oc)]
+            w['failures'] = 0
+        except Exception as exc:
+            w['failures'] += 1
+            if w['failures'] == 1:
+                self.store.event(ident, 'connection retry', str(exc))
+            if w['failures'] >= 5:
+                raise Attention('OpenCode connection lost. Restore the server and Resume; the submitted prompt will not be resent.')
+            time.sleep(self.s.poll)
+            return False
+        pending = self._gate(ident, pending, w['audited'], agent)
+        matching = [m for m in messages if m.get('info', {}).get('role') == 'assistant' and m.get('info', {}).get('parentID') == step['message_id']]
+        accepted = any(m.get('info', {}).get('id') == step['message_id'] for m in messages)
+        if accepted and step['status'] == 'dispatching':
+            step['status'] = 'running'
+            self.store.update('steps', step['id'], status='running')
+        if not accepted and not matching and time.time() - step['started'] > 45:
+            raise Attention(f'OpenCode has no record of the prompt for {agent} after 45 seconds. Submission is uncertain; use Stop to end this run. It will not be resent automatically.')
+        tool_lines = []
+        for msg in matching:
+            for part in msg.get('parts', []):
+                if part.get('type') != 'tool':
+                    continue
+                state = part.get('state', {})
+                key = json.dumps([msg['info'].get('id'), part.get('id'), state.get('status')])
+                if key not in w['seen']:
+                    w['seen'].add(key)
+                    detail = {'tool': part.get('tool'), 'status': state.get('status'), 'title': state.get('title', ''), 'agent': agent}
+                    if state.get('status') in ('completed', 'error'):
+                        detail['output'] = str(state.get('output', state.get('error', '')))[-6000:]
+                    w['activity'].append({'created': now(), 'kind': part.get('tool', 'tool'), 'status': state.get('status'),
+                                          'detail': state.get('title') or str((state.get('input') or {}).get('command', (state.get('input') or {}).get('filePath', ''))),
+                                          'output': detail.get('output', '')})
+                    w['activity'] = w['activity'][-100:]
+                    self.store.event(ident, 'OpenCode tool', detail)
+                tool_lines.append(str(state.get('output', state.get('error', '')))[-2500:])
+        result = '\n'.join(p.get('text', '') for m in matching for p in m.get('parts', []) if p.get('type') == 'text')
+        live, omitted = transcript(matching)
+        self.store.update('steps', step['id'], result=result, seen=list(w['seen']), activity=w['activity'], tool_results='\n'.join(tool_lines)[-12000:],
+                          transcript=live, transcript_omitted=omitted)
+        with self.lock:
+            # Drop an older in-flight poll's copy of a request that was
+            # already confirmed resolved while this poll was in progress.
+            filtered = []
+            for packet in pending:
+                receipt = self.store.review(ident, packet['kind'], packet['request_id'])
+                if receipt and receipt['state'] == 'confirmed' and receipt['fingerprint'] == packet['fingerprint']:
+                    continue
+                filtered.append({**packet, 'agent': agent})
+            w['pending'] = filtered
+            publish()
+        active = statuses.get(session, {'type': 'idle'}).get('type')
+        errors = [m['info'].get('error') for m in matching if m['info'].get('error')]
+        terminal_messages = [m for m in matching if m['info'].get('time', {}).get('completed') and m['info'].get('finish') and m['info'].get('finish') not in ('tool-calls', 'unknown')]
+        for message in terminal_messages:
+            if message['info'].get('finish') in ('length', 'content-filter', 'error'):
+                errors.append({'finish': message['info']['finish']})
+        if not w['pending'] and active == 'idle' and (errors or terminal_messages):
+            final = result or '\n'.join(tool_lines) or '(No textual response)'
+            if errors:
+                final += '\nOpenCode errors: ' + json.dumps(errors)
+            self._record_opencode_usage(ident, step, matching)
+            self.store.update('steps', step['id'], status='failed' if errors else 'finished', result=final[-40000:], ended=now())
+            self.store.event(ident, 'OpenCode result', final[-40000:])
+            if run.get('mode') != 'team':
+                self._push(ident, f'Step {step["number"]} finished. Hermes is reviewing it.')
+            return True
+        return False
 
     def models_status(self):
         return {'configured': self.broker.configured, 'error': self.models_error, 'source': self.broker.registry.get('source'),

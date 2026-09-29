@@ -55,6 +55,9 @@ def route(broker, body):
         if chosen:
             if chosen['model']:
                 payload['model'] = chosen['model']
+            if chosen['paid'] and payload.get('stream'):
+                # Streams carry token counts only when asked; the spend cap needs them.
+                payload['stream_options'] = {**(payload.get('stream_options') if isinstance(payload.get('stream_options'), dict) else {}), 'include_usage': True}
             if chosen.get('report_cost'):
                 payload['usage'] = {**(payload.get('usage') if isinstance(payload.get('usage'), dict) else {}), 'include': True}
             return chosen, json.dumps(payload).encode()

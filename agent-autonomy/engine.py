@@ -495,14 +495,14 @@ class Controller:
             if run['status'] in TERMINAL:
                 raise ValueError('This run has ended. Start another goal to continue.')
             if action == 'pause':
-                self.store.update('runs', ident, pause=True)
+                self.store.update('runs', ident, pause=True, pause_reason=None)
                 self.store.event(ident, 'control', 'Pause requested. The active step may finish; no next prompt will start.')
             elif action == 'resume':
                 if run['stop']:
                     raise ValueError('Stop is pending; finish reconciling the current session first.')
                 if time.time() >= run['deadline']:
                     raise ValueError('Run time limit expired. Stop this run, then start a new goal.')
-                self.store.update('runs', ident, pause=False, status='resuming')
+                self.store.update('runs', ident, pause=False, pause_reason=None, status='resuming')
                 self.store.event(ident, 'control', 'Resuming with session reconciliation.')
                 self._launch(ident)
             elif action == 'stop':
@@ -720,7 +720,8 @@ class Controller:
             if not run['pause']:
                 return run
             if not marked:
-                self.store.update('runs', ident, status='paused', summary='Paused before the next action.')
+                # Keep the reason when something other than you paused the run (a spend cap, M12).
+                self.store.update('runs', ident, status='paused', summary=run.get('pause_reason') or 'Paused before the next action.')
                 marked = True
             time.sleep(min(self.s.poll, 0.5))
 
@@ -1512,7 +1513,8 @@ class Controller:
         if reason:
             with self.lock:
                 if not self.store.get('runs', run_id)['pause']:
-                    self.store.update('runs', run_id, pause=True, summary=reason + ' Raise the cap or switch the role to your local model, then Resume.')
+                    note = reason + ' Raise the cap or switch the role to your local model, then Resume.'
+                    self.store.update('runs', run_id, pause=True, pause_reason=note, summary=note)
                     self.store.event(run_id, 'spend cap', reason)
                     self.store.audit_append(run_id, {'action': 'paid call refused', 'actor': 'AgentControl', 'reason': reason, 'endpoint': endpoint['id']})
                     self._push(run_id, reason)

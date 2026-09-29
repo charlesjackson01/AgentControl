@@ -34,7 +34,8 @@ class RecordingMock(mock.Handler):
         length = int(self.headers.get('Content-Length') or 0)
         raw = self.rfile.read(length)
         type(self).seen.append({'port': self.server.server_port, 'model': json.loads(raw).get('model'),
-                                'auth': self.headers.get('Authorization'), 'usage': json.loads(raw).get('usage')})
+                                'auth': self.headers.get('Authorization'), 'usage': json.loads(raw).get('usage'),
+                                'stream_options': json.loads(raw).get('stream_options')})
         self.rfile = __import__('io').BytesIO(raw)
         self.headers.replace_header('Content-Length', str(len(raw)))
         super().do_POST()
@@ -138,6 +139,7 @@ class PaidModelTests(unittest.TestCase):
         self.assertEqual(status, 200)
         paid = [s for s in RecordingMock.seen if s['port'] == self.paid.server_port]
         self.assertEqual((paid[0]['model'], paid[0]['auth']), ('vendor/big-model', 'Bearer sk-test-secret'))
+        self.assertEqual(json.loads(json.dumps(paid[0].get('stream_options'))), {'include_usage': True})
         row = c.store.usage(run['id'])[-1]
         self.assertEqual((row['endpoint'], row['tokens_in'], row['tokens_out']), ('router', 8, 5))
         self.assertAlmostEqual(row['cost'], 8 / 1e6 * 3 + 5 / 1e6 * 15)
@@ -169,9 +171,12 @@ class PaidModelTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as err:
             self.chat(base, 'router')
         self.assertEqual(err.exception.code, 402)
+        until = time.monotonic() + 5
+        while c.store.get('runs', run['id'])['status'] != 'paused' and time.monotonic() < until:
+            time.sleep(.02)
         state = c.store.get('runs', run['id'])
-        self.assertTrue(state['pause'])
-        self.assertIn('Spend cap reached ($0.0110 of $0.01)', state['summary'])
+        self.assertEqual((state['pause'], state['status']), (True, 'paused'))
+        self.assertIn('Spend cap reached ($0.0110 of $0.01)', state['summary'], 'the reason survives the run reaching its pause')
         self.assertEqual(c.spend_status(state)['run'], 0.011)
         with self.assertRaisesRegex(ValueError, 'type approve'):
             c.set_models(run['id'], spend_cap=0.05)

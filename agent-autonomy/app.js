@@ -13,7 +13,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const ended = new Set(['completed', 'blocked', 'failed', 'stopped', 'limit_reached']);
 const KEY_NAME = 'ac-dashboard-key', LEGACY_KEY_NAME = 'trial-dashboard-key';
 
-const VIEWS = ['mission', 'runs', 'approvals', 'activity', 'new', 'project', 'skills'];
+const VIEWS = ['mission', 'runs', 'approvals', 'activity', 'new', 'project', 'skills', 'usage'];
 let key = readKey(), selected = '', data = null, current = null, view = savedView();
 let agentFilter = null;
 let refreshing = false, connected = false, reviewBusy = false, reviewing = null, stopRunId = '', parentRun = null;
@@ -391,8 +391,9 @@ function renderShell() {
   document.querySelectorAll('[data-capability]').forEach(e => e.classList.toggle('hidden', !data.capabilities?.[e.dataset.capability]));
   togglePreviewFields('new');
   renderIsolation();
+  renderModelsPicker();
 
-  const crumbs = [project, {mission: 'Mission', new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills'}[view]];
+  const crumbs = [project, {mission: 'Mission', new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills', usage: 'Usage'}[view]];
   if (current && !['new', 'mission'].includes(view)) crumbs.push('#' + current.id.slice(0, 6));
   if (view === 'runs' && agentFilter) crumbs.push('Agent · ' + agentFilter);
   $('breadcrumb').textContent = crumbs.join(' / ');
@@ -413,7 +414,7 @@ function renderShell() {
   $('xp-status').textContent = connected ? state.text : 'Reconnecting';
   $('xp-folder').textContent = data.project;
 
-  const waitingSkills = pendingSkills().length, waiting = inbox.length + waitingSkills;
+  const waitingSkills = pendingSkills().length + researchRequests().length, waiting = inbox.length + waitingSkills;
   $('nav-count').textContent = waiting;
   $('nav-count').classList.toggle('hidden', !waiting);
   $('tab-count').textContent = waiting;
@@ -491,13 +492,15 @@ function renderRun() {
   $('steering').placeholder = coder ? `A note about ${coder} for Hermes. Hermes decides what ${coder} is told.` : 'Tell Hermes something. It goes into the next prompt.';
   $('steering-form').classList.toggle('hidden', finished);
   $('steering-form').querySelectorAll('button').forEach(button => { button.disabled = !connected || (button.dataset.action === 'verify-now' && !canVerifyNow()); });
-  setHTML($('inline-approvals'), pending.map(approvalCard).join('') || (finished ? '' : recentDecisionHTML()));
+  const asks = researchRequests(current.id).filter(r => !agentFilter || r.agent === agentFilter);
+  setHTML($('inline-approvals'), pending.map(approvalCard).join('') + asks.map(r => researchCard(r, 'inline')).join('') || (finished ? '' : recentDecisionHTML()));
   if (coder) setHTML($('team-panel'), ''); else renderTeam();
   renderChecks();
   renderVerification();
   renderModelUsage();
   renderBranch();
   renderContainer();
+  renderSpecialistPanels();
   renderSkillsPanel();
   renderFiles(fileStats(steps));
   renderTimeline();
@@ -575,7 +578,9 @@ function renderStages(step, states, nextNumber, pending, finished) {
   for (const [name, label, who] of STAGES) {
     const section = $('stage-' + name);
     section.className = `stage stage-${name} ${states[name]}`;
-    const by = name === 'code' && step && isTeam() ? `${who} · ${agentName(step.agent)}` : who;
+    const role = step?.role || roleOf(step?.agent);
+    const actor = name === 'code' && role === 'researcher' ? 'Hermes · web research' : name === 'code' && role === 'reviewer' ? 'OpenCode · read-only' : who;
+    const by = name === 'code' && step && (isTeam() || role !== 'coder') ? `${actor} · ${agentName(step.agent)}` : actor;
     setHTML($(`stage-${name}-head`), stageHead(name, label, by, states[name]));
     const tab = document.querySelector(`[data-stage-tab="${name}"]`);
     tab.className = `stage-tab ${states[name]}`;
@@ -736,13 +741,13 @@ function renderVerification() {
 function tokens(n) { return n >= 10000 ? Math.round(n / 1000) + 'k' : String(n || 0); }
 function renderModelUsage() {
   const usage = data.usage, models = data.models || {}, endpoint = (models.endpoints || []).find(e => e.default);
-  if (!usage?.total?.calls && !endpoint) { setHTML($('model-usage'), ''); return; }
+  if (!usage?.total?.calls && !endpoint && !data.spend?.cap) { setHTML($('model-usage'), ''); return; }
   const queue = endpoint ? `<p class="small muted">${esc(endpoint.id)} · ${endpoint.in_flight.length} of ${endpoint.slots} busy${endpoint.queued.length ? ` · ${endpoint.queued.length} waiting (${esc(endpoint.queued.map(q => q.agent).join(', '))})` : ''}${models.gateway ? ' · gateway on' : ''}</p>` : '';
-  const agents = Object.entries(usage?.by_agent || {}).filter(([name]) => !coderFilter() || [coderFilter(), 'hermes'].includes(name)).map(([name, u]) => `<div class="usage-row"><span>${esc(name)}</span><span class="mono small">${u.calls} call${u.calls === 1 ? '' : 's'} · ${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out${u.queued_ms ? ` · waited ${Math.round(u.queued_ms / 1000)} s` : ''}</span></div>`).join('');
+  const agents = Object.entries(usage?.by_agent || {}).filter(([name]) => !coderFilter() || [coderFilter(), 'hermes'].includes(name)).map(([name, u]) => `<div class="usage-row"><span>${esc(name)}</span><span class="mono small">${u.calls} call${u.calls === 1 ? '' : 's'} · ${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out${u.queued_ms ? ` · waited ${Math.round(u.queued_ms / 1000)} s` : ''}${u.cost > 0 ? ` · ${money(u.cost, 4)}` : ''}</span></div>`).join('');
   const total = usage?.total || {calls: 0, cost: 0};
   setHTML($('model-usage'), `<section class="ac-panel"><h2 class="ac-panel__title">Model usage</h2>${queue}
     ${agents || '<p class="small muted">Token counts appear after Hermes or OpenCode finish a call.</p>'}
-    <p class="small muted">${total.cost > 0 ? `Spend on paid providers: $${total.cost.toFixed(4)}` : 'Local model · no spend'}</p></section>`);
+    ${spendHTML() || `<p class="small muted">${total.cost > 0 ? `Spend on paid providers: $${total.cost.toFixed(4)}` : 'Local model · no spend'}</p>`}</section>`);
 }
 function isTeam(run = current) { return run?.mode === 'team'; }
 function agentName(name = 'coder-1') {
@@ -845,7 +850,8 @@ function agentCard(a) {
   const name = a.name, hermes = a.type === 'orchestrator', finished = ended.has(current.status);
   const [label, tone] = AGENT_STATE[a.state] || [String(a.state || 'idle').replaceAll('_', ' '), ''];
   const step = hermes ? null : [...(data.steps || [])].reverse().find(s => (s.agent || 'coder-1') === name);
-  const lines = hermes ? [] : transcriptTail(step);
+  const role = roleOf(name);
+  const lines = hermes || role === 'researcher' ? [] : transcriptTail(step);
   const u = agentUsage(name), waiting = agentRequests(name).length;
   const teamWaiting = hermes && current.status === 'awaiting_approval';
   const ws = current.workspace?.agents?.[name], skills = (data.skills?.installs || []).filter(i => i.agent === name && i.state === 'installed').length;
@@ -853,20 +859,26 @@ function agentCard(a) {
   const stats = [
     u ? `${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out` : 'no model calls yet',
     hermes ? plural(current.decision_count || 0, 'decision') : `${plural(a.stats?.turns ?? agentSteps(name).length, 'turn')} · ${plural(a.stats?.tool_calls || 0, 'tool call')}`];
-  const where = hermes ? `<span>${esc(data.profile || 'Hermes')}</span>`
+  const where = hermes ? `<span>${esc(data.profile || 'Hermes')}</span>` : role === 'researcher' ? '<span>scratch folder · no project files</span>'
     : `${ws?.branch ? `<span class="mono">${esc(ws.branch)}</span>` : '<span>project folder</span>'}${current.isolation === 'container' ? '<span>in container</span>' : ''}${skills ? `<span>${plural(skills, 'skill')}</span>` : ''}`;
-  const body = hermes
+  const body = role === 'researcher'
+    ? `<p class="small agent-task">${esc(step ? step.question || step.title : 'No question yet')}</p>
+      <p class="small ${step?.status === 'awaiting_approval' ? 'warning-text' : 'muted'}">${esc(step?.report?.summary?.slice(0, 220) || {awaiting_approval: 'Waiting for your approval.', researching: 'Researching…', rejected: 'You declined it.', failed: 'Did not finish.'}[step?.status] || 'Runs only after you approve each question.')}</p>
+      ${step?.report?.sources?.length ? `<p class="small muted">${plural(step.report.sources.length, 'source')}</p>` : ''}`
+    : hermes
     ? `<p class="small">${esc(a.task || (finished ? current.summary : current.summary || 'Waiting for the next decision.'))}</p>${(current.plan || []).length ? `<ol class="mission-plan small">${current.plan.slice(0, 4).map(p => `<li>${esc(typeof p === 'string' ? p : p.title || pretty(p))}</li>`).join('')}</ol>` : ''}`
     : `<p class="small agent-task">${esc(a.task || (step ? `Turn ${step.number}: ${step.title}` : 'No turn yet'))}</p>
+      ${role === 'reviewer' && step?.findings ? `<p class="small">${esc({ok: 'No problems found', changes: plural(step.findings.findings.length, 'finding'), unknown: 'Unstructured review'}[step.findings.verdict] || '')}</p>` : ''}
       <pre class="mission-tail" aria-label="Latest output from ${esc(name)}">${lines.length ? lines.map(l => `<span class="${esc(l.cls)}">${esc(l.text)}</span>`).join('\n') : '<span class="muted">No output yet.</span>'}</pre>`;
   return `<article class="agent-card ${tone}" data-agent-card="${esc(name)}">
-    <header class="agent-card__head"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'}">${esc(hermes ? 'H' : name.replace(/\D/g, '') || 'C')}</span>
+    <header class="agent-card__head"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(roleOf(name))}">${esc(roleMark(name))}</span>
       <button class="agent-card__name" data-agent="${esc(name)}" aria-label="Open ${esc(name)}"><strong>${esc(hermes ? 'Hermes' : name)}</strong><small>${esc(title || a.role || (hermes ? 'Orchestrator' : 'Coder'))}</small></button>
       <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span></header>
     ${body}
     <footer class="agent-card__foot"><span class="small muted">${stats.map(esc).join(' · ')}</span><span class="agent-where small muted">${where}</span>
       ${waiting ? `<button class="ac-btn compact attention-button" data-view="approvals">${plural(waiting, 'request')} waiting</button>` : ''}
-      ${teamWaiting ? '<button class="ac-btn compact attention-button" data-view="runs">Team plan needs you</button>' : ''}</footer>
+      ${teamWaiting ? '<button class="ac-btn compact attention-button" data-view="runs">Team plan needs you</button>' : ''}
+      ${researchRequests(current.id).some(r => r.agent === name) ? '<button class="ac-btn compact attention-button" data-view="approvals">Approve the question</button>' : ''}</footer>
   </article>`;
 }
 function taskDepths(tasks) {
@@ -910,11 +922,13 @@ function renderMissionResources() {
   const mine = p.run === current.id && previewLive(p);
   const previewLine = `<dt>Preview</dt><dd>${mine ? `<span class="success-text">${esc(p.state)}</span> · ${esc(p.mode)}` : current.preview ? esc(current.preview.mode) + ' · not running' : 'None set'}
       <button class="text-button small" data-view="project">Open Project</button></dd>`;
-  return `<section class="ac-panel"><h2 class="ac-panel__title">Resources</h2><dl class="facts small">${model}${box}${previewLine}</dl></section>`;
+  const s = data.spend || {};
+  const spend = s.cap || s.run ? `<dt>Spend</dt><dd>${money(s.run, 4)}${s.cap ? ` of ${money(s.cap)} cap` : ''}</dd>` : '';
+  return `<section class="ac-panel"><h2 class="ac-panel__title">Resources</h2><dl class="facts small">${model}${box}${spend}${previewLine}</dl></section>`;
 }
 function renderMission() {
   const finished = !current || ended.has(current.status);
-  const waiting = (data.inbox || []).length + pendingSkills().length;
+  const waiting = (data.inbox || []).length + pendingSkills().length + researchRequests().length;
   if (!current) {
     setHTML($('mission-head'), `<section class="ac-panel mission-empty"><div class="eyebrow">Mission control</div><h1 id="mission-title">No run yet</h1>
       <p class="muted">Start a run to see Hermes and every coder here, live.</p><button class="ac-btn primary" data-action="new">Start a new run</button></section>`);
@@ -928,7 +942,7 @@ function renderMission() {
   setHTML($('mission-head'), `<section class="mission-head">
     <div class="mission-title"><div class="eyebrow">Mission control${finished ? ' · last run' : ''}</div>
       <h1 id="mission-title">${esc(runTitle(current, 120))}</h1>
-      <p class="small muted">${statusHTML(current, runRequests())} <span>${isTeam() ? plural(Object.keys(current.team?.agents || {}).length, 'coder') : 'One coder'}</span> · <span>${steps.length} of ${current.max_steps} prompts</span> · <span>${duration(b.used)} of ${duration(b.allowed)}</span></p>
+      <p class="small muted">${statusHTML(current, runRequests())} <span>${isTeam() ? plural(Object.keys(current.team?.agents || {}).length, 'agent') : 'One coder'}</span> · <span>${steps.length} of ${current.max_steps} prompts</span> · <span>${duration(b.used)} of ${duration(b.allowed)}</span></p>
       <p class="small">${esc(current.summary)}</p></div>
     <div class="mission-actions row wrap">${waiting ? `<button class="ac-btn primary" data-view="approvals" aria-live="polite">${plural(waiting, 'item')} waiting for you</button>` : '<span class="small muted" aria-live="polite">Nothing waiting for you</span>'}
       <button class="ac-btn" data-run="${esc(current.id)}">Open run</button>${controls}</div></section>`);
@@ -957,6 +971,141 @@ function renderAgentHead() {
       ${a.task ? `<p class="small">${esc(a.task)}</p>` : ''}</div></div>
     <p class="small muted">${hermes ? 'Hermes plans every turn below; notes you send go to it directly.' : `Showing only ${esc(a.name)}’s turns, requests and changes. Notes you send go to Hermes, marked for ${esc(a.name)}; Hermes decides what ${esc(a.name)} is told.`}</p>
   </section>`);
+}
+// ---- specialists, models and spend (M12) ------------------------------------
+const ROLE_NAMES = ['coder', 'tester', 'reviewer', 'researcher'];
+function roleOf(name) {
+  if (name === 'hermes') return 'orchestrator';
+  const base = String(name || 'coder-1').replace(/-\d+$/, '');
+  return ROLE_NAMES.includes(base) ? base : 'coder';
+}
+function roleMark(name) {
+  const role = roleOf(name);
+  return role === 'orchestrator' ? 'H' : role === 'tester' ? 'T' : role === 'reviewer' ? 'Rv' : role === 'researcher' ? 'W' : (name.replace(/\D/g, '') || 'C');
+}
+function researchRequests(run = null) { return (data?.research_requests || []).filter(r => !run || r.run === run); }
+function money(n, digits = 2) { return '$' + Number(n || 0).toFixed(digits); }
+function researchCard(r, where = 'list') {
+  const id = esc(r.step), field = esc(`research-confirm-${where}-${r.step}`);
+  return `<article class="approval-card research-card" tabindex="-1" data-research-card="${id}">
+    <div class="approval-titlebar">Research needs your approval</div>
+    <div class="row between"><div class="approval-icon">${icon('shield')}</div><span class="risk-badge risk-critical">R3 · Critical</span></div>
+    <h2>Let ${esc(r.agent)} look this up on the web?</h2>
+    <pre class="command">${esc(r.question)}</pre>
+    ${r.why && r.why !== r.question ? `<p class="small"><strong>Why:</strong> ${esc(r.why.slice(0, 600))}</p>` : ''}
+    <p class="small">Hermes browses the internet <strong>from this machine</strong> with only these toolsets: <span class="mono">${esc((r.toolsets || []).join(', '))}</span>. At most ${esc(String(r.max_turns))} steps and ${Math.round((r.seconds || 0) / 60)} minutes. It gets no project files, shell or file tools. The question may reach search engines and websites.</p>
+    <label for="${field}" class="small">Type <strong>approve</strong> to allow it</label>
+    <input id="${field}" autocomplete="off" placeholder="approve">
+    <p class="error small" role="alert"></p>
+    <div class="approval-actions"><button class="ac-btn" data-action="research-reject" data-step="${id}" data-research-run="${esc(r.run)}" data-fp="${esc(r.fingerprint)}">Decline</button>
+      <button class="ac-btn primary" data-action="research-approve" data-step="${id}" data-research-run="${esc(r.run)}" data-fp="${esc(r.fingerprint)}">Approve research</button></div>
+    <p class="policy-note">Run #${esc(r.run.slice(0, 6))} · ${esc(r.agent)} · The report comes back labelled as untrusted web content.</p>
+  </article>`;
+}
+async function researchDecision(button, action) {
+  const card = button.closest('[data-research-card]'), step = button.dataset.step;
+  const confirm = card?.querySelector('input')?.value || '', errorBox = card?.querySelector('.error');
+  try {
+    await api('/api/research/decide', 'POST', {run: button.dataset.researchRun, step, action, fingerprint: button.dataset.fp, confirm});
+    toast(action === 'approve' ? 'Research approved.' : 'Research declined; Hermes carries on without it.');
+    await refresh();
+  } catch (error) { if (errorBox) errorBox.textContent = error.message; else toast(error.message); }
+}
+function latestStep(role) {
+  const coder = coderFilter();
+  return [...(data.steps || [])].reverse().find(s => (s.role || roleOf(s.agent)) === role && (!agentFilter || s.agent === agentFilter || (!coder && agentFilter === 'hermes')));
+}
+function findingsHTML(f) {
+  const tone = {high: 'error', medium: 'warning-text', low: 'muted'};
+  return (f.findings || []).map(x => `<div class="finding"><span class="${tone[x.severity] || ''} small">${esc(x.severity)}</span>
+    <div><strong class="small mono">${esc(x.file || '')}${x.line ? ':' + x.line : ''}</strong><p class="small">${esc(x.issue)}</p>${x.suggestion ? `<p class="small muted">${esc(x.suggestion)}</p>` : ''}</div></div>`).join('');
+}
+function renderSpecialistPanels() {
+  const review = latestStep('reviewer'), research = latestStep('researcher');
+  const f = review?.findings;
+  setHTML($('review-panel'), f ? `<section class="ac-panel"><h2 class="ac-panel__title">Review <span class="muted small">· ${esc(review.agent)} · turn ${review.number}</span></h2>
+    <p class="small"><span class="ac-status ${f.verdict === 'ok' ? 'completed' : f.verdict === 'changes' ? 'attention' : ''}">${esc({ok: 'No problems found', changes: 'Changes suggested', unknown: 'No structured findings'}[f.verdict] || f.verdict)}</span></p>
+    ${f.summary ? `<p class="small">${esc(f.summary)}</p>` : ''}${findingsHTML(f)}
+    <p class="small muted">The reviewer cannot edit. Hermes decides what, if anything, a coder changes.</p></section>` : '');
+  if (!research) { setHTML($('research-panel'), ''); return; }
+  const r = research.report, state = research.status;
+  const body = r ? `<p class="small">${esc(r.summary)}</p>${(r.findings || []).map(x => `<div class="finding"><span class="small muted">•</span><div><p class="small">${esc(x.claim)}</p>${x.sources.map(u => `<a class="small source-link" href="${esc(u)}" target="_blank" rel="noopener noreferrer nofollow">${esc(u)}</a>`).join('')}</div></div>`).join('')}
+      ${(r.open_questions || []).length ? `<p class="small muted">Open: ${esc(r.open_questions.join(' · '))}</p>` : ''}`
+    : `<p class="small muted">${esc({awaiting_approval: 'Waiting for your approval in Approvals.', approved: 'Approved; starting.', researching: 'Researching…', rejected: 'You declined this research.', failed: research.result || 'The research did not finish.'}[state] || state)}</p>`;
+  setHTML($('research-panel'), `<section class="ac-panel"><h2 class="ac-panel__title">Research <span class="muted small">· ${esc(research.agent)}</span></h2>
+    <pre class="command small">${esc(research.question || '')}</pre>${body}
+    ${r ? '<p class="small muted">Web content, labelled untrusted when passed to agents. Links open in a new tab.</p>' : ''}</section>`);
+}
+// Models picker in New run: only shown when models.json lists more than your local model.
+function renderModelsPicker() {
+  const o = data?.model_options, isolation = $('iso-container')?.checked ? 'container' : 'host';
+  $('models-section').classList.toggle('hidden', !o?.endpoints?.length);
+  if (!o?.endpoints?.length) return;
+  const roles = [['orchestrator', 'Hermes (planning)'], ['coder', 'Coders'], ['tester', 'Tester'], ['reviewer', 'Reviewer'], ['researcher', 'Researcher']];
+  const previous = Object.fromEntries(roles.map(([r]) => [r, $('model-' + r)?.value || '']));
+  setHTML($('models-picker'), roles.map(([role, label]) => {
+    // A container's OpenCode always reaches the gateway, so coder-side roles are open there.
+    const why = isolation === 'container' && !['orchestrator', 'researcher'].includes(role) ? '' : o.unavailable?.[role];
+    return `<div class="model-row"><label for="model-${role}">${esc(label)}</label><select id="model-${role}" data-model-role="${role}" ${why ? 'disabled' : ''}>
+      <option value="">Your local model (${esc(o.default || 'default')})</option>
+      ${o.endpoints.map(e => `<option value="${esc(e.id)}" ${previous[role] === e.id ? 'selected' : ''}>${esc(e.id)} · ${esc(e.model || '')}${e.paid ? ` · paid ${money(e.cost_per_mtok_in)}/${money(e.cost_per_mtok_out)} per M tokens` : ''}</option>`).join('')}
+    </select>${why ? `<small class="muted">${esc(why)}</small>` : ''}</div>`;
+  }).join(''));
+  togglePaidFields();
+}
+function chosenModels() {
+  const out = {};
+  document.querySelectorAll('[data-model-role]').forEach(s => { if (s.value && !s.disabled) out[s.dataset.modelRole] = s.value; });
+  return out;
+}
+function paidChosen() {
+  const paid = new Set((data?.model_options?.endpoints || []).filter(e => e.paid).map(e => e.id));
+  return Object.values(chosenModels()).some(id => paid.has(id));
+}
+function togglePaidFields() { $('paid-fields').classList.toggle('hidden', !paidChosen()); }
+function modelsBody() {
+  const models = chosenModels();
+  if (!Object.keys(models).length) return {};
+  return {models, ...(paidChosen() ? {spend_cap: Number($('spend-cap').value)} : {})};
+}
+function spendHTML() {
+  const s = data.spend || {}, paidRun = s.cap !== null && s.cap !== undefined;
+  if (!paidRun && !s.run) return '';
+  const models = Object.entries(current.models || {}).map(([r, e]) => `${r}: ${e}`).join(' · ');
+  const capped = /Spend cap reached|Monthly spend cap/.test(current.summary || '');
+  return `<div class="spend-box"><p class="small"><strong>${money(s.run, 4)}</strong>${paidRun ? ` of ${money(s.cap)} cap` : ''} spent in this run${s.monthly_cap ? ` · ${money(s.month)} of ${money(s.monthly_cap)} this month` : ''}</p>
+    ${models ? `<p class="small muted">Paid choices: ${esc(models)}</p>` : ''}
+    ${paidRun && !ended.has(current.status) ? `<details ${capped ? 'open' : ''}><summary class="small">Change the cap or go back to your local model</summary>
+      <label for="cap-new" class="small">New cap · $</label><input id="cap-new" type="number" min="0.01" max="1000" step="0.01" value="${esc(String((s.cap || 1) * 2))}">
+      <label for="cap-confirm" class="small">Type <strong>approve</strong> to raise it</label><input id="cap-confirm" autocomplete="off" placeholder="approve">
+      <div class="row wrap"><button class="ac-btn compact" data-action="cap-raise">Raise cap</button><button class="ac-btn compact" data-action="models-local">Use my local model</button></div>
+      <p id="cap-error" class="error small" role="alert"></p></details>` : ''}</div>`;
+}
+async function capAction(kind) {
+  try {
+    if (kind === 'raise') await api('/api/models/set', 'POST', {run: current.id, spend_cap: Number($('cap-new').value), confirm: $('cap-confirm').value});
+    else await api('/api/models/set', 'POST', {run: current.id, models: Object.fromEntries(Object.keys(current.models || {}).map(r => [r, null]))});
+    toast(kind === 'raise' ? 'Cap raised. Resume the run to continue.' : 'Every role uses your local model again.');
+    await refresh();
+  } catch (error) { if ($('cap-error')) $('cap-error').textContent = error.message; else toast(error.message); }
+}
+let usageData = null;
+async function loadUsage() {
+  try { usageData = await api('/api/usage?period=' + encodeURIComponent($('usage-period').value)); } catch (error) { usageData = {error: error.message}; }
+  renderUsage();
+}
+function renderUsage() {
+  const u = usageData;
+  if (!u) { setHTML($('usage-report'), '<p class="small muted">Loading…</p>'); return; }
+  if (u.error) { setHTML($('usage-report'), `<p class="error">${esc(u.error)}</p>`); return; }
+  const rows = u.rows.map(r => `<tr><td><button class="text-button" data-run="${esc(r.run || '')}">${esc(r.title || (r.run || '—').slice(0, 6))}</button></td><td>${esc(r.agent || '—')}</td>
+    <td class="mono small">${esc(r.endpoint || '—')}${r.paid ? ' <span class="paid-tag">paid</span>' : ''}</td><td class="num">${r.calls}</td><td class="num">${tokens(r.tokens_in)} / ${tokens(r.tokens_out)}</td>
+    <td class="num">${r.paid ? money(r.cost, 4) : '<span class="muted">local · $0</span>'}</td></tr>`).join('');
+  setHTML($('usage-report'), `<section class="ac-panel"><div class="usage-totals"><div><small>Calls</small><strong>${u.total.calls}</strong></div><div><small>Tokens in / out</small><strong>${tokens(u.total.tokens_in)} / ${tokens(u.total.tokens_out)}</strong></div>
+      <div><small>Spend</small><strong>${money(u.total.cost, 4)}</strong>${u.monthly_cap ? `<small>of ${money(u.monthly_cap)} monthly cap</small>` : ''}</div></div>
+    ${rows ? `<div class="table-wrap"><table class="team-table usage-table"><thead><tr><th>Run</th><th>Agent</th><th>Model</th><th class="num">Calls</th><th class="num">Tokens in / out</th><th class="num">Cost</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<p class="small muted">No model calls recorded in this period.</p>'}
+    <p class="small muted">Token counts come from Hermes, OpenCode and the gateway. Only paid providers cost money; your local model is always $0.</p></section>`);
 }
 // ---- skills (M9) ----------------------------------------------------------
 const SKILL_WAITING = ['proposed', 'awaiting_fetch'];
@@ -1141,9 +1290,9 @@ function recentDecisionHTML() {
     <button class="text-button" data-review="${esc(requestKey(r))}">View decision</button></section>`;
 }
 function renderApprovals() {
-  setHTML($('skill-proposals'), pendingSkills().map(skillCard).join(''));
+  setHTML($('skill-proposals'), researchRequests().map(r => researchCard(r)).join('') + pendingSkills().map(skillCard).join(''));
   renderSkillsView();
-  setHTML($('approval-list'), data.inbox.length ? data.inbox.map(approvalCard).join('') : pendingSkills().length ? '' : '<section class="ac-panel"><h2>Nothing waiting on you.</h2><p class="muted small">New permission requests and questions will appear here.</p></section>');
+  setHTML($('approval-list'), data.inbox.length ? data.inbox.map(approvalCard).join('') : pendingSkills().length || researchRequests().length ? '' : '<section class="ac-panel"><h2>Nothing waiting on you.</h2><p class="muted small">New permission requests and questions will appear here.</p></section>');
   setHTML($('rule-list'), rulesHTML());
   setHTML($('audit-list'), auditHTML());
   setHTML($('decision-history'), data.reviews.length ? data.reviews.map(r => {
@@ -1473,6 +1622,7 @@ function showView(next) {
   document.querySelectorAll('.nav [data-view], .tabbar [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
   closeDrawer();
   if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } }
+  if (next === 'usage') loadUsage();
 }
 let preflight = null;
 function chosenMode() { return document.querySelector('input[name="run-mode"]:checked')?.value || 'single'; }
@@ -1723,6 +1873,11 @@ const ACTIONS = {
     askConfirm('Discard this branch?', `<p>Delete <code>${esc(ws.integration.branch)}</code>, the agent branch, and their worktrees.</p><p class="small muted">Work that was not applied is lost. Your checkout is not touched.</p>`,
       'Discard branch', true, async () => { await control('discard_workspace', '', id); toast('Branch discarded.'); });
   },
+  'research-approve': button => researchDecision(button, 'approve'),
+  'research-reject': button => researchDecision(button, 'reject'),
+  'cap-raise': () => capAction('raise'),
+  'models-local': () => capAction('local'),
+  'usage-refresh': () => loadUsage(),
   'container-stop': async () => { await control('container_stop'); toast('Container stopped.'); },
   'container-start': async () => { await control('container_start'); toast('Starting the container…'); },
   'sandbox-check': async () => { try { data.sandbox = await api('/api/sandbox?check=1'); } catch (error) { toast(error.message); } renderIsolation(); },
@@ -1869,6 +2024,7 @@ function init() {
     $('start-error').textContent = '';
     if ($('verify-enabled').checked && !$('verify').value.trim()) { $('start-error').textContent = 'Enter a verification command or turn off independent verification.'; return; }
     if ($('iso-container').checked && $('container-network').value === 'internet' && $('container-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to let agents use the internet, or choose another network setting.'; return; }
+    if (paidChosen() && $('paid-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to allow paid models, or pick your local model for every role.'; return; }
     if (preflight?.usable && preflight.dirty_count && !$('allow-dirty')?.checked) { $('start-error').textContent = 'Your project has uncommitted changes. Commit them, or tick “Start from my last commit anyway”.'; return; }
     $('start-run').disabled = true;
     try {
@@ -1880,6 +2036,8 @@ function init() {
         ...($('allow-dirty')?.checked ? {allow_dirty: true} : {}),
         ...runModeBody(),
         ...isolationBody(),
+        ...modelsBody(),
+        ...(paidChosen() ? {confirm: $('paid-confirm').value.trim()} : {}),
         ...(preflight?.usable && $('setup-cmd').value.trim() ? {setup: $('setup-cmd').value.trim()} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');
@@ -1888,7 +2046,9 @@ function init() {
     } catch (error) { $('start-error').textContent = error.message; $('start-run').disabled = false; }
   };
   document.querySelectorAll('input[name="run-mode"]').forEach(radio => { radio.onchange = scheduleAutoPreview; });
-  document.querySelectorAll('input[name="isolation"]').forEach(radio => { radio.onchange = renderIsolation; });
+  document.querySelectorAll('input[name="isolation"]').forEach(radio => { radio.onchange = () => { renderIsolation(); renderModelsPicker(); }; });
+  $('models-picker').addEventListener('change', togglePaidFields);
+  $('usage-period').onchange = loadUsage;
   $('container-network').onchange = renderIsolation;
   ['goal', 'verify', 'max-prompts'].forEach(id => $(id).addEventListener('input', scheduleAutoPreview));
   $('verify-enabled').onchange = () => { $('verify').disabled = !$('verify-enabled').checked; $('verify').required = $('verify-enabled').checked; };

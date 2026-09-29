@@ -5022,3 +5022,99 @@ button.task-node {
     transform:rotate(90deg);
   }
 }
+
+/* Specialists, models and spend (M12) */
+.agent-avatar.role-tester {
+  background:var(--ac-success);
+}
+
+.agent-avatar.role-reviewer {
+  background:var(--ac-warning);
+  color:var(--ac-on-warning);
+}
+
+.agent-avatar.role-researcher {
+  background:var(--ac-link);
+}
+
+.finding {
+  display:grid;
+  grid-template-columns:max-content minmax(0,1fr);
+  gap:4px 10px;
+  padding:8px 0;
+  border-top:1px solid var(--ac-border);
+}
+
+.finding p {
+  margin:0 0 2px;
+  overflow-wrap:anywhere;
+}
+
+.source-link {
+  display:block;
+  overflow-wrap:anywhere;
+}
+
+.research-card pre.command {
+  white-space:pre-wrap;
+}
+
+.models-picker {
+  display:grid;
+  gap:10px;
+}
+
+.model-row {
+  display:grid;
+  gap:4px;
+  min-width:0;
+}
+
+.model-row select {
+  max-width:100%;
+}
+
+.paid-tag {
+  display:inline-block;
+  padding:0 5px;
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-warning-soft);
+  color:var(--ac-warning-text);
+  font-family:var(--ac-font-ui);
+  font-size:var(--ac-text-xs);
+}
+
+.spend-box {
+  border-top:1px solid var(--ac-border);
+  margin-top:8px;
+  padding-top:8px;
+}
+
+.spend-box details {
+  display:grid;
+  gap:4px;
+}
+
+.usage-totals {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px 32px;
+  margin:0 0 14px;
+}
+
+.usage-totals div {
+  display:grid;
+}
+
+.usage-totals small {
+  color:var(--ac-text-muted);
+}
+
+.usage-totals strong {
+  font-size:var(--ac-text-lg);
+}
+
+.usage-table .num {
+  text-align:right;
+  white-space:nowrap;
+}

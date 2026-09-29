@@ -480,6 +480,59 @@ The gateway forwards each request unchanged and streams the reply back. It:
 
 This follows the design of ai-arch's `aid` gateway. It is optional; without it, AgentControl still records usage from what Hermes and OpenCode report.
 
+## Specialist agents: tester, reviewer, researcher
+
+Besides coders, Hermes can bring in a specialist, **only when the work needs one**. It can do this in a team plan (you approve the plan as usual), or, in a one-agent run, as a single `delegate` turn (at most 3 per run). The roles are declared in `agents.py`; a new role later is one more entry there.
+
+| Role | Runs as | Works in | May change | Enforced by AgentControl |
+|---|---|---|---|---|
+| **Tester** | OpenCode | its own branch | test files, and files its task names | A turn that changes anything else is **not merged** and is dropped from its branch; it is retried with the reason. Your approvals apply as for coders. |
+| **Reviewer** | OpenCode | a copy of the merged result | nothing | Its prompts switch off OpenCode's write, edit, patch, bash and web tools. Any permission it asks for is **refused for you** and logged. Anything it leaves behind is discarded. Its findings (file, line, severity, suggestion) go to Hermes, which decides whether a coder fixes them. |
+| **Researcher** | Hermes CLI | an empty scratch folder | nothing | **Each question waits for your typed `approve`** in Approvals. It runs Hermes with only the toolsets you name, never `--yolo`, and with limits on turns and time. Its cited report goes to Hermes and dependent tasks, marked as untrusted web content, and every source URL is in the audit log. |
+
+Notes:
+- A researcher task in a team plan holds back only the tasks that depend on it. Declining a question is reported to Hermes, which carries on without it.
+- OpenCode's own `plan` agent is **not** used for the reviewer: our M12 spike showed it still writes files when your OpenCode config allows edits. The per-prompt tool switch does hold (see `spikes/opencode_agent_probe.py`).
+
+**Sharing one GPU.** At most `slots + 1` agents work at once (so one can generate while another runs tools or tests); `--max-parallel-agents N` overrides this. Only one researcher runs at a time, and a research call takes a model slot while it runs, because Hermes calls the model server directly.
+
+**Enabling the researcher.** AgentControl never guesses Hermes toolset names. Run the probe on your server:
+```
+python3 agent-autonomy/spikes/hermes_research_probe.py            # lists your Hermes toolsets
+python3 agent-autonomy/spikes/hermes_research_probe.py --try web  # optional: one real research call, asks first
+```
+Then start AgentControl with `--research-toolsets <names>`, for example `--research-toolsets web`. Until then, the researcher is shown as unavailable, with the reason, and Hermes is not offered it.
+
+## Paid models (optional), spend caps and usage
+
+Everything works with no paid provider. If you want one, for example OpenRouter for Hermes's planning, list it in `models.json` next to your local model:
+
+```json
+{
+  "default": "local",
+  "monthly_cap": 20,
+  "endpoints": [
+    {"id": "local", "url": "http://127.0.0.1:8080", "slots": 1},
+    {"id": "router", "url": "https://openrouter.ai/api", "model": "anthropic/claude-sonnet", "paid": true,
+     "api_key_ref": "openrouter", "cost_per_mtok_in": 3, "cost_per_mtok_out": 15, "report_cost": true, "slots": 4}
+  ]
+}
+```
+
+Put the key in ai-arch's secret store: `~/.local/share/ai-arch/secrets/openrouter` (mode 600). It is added only by the gateway and never reaches agents, logs or the dashboard.
+
+Then:
+- **New run → Models.** Pick a model per role. Every role defaults to your local model. A paid choice needs a **spend cap for the run** and the typed `approve`.
+- **The gateway is the only way out for paid calls,** so the caps hold. Start AgentControl with `--gateway-port 8768`:
+  - **OpenCode on this machine:** add a provider named `agentcontrol` to your OpenCode config, with `baseURL` `http://127.0.0.1:8768/agent/opencode/v1` and one model entry per endpoint id (`"local"`, `"router"`). AgentControl names the model in each prompt. **Container runs** get this provider automatically.
+  - **Hermes:** add a provider to your Hermes `config.yaml` whose base URL is `http://127.0.0.1:8768/agent/hermes/v1`, and start AgentControl with `--hermes-provider <its name>`. AgentControl then passes `--provider <name> -m <endpoint id>` for the roles you chose. Check first with the probe that your Hermes has these flags.
+- **Caps:**
+  - The gateway refuses a paid call that the run did not choose.
+  - When the run's cap or the monthly cap is reached, the next paid call is refused and the run pauses. On the run page you can **raise the cap** (typed `approve`) or **go back to your local model**, then Resume.
+  - At most one call already in flight can go over the cap.
+  - The gateway asks streams to include token counts, and uses the provider's own reported cost when it gives one (`report_cost`, OpenRouter's usage accounting). Otherwise it computes cost from the registry prices.
+- **Usage** (sidebar) lists calls, tokens and spend this month or for all time, by run, agent and model. Local calls always show $0. `GET /api/usage?period=month|all` returns the same.
+
 ## Agents
 
 Every run records the agents working on it:

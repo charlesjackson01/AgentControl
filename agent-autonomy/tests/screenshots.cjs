@@ -44,6 +44,35 @@ function withMission(s) {
     ...(team ? {'coder-2': {calls: 1, tokens_in: 6800, tokens_out: 700}} : {})}};
   return s;
 }
+// Specialists (M12): a reviewer with findings, a researcher with a report and a new question waiting.
+function withSpecialists(s) {
+  s = withMission(s);
+  const base = s.steps[0];
+  s.run.team.agents['reviewer-1'] = {label: 'qa', role: 'reviewer'};
+  s.run.team.agents['researcher-1'] = {label: 'docs', role: 'researcher'};
+  s.agents.push({name: 'reviewer-1', type: 'reviewer', role: 'Reviewer', runtime: 'opencode', state: 'idle', stats: {turns: 1, tool_calls: 6}},
+    {name: 'researcher-1', type: 'researcher', role: 'Researcher', runtime: 'hermes-cli', state: 'waiting_on_you', task: 'Waiting for your approval: t5: Retry-After', stats: {turns: 1}});
+  s.steps.push({...base, id: 'step_rev', number: 3, title: 't4: Review the storage module', agent: 'reviewer-1', role: 'reviewer', status: 'finished',
+    findings: {verdict: 'changes', summary: 'Saving is atomic, but a corrupt file crashes list.', findings: [
+      {file: 'demo_app/todo.py', line: 41, severity: 'high', issue: 'json.load raises on a corrupt tasks.json and the CLI exits with a traceback.', suggestion: 'Catch JSONDecodeError and explain how to recover.'},
+      {file: 'demo_app/test_todo.py', line: 0, severity: 'low', issue: 'No test covers an empty file.', suggestion: 'Add a test that starts from an empty tasks.json.'}]},
+    verification: {status: 'not applicable', output: ''}, evidence: {changed_files: [], diff: '', file_stats: []}},
+    {...base, id: 'step_res', number: 4, title: 't0: File locking', agent: 'researcher-1', role: 'researcher', status: 'finished', question: 'How can a Python CLI write a JSON file atomically on Linux and Windows?',
+      report: {summary: 'Write to a temporary file in the same folder, flush and fsync it, then os.replace() it over the original.', findings: [
+        {claim: 'os.replace is atomic on POSIX and overwrites the destination on Windows.', sources: ['https://docs.python.org/3/library/os.html#os.replace']},
+        {claim: 'The temporary file must be on the same filesystem as the target.', sources: ['https://docs.python.org/3/library/tempfile.html']}], open_questions: [], sources: []},
+      verification: {status: 'not applicable', output: ''}, evidence: {changed_files: [], diff: '', file_stats: []}});
+  s.research_requests = [{run: s.run.id, step: 'step_ask', number: 5, title: 't5: Retry-After', agent: 'researcher-1', question: 'Is there a standard format for a "last modified" line in a plain-text CLI listing?',
+    why: 'The list command should show when each task changed.', toolsets: ['web'], max_turns: 8, seconds: 600, fingerprint: 'fp', created: s.run.created}];
+  s.roles = {coder: '', tester: '', reviewer: '', researcher: ''};
+  return s;
+}
+const USAGE_REPORT = {period: 'month', monthly_cap: 20, total: {calls: 14, tokens_in: 182000, tokens_out: 21400, cost: 0.1832}, rows: [
+  {run: 'run_live', title: 'Todo app', agent: 'hermes', endpoint: 'router', paid: true, calls: 4, tokens_in: 41200, tokens_out: 5100, cost: 0.1832},
+  {run: 'run_live', title: 'Todo app', agent: 'coder-1', endpoint: 'local', paid: false, calls: 7, tokens_in: 120400, tokens_out: 14100, cost: 0},
+  {run: 'run_live', title: 'Todo app', agent: 'researcher-1', endpoint: 'local', paid: false, calls: 3, tokens_in: 20400, tokens_out: 2200, cost: 0}]};
+const MODEL_OPTIONS = {default: 'local', monthly_cap: 20, endpoints: [{id: 'router', model: 'anthropic/claude-sonnet', paid: true, cost_per_mtok_in: 3, cost_per_mtok_out: 15}],
+  unavailable: {orchestrator: '', coder: '', tester: '', reviewer: '', researcher: 'Hermes reaches other models only through the gateway: start with --gateway-port and --hermes-provider (see the README).'}};
 const scenarios = {
   login: {state: fx.richActive, key: false},
   empty: {state: fx.empty},
@@ -90,6 +119,16 @@ const scenarios = {
   missionsingle: {state: () => withMission((() => { const s = fx.richActive(); s.inbox[0].agent = 'coder-1'; return s; })()), view: 'mission'},
   missionempty: {state: fx.empty, view: 'mission'},
   agent: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent="coder-2"]'},
+  specialists: {state: () => withSpecialists(teamState()), view: 'mission'},
+  researchask: {state: () => withSpecialists(teamState()), view: 'approvals'},
+  findings: {state: () => withSpecialists(teamState()), view: 'runs'},
+  paidrun: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'paused'; s.run.pause = true; s.run.models = {orchestrator: 'router'}; s.run.spend_cap = 0.5;
+    s.run.summary = 'Spend cap reached ($0.5012 of $0.50). Raise the cap or switch the role to your local model, then Resume.';
+    s.spend = {run: 0.5012, cap: 0.5, month: 3.2, monthly_cap: 20};
+    s.usage = {total: {calls: 6, tokens_in: 31200, tokens_out: 3900, cost: 0.5012}, by_agent: {hermes: {calls: 3, tokens_in: 12480, tokens_out: 1500, cost: 0.5012}, 'coder-1': {calls: 3, tokens_in: 18720, tokens_out: 2400, cost: 0}}};
+    s.models = {configured: true, endpoints: [{id: 'local', slots: 1, default: true, in_flight: [], queued: [], health: {state: 'online'}}]}; return s; }},
+  modelsnew: {state: () => ({...fx.empty(), model_options: MODEL_OPTIONS}), click: ['#empty-state [data-action="new"]'], preflight: CLEAN_GIT},
+  usage: {state: fx.richActive, view: 'usage', api: {'/api/usage': USAGE_REPORT}},
   containernew: {state: () => ({...fx.empty(), sandbox: SANDBOX}), click: ['#empty-state [data-action="new"]', '#iso-container'], preflight: CLEAN_GIT},
   containeroff: {state: () => ({...fx.empty(), sandbox: {...SANDBOX, rootless: false, unavailable: 'docker runs as root on this machine. Agent containers need rootless Docker or Podman (see the README), or start AgentControl with --allow-rootful-containers.'}}),
     click: '#empty-state [data-action="new"]', preflight: CLEAN_GIT},
@@ -151,7 +190,8 @@ async function open(browser, theme, [width, height], scenario) {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/api/')) {
       if (scenario.key === false) return route.fulfill({status: 401, contentType: 'application/json', body: JSON.stringify({error: 'Enter the dashboard key printed in your server terminal.'})});
-      const body = url.pathname === '/api/state' ? (typeof scenario.live === 'function' ? scenario.live(state) : state)
+      const body = (scenario.api || {})[url.pathname] ? scenario.api[url.pathname]
+        : url.pathname === '/api/state' ? (typeof scenario.live === 'function' ? scenario.live(state) : state)
         : url.pathname === '/api/workspace/preflight' ? (scenario.preflight || {is_repo: false, usable: false, reason: '', changes: [], untracked: [], dirty_count: 0}) : {ok: true};
       return route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     }

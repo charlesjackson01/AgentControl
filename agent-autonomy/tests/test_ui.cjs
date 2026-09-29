@@ -30,6 +30,8 @@ async function harness(state=fixture(),savedTheme='mac') {
    let result;
    if(url==='/api/control'&&state.failControl)return {status:400,ok:false,json:async()=>({error:state.failControl})};
    if(url==='/api/mode/preview')return {status:200,ok:true,json:async()=>clone(state.autoPreview||{mode:'single',rule:3,reasons:['The brief names one area of work.']})};
+   if(url.startsWith('/api/usage'))return {status:200,ok:true,json:async()=>clone(state.usageReport||{rows:[],total:{calls:0,tokens_in:0,tokens_out:0,cost:0}})};
+   if(url==='/api/research/decide'&&state.failResearch)return {status:400,ok:false,json:async()=>({error:state.failResearch})};
    if(url==='/api/workspace/preflight')return {status:200,ok:true,json:async()=>clone(state.preflight||{is_repo:false,usable:false,reason:'',changes:[],untracked:[],dirty_count:0})};
    if(url.startsWith('/api/state'))result=clone(state);
    else if(url==='/api/review'){
@@ -771,5 +773,92 @@ test('the bottom tab bar navigates, shows the waiting count, and the view is rem
  assert.equal(h.document.querySelector('.tabbar [data-view="mission"]').getAttribute('aria-current'),'page');
  await h.click('.tabbar [data-tab="more"]');
  assert(h.document.getElementById('sidebar').classList.contains('drawer-open'));
+});
+function specialistFixture(){
+ const s=missionFixture();
+ s.agents.push({name:'reviewer-1',type:'reviewer',role:'Reviewer',state:'idle',stats:{turns:1,tool_calls:2}},
+  {name:'researcher-1',type:'researcher',role:'Researcher',state:'waiting_on_you',task:'Waiting for your approval: t0: Status code',stats:{turns:1}});
+ s.steps.push({...clone(s.steps[0]),id:'step_rev',number:3,title:'t4: Review',agent:'reviewer-1',role:'reviewer',status:'finished',
+  findings:{verdict:'changes',summary:'One issue',findings:[{file:'api.py',line:12,severity:'high',issue:'No input validation',suggestion:'Check the payload'}]},
+  verification:{status:'not applicable',output:''}},
+  {...clone(s.steps[0]),id:'step_res',number:4,title:'t0: Status code',agent:'researcher-1',role:'researcher',status:'finished',question:'Which HTTP status fits a rate limit?',
+  report:{summary:'Use 429 Too Many Requests.',findings:[{claim:'429 is defined in RFC 6585',sources:['https://www.rfc-editor.org/rfc/rfc6585']}],open_questions:[],sources:['https://www.rfc-editor.org/rfc/rfc6585']}});
+ s.research_requests=[{run:'run_test',step:'step_ask',number:5,title:'t5: Retry-After',agent:'researcher-1',question:'How should Retry-After be formatted?',why:'The API returns 429',toolsets:['web'],max_turns:8,seconds:600,fingerprint:'fp123',created:runTime()}];
+ return s;
+}
+test('research waits in Approvals and inline, and approving sends the typed word and the exact request',async()=>{
+ const h=await harness(specialistFixture());
+ assert.equal(h.document.getElementById('tab-count').textContent,'2','permission + research');
+ assert.match(h.document.querySelector('[data-agent-card="researcher-1"]').textContent,/Approve the question/);
+ await h.click('[data-view="approvals"]');
+ const card=h.document.querySelector('#skill-proposals [data-research-card="step_ask"]');
+ assert(card);assert.match(card.textContent,/How should Retry-After be formatted\?/);assert.match(card.textContent,/from this machine/);assert.match(card.textContent,/R3 · Critical/);
+ card.querySelector('input').value='approve';
+ await h.click('#skill-proposals [data-action="research-approve"]');
+ assert.deepEqual(h.calls.find(c=>c.url==='/api/research/decide').body,{run:'run_test',step:'step_ask',action:'approve',fingerprint:'fp123',confirm:'approve'});
+ h.state.failResearch='Research browses the internet from your machine: type approve to allow it.';
+ await h.click('#skill-proposals [data-action="research-reject"]');
+ assert.match(h.document.querySelector('#skill-proposals [data-research-card] .error').textContent,/type approve/);
+ await h.click('[data-view="runs"]');
+ assert(h.document.querySelector('#inline-approvals [data-research-card="step_ask"]'),'also shown on the run page');
+});
+test('reviewer findings and the research report are shown, with safe source links',async()=>{
+ const h=await harness(specialistFixture());
+ await h.click('[data-view="runs"]');
+ const review=h.document.getElementById('review-panel').textContent;
+ assert.match(review,/Changes suggested/);assert.match(review,/api\.py:12/);assert.match(review,/No input validation/);assert.match(review,/cannot edit/);
+ const link=h.document.querySelector('#research-panel a.source-link');
+ assert.equal(link.getAttribute('href'),'https://www.rfc-editor.org/rfc/rfc6585');
+ assert.match(link.getAttribute('rel'),/noopener/);assert.match(link.getAttribute('rel'),/noreferrer/);
+ assert.match(h.document.getElementById('research-panel').textContent,/Use 429/);
+ const mission=h.document.querySelector('[data-agent-card="reviewer-1"]');
+ assert.match(mission.textContent,/1 finding/);assert.equal(mission.querySelector('.agent-avatar').textContent,'Rv');
+});
+function modelsFixture(){
+ const s=gitNew();
+ s.model_options={default:'local',monthly_cap:20,unavailable:{orchestrator:'Hermes reaches other models only through the gateway: start with --gateway-port and --hermes-provider (see the README).',coder:'',tester:'',reviewer:'',researcher:'Hermes reaches other models only through the gateway'},
+  endpoints:[{id:'router',model:'vendor/big-model',paid:true,cost_per_mtok_in:3,cost_per_mtok_out:15}]};
+ return s;
+}
+test('New run offers other models per role, and paid ones need a cap and the typed word',async()=>{
+ let h=await harness(gitNew());await h.click('[data-action="new"]');
+ assert(h.document.getElementById('models-section').classList.contains('hidden'),'no other models, no section');
+ h=await harness(modelsFixture());await h.click('[data-action="new"]');
+ assert(!h.document.getElementById('models-section').classList.contains('hidden'));
+ assert(h.document.getElementById('model-orchestrator').disabled);
+ assert.match(h.document.getElementById('models-picker').textContent,/paid \$3\.00\/\$15\.00 per M tokens/);
+ const coder=h.document.getElementById('model-coder');Object.defineProperty(coder,'value',{value:'router',writable:true});
+ h.document.getElementById('models-picker').dispatchEvent(new h.context.window.Event('change'));
+ assert(!h.document.getElementById('paid-fields').classList.contains('hidden'));
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ assert.equal(h.calls.filter(c=>c.url==='/api/runs').length,0);
+ assert.match(h.document.getElementById('start-error').textContent,/Type approve to allow paid models/);
+ h.document.getElementById('paid-confirm').value='approve';h.document.getElementById('spend-cap').value='2.5';
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const body=h.calls.find(c=>c.url==='/api/runs').body;
+ assert.deepEqual([body.models,body.spend_cap,body.confirm],[{coder:'router'},2.5,'approve']);
+});
+test('a paid run shows its spend, and the cap can be raised or dropped for the local model',async()=>{
+ const s=fixture();s.run.models={coder:'router'};s.run.spend_cap=0.5;s.run.summary='Spend cap reached ($0.5012 of $0.50). Raise the cap or switch the role to your local model, then Resume.';
+ s.spend={run:0.5012,cap:0.5,month:3.2,monthly_cap:20};s.usage={total:{calls:3,tokens_in:9000,tokens_out:900,cost:0.5012},by_agent:{'coder-1':{calls:3,tokens_in:9000,tokens_out:900,cost:0.5012}}};
+ const h=await harness(s);await h.click('[data-view="runs"]');
+ const panel=h.document.getElementById('model-usage').textContent;
+ assert.match(panel,/\$0\.5012 of \$0\.50 cap spent in this run/);assert.match(panel,/\$3\.20 of \$20\.00 this month/);assert.match(panel,/Paid choices: coder: router/);
+ h.document.getElementById('cap-confirm').value='approve';
+ await h.click('[data-action="cap-raise"]');
+ assert.deepEqual(h.calls.find(c=>c.url==='/api/models/set').body,{run:'run_test',spend_cap:1,confirm:'approve'});
+ await h.click('[data-action="models-local"]');
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/models/set').pop().body,{run:'run_test',models:{coder:null}});
+ assert.match(h.document.getElementById('mission-resources').textContent,/\$0\.5012 of \$0\.50 cap/);
+});
+test('the Usage view reports calls, tokens and spend, local calls cost nothing',async()=>{
+ const s=fixture();s.usageReport={period:'month',monthly_cap:20,total:{calls:5,tokens_in:30000,tokens_out:4000,cost:0.0214},rows:[
+  {run:'run_test',title:'Todo app',agent:'coder-1',endpoint:'router',paid:true,calls:2,tokens_in:12000,tokens_out:1500,cost:0.0214},
+  {run:'run_test',title:'Todo app',agent:'hermes',endpoint:'local',paid:false,calls:3,tokens_in:18000,tokens_out:2500,cost:0}]};
+ const h=await harness(s);await h.click('.nav [data-view="usage"]');await tick();
+ const text=h.document.getElementById('usage-report').textContent;
+ assert.match(text,/\$0\.0214/);assert.match(text,/of \$20\.00 monthly cap/);assert.match(text,/local · \$0/);assert.match(text,/paid/);
+ assert(h.calls.some(c=>c.url==='/api/usage?period=month'));
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

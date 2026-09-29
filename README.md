@@ -56,6 +56,12 @@ Hermes CLI and the OpenCode API without starting a model.
 - **Skills.** Give agents OpenCode skills from your own library or a pinned git
   commit. Every install is reviewed and approved by you, installed per agent,
   logged, and removable.
+- **Specialists.** Hermes can add a tester (only test changes merge), a
+  read-only reviewer, or a web researcher (each question needs your typed
+  approval) when the work needs one.
+- **Optional paid models.** Pick a paid model per run and role, with a
+  typed confirmation and a spend cap enforced at the gateway; a Usage page
+  reports tokens and spend. Nothing requires a paid provider.
 - **Mission control.** A home view with a live card per agent (state, task,
   output, tokens, requests waiting), the task graph and the model queue; open
   any agent for its own filtered view. Phones get a bottom tab bar.

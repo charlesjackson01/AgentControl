@@ -49,8 +49,13 @@ def _v5(c):
         CREATE TABLE IF NOT EXISTS trusted_skills (hash TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT, approved TEXT NOT NULL);''')
 
 
+def _v6(c):
+    """Usage by period (M12 cost reporting and the monthly spend cap)."""
+    c.execute('CREATE INDEX IF NOT EXISTS usage_created ON usage(created)')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5]
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6]
 USAGE_FIELDS = ('run', 'agent', 'source', 'endpoint', 'model', 'tokens_in', 'tokens_out', 'duration_ms', 'queued_ms', 'status', 'cost', 'ref')
 GENESIS = '0' * 64
 
@@ -230,6 +235,28 @@ class Store:
         total = {k: sum(a[k] for a in by_agent.values()) for k in keys}
         total['cost'] = round(total['cost'], 6)
         return {'total': total, 'by_agent': by_agent}
+
+    def usage_period(self, since=None):
+        """Usage since a timestamp (or ever), by run, agent and endpoint, for the cost report."""
+        where, args = (' WHERE created >= ?', (since,)) if since else ('', ())
+        with self.connection() as c:
+            rows = c.execute('SELECT run, agent, endpoint, COUNT(*), COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0),'
+                             ' COALESCE(SUM(cost),0), MIN(created), MAX(created) FROM usage' + where
+                             + ' GROUP BY run, agent, endpoint ORDER BY MAX(created) DESC', args).fetchall()
+        keys = ('run', 'agent', 'endpoint', 'calls', 'tokens_in', 'tokens_out', 'cost', 'first', 'last')
+        return [dict(zip(keys, r)) for r in rows]
+
+    def spend(self, run=None, since=None):
+        """Money spent on paid calls, for one run and/or since a timestamp."""
+        clauses, args = ['cost > 0'], []
+        if run:
+            clauses.append('run = ?')
+            args.append(run)
+        if since:
+            clauses.append('created >= ?')
+            args.append(since)
+        with self.connection() as c:
+            return round(c.execute('SELECT COALESCE(SUM(cost),0) FROM usage WHERE ' + ' AND '.join(clauses), args).fetchone()[0], 6)
 
     def put_capability(self, item):
         with self.connection() as c:

@@ -1,5 +1,6 @@
 """Bounded Hermes -> OpenCode controller. Python 3.10+, standard library only."""
 import contextlib
+from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
@@ -66,6 +67,7 @@ class Settings:
     research_turns: int = 8
     research_seconds: int = 600
     max_parallel_agents: int = None         # None = model slots + 1 (tools and tests overlap one generating agent)
+    hermes_provider: str = ''               # a provider in your Hermes config that points at AgentControl's gateway (M12)
 
 
 def review_packet(request, messages=()):
@@ -214,7 +216,7 @@ class Controller:
 
     def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None,
             allow_dirty=False, setup='', mode='single', team_size=planner.MAX_AGENTS,
-            isolation='host', cpus=4, memory_gb=8, network='setup', confirm=None):
+            isolation='host', cpus=4, memory_gb=8, network='setup', confirm=None, models=None, spend_cap=None):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
         title = self._title(title)
@@ -234,6 +236,7 @@ class Controller:
                 raise ValueError('Network must be setup, none, or internet')
             if network == 'internet' and str(confirm or '').strip().lower() != permissions.CONFIRM_WORD:
                 raise ValueError(f'Internet access while agents work is critical: type {permissions.CONFIRM_WORD} to confirm.')
+        model_choice, cap = self._check_models(models, spend_cap, confirm, isolation)
         if mode not in ('single', 'team', 'auto'):
             raise ValueError('Mode must be single, team, or auto')
         if mode in ('team', 'auto') and (type(team_size) is not int or not 2 <= team_size <= planner.MAX_AGENTS):
@@ -278,6 +281,7 @@ class Controller:
                    'parent_run': parent_run or None, 'title': title, 'preview': preview,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
                    'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto, 'isolation': isolation,
+                   'models': model_choice, 'spend_cap': cap,
                    'container': self._container_record(ident, cpus, memory_gb, network) if isolation == 'container' else None,
                    'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': [],
                             'auto': bool(auto)} if mode == 'team' else None}
@@ -287,6 +291,8 @@ class Controller:
             for agent in agent_registry.default_agents(run, self.s.profile):
                 self.store.put_agent(agent)
             self.store.event(ident, 'goal', goal)
+            if model_choice:
+                self.store.audit_append(ident, {'action': 'models chosen', 'actor': HUMAN, 'models': model_choice, 'spend_cap': cap})
             if isolation == 'container':
                 c = run['container']
                 self.store.audit_append(ident, {'action': 'container requested', 'actor': HUMAN, 'runtime': c['runtime'], 'rootless': c['rootless'],
@@ -961,6 +967,7 @@ class Controller:
         self._prepare_workspace(ident)
         self._prepare_container(ident)
         run = self.store.get('runs', ident)
+        self._hermes_routes(run)
         self._api(run).health()
         if not run['session']:
             session = self._api(run).request('/session', 'POST', {'title': 'AgentControl ' + ident}, **self._oc(run))
@@ -1411,6 +1418,136 @@ class Controller:
             if run['status'] != status or run['summary'] != working:
                 self.store.update('runs', ident, status=status, phase='code', summary=working)
             time.sleep(min(self.s.poll, 1.0))
+
+    # ---- models per role and spend (M12) ------------------------------------------
+    MODEL_ROLES = ('orchestrator', 'coder', 'tester', 'reviewer', 'researcher')
+
+    def model_options(self, isolation='host'):
+        """Which endpoints each role may use in a new run, and why a choice is unavailable."""
+        endpoints = [e for e in self.broker.endpoints if e['id'] != self.broker.registry.get('default')]
+        gateway_on = bool(self.gateway_info)
+        reasons = {}
+        for role in self.MODEL_ROLES:
+            runtime = agent_registry.TYPES[role].runtime
+            if runtime == 'hermes-cli':
+                reasons[role] = ('' if self.s.hermes_provider and gateway_on else
+                                 'Hermes reaches other models only through the gateway: start with --gateway-port and --hermes-provider (see the README).')
+            else:
+                reasons[role] = ('' if isolation == 'container' or gateway_on else
+                                 'OpenCode on this machine reaches other models only through the gateway: start with --gateway-port and add the agentcontrol provider (see the README), or use a container.')
+        return {'endpoints': [{k: e[k] for k in ('id', 'model', 'paid', 'cost_per_mtok_in', 'cost_per_mtok_out')} for e in endpoints],
+                'default': self.broker.registry.get('default'), 'unavailable': reasons,
+                'monthly_cap': self.broker.registry.get('monthly_cap')}
+
+    def _check_models(self, models, spend_cap, confirm, isolation):
+        """Your per-role model choice for a new run. Anything paid needs a spend cap and the typed confirmation."""
+        if not models:
+            return {}, None
+        if not isinstance(models, dict):
+            raise ValueError('Models must map roles to endpoint ids')
+        options = self.model_options(isolation)
+        ids = {e['id']: e for e in options['endpoints']}
+        choice = {}
+        for role, endpoint in models.items():
+            if endpoint in (None, '', options['default']):
+                continue
+            if role not in self.MODEL_ROLES:
+                raise ValueError(f'Unknown role {role!r}')
+            if endpoint not in ids:
+                raise ValueError(f'Unknown model endpoint {endpoint!r}')
+            if options['unavailable'][role]:
+                raise ValueError(options['unavailable'][role])
+            choice[role] = endpoint
+        paid = [r for r, e in choice.items() if ids[e]['paid']]
+        cap = None
+        if paid:
+            if type(spend_cap) not in (int, float) or not 0.01 <= spend_cap <= 1000:
+                raise ValueError('A paid model needs a spend cap for this run, from $0.01 to $1,000')
+            if str(confirm or '').strip().lower() != permissions.CONFIRM_WORD:
+                raise ValueError(f'Paid models send your prompts and code to an outside provider and cost money: type {permissions.CONFIRM_WORD} to confirm.')
+            cap = round(float(spend_cap), 2)
+        return choice, cap
+
+    def set_models(self, ident, models=None, spend_cap=None, confirm=None):
+        """Change a run's model choice or cap (for example after the cap paused it). Going back to your
+        local model is always allowed; more paid use needs the typed confirmation again."""
+        with self.lock:
+            run = self.store.get('runs', ident)
+            if run['status'] in TERMINAL:
+                raise ValueError('This run has ended.')
+            current = dict(run.get('models') or {})
+            wanted = {**current, **(models or {})}
+            ids = {e['id']: e for e in self.broker.endpoints}
+            more_paid = any(ids.get(e, {}).get('paid') and current.get(r) != e for r, e in wanted.items()) or \
+                (spend_cap is not None and (run.get('spend_cap') or 0) < spend_cap)
+            if more_paid:
+                choice, cap = self._check_models(wanted, spend_cap if spend_cap is not None else run.get('spend_cap'), confirm, run.get('isolation', 'host'))
+            else:
+                choice = {r: e for r, e in wanted.items() if e and e != self.broker.registry.get('default')}
+                cap = run.get('spend_cap') if any(ids.get(e, {}).get('paid') for e in choice.values()) else None
+            self.store.update('runs', ident, models=choice, spend_cap=cap)
+            self._hermes_routes(self.store.get('runs', ident))
+            self.store.audit_append(ident, {'action': 'models changed', 'actor': HUMAN, 'models': choice, 'spend_cap': cap})
+            self.store.event(ident, 'control', f"Models: {choice or 'your local model for every role'}" + (f'; cap ${cap:.2f}' if cap else ''))
+            return self.store.get('runs', ident)
+
+    def spend_status(self, run=None):
+        month = datetime.now(timezone.utc).strftime('%Y-%m-01T00:00:00')
+        return {'run': self.store.spend(run['id']) if run else 0.0, 'cap': (run or {}).get('spend_cap'),
+                'month': self.store.spend(since=month), 'monthly_cap': self.broker.registry.get('monthly_cap')}
+
+    def authorize_paid(self, run_id, agent, endpoint):
+        """The gateway asks before every paid call. '' allows it; otherwise the reason, and the run pauses."""
+        if not run_id:
+            return 'Paid models are used only inside a run that allows them.'
+        run = self.store.get('runs', run_id)
+        if endpoint['id'] not in (run.get('models') or {}).values():
+            return f"This run did not allow {endpoint['id']}. Choose it for a role in New run (or on the run page)."
+        spent, status = self.store.spend(run_id), self.spend_status(run)
+        reason = ''
+        if run.get('spend_cap') is not None and spent >= run['spend_cap']:
+            reason = f"Spend cap reached (${spent:.4f} of ${run['spend_cap']:.2f})."
+        elif status['monthly_cap'] is not None and status['month'] >= status['monthly_cap']:
+            reason = f"Monthly spend cap reached (${status['month']:.4f} of ${status['monthly_cap']:.2f})."
+        if reason:
+            with self.lock:
+                if not self.store.get('runs', run_id)['pause']:
+                    self.store.update('runs', run_id, pause=True, summary=reason + ' Raise the cap or switch the role to your local model, then Resume.')
+                    self.store.event(run_id, 'spend cap', reason)
+                    self.store.audit_append(run_id, {'action': 'paid call refused', 'actor': 'AgentControl', 'reason': reason, 'endpoint': endpoint['id']})
+                    self._push(run_id, reason)
+        return reason
+
+    def usage_report(self, period='month'):
+        """Calls, tokens and spend by run, agent and endpoint, for this month or all time."""
+        since = datetime.now(timezone.utc).strftime('%Y-%m-01T00:00:00') if period == 'month' else None
+        rows = self.store.usage_period(since)
+        paid = {e['id'] for e in self.broker.endpoints if e['paid']}
+        titles = {r['id']: r.get('title') or r['goal'][:80] for r in self.store.runs()}
+        for row in rows:
+            row['paid'] = row['endpoint'] in paid or row['cost'] > 0
+            row['title'] = titles.get(row['run'], '')
+            row['cost'] = round(row['cost'], 6)
+        total = {k: sum(r[k] for r in rows) for k in ('calls', 'tokens_in', 'tokens_out')}
+        total['cost'] = round(sum(r['cost'] for r in rows), 6)
+        return {'period': 'month' if since else 'all', 'since': since, 'rows': rows[:500], 'total': total,
+                'monthly_cap': self.broker.registry.get('monthly_cap')}
+
+    def _route_for(self, run, role):
+        """The endpoint id a role uses in this run, or None for the default (your local model)."""
+        return (run.get('models') or {}).get(role)
+
+    def _hermes_routes(self, run):
+        routes = {}
+        for role in ('orchestrator', 'researcher'):
+            endpoint = self._route_for(run, role)
+            if endpoint and self.s.hermes_provider:
+                routes[role] = ['--provider', self.s.hermes_provider, '-m', endpoint]
+        if hasattr(self.manager, 'routes') or routes:
+            try:
+                self.manager.routes = routes
+            except AttributeError:
+                pass
 
     # ---- specialists (M12) -----------------------------------------------------
     def role_status(self):
@@ -2009,9 +2146,10 @@ class Controller:
         sockets.mkdir(parents=True, exist_ok=True)
         endpoint = self.broker.endpoint()
         config = base / 'opencode.json'
-        config.write_text(json.dumps(sandbox.opencode_config(endpoint.get('model') or 'local-model', sandbox.host_permission()), indent=2))
+        config.write_text(json.dumps(sandbox.opencode_config(endpoint.get('model') or 'local-model', sandbox.host_permission(),
+                                                             extra_models=[e['id'] for e in self.broker.endpoints]), indent=2))
         if ident not in self.run_gateways:
-            server = gateway.serve_unix(self.broker, self.store.usage_add, ident, str(sockets / 'model.sock'))
+            server = gateway.serve_unix(self.broker, self.store.usage_add, ident, str(sockets / 'model.sock'), authorize=lambda r, a, e: self.authorize_paid(r, a, e))
             threading.Thread(target=server.serve_forever, daemon=True).start()
             self.run_gateways[ident] = server
         box = self.sandbox_factory(c['runtime'])
@@ -2205,6 +2343,11 @@ class Controller:
             self.store.update('runs', ident, status='coding', phase='code', summary=step['title'])
             self.store.event(ident, 'OpenCode prompt', {'step': step['number'], 'message_id': step['message_id'], 'text': step['prompt']})
             payload = {'messageID': step['message_id'], 'parts': [{'type': 'text', 'text': step['prompt']}]}
+            endpoint = self._route_for(run, step.get('role') or agent_registry.role_of(step.get('agent')))
+            if endpoint:
+                # M12 spike: OpenCode honours a per-prompt model. The agentcontrol provider is the gateway,
+                # which sends this model id to that endpoint and enforces the run's spend cap.
+                payload['model'] = {'providerID': 'agentcontrol', 'modelID': endpoint}
             if agent_registry.type_of(step.get('agent')).edits == 'none':
                 # M12 spike: OpenCode withholds tools switched off per prompt, so the reviewer is never offered them.
                 payload['tools'] = {name: False for name in agent_registry.CHANGE_TOOLS}
@@ -2386,6 +2529,8 @@ class Controller:
                 'preview': self.preview.status(),
                 'agent_types': agent_registry.types(),
                 'roles': self.role_status(),
+                'spend': self.spend_status(run),
+                'model_options': self.model_options(),
                 'research_requests': self.research_requests(),
                 'permissions': {'policy': permissions.POLICY, 'levels': permissions.LEVELS, 'labels': permissions.LABELS,
                                 'confirm_word': permissions.CONFIRM_WORD},

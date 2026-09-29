@@ -50,7 +50,8 @@ def _endpoint(raw, fallback_id):
         raise RegistryError(f'Endpoint {ident}: costs must be zero or positive numbers')
     return {'id': ident, 'url': url, 'model': str(raw.get('model') or ''), 'api_key_ref': str(raw.get('api_key_ref') or ''),
             'slots': slots, 'timeout_ms': int(raw.get('timeout_ms') or 600000),
-            'paid': bool(raw.get('paid', False)), 'cost_per_mtok_in': float(costs[0]), 'cost_per_mtok_out': float(costs[1])}
+            'paid': bool(raw.get('paid', False)), 'cost_per_mtok_in': float(costs[0]), 'cost_per_mtok_out': float(costs[1]),
+            'report_cost': bool(raw.get('report_cost', False))}
 
 
 def parse_registry(data):
@@ -72,14 +73,17 @@ def parse_registry(data):
         raise RegistryError(f'Default endpoint {default!r} is not in the list')
     if default and next(e for e in endpoints if e['id'] == default)['paid']:
         raise RegistryError('The default endpoint must not be a paid provider. Pick a local model as the default.')
-    return {'default': default, 'endpoints': endpoints}
+    cap = data.get('monthly_cap')
+    if cap is not None and (not isinstance(cap, (int, float)) or isinstance(cap, bool) or cap < 0):
+        raise RegistryError('monthly_cap must be a positive number of dollars (or left out)')
+    return {'default': default, 'endpoints': endpoints, 'monthly_cap': float(cap) if cap is not None else None}
 
 
 def load_registry(path):
     """The registry at `path`, or an empty one (all model features off) if the file is absent."""
     path = Path(path).expanduser() if path else None
     if not path or not path.exists():
-        return {'default': None, 'endpoints': [], 'source': str(path) if path else None}
+        return {'default': None, 'endpoints': [], 'monthly_cap': None, 'source': str(path) if path else None}
     try:
         data = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
@@ -224,7 +228,7 @@ class Broker:
         with self.lock:
             for e in self.endpoints:
                 queue = [t for _, _, t in sorted(self.waiting[e['id']])]
-                result.append({**{k: e[k] for k in ('id', 'url', 'model', 'slots', 'paid')},
+                result.append({**{k: e[k] for k in ('id', 'url', 'model', 'slots', 'paid', 'cost_per_mtok_in', 'cost_per_mtok_out')},
                                'has_key': bool(e['api_key_ref']), 'default': e['id'] == self.registry.get('default'),
                                'health': self.health_cache.get(e['id']),
                                'in_flight': [{'agent': t['agent'], 'since': t['started']} for t in self.active[e['id']].values()],

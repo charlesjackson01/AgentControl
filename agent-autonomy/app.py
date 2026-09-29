@@ -70,6 +70,9 @@ def handler(controller, key):
                 return self.reply(200, {k: info[k] for k in ('is_repo', 'usable', 'reason', 'branch', 'subdir')} |
                                   {'changes': info['changes'][:50], 'untracked': info['untracked'][:50],
                                    'dirty_count': len(info['changes']) + len(info['untracked'])})
+            if path.path == '/api/usage':
+                period = (urllib.parse.parse_qs(path.query).get('period') or ['month'])[0]
+                return self.reply(200, controller.usage_report(period))
             if path.path == '/api/sandbox':
                 if urllib.parse.parse_qs(path.query).get('check'):
                     controller.sandbox_info(refresh=True)
@@ -174,7 +177,8 @@ def handler(controller, key):
                                          allow_dirty=body.get('allow_dirty') is True, setup=body.get('setup', ''),
                                          mode=body.get('mode', 'single'), **({'team_size': body['team_size']} if 'team_size' in body else {}),
                                          isolation=body.get('isolation', 'host'), cpus=body.get('cpus', 4), memory_gb=body.get('memory_gb', 8),
-                                         network=body.get('network', 'setup'), confirm=body.get('confirm'))
+                                         network=body.get('network', 'setup'), confirm=body.get('confirm'),
+                                         models=body.get('models'), spend_cap=body.get('spend_cap'))
                     return self.reply(201, {'id': run['id']})
                 if self.path == '/api/preview/ticket':
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})
@@ -195,6 +199,9 @@ def handler(controller, key):
                     verifier = str(body.get('verifier') or '')[:2000]
                     return self.reply(200, controller.auto_decision(str(body.get('goal', ''))[:12000], checks, verifier.split(),
                                                                     steps if type(steps) is int else 8))
+                if self.path == '/api/models/set':
+                    cap = body.get('spend_cap')
+                    return self.reply(200, controller.set_models(body['run'], body.get('models') or {}, cap, body.get('confirm', '')))
                 if self.path == '/api/research/decide':
                     return self.reply(200, controller.decide_research(body['run'], body['step'], body.get('action'),
                                                                       body.get('fingerprint', ''), body.get('confirm', '')))
@@ -283,6 +290,7 @@ def main():
     p.add_argument('--skills-library', type=Path, default=Path(os.environ.get('AGENTCONTROL_SKILLS', '~/agentcontrol/skills')),
                    help='Folder of skills you curate (each a folder with SKILL.md)')
     p.add_argument('--research-toolsets', default='', help='Hermes toolsets the researcher may use, comma-separated (see spikes/hermes_research_probe.py). Empty: no researcher')
+    p.add_argument('--hermes-provider', default='', help="A provider in your Hermes config.yaml whose base_url is this gateway; lets Hermes use a per-run model (see README)")
     p.add_argument('--max-parallel-agents', type=int, default=None, help='Agents that may work at once (default: model slots + 1)')
     p.add_argument('--container-runtime', choices=('podman', 'docker'), default=None, help='Container runtime for isolated runs (default: whichever is found)')
     p.add_argument('--allow-rootful-containers', action='store_true',
@@ -312,7 +320,7 @@ def main():
                  skills_library=a.skills_library, container_runtime=a.container_runtime,
                  allow_rootful_containers=a.allow_rootful_containers,
                  research_toolsets=tuple(t.strip() for t in a.research_toolsets.split(',') if t.strip()),
-                 max_parallel_agents=a.max_parallel_agents)
+                 max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider)
     if a.build_agent_image:
         return build_agent_image(a)
     controller = Controller(s)
@@ -343,7 +351,8 @@ def main():
     gateway_server = None
     if a.gateway_port:
         try:
-            gateway_server = gateway.serve(controller.broker, controller.store.usage_add, lambda: active_run(controller), a.gateway_port)
+            gateway_server = gateway.serve(controller.broker, controller.store.usage_add, lambda: active_run(controller), a.gateway_port,
+                                           authorize=controller.authorize_paid)
             controller.gateway_info = {'port': gateway_server.server_port, 'url': f'http://127.0.0.1:{gateway_server.server_port}/agent/<name>/v1'}
             threading.Thread(target=gateway_server.serve_forever, daemon=True).start()
         except OSError as exc:

@@ -103,9 +103,10 @@ def sockets_dir(data, run_id):
     return Path('/tmp') / f'agentcontrol-{os.getuid()}' / run_id
 
 
-def opencode_config(model, permission=None):
+def opencode_config(model, permission=None, extra_models=()):
     """OpenCode inside the container: our relay as its only model provider, and your host
-    permission rules (or 'ask' for everything that changes things). Never more than your host allows."""
+    permission rules (or 'ask' for everything that changes things). Never more than your host allows.
+    `extra_models` are endpoint ids a run may pick per role (M12); the gateway routes them and enforces caps."""
     rules = dict(DEFAULT_PERMISSION)
     if isinstance(permission, dict):
         rules.update(permission)
@@ -113,7 +114,7 @@ def opencode_config(model, permission=None):
         rules = permission
     return {'provider': {'agentcontrol': {'npm': '@ai-sdk/openai-compatible', 'name': 'AgentControl',
                                           'options': {'baseURL': f'http://127.0.0.1:{MODEL_PORT}/agent/opencode/v1', 'apiKey': 'none'},
-                                          'models': {model: {'name': model, 'tool_call': True}}}},
+                                          'models': {m: {'name': m, 'tool_call': True} for m in [model, *extra_models]}}},
             'model': f'agentcontrol/{model}', 'small_model': f'agentcontrol/{model}', 'permission': rules,
             'autoupdate': False, 'share': 'disabled'}
 

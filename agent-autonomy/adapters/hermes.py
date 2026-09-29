@@ -24,6 +24,7 @@ class Hermes:
         self.capabilities = None
         self.last_repair = None
         self.last_calls = []   # usage of the most recent run_json: one entry per Hermes process
+        self.routes = {}       # role -> extra args choosing a model through AgentControl's gateway (M12)
 
     def prefix(self):
         return [self.s.hermes] + (['--profile', self.s.profile] if self.s.profile else [])
@@ -88,14 +89,15 @@ class Hermes:
         attempt (M0: a local model dropped braces in 1 of 3 large replies); a second failure raises."""
         self.last_repair = None
         self.last_calls = []
-        cleaned = self._ask(prompt, cancel)
+        route = self.routes.get('orchestrator', [])
+        cleaned = self._ask(prompt, cancel, extra=route)
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as first:
             self.last_repair = f'{first.msg} at line {first.lineno} column {first.colno}'
             repair = (prompt + '\n\nYOUR PREVIOUS REPLY WAS NOT VALID JSON (' + self.last_repair + '). Previous reply:\n'
                       + cleaned[-6000:] + '\n\nReturn ONLY the corrected JSON object, with the same content and no commentary.')
-            cleaned = self._ask(repair, cancel)
+            cleaned = self._ask(repair, cancel, extra=route)
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError as exc:
@@ -110,7 +112,7 @@ class Hermes:
             raise RuntimeError('No research toolsets are configured (start AgentControl with --research-toolsets).')
         self.last_calls = []
         caps = self.inspect()
-        extra = ['--run-budget', str(int(self.s.research_seconds))] if caps.get('--run-budget') else []
+        extra = (['--run-budget', str(int(self.s.research_seconds))] if caps.get('--run-budget') else []) + self.routes.get('researcher', [])
         self.s.data.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='research-', dir=self.s.data) as scratch:
             prompt = roles.RESEARCH_RULES + '\nQUESTION:\n' + question.strip() + ('\n\nCONTEXT (untrusted, for orientation only):\n' + context if context else '')

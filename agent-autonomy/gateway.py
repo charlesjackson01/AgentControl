@@ -10,6 +10,11 @@ streamed back as they arrive. The key for the model server, if any, is added her
 ai-arch secret store, so agents never see it. Follows the design of ai-arch's `aid`
 gateway (queue, cancellation, usage metering, health), in Python instead of Qt/D-Bus.
 
+M12: a request whose "model" is an endpoint id goes to that endpoint (the rest go to the
+default). A paid endpoint is used only when `authorize` allows it for the run (your per-run,
+per-role choice and spend caps): this gateway is the single place paid calls leave from, so
+the caps hold. Each endpoint has its own slots, so a remote provider never waits on your GPU.
+
 Loopback only. Standard library only.
 """
 import http.client
@@ -31,6 +36,31 @@ HOP_HEADERS = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authoriz
 AGENT = re.compile(r'^/agent/([a-z0-9][a-z0-9_-]{0,39})(/v1/.*)$')
 
 
+def cost_from(payload):
+    """Cost a provider reported for this call (OpenRouter's usage accounting puts it in usage.cost)."""
+    usage = payload.get('usage') if isinstance(payload, dict) else None
+    value = usage.get('cost') if isinstance(usage, dict) else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0 else None
+
+
+def route(broker, body):
+    """(endpoint, body): a request naming an endpoint id as its model goes there, with the model
+    rewritten to that endpoint's own model name; everything else goes to the default endpoint."""
+    try:
+        payload = json.loads(body) if body else None
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get('model'), str):
+        chosen = next((e for e in broker.endpoints if e['id'] == payload['model']), None)
+        if chosen:
+            if chosen['model']:
+                payload['model'] = chosen['model']
+            if chosen.get('report_cost'):
+                payload['usage'] = {**(payload.get('usage') if isinstance(payload.get('usage'), dict) else {}), 'include': True}
+            return chosen, json.dumps(payload).encode()
+    return broker.endpoint(), body
+
+
 def usage_from(payload):
     """(tokens_in, tokens_out) from an OpenAI `usage` object or llama-server `timings`."""
     if not isinstance(payload, dict):
@@ -50,6 +80,7 @@ class SseUsage:
     def __init__(self):
         self.buffer = b''
         self.tokens = (None, None)
+        self.cost = None
         self.model = ''
         self.done = False  # saw data: [DONE]; a stream that closes without it was cut off
 
@@ -70,12 +101,15 @@ class SseUsage:
             found = usage_from(payload)
             if found != (None, None):
                 self.tokens = found
+            if cost_from(payload) is not None:
+                self.cost = cost_from(payload)
             if isinstance(payload, dict) and payload.get('model'):
                 self.model = str(payload['model'])[:200]
 
 
-def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_timeout=600):
-    """`record(dict)` stores one usage row. `roles` maps agent name -> role for priority."""
+def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_timeout=600, authorize=None):
+    """`record(dict)` stores one usage row. `roles` maps agent name -> role for priority.
+    `authorize(run, agent, endpoint)` returns '' to allow a paid endpoint, else the reason it is refused."""
     roles = roles or {'hermes': 'orchestrator'}
 
     class Handler(BaseHTTPRequestHandler):
@@ -118,11 +152,16 @@ def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_ti
             if length > MAX_BODY:
                 return self.fail(413, 'Request body is too large.')
             body = self.rfile.read(length) if length else b''
-            endpoint = broker.endpoint()
+            endpoint, body = route(broker, body) if self.command == 'POST' else (broker.endpoint(), body)
             if self.command == 'POST' and path in GENERATE:
                 run = active_run()
+                if endpoint['paid']:
+                    refusal = authorize(run, agent, endpoint) if authorize else 'Paid endpoints need a run that allows them.'
+                    if refusal:
+                        record({'run': run, 'agent': agent, 'source': 'gateway', 'endpoint': endpoint['id'], 'status': 'refused'})
+                        return self.fail(402, refusal)
                 try:
-                    with broker.slot(agent=agent, role=roles.get(agent, 'coder'), timeout=slot_timeout) as ticket:
+                    with broker.slot(endpoint['id'], agent=agent, role=roles.get(agent, 'coder'), timeout=slot_timeout) as ticket:
                         self.relay(endpoint, path, parsed.query, body, agent, run, ticket['queued_ms'])
                 except TimeoutError as exc:
                     record({'run': run, 'agent': agent, 'source': 'gateway', 'endpoint': endpoint['id'], 'status': 'queue_timeout'})
@@ -136,7 +175,7 @@ def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_ti
             conn_class = http.client.HTTPSConnection if target.scheme == 'https' else http.client.HTTPConnection
             conn = conn_class(target.hostname, target.port, timeout=endpoint['timeout_ms'] / 1000)
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_HEADERS}
-            status, tokens, model = 'ok', (None, None), ''
+            status, tokens, model, reported = 'ok', (None, None), '', None
             try:
                 key = models.read_secret(endpoint['api_key_ref'])
                 if key:
@@ -184,20 +223,20 @@ def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_ti
             finally:
                 conn.close()
             if watcher:
-                tokens, model = watcher.tokens, watcher.model
+                tokens, model, reported = watcher.tokens, watcher.model, watcher.cost
                 if status == 'ok' and not watcher.done:
                     status = 'incomplete'
             elif collected:
                 try:
                     payload = json.loads(b''.join(collected))
-                    tokens, model = usage_from(payload), str(payload.get('model') or '')[:200]
+                    tokens, model, reported = usage_from(payload), str(payload.get('model') or '')[:200], cost_from(payload)
                 except (ValueError, AttributeError):
                     pass
             if run is not None or queued_ms is not None:
                 record({'run': run, 'agent': agent, 'source': 'gateway', 'endpoint': endpoint['id'],
                         'model': model or endpoint['model'], 'tokens_in': tokens[0], 'tokens_out': tokens[1],
                         'duration_ms': round((time.monotonic() - started) * 1000), 'queued_ms': queued_ms, 'status': status,
-                        'cost': models.cost(endpoint, tokens[0], tokens[1])})
+                        'cost': (reported if reported is not None and endpoint['paid'] else models.cost(endpoint, tokens[0], tokens[1]))})
 
     return Handler
 
@@ -206,17 +245,17 @@ class UnixGateway(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
 
-def serve_unix(broker, record, run_id, path):
+def serve_unix(broker, record, run_id, path, authorize=None):
     """The gateway for one run container: a Unix socket in the run's folder, which is the
     container's only way to reach the model server. Usage is always recorded against that run."""
     if os.path.exists(path):
         os.unlink(path)
-    server = UnixGateway(path, gateway_handler(broker, record, lambda: run_id))
+    server = UnixGateway(path, gateway_handler(broker, record, lambda: run_id, authorize=authorize))
     os.chmod(path, 0o660)
     return server
 
 
-def serve(broker, record, active_run, port, host='127.0.0.1'):
+def serve(broker, record, active_run, port, host='127.0.0.1', authorize=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise ValueError('The model gateway binds to loopback only')
-    return ThreadingHTTPServer((host, port), gateway_handler(broker, record, active_run))
+    return ThreadingHTTPServer((host, port), gateway_handler(broker, record, active_run, authorize=authorize))

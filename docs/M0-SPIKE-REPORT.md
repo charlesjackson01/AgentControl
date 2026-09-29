@@ -11,9 +11,9 @@ Milestone M0 of `docs/MULTI-AGENT-PLAN.md`: integration housekeeping and measure
 | Does OpenCode serialize model requests across sessions? | **No.** 2 agents produced 2 overlapping model requests, so AgentControl's broker must enforce the llama-server slot limit | Same |
 | Are status and approvals scoped per worktree? | **Yes, and this is critical.** Without `?directory=`, a busy worktree agent looks idle, its approval is invisible, and replying returns 404 | Same |
 | Is KVM available? | **Yes**, after you enabled SVM: `kvm_amd` loaded, `/dev/kvm` present, `virt-host-validate` PASS | Your server (your output, 2026-09-29) |
-| How fast does an ai-arch VM boot under KVM? | **Pending**: run `kvm_boot_probe.py` | Your server |
-| How many agents can share llama-server at useful speed? | **Pending**: run `slots_bench.py` with `-np 1`, then `-np 2` | Your server |
-| Can Hermes on your local Qwen write a valid team proposal? | **Pending**: run `hermes_team_probe.py` | Your server |
+| How fast does an ai-arch VM boot under KVM? | **13.2 s to DHCP address and SSH banner.** TCG is documented at 30–60 s to network, and up to 2 min | Your server, 2026-09-29 |
+| How many agents can share llama-server at useful speed? | **One at a time with today's `-np 1`.** Aggregate output is flat at ~56 tok/s, so extra agents queue. About 3.6 GB of VRAM is free | Your server, 2026-09-29 |
+| Can Hermes on your local Qwen write a valid team proposal? | **2 of 3 valid, 27–58 s each.** The failure was a JSON syntax slip (missing `}`), not a bad plan | Your server, 2026-09-29 |
 
 ## 1. ai-arch merge
 
@@ -70,32 +70,37 @@ Findings from the VM definition that the probe works around:
 - **The CPU is pinned to a TCG-only feature list** (`EPYC` + 3dnow, la57, mpx, pcommit…). Under KVM on a 5950X this will not start. The probe uses `host-passthrough`. Updating ai-arch's own build pipeline for KVM is a separate, later ai-arch ADR, not an M0 change.
 - The domain type is `qemu` (TCG). ADR-0001 already says KVM is "one knob" (`type='kvm'`).
 
-Measure boot time without touching your VMs. It uses a throwaway overlay on a baseline image, then deletes it:
-```bash
-cd ~/AgentControl/agent-autonomy/spikes
-ls ~/AgentControl/ai-arch/vms/*.qcow2 ~/ai-arch/vms/*.qcow2 2>/dev/null     # find your baseline images
-python3 kvm_boot_probe.py --baseline <path>/ai-arch-baseline-with-theme.qcow2 --vm-dir <that same dir>   # dry run
-python3 kvm_boot_probe.py --baseline <path>/ai-arch-baseline-with-theme.qcow2 --vm-dir <that same dir> --run
+**Measured on your server:** a throwaway overlay of `ai-arch-baseline-with-tailscale.qcow2` (4 vCPU, 8 GiB) booted with `domain type="kvm"` and CPU `host-passthrough`.
+
+```json
+{"seconds_to_dhcp_address": 13.2, "seconds_to_ssh_banner": 13.2, "ssh_banner": "SSH-2.0-OpenSSH_10.5", "notes": [], "cleaned_up": true}
 ```
-It reports seconds to a DHCP address and to the SSH banner. ai-arch documents TCG at "30–60 s to network", and says never to call a TCG VM down before 2 minutes.
+
+The documented TCG figure is 30–60 s to network, and up to 2 min before a VM counts as down, so KVM is several times faster. Conclusions:
+- **The VM tier (M13) is practical.** Clone a baseline and boot it in about 13 s.
+- ai-arch was *copied* into AgentControl, not moved. `~/ai-arch/vms/` (which libvirt uses) and `~/AgentControl/ai-arch/vms/` both exist, so the lab VM's paths are intact.
+
+Re-run: `python3 kvm_boot_probe.py --baseline ~/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2 --vm-dir ~/ai-arch/vms --run`
 
 ## 4. Model slots (pending): the key hardware number
 
-With `-np 1` today, agents queue for the model. To test real parallelism:
-```bash
-cd ~/AgentControl/agent-autonomy/spikes
-python3 slots_bench.py --url http://127.0.0.1:8080 --concurrency 1 2 3 | tee np1.txt
-nvidia-smi --query-gpu=memory.used,memory.total --format=csv | tee -a np1.txt
-# then restart llama-server in its tmux session with two slots, keeping >=64K context each for Hermes:
-#   same flags as now, but  -np 2 -c 262144   (2 x 131072); if it runs out of VRAM, try -c 196608 (2 x 98304)
-python3 slots_bench.py --url http://127.0.0.1:8080 --concurrency 1 2 3 | tee np2.txt
-nvidia-smi --query-gpu=memory.used,memory.total --format=csv | tee -a np2.txt
-```
-Checked here against simulated 1-slot and 2-slot servers:
-- With 1 slot, aggregate throughput stays flat and each extra agent waits.
-- With 2 slots, it doubles for 2 agents.
+**Measured on your server** (`-np 1`, 131072 context per slot, model `Qwen3.8-27B-Uncensored-Q4_K_M`, 256 tokens per request):
 
-On the 3090, the real gain will be smaller because the slots share one GPU. That is exactly what this measures. Restore your usual flags afterwards if `-np 2` doesn't pay off.
+| Agents at once | Wall | Aggregate | Per request (tok/s) |
+|---|---|---|---|
+| 1 | 4.5 s | 56.9 tok/s | 56.9 |
+| 2 | 9.1 s | 56.2 tok/s | 55.1, 28.1 |
+| 3 | 13.8 s | 55.5 tok/s | 54.9, 18.5, 27.3 |
+
+VRAM: 20,932 / 24,576 MiB used (about 3.6 GB free).
+
+**Conclusions:**
+- Aggregate throughput is flat, so a second or third agent waits for the model; it doesn't run alongside.
+  - The model broker (M5) defaults to 1 concurrent model stream.
+  - Multi-agent mode helps only when agents spend time in tools, tests and verification rather than generation. Auto mode (M8) accounts for this.
+- `-np 2` was not tested. It would split the KV cache, and Hermes needs ≥64K context per slot, with only ~3.6 GB free. It stays optional.
+
+Re-run: `python3 slots_bench.py --url http://127.0.0.1:8080 --concurrency 1 2 3`
 
 ## 5. Hermes team proposals (pending)
 
@@ -103,17 +108,20 @@ On the 3090, the real gain will be smaller because the slots share one GPU. That
 cd ~/AgentControl/agent-autonomy/spikes
 python3 hermes_team_probe.py --profile ai-arch-dev --trials 3
 ```
-It uses the engine's exact Hermes invocation and validates:
-- the schema: mode, agents, tasks
-- that every task belongs to a known agent
-- that no dependency points at a missing task, and there are no cycles
+**Measured on your server:** 2 of 3 proposals valid, taking 26.7 s (invalid), 47.6 s and 57.5 s.
+- Both valid proposals chose `mode: single`, with one coder and 4–5 ordered tasks. The reason given was sound: "tightly sequential; one coder avoids coordination overhead and file conflicts". So Hermes's own mode judgment is usable for Auto mode.
+- The invalid proposal was a **JSON syntax slip**: the closing `}` was missing after each task object. The plan itself was fine.
+- Hermes's `stream-json` result includes token counts and `duration_ms`, which is free usage data for the model broker.
+- The first attempt failed only because llama-server was not running. Hermes then printed just a session ID after 5 minutes, which is why the broker (M5) must health-check the model server first.
 
-It executes nothing. With the fake Hermes here, the validator accepted a correct two-agent plan and rejected one with a dependency cycle. Your result tells us how much validation and retry the planner (M7) needs from a local 27B model.
+**Consequences:**
+- **M1 adds one bounded JSON-repair retry** to every Hermes call. Today a single malformed decision ends a whole run as failed.
+- M7 validates every proposal and keeps teams small.
 
 ## Tests after M0
 - `python3 -m unittest discover -s agent-autonomy/tests`: OK
 - `node agent-autonomy/tests/test_ui.cjs`: 25/25
 - Probes were exercised against a real `opencode serve`, simulated 1-slot and 2-slot servers, a fake Hermes, and the real `ai-arch-dev.xml`.
 
-## Next
-Paste the three pending outputs (KVM boot, slots, Hermes). Then M1 (the no-behavior-change refactor) starts. It will add the `?directory=`-aware OpenCode adapter from finding 2 above.
+## Status
+**M0 complete. Every question is answered with a measurement.** M1 (the no-behavior-change refactor) adds the `?directory=`-aware OpenCode adapter from §2 and the Hermes JSON-repair retry from §5.

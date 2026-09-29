@@ -178,7 +178,7 @@ agent-autonomy/
 | # | Milestone | Done when |
 |---|---|---|
 | **M0** | **Spikes + integration housekeeping** (no product features): merge `add-ai-arch` safely; OpenCode multi-session/per-directory spike; llama-server `-np 2` memory/throughput benchmark with ≥64K per slot; **confirm KVM after the SVM change and time a KVM boot of the ai-arch baseline VM** (vs TCG); check the Hermes CLI can emit a team-proposal JSON | A written spike report with measured numbers (including VM boot time on KVM); all existing tests green |
-| **M1** | **Refactor, no behavior change**: split `journal`, `adapters/`, `verify` out of `engine.py`; migrations; fix the `rowid` ordering bug | All 62 + 25 tests pass unchanged; screenshots identical |
+| **M1** | **Refactor, no behavior change** (plus two fixes the spikes justified): split `journal`, `adapters/`, `verify` out of `engine.py`; migrations; fix the `rowid` ordering bug; **a directory-aware OpenCode adapter** (M0 finding: status, approvals and replies need `?directory=`); **one bounded JSON-repair retry for Hermes calls** (M0: 1 in 3 malformed on large replies) | All 62 + 25 tests pass unchanged; new tests for directory scoping and JSON repair; screenshots identical |
 | **M2** | **Event bus + SSE** with polling fallback | Dashboard live over SSE; polling path still tested |
 | **M3** | **Agent identity in single mode**: registry, `agents` table, the single run shown as agent "coder-1" | Journal + API expose agents; no UX regression |
 | **M4** | **Permissions gate (R0–R3 + audit)**, ported from ai-arch SECURITY.md, used by the existing approvals | Permission matrix tests (deny unknown, never remember R3, audit on every decision) |
@@ -235,10 +235,80 @@ The ordering follows your instruction: architecture and integration (M0–M9) co
 - The Chromium screenshot and end-to-end harness (`tests/screenshots.cjs`, the preview end-to-end pattern) for UI milestones.
 - Live checks on your server where hardware matters: llama-server slots, KVM, Docker. I'll give you exact commands, since this cloud container has no GPU and no access to your host.
 
+## M0 findings so far (2026-09-29)
+- **Hermes works when llama-server is up.** `hermes --profile ai-arch-dev chat --quiet -q "…pong"` returned `pong` in 20 s, exit 0. The first probe failure was only because llama-server was stopped. **Lesson for M5:** the model broker must health-check the endpoint before dispatching and report "model server offline" clearly, instead of letting Hermes fail after minutes.
+- **Hermes CLI features relevant to later milestones** (from `hermes chat --help` on your server):
+  - `--in DIR` and `--worktree`: run a Hermes agent scoped to a directory or worktree (useful for research/browser agents in M12).
+  - `-s/--skills`: preload skills per session (a candidate provisioning path for M9 capabilities).
+  - `-t/--toolsets`: per-agent tool restriction (M4/M9 per-agent permissions).
+  - `-m/--model`, `--provider` (user-defined providers in config.yaml): per-agent model selection (M5/M12).
+  - `--run-budget SECONDS`, `--max-turns`: hard per-agent limits (M7).
+  - `--safe-mode`, `--ignore-user-config`: a reproducible and restricted agent profile.
+  - `--format stream-json`: structured events (M2 live activity).
+  - `--yolo` exists: AgentControl must **never** pass it (permission bypass).
+- **Team-proposal probe, measured on your server: 2 of 3 valid, 27–58 s each.**
+  - Both valid proposals chose `mode: single` with a sound reason ("tightly sequential; one coder avoids coordination overhead"). So Hermes's own mode judgment is usable for Auto mode (M8), alongside the rule-based checks.
+  - The invalid one was a **JSON syntax slip**: the model omitted the closing `}` after each task object. The plan content itself was fine.
+  - The Hermes `result` event includes `tokens` (input/output) and `duration_ms`. That is free usage data for the broker (M5).
+- **Consequences:**
+  - **M1 adds a bounded JSON-repair retry** for every Hermes call: at most one retry, feeding back the parse error ("return the corrected JSON only"). Today a single malformed Hermes decision fails the whole run (`_work` catches it and ends the run as failed). This fixes that existing fragility as well as the planner.
+  - **M7 keeps teams small by default** and validates every proposal: known agents, no dangling or circular dependencies. Evaluating llama-server's grammar-constrained JSON output for planning calls goes into M5, as an option only.
+- **Slots benchmark, measured on your server (`-np 1`, 131072 ctx, model `Qwen3.8-27B-Uncensored-Q4_K_M`):**
+
+  | Agents | Wall | Aggregate | Per request |
+  |---|---|---|---|
+  | 1 | 4.5 s | 56.9 tok/s | 56.9 |
+  | 2 | 9.1 s | 56.2 tok/s | 55.1 / 28.1 |
+  | 3 | 13.8 s | 55.5 tok/s | 54.9 / 18.5 / 27.3 |
+
+  - Aggregate throughput is flat, so extra agents strictly queue.
+  - VRAM is 20,932 / 24,576 MiB, so about 3.6 GB is free.
+  - **Consequences for M5/M7:**
+    - Default to **1 concurrent model stream**. Parallel agents only help when time goes to tools, tests and verification rather than generation.
+    - Auto mode must account for this: with one slot, multi-agent pays off only for tool-heavy or independent-verification work.
+    - `-np 2` is optional and untested; try it only if you want to measure it.
+- **VM files:** ai-arch was *copied*, not moved. Both `~/ai-arch/vms/` (which the libvirt definitions point to) and `~/AgentControl/ai-arch/vms/` exist, so the lab VM paths are intact.
+- **KVM boot probe, measured on your server:** a throwaway overlay of `ai-arch-baseline-with-tailscale.qcow2` booted with `domain type="kvm"`, CPU `host-passthrough`, 4 vCPU, 8 GiB. It had a **DHCP address and SSH banner (OpenSSH 10.5) at 13.2 s** and was cleaned up afterwards.
+  - The documented TCG figure is 30–60 s to network, and up to 2 min before a VM counts as down, so KVM is several times faster.
+  - **Consequence:** the VM tier (M13) is practical: cloning a baseline takes seconds and boot about 13 s.
+  - ai-arch's own domain XML still pins a TCG-only CPU model. Switching the ai-arch build pipeline to KVM is a separate ai-arch ADR, outside AgentControl's milestones.
+
+**M0 complete.** All five spike questions are answered with measurements.
+
+---
+
+## M1 execution plan (for approval)
+
+Goal: restructure `engine.py` for multi-agent work **without changing behavior**, plus the two fixes M0 justified.
+
+1. **Record M0 in the repo.** Fill the measured numbers into `docs/M0-SPIKE-REPORT.md` (Hermes 2/3 at 27–58 s, slots table, VRAM, KVM 13.2 s), and sync `docs/MULTI-AGENT-PLAN.md` with this plan file.
+2. **`journal.py`**: move `Store` out of `engine.py` unchanged, then:
+   - add a `schema_version` table and a migration runner (v1 = today's schema)
+   - fix run ordering: order by the `created` timestamp instead of `rowid`, so updating a run no longer reorders history
+3. **`adapters/opencode.py`**: move the `OpenCode` class.
+   - Add an optional `directory` per call. It is appended as `?directory=` to `prompt_async`, `/session/status`, `/permission`, `/question` and the replies, as M0 proved necessary.
+   - Single mode passes `None`, so today's requests are byte-identical.
+4. **`adapters/hermes.py`**: move the `Hermes` class and split it:
+   - a generic `run_json(prompt)`, the exact invocation plus the parsing now in `decide()`
+   - `decide()`, which keeps today's validation
+   - `run_json` gets **one bounded repair retry**: on a JSON parse failure, re-ask once with the parse error and "return only the corrected JSON". A second failure raises exactly as today.
+5. **`verify.py`**: move `snapshot`, `evidence`, `transcript` and the verifier call, unchanged.
+6. **`engine.py`** keeps `Controller` and imports the modules. Names `engine.X` stay re-exported, so `app.py`, the tests and the spikes are unaffected.
+
+**Verification:**
+- The full existing suites pass unmodified: 48 workflow + 14 preview Python tests, and 25 DOM tests.
+- New tests:
+  - OpenCode calls with `directory` hit the scoped URLs; without it they are unchanged (via FakeAPI/an HTTP capture).
+  - A malformed-then-valid Hermes reply succeeds with one retry; malformed twice fails as before.
+  - Run ordering is stable after updates.
+  - Migrations run on an existing v4/v5 journal file without data loss (a copy of a real schema).
+- The screenshot harness matrix is unchanged, with 0 warnings.
+- Commit per step; push to `claude/gifted-fermi-rcas2a`.
+
 ## Decisions needed from you (after approval)
 1. OK to merge `add-ai-arch` into the working branch as the `ai-arch/` subproject, dropping the old `dashboard.py` it carries?
 2. Willing to try restarting llama-server with `-np 2` (and a larger `-c`) for the M0 benchmark?
 3. ~~Enable SVM / confirm KVM~~ Done and confirmed (2026-09-29).
 4. For container isolation: are rootless Docker (or podman) acceptable? The alternative is limiting agents to process isolation.
 
-**Next step on approval:** execute **M0 only**, report the measured results, then check in before M1.
+**Status:** M0 complete (see `docs/M0-SPIKE-REPORT.md`). M1 approved and in progress.

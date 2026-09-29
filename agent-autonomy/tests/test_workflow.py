@@ -207,6 +207,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.api.prompts), 1)
         self.assertTrue(self.api.prompts[0]['parts'][0]['text'].startswith('NEW'))
 
+    def test_note_for_an_agent_reaches_hermes_not_the_agent(self):
+        c, manager = self.controller([coding('OLD'), coding('NEW'), complete()])
+        manager.hold = threading.Event()
+        run = c.new('A feature')
+        self.wait(lambda: len(manager.calls)==1)
+        with self.assertRaisesRegex(ValueError, 'no agent named coder-9'):
+            c.control(run['id'], 'instruction', 'Hi', 'coder-9')
+        c.control(run['id'], 'instruction', 'Keep the tests fast', 'coder-1')
+        note = c.store.get('runs', run['id'])['instructions'][-1]
+        self.assertEqual((note['agent'], note['text']), ('coder-1', 'Note for coder-1: Keep the tests fast'))
+        manager.hold.set()
+        self.assertEqual(self.done(c,run['id'])['status'], 'completed')
+        self.assertIn('Note for coder-1: Keep the tests fast', manager.calls[1])
+        self.assertNotIn('Keep the tests fast', self.api.prompts[0]['parts'][0]['text'], 'only Hermes decides what the agent is told')
+
     def test_stop_aborts_only_managed_session(self):
         self.api.hold=True
         c, _ = self.controller([coding()])

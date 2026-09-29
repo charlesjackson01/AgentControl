@@ -460,7 +460,7 @@ class Controller:
         thread.start()
         return self.store.get('runs', ident)
 
-    def control(self, ident, action, text=''):
+    def control(self, ident, action, text='', agent=None):
         if action == 'verify':
             return self._verify_now(ident)
         if action == 'apply':
@@ -497,9 +497,16 @@ class Controller:
             elif action == 'instruction':
                 if not isinstance(text, str) or not 1 <= len(text.strip()) <= 5000:
                     raise ValueError('Enter an instruction of 1–5,000 characters')
-                items = run['instructions'] + [{'time': now(), 'text': text.strip()}]
+                note = {'time': now(), 'text': text.strip()}
+                if agent is not None:
+                    # A note about one agent still goes to Hermes, which decides what that agent is told.
+                    known = [a['name'] for a in self.store.agents(ident) if a['type'] == 'coder']
+                    if agent not in known:
+                        raise ValueError(f'This run has no agent named {agent}')
+                    note = {**note, 'agent': agent, 'text': f'Note for {agent}: {text.strip()}'}
+                items = run['instructions'] + [note]
                 self.store.update('runs', ident, instructions=items)
-                self.store.event(ident, 'user instruction', text.strip())
+                self.store.event(ident, 'user instruction', note['text'])
             elif action == 'revoke_rule':
                 grants = run.get('grants', [])
                 target = next((g for g in grants if g['id'] == text and not g.get('revoked')), None)

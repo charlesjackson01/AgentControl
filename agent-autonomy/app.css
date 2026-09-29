@@ -4570,3 +4570,455 @@ kbd {
 .container-limits input {
   width:6em;
 }
+
+/* Mission control (M11) */
+.mission-head {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px 24px;
+  align-items:flex-start;
+  justify-content:space-between;
+  margin:0 0 20px;
+}
+
+.mission-title {
+  flex:1 1 420px;
+  min-width:0;
+}
+
+.mission-title h1 {
+  margin:4px 0 6px;
+  font-size:var(--ac-text-xl);
+  overflow-wrap:anywhere;
+}
+
+.mission-title .ac-status {
+  margin-right:6px;
+}
+
+.mission-actions {
+  gap:8px;
+  align-items:center;
+}
+
+.mission-grid {
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+  gap:16px;
+  margin:0 0 20px;
+}
+
+.agent-card {
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  min-width:0;
+  padding:14px 16px;
+  background:var(--ac-surface);
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius);
+  box-shadow:var(--ac-shadow-card);
+  cursor:pointer;
+}
+
+.agent-card:hover {
+  border-color:var(--ac-border-strong);
+}
+
+.agent-card.running {
+  border-color:var(--ac-accent);
+}
+
+.agent-card.attention {
+  border-color:var(--ac-warning);
+  box-shadow:0 0 0 1px var(--ac-warning);
+}
+
+.agent-card__head {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+
+.agent-card__name {
+  flex:1;
+  min-width:0;
+  display:grid;
+  text-align:left;
+  background:none;
+  border:0;
+  padding:0;
+  color:inherit;
+  font:inherit;
+  cursor:pointer;
+}
+
+.agent-card__name small {
+  color:var(--ac-text-muted);
+  font-size:var(--ac-text-xs);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.agent-card__name:focus-visible {
+  outline:2px solid var(--ac-focus);
+  outline-offset:3px;
+}
+
+.agent-card p {
+  margin:0;
+}
+
+.agent-card .agent-task {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.mission-tail {
+  margin:0;
+  min-height:7.5em;
+  max-height:9.5em;
+  overflow:hidden;
+  padding:8px 10px;
+  background:var(--ac-term-bg);
+  color:var(--ac-term-text);
+  border:1px solid var(--ac-term-border);
+  border-radius:var(--ac-radius-sm);
+  font-family:var(--ac-font-mono);
+  font-size:var(--ac-text-xs);
+  line-height:1.5;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+}
+
+.mission-tail .tool {
+  color:var(--ac-term-tool);
+}
+
+.mission-tail .tool.running {
+  color:var(--ac-term-warn);
+}
+
+.mission-tail .tool.error {
+  color:var(--ac-term-error);
+}
+
+.mission-tail .muted {
+  color:var(--ac-term-muted);
+}
+
+.mission-plan {
+  margin:0;
+  padding-left:20px;
+  color:var(--ac-text-muted);
+}
+
+.agent-card__foot {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px 12px;
+  align-items:center;
+  margin-top:auto;
+}
+
+.agent-where {
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px 10px;
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+
+.attention-button {
+  background:var(--ac-warning-soft);
+  color:var(--ac-warning-text);
+  border-color:var(--ac-warning);
+}
+
+.mission-row {
+  display:grid;
+  grid-template-columns:minmax(0,3fr) minmax(0,2fr);
+  gap:0 20px;
+}
+
+.task-graph {
+  display:flex;
+  gap:8px;
+  align-items:flex-start;
+  overflow-x:auto;
+  padding-bottom:6px;
+}
+
+.task-col {
+  display:grid;
+  gap:8px;
+  flex:1 0 170px;
+  max-width:260px;
+}
+
+.task-arrow {
+  align-self:center;
+  color:var(--ac-text-muted);
+}
+
+.task-node {
+  display:grid;
+  gap:2px;
+  text-align:left;
+  padding:8px 10px;
+  background:var(--ac-surface-2);
+  border:1px solid var(--ac-border);
+  border-left:4px solid var(--ac-border-strong);
+  border-radius:var(--ac-radius-sm);
+  color:inherit;
+  font:inherit;
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+
+button.task-node {
+  cursor:pointer;
+}
+
+.task-node.done {
+  border-left-color:var(--ac-success);
+}
+
+.task-node.running {
+  border-left-color:var(--ac-accent);
+}
+
+.task-node.failed,
+.task-node.blocked {
+  border-left-color:var(--ac-danger);
+}
+
+.turn-row {
+  display:flex;
+  gap:10px;
+  align-items:center;
+  width:100%;
+  text-align:left;
+  padding:8px 0;
+  background:none;
+  border:0;
+  border-bottom:1px solid var(--ac-border);
+  color:inherit;
+  font:inherit;
+  cursor:pointer;
+}
+
+.turn-row span:last-child {
+  display:grid;
+  min-width:0;
+}
+
+.mission-events {
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:grid;
+  gap:6px;
+}
+
+.mission-events li {
+  overflow-wrap:anywhere;
+}
+
+.mission-empty {
+  text-align:left;
+}
+
+.agent-head__id {
+  display:flex;
+  gap:12px;
+  align-items:flex-start;
+  margin:12px 0 6px;
+}
+
+.agent-head__id h2 {
+  margin:0 0 4px;
+  font-size:var(--ac-text-lg);
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px 10px;
+  align-items:center;
+}
+
+.agent-head__id p {
+  margin:0 0 4px;
+  overflow-wrap:anywhere;
+}
+
+.agent-head .agent-avatar {
+  width:36px;
+  height:36px;
+  font-size:var(--ac-text-sm);
+}
+
+.agent-switch {
+  gap:6px;
+}
+
+.agent-head p.small.muted {
+  margin:0;
+}
+
+/* Bottom tab bar: phones only */
+.tabbar {
+  display:none;
+}
+
+:root[data-theme=terminal] .agent-card {
+  border-radius:0;
+  box-shadow:none;
+  font-family:var(--ac-font-mono);
+}
+
+:root[data-theme=terminal] .mission-tail {
+  border-radius:0;
+}
+
+:root[data-theme=terminal] .task-node {
+  border-radius:0;
+  font-family:var(--ac-font-mono);
+}
+
+:root[data-theme=xp] .agent-card {
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-xp-taskpane-body);
+  box-shadow:none;
+}
+
+:root[data-theme=xp] .agent-card__head {
+  margin:-14px -16px 0;
+  padding:8px 12px;
+  background:var(--ac-xp-taskpane-header);
+  border-radius:var(--ac-radius-sm) var(--ac-radius-sm) 0 0;
+}
+
+:root[data-theme=xp] .agent-card__name strong {
+  color:var(--ac-xp-taskpane-title);
+}
+
+@media(max-width:1099px) {
+  .mission-row {
+    grid-template-columns:minmax(0,1fr);
+  }
+}
+
+@media(max-width:699px) {
+  .mission-grid {
+    grid-template-columns:minmax(0,1fr);
+    gap:12px;
+  }
+  .mission-actions {
+    width:100%;
+  }
+  .mission-actions .ac-btn {
+    flex:1 1 auto;
+    justify-content:center;
+  }
+  .tabbar,
+  :root[data-theme=terminal] .tabbar,
+  :root[data-theme=xp] .tabbar {
+    display:grid;
+    grid-template-columns:repeat(5,minmax(0,1fr));
+    position:fixed;
+    left:0;
+    right:0;
+    bottom:0;
+    z-index:60;
+    padding:4px 4px calc(4px + env(safe-area-inset-bottom));
+    background:var(--ac-toolbar-bg);
+    border-top:1px solid var(--ac-border-strong);
+  }
+  .tabbar button {
+    position:relative;
+    display:grid;
+    justify-items:center;
+    gap:2px;
+    min-height:48px;
+    padding:4px 2px;
+    background:none;
+    border:0;
+    border-radius:var(--ac-radius-sm);
+    color:var(--ac-text-muted);
+    font:inherit;
+    font-size:var(--ac-text-xs);
+  }
+  .tabbar button.active {
+    color:var(--ac-accent);
+    font-weight:600;
+  }
+  .tabbar .icon {
+    width:20px;
+    height:20px;
+  }
+  .tabbar .badge {
+    position:absolute;
+    top:2px;
+    left:calc(50% + 6px);
+    margin:0;
+  }
+  :root[data-theme=terminal] .tabbar {
+    background:var(--ac-term-bg);
+    border-top-color:var(--ac-term-border);
+  }
+  :root[data-theme=terminal] .tabbar button {
+    color:var(--ac-term-muted);
+    font-family:var(--ac-font-mono);
+    border-radius:0;
+  }
+  :root[data-theme=terminal] .tabbar button.active {
+    color:var(--ac-term-prompt);
+  }
+  :root[data-theme=xp] .tabbar {
+    background:var(--ac-xp-taskbar);
+    border-top:0;
+  }
+  :root[data-theme=xp] .tabbar button,
+  :root[data-theme=xp] .tabbar button.active {
+    color:var(--ac-chrome-text);
+  }
+  :root[data-theme=xp] .tabbar button.active {
+    background:var(--ac-xp-tray);
+  }
+  /* The tab bar takes over the bottom edge from the shortcut bar and the XP taskbar. */
+  :root[data-theme=terminal] .terminal-keybar,
+  :root[data-theme=xp] .xp-taskbar,
+  :root[data-theme=xp] .window-status {
+    display:none;
+  }
+  .workspace,
+  :root[data-theme=terminal] .workspace,
+  :root[data-theme=xp] .workspace {
+    padding-bottom:calc(84px + env(safe-area-inset-bottom));
+  }
+  .toast,
+  :root[data-theme=terminal] .toast,
+  :root[data-theme=xp] .toast {
+    bottom:calc(72px + env(safe-area-inset-bottom));
+  }
+  :root[data-theme=xp] .xp-notification {
+    bottom:calc(72px + env(safe-area-inset-bottom));
+  }
+  .agent-head .row.between {
+    gap:8px;
+  }
+  .task-graph {
+    flex-direction:column;
+    align-items:stretch;
+    overflow-x:visible;
+  }
+  .task-col {
+    flex:none;
+    max-width:none;
+  }
+  .task-arrow {
+    transform:rotate(90deg);
+  }
+}

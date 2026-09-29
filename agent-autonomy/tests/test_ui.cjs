@@ -20,6 +20,7 @@ async function harness(state=fixture(),savedTheme='mac') {
  // Select value is read-only in linkedom, unlike browsers.
  for(const s of document.querySelectorAll('select'))Object.defineProperty(s,'value',{value:s.querySelector('option')?.value || '',writable:true});
  const storage=new Map([['ac-theme',savedTheme]]),calls=[],intervals=[];
+ if(state.savedView)storage.set('ac-view',state.savedView);
  const context=vm.createContext({TextDecoder,TextEncoder,AbortController,location:{protocol:'http:',hostname:'100.1.2.3'},document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
   sessionStorage:{getItem:()=> 'test-dashboard-key',setItem:()=>{}},
   localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
@@ -688,5 +689,87 @@ test('container panel shows limits and network state, and stops or starts the co
  assert.match(panel(),/Removed/);assert(!h.document.querySelector('[data-action="container-start"]'));
  h=await harness();
  assert.equal(h.document.getElementById('container-panel').textContent,'');
+});
+function missionFixture(){
+ const s=fixture();s.run.mode='team';s.run.status='coding';s.inbox[0].agent='coder-2';
+ s.run.team={state:'running',agents:{'coder-1':{label:'core'},'coder-2':{label:'docs-ui'}},tasks:[
+  {id:'t1',title:'Storage',agent:'coder-1',depends_on:[],status:'done',steps:[s.steps[0].id]},
+  {id:'t2',title:'HTML list',agent:'coder-2',depends_on:[],status:'running',attempts:2,steps:[]},
+  {id:'t3',title:'CLI',agent:'coder-1',depends_on:['t1'],status:'waiting',steps:[]}]};
+ const second={...clone(s.steps[0]),id:'step_two',number:2,title:'t2: HTML list',agent:'coder-2',status:'running',verification:null,
+  transcript:[{type:'tool',tool:'bash',status:'running',summary:'npm test'},{type:'text',text:'Checking the list markup'}]};
+ s.steps[0].agent='coder-1';s.steps.push(second);
+ s.agents=[{name:'hermes',type:'orchestrator',role:'Orchestrator',state:'idle',stats:{turns:2}},
+  {name:'coder-1',type:'coder',role:'Coder',state:'idle',stats:{turns:1,tool_calls:3}},
+  {name:'coder-2',type:'coder',role:'Coder',state:'waiting_on_you',task:'t2: HTML list',stats:{turns:1,tool_calls:1}}];
+ s.usage={total:{calls:3,tokens_in:9000,tokens_out:900,cost:0},by_agent:{hermes:{calls:2,tokens_in:6000,tokens_out:600},'coder-2':{calls:1,tokens_in:3000,tokens_out:300}}};
+ s.models={configured:true,endpoints:[{id:'local',slots:1,default:true,in_flight:[{agent:'coder-2'}],queued:[{agent:'hermes'}],health:{state:'online'}}]};
+ s.run.workspace={mode:'worktree',base_branch:'main',integration:{branch:'agentcontrol/run_test/integration'},agents:{'coder-1':{branch:'agentcontrol/run_test/coder-1'},'coder-2':{branch:'agentcontrol/run_test/coder-2'}}};
+ return s;
+}
+test('mission shows every agent live, the task graph, and the model queue',async()=>{
+ const h=await harness(missionFixture());
+ assert(!h.document.getElementById('view-mission').classList.contains('hidden'),'Mission is the home view');
+ const cards=[...h.document.querySelectorAll('[data-agent-card]')].map(c=>c.dataset.agentCard);
+ assert.deepEqual(cards,['hermes','coder-1','coder-2']);
+ const two=h.document.querySelector('[data-agent-card="coder-2"]').textContent;
+ assert.match(two,/Waiting on you/);assert.match(two,/\$ npm test/);assert.match(two,/Checking the list markup/);
+ assert.match(two,/3000 in · 300 out/);assert.match(two,/agentcontrol\/run_test\/coder-2/);assert.match(two,/1 request waiting/);
+ assert.match(h.document.querySelector('[data-agent-card="hermes"]').textContent,/6000 in · 600 out · 1 decision/);
+ const cols=[...h.document.querySelectorAll('.task-col')].map(c=>[...c.querySelectorAll('.task-node .mono')].map(n=>n.textContent));
+ assert.deepEqual(cols,[['t1','t2'],['t3']]);
+ assert.match(h.document.getElementById('mission-tasks').textContent,/1 of 3 done/);
+ assert.match(h.document.getElementById('mission-resources').textContent,/1 of 1 slot busy \(coder-2\) · waiting: hermes/);
+ assert.match(h.document.getElementById('mission-head').textContent,/1 item waiting for you/);
+ await h.click('[data-turn="'+h.state.steps[0].id+'"].task-node');
+ assert(!h.document.getElementById('view-runs').classList.contains('hidden'),'a task opens its turn');
+});
+test('an agent card opens that agent only, and notes about it go to Hermes',async()=>{
+ const h=await harness(missionFixture());
+ await h.click('[data-agent="coder-2"]');
+ assert(!h.document.getElementById('view-runs').classList.contains('hidden'));
+ assert.match(h.document.getElementById('agent-head').textContent,/coder-2 \(docs-ui\)/);
+ const chips=[...h.document.querySelectorAll('#turn-rail .turn-chip')].map(c=>c.dataset.turn);
+ assert.deepEqual(chips,['step_two'],'only coder-2 turns');
+ assert.equal(h.document.getElementById('team-panel').textContent,'');
+ assert.match(h.document.getElementById('inline-approvals').textContent,/python3 -m unittest/);
+ assert.match(h.document.getElementById('breadcrumb').textContent,/Agent · coder-2/);
+ h.document.getElementById('steering').value='Keep the markup accessible';
+ await h.document.getElementById('steering-form').onsubmit({preventDefault(){}});await tick();
+ assert.deepEqual(h.calls.find(c=>c.url==='/api/control').body,{run:'run_test',action:'instruction',text:'Keep the markup accessible',agent:'coder-2'});
+ assert.match(h.document.getElementById('steering-feedback').textContent,/marked for coder-2/);
+ await h.click('[data-agent="coder-1"]');
+ assert.deepEqual([...h.document.querySelectorAll('#turn-rail .turn-chip')].map(c=>c.dataset.turn),[h.state.steps[0].id]);
+ assert.equal(h.document.getElementById('inline-approvals').querySelectorAll('[data-approval-card]').length,0,'coder-2 requests are not shown for coder-1');
+ await h.click('[data-action="agent-clear"]');
+ assert(!h.document.getElementById('view-mission').classList.contains('hidden'));
+ assert.equal(h.document.getElementById('agent-head').textContent,'');
+ await h.click('[data-view="runs"]');
+ assert.equal(h.document.querySelectorAll('#turn-rail .turn-chip').length,2,'the Runs page without a filter is unchanged');
+ h.document.getElementById('steering').value='General note';
+ await h.document.getElementById('steering-form').onsubmit({preventDefault(){}});await tick();
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').pop().body.agent,undefined);
+});
+test('mission without runs offers a new run; single runs list their turns',async()=>{
+ const empty=fixture();empty.run=null;empty.steps=[];empty.inbox=[];empty.runs=[];
+ let h=await harness(empty);
+ assert.match(h.document.getElementById('mission-head').textContent,/No run yet/);
+ assert.equal(h.document.getElementById('mission-agents').textContent,'');
+ h=await harness();
+ assert.deepEqual([...h.document.querySelectorAll('[data-agent-card]')].map(c=>c.dataset.agentCard),['hermes','coder-1']);
+ assert.match(h.document.getElementById('mission-tasks').textContent,/Turns/);
+});
+test('the bottom tab bar navigates, shows the waiting count, and the view is remembered',async()=>{
+ const s=missionFixture();s.savedView='approvals';
+ const h=await harness(s);
+ assert(!h.document.getElementById('view-approvals').classList.contains('hidden'),'remembered view restored');
+ assert.equal(h.document.getElementById('tab-count').textContent,'1');
+ assert(!h.document.getElementById('tab-count').classList.contains('hidden'));
+ await h.click('.tabbar [data-view="mission"]');
+ assert(!h.document.getElementById('view-mission').classList.contains('hidden'));
+ assert.equal(h.storage.get('ac-view'),'mission');
+ assert.equal(h.document.querySelector('.tabbar [data-view="mission"]').getAttribute('aria-current'),'page');
+ await h.click('.tabbar [data-tab="more"]');
+ assert(h.document.getElementById('sidebar').classList.contains('drawer-open'));
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

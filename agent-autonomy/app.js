@@ -13,7 +13,9 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const ended = new Set(['completed', 'blocked', 'failed', 'stopped', 'limit_reached']);
 const KEY_NAME = 'ac-dashboard-key', LEGACY_KEY_NAME = 'trial-dashboard-key';
 
-let key = readKey(), selected = '', data = null, current = null, view = 'runs';
+const VIEWS = ['mission', 'runs', 'approvals', 'activity', 'new', 'project', 'skills'];
+let key = readKey(), selected = '', data = null, current = null, view = savedView();
+let agentFilter = null;
 let refreshing = false, connected = false, reviewBusy = false, reviewing = null, stopRunId = '', parentRun = null;
 let refreshAgain = false;
 let toastTimer, errorTimer, pollTimer, failures = 0, announcedRequests = '', diffText = '', lastStateTime = null;
@@ -22,6 +24,7 @@ const seenRequests = new Set();
 const dismissedReceipts = new Set();
 const term = {turn: null, count: 0, omitted: 0, last: '', follow: true};
 
+function savedView() { const v = readItem('local', 'ac-view'); return VIEWS.includes(v) && v !== 'new' ? v : 'mission'; }
 function storage(kind) { try { return kind === 'local' ? localStorage : sessionStorage; } catch { return null; } }
 function readItem(kind, name) { try { return storage(kind)?.getItem(name) || ''; } catch { return ''; } }
 function readKey() { return readItem('local', KEY_NAME) || readItem('session', KEY_NAME) || readItem('session', LEGACY_KEY_NAME); }
@@ -260,7 +263,7 @@ function nextDelay() {
   if (!connected) return Math.min(30000, 2000 * 2 ** Math.min(failures, 4));
   if (live.state === 'live') return 15000;  // changes arrive over the stream; this is only a safety net
   if (document.hidden) return 10000;
-  return isLive() && view === 'runs' ? 1000 : 2000;
+  return isLive() && ['runs', 'mission'].includes(view) ? 1000 : 2000;
 }
 function schedule(delay = nextDelay()) {
   clearTimeout(pollTimer);
@@ -355,6 +358,7 @@ function disconnectEvents() {
 function render() {
   autoOpenProject();
   renderShell();
+  renderMission();
   renderRun();
   renderProject();
   renderApprovals();
@@ -388,8 +392,9 @@ function renderShell() {
   togglePreviewFields('new');
   renderIsolation();
 
-  const crumbs = [project, {new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills'}[view]];
-  if (current && view !== 'new') crumbs.push('#' + current.id.slice(0, 6));
+  const crumbs = [project, {mission: 'Mission', new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills'}[view]];
+  if (current && !['new', 'mission'].includes(view)) crumbs.push('#' + current.id.slice(0, 6));
+  if (view === 'runs' && agentFilter) crumbs.push('Agent · ' + agentFilter);
   $('breadcrumb').textContent = crumbs.join(' / ');
   $('xp-address').textContent = crumbs.join('\\');
   $('window-title').textContent = 'AgentControl' + (current ? ' — ' + runTitle(current, 100) : '');
@@ -411,6 +416,8 @@ function renderShell() {
   const waitingSkills = pendingSkills().length, waiting = inbox.length + waitingSkills;
   $('nav-count').textContent = waiting;
   $('nav-count').classList.toggle('hidden', !waiting);
+  $('tab-count').textContent = waiting;
+  $('tab-count').classList.toggle('hidden', !waiting);
   $('approval-total').textContent = `${waiting} pending`;
   $('tray-count').textContent = inbox.length ? `⚠ ${inbox.length}` : '';
   $('tray-clock').textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
@@ -473,15 +480,19 @@ function renderConnections() {
 function renderRun() {
   $('empty-state').classList.toggle('hidden', !!current);
   $('run-layout').classList.toggle('hidden', !current);
-  if (!current) return;
-  const steps = data.steps || [], pending = runRequests(), finished = ended.has(current.status);
-  renderRunHeader(steps, pending, finished);
-  renderOutcome(steps, finished);
+  if (!current) { agentFilter = null; return; }
+  const all = data.steps || [], coder = coderFilter(), finished = ended.has(current.status);
+  if (agentFilter && !coder && agentFilter !== 'hermes') agentFilter = null;
+  const steps = coder ? agentSteps() : all, pending = runRequests().filter(p => !coder || (p.agent || 'coder-1') === coder);
+  renderAgentHead();
+  renderRunHeader(all, runRequests(), finished);
+  renderOutcome(all, finished);
   renderWorkflow(steps, pending, finished);
+  $('steering').placeholder = coder ? `A note about ${coder} for Hermes. Hermes decides what ${coder} is told.` : 'Tell Hermes something. It goes into the next prompt.';
   $('steering-form').classList.toggle('hidden', finished);
   $('steering-form').querySelectorAll('button').forEach(button => { button.disabled = !connected || (button.dataset.action === 'verify-now' && !canVerifyNow()); });
   setHTML($('inline-approvals'), pending.map(approvalCard).join('') || (finished ? '' : recentDecisionHTML()));
-  renderTeam();
+  if (coder) setHTML($('team-panel'), ''); else renderTeam();
   renderChecks();
   renderVerification();
   renderModelUsage();
@@ -523,7 +534,7 @@ function renderOutcome(steps, finished) {
     </div></section>` : '');
 }
 function renderWorkflow(steps, pending, finished) {
-  const next = planningNext(current, steps);
+  const next = planningNext(current, data.steps || []) && !(coderFilter() && isTeam());
   const ids = steps.map(s => s.id);
   if (selectedTurn && selectedTurn !== 'next' && !ids.includes(selectedTurn)) selectedTurn = null;
   if (selectedTurn === 'next' && !next) selectedTurn = null;
@@ -727,7 +738,7 @@ function renderModelUsage() {
   const usage = data.usage, models = data.models || {}, endpoint = (models.endpoints || []).find(e => e.default);
   if (!usage?.total?.calls && !endpoint) { setHTML($('model-usage'), ''); return; }
   const queue = endpoint ? `<p class="small muted">${esc(endpoint.id)} · ${endpoint.in_flight.length} of ${endpoint.slots} busy${endpoint.queued.length ? ` · ${endpoint.queued.length} waiting (${esc(endpoint.queued.map(q => q.agent).join(', '))})` : ''}${models.gateway ? ' · gateway on' : ''}</p>` : '';
-  const agents = Object.entries(usage?.by_agent || {}).map(([name, u]) => `<div class="usage-row"><span>${esc(name)}</span><span class="mono small">${u.calls} call${u.calls === 1 ? '' : 's'} · ${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out${u.queued_ms ? ` · waited ${Math.round(u.queued_ms / 1000)} s` : ''}</span></div>`).join('');
+  const agents = Object.entries(usage?.by_agent || {}).filter(([name]) => !coderFilter() || [coderFilter(), 'hermes'].includes(name)).map(([name, u]) => `<div class="usage-row"><span>${esc(name)}</span><span class="mono small">${u.calls} call${u.calls === 1 ? '' : 's'} · ${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out${u.queued_ms ? ` · waited ${Math.round(u.queued_ms / 1000)} s` : ''}</span></div>`).join('');
   const total = usage?.total || {calls: 0, cost: 0};
   setHTML($('model-usage'), `<section class="ac-panel"><h2 class="ac-panel__title">Model usage</h2>${queue}
     ${agents || '<p class="small muted">Token counts appear after Hermes or OpenCode finish a call.</p>'}
@@ -792,6 +803,161 @@ function renderTeam() {
     <div class="table-wrap"><table class="team-table"><thead><tr><th>Task</th><th>What</th><th>Agent</th><th>After</th><th>Status</th></tr></thead><tbody>${taskRows(tasks, true)}</tbody></table></div>
     <p class="small muted">Select a task to follow its latest turn.</p></section>`);
 }
+// ---- mission control (M11) -------------------------------------------------
+// Everything here is drawn from /api/state; nothing is sent to an agent from this view.
+const AGENT_STATE = {working: ['Working', 'running'], waiting_on_you: ['Waiting on you', 'attention'], needs_attention: ['Needs attention', 'attention'],
+  paused: ['Paused', ''], idle: ['Idle', ''], finished: ['Finished', 'completed'], failed: ['Failed', 'failed'], stopped: ['Stopped', ''],
+  blocked: ['Blocked', 'attention'], limit_reached: ['Budget used', 'attention']};
+function coderFilter() {
+  if (!agentFilter || agentFilter === 'hermes' || !current) return null;
+  return missionAgents().some(a => a.name === agentFilter) ? agentFilter : null;
+}
+function agentSteps(name = coderFilter()) { return (data?.steps || []).filter(s => (s.agent || 'coder-1') === name); }
+function missionAgents() {
+  if (!current) return [];
+  if ((data.agents || []).length) return data.agents;
+  const coders = Object.keys(current.team?.agents || {}).length ? Object.keys(current.team.agents) : ['coder-1'];
+  return [{name: 'hermes', type: 'orchestrator', role: 'Orchestrator', state: 'idle'}, ...coders.map(name => ({name, type: 'coder', role: 'Coder', state: 'idle'}))];
+}
+function agentUsage(name) {
+  const by = data.usage?.by_agent || {};
+  return by[name] || (name === 'coder-1' && !isTeam() ? by.opencode : null);
+}
+function agentRequests(name) {
+  return runRequests().filter(p => name === 'hermes' ? false : (p.agent || 'coder-1') === name);
+}
+function openAgent(name) {
+  agentFilter = name; selectedTurn = null; termReset(null);
+  showView('runs');
+  if (data) renderRun();
+  if (name !== 'hermes') showStage('code', false);  // on phones the terminal comes first
+  $('workspace').scrollTop = 0;
+}
+/* The last few lines of an agent's latest turn, as plain one-line entries. */
+function transcriptTail(step, count = 6) {
+  return transcriptOf(step).slice(-count).map(e => {
+    if (e.type === 'text') return {cls: 'text', text: String(e.text || '').trim().split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 200)};
+    const tool = e.tool || 'tool';
+    return {cls: 'tool ' + (e.status || ''), text: `${TOOL_SYMBOL[tool] || '•'} ${tool === 'bash' ? '' : tool + ' '}${e.summary || e.title || ''}`.slice(0, 200)};
+  }).filter(e => e.text);
+}
+function agentCard(a) {
+  const name = a.name, hermes = a.type === 'orchestrator', finished = ended.has(current.status);
+  const [label, tone] = AGENT_STATE[a.state] || [String(a.state || 'idle').replaceAll('_', ' '), ''];
+  const step = hermes ? null : [...(data.steps || [])].reverse().find(s => (s.agent || 'coder-1') === name);
+  const lines = hermes ? [] : transcriptTail(step);
+  const u = agentUsage(name), waiting = agentRequests(name).length;
+  const teamWaiting = hermes && current.status === 'awaiting_approval';
+  const ws = current.workspace?.agents?.[name], skills = (data.skills?.installs || []).filter(i => i.agent === name && i.state === 'installed').length;
+  const title = current.team?.agents?.[name]?.label;
+  const stats = [
+    u ? `${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out` : 'no model calls yet',
+    hermes ? plural(current.decision_count || 0, 'decision') : `${plural(a.stats?.turns ?? agentSteps(name).length, 'turn')} · ${plural(a.stats?.tool_calls || 0, 'tool call')}`];
+  const where = hermes ? `<span>${esc(data.profile || 'Hermes')}</span>`
+    : `${ws?.branch ? `<span class="mono">${esc(ws.branch)}</span>` : '<span>project folder</span>'}${current.isolation === 'container' ? '<span>in container</span>' : ''}${skills ? `<span>${plural(skills, 'skill')}</span>` : ''}`;
+  const body = hermes
+    ? `<p class="small">${esc(a.task || (finished ? current.summary : current.summary || 'Waiting for the next decision.'))}</p>${(current.plan || []).length ? `<ol class="mission-plan small">${current.plan.slice(0, 4).map(p => `<li>${esc(typeof p === 'string' ? p : p.title || pretty(p))}</li>`).join('')}</ol>` : ''}`
+    : `<p class="small agent-task">${esc(a.task || (step ? `Turn ${step.number}: ${step.title}` : 'No turn yet'))}</p>
+      <pre class="mission-tail" aria-label="Latest output from ${esc(name)}">${lines.length ? lines.map(l => `<span class="${esc(l.cls)}">${esc(l.text)}</span>`).join('\n') : '<span class="muted">No output yet.</span>'}</pre>`;
+  return `<article class="agent-card ${tone}" data-agent-card="${esc(name)}">
+    <header class="agent-card__head"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'}">${esc(hermes ? 'H' : name.replace(/\D/g, '') || 'C')}</span>
+      <button class="agent-card__name" data-agent="${esc(name)}" aria-label="Open ${esc(name)}"><strong>${esc(hermes ? 'Hermes' : name)}</strong><small>${esc(title || a.role || (hermes ? 'Orchestrator' : 'Coder'))}</small></button>
+      <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span></header>
+    ${body}
+    <footer class="agent-card__foot"><span class="small muted">${stats.map(esc).join(' · ')}</span><span class="agent-where small muted">${where}</span>
+      ${waiting ? `<button class="ac-btn compact attention-button" data-view="approvals">${plural(waiting, 'request')} waiting</button>` : ''}
+      ${teamWaiting ? '<button class="ac-btn compact attention-button" data-view="runs">Team plan needs you</button>' : ''}</footer>
+  </article>`;
+}
+function taskDepths(tasks) {
+  const byId = Object.fromEntries(tasks.map(t => [t.id, t])), depth = {};
+  const of = (id, seen = new Set()) => {
+    if (depth[id] !== undefined) return depth[id];
+    if (seen.has(id) || !byId[id]) return 0;
+    seen.add(id);
+    return depth[id] = Math.max(0, ...(byId[id].depends_on || []).map(d => of(d, seen) + 1));
+  };
+  tasks.forEach(t => of(t.id));
+  return depth;
+}
+function renderMissionTasks() {
+  const tasks = current.team?.tasks || [];
+  if (isTeam() && tasks.length) {
+    const depth = taskDepths(tasks), columns = [];
+    tasks.forEach(t => (columns[depth[t.id]] ||= []).push(t));
+    const done = tasks.filter(t => t.status === 'done').length;
+    const cols = columns.map((col, i) => `<div class="task-col" role="list" aria-label="${i ? `After step ${i}` : 'Can start now'}">${col.map(t => {
+      const inner = `<span class="mono small">${esc(t.id)}</span><strong>${esc(t.title)}</strong><small>${esc(agentName(t.agent))}</small><small class="${TASK_TONE[t.status] || ''}">${esc(t.status || 'waiting')}${t.attempts > 1 ? ` · ${t.attempts} tries` : ''}</small>`;
+      return t.steps?.length ? `<button role="listitem" class="task-node ${esc(t.status || '')}" data-turn="${esc(t.steps.at(-1))}" aria-label="Task ${esc(t.id)}: ${esc(t.title)}, ${esc(t.status)}">${inner}</button>`
+        : `<div role="listitem" class="task-node ${esc(t.status || '')}">${inner}</div>`;
+    }).join('')}</div>`).join('<span class="task-arrow" aria-hidden="true">→</span>');
+    return `<section class="ac-panel"><h2 class="ac-panel__title">Tasks <span class="muted small">· ${done} of ${tasks.length} done</span></h2><div class="task-graph">${cols}</div>
+      <p class="small muted">A task starts once the tasks it depends on are merged. Select a task to open its latest turn.</p></section>`;
+  }
+  const steps = data.steps || [];
+  const rows = steps.slice(-8).reverse().map(s => `<button class="turn-row" data-turn="${esc(s.id)}"><span class="chip-number">${s.number}</span><span><strong>${esc(s.title)}</strong><small class="muted">${isTeam() ? esc(agentName(s.agent)) + ' · ' : ''}${esc(verificationLabel(s))}</small></span></button>`).join('');
+  return `<section class="ac-panel"><h2 class="ac-panel__title">Turns <span class="muted small">· ${steps.length} of ${current.max_steps}</span></h2>
+    ${rows || '<p class="small muted">Hermes is preparing the first turn.</p>'}</section>`;
+}
+function renderMissionResources() {
+  const endpoint = (data.models?.endpoints || []).find(e => e.default), c = data.container, p = previewStatus();
+  const model = endpoint ? `<dt>Model</dt><dd>${esc(endpoint.id)} · ${endpoint.health?.state === 'online' ? '<span class="success-text">online</span>' : esc(endpoint.health?.state || 'unchecked')}
+      <small class="muted">${endpoint.in_flight.length} of ${endpoint.slots} slot${endpoint.slots === 1 ? '' : 's'} busy${endpoint.in_flight.length ? ` (${esc(endpoint.in_flight.map(x => x.agent).join(', '))})` : ''}${endpoint.queued.length ? ` · waiting: ${esc(endpoint.queued.map(x => x.agent).join(', '))}` : ''}</small></dd>`
+    : `<dt>Model</dt><dd>${esc(data.health.agents?.opencode?.label ? 'OpenCode’s configured model' : 'Not described')} <small class="muted">Describe it in state/models.json to see the queue.</small></dd>`;
+  const box = c ? `<dt>Container</dt><dd>${esc({running: 'Running', exited: 'Stopped', removed: 'Removed', pending: 'Starts with the first turn', missing: 'Not created yet'}[c.live] || c.live)}
+      <small class="muted">${esc(c.runtime)}${c.rootless ? ' · rootless' : ''} · ${esc(String(c.cpus))} CPUs · ${esc(String(c.memory_gb))} GB · network ${c.network === 'internet' ? 'on' : c.network_cut || c.network === 'none' ? 'off' : 'on for setup'}</small></dd>`
+    : `<dt>Isolation</dt><dd>This machine <small class="muted">Agents run under your OpenCode permissions.</small></dd>`;
+  const mine = p.run === current.id && previewLive(p);
+  const previewLine = `<dt>Preview</dt><dd>${mine ? `<span class="success-text">${esc(p.state)}</span> · ${esc(p.mode)}` : current.preview ? esc(current.preview.mode) + ' · not running' : 'None set'}
+      <button class="text-button small" data-view="project">Open Project</button></dd>`;
+  return `<section class="ac-panel"><h2 class="ac-panel__title">Resources</h2><dl class="facts small">${model}${box}${previewLine}</dl></section>`;
+}
+function renderMission() {
+  const finished = !current || ended.has(current.status);
+  const waiting = (data.inbox || []).length + pendingSkills().length;
+  if (!current) {
+    setHTML($('mission-head'), `<section class="ac-panel mission-empty"><div class="eyebrow">Mission control</div><h1 id="mission-title">No run yet</h1>
+      <p class="muted">Start a run to see Hermes and every coder here, live.</p><button class="ac-btn primary" data-action="new">Start a new run</button></section>`);
+    ['mission-agents', 'mission-tasks', 'mission-resources', 'mission-activity'].forEach(id => setHTML($(id), ''));
+    return;
+  }
+  const b = budget(current), steps = data.steps || [];
+  const canResume = current.pause || ['interrupted', 'attention'].includes(current.status);
+  const controls = finished ? `<button class="ac-btn" data-action="new">New run</button><button class="ac-btn" data-action="followup">Follow-up run</button>`
+    : `<button class="ac-btn compact" data-action="pause">${icon(canResume ? 'play' : 'pause')}<span>${canResume ? 'Resume' : 'Pause'}</span></button><button class="ac-btn compact danger-button" data-action="stop">${icon('stop')}<span>Stop</span></button>`;
+  setHTML($('mission-head'), `<section class="mission-head">
+    <div class="mission-title"><div class="eyebrow">Mission control${finished ? ' · last run' : ''}</div>
+      <h1 id="mission-title">${esc(runTitle(current, 120))}</h1>
+      <p class="small muted">${statusHTML(current, runRequests())} <span>${isTeam() ? plural(Object.keys(current.team?.agents || {}).length, 'coder') : 'One coder'}</span> · <span>${steps.length} of ${current.max_steps} prompts</span> · <span>${duration(b.used)} of ${duration(b.allowed)}</span></p>
+      <p class="small">${esc(current.summary)}</p></div>
+    <div class="mission-actions row wrap">${waiting ? `<button class="ac-btn primary" data-view="approvals" aria-live="polite">${plural(waiting, 'item')} waiting for you</button>` : '<span class="small muted" aria-live="polite">Nothing waiting for you</span>'}
+      <button class="ac-btn" data-run="${esc(current.id)}">Open run</button>${controls}</div></section>`);
+  setHTML($('mission-agents'), missionAgents().map(agentCard).join(''));
+  setHTML($('mission-tasks'), renderMissionTasks());
+  setHTML($('mission-resources'), renderMissionResources());
+  const events = (data.events || []).slice(-8).reverse().map(e => {
+    let parsed; try { parsed = JSON.parse(e.detail); } catch {}
+    return `<li><span class="muted small">${when(e.created)}</span> <strong class="small">${esc(e.kind)}</strong> <span class="small">${esc(String(eventSummary(e, parsed) || '').slice(0, 160))}</span></li>`;
+  }).join('');
+  setHTML($('mission-activity'), `<section class="ac-panel"><h2 class="ac-panel__title">Latest activity <button class="text-button small" data-view="activity">All activity</button></h2>
+    ${events ? `<ul class="mission-events">${events}</ul>` : '<p class="small muted">Nothing recorded yet.</p>'}</section>`);
+}
+function renderAgentHead() {
+  if (!agentFilter || !current) { setHTML($('agent-head'), ''); return; }
+  const agents = missionAgents(), a = agents.find(x => x.name === agentFilter);
+  if (!a) { setHTML($('agent-head'), ''); return; }
+  const [label, tone] = AGENT_STATE[a.state] || [String(a.state || 'idle'), ''];
+  const hermes = a.type === 'orchestrator', ws = current.workspace?.agents?.[a.name];
+  const switcher = agents.map(x => `<button class="ac-btn compact ${x.name === a.name ? 'primary' : ''}" data-agent="${esc(x.name)}" aria-pressed="${x.name === a.name}">${esc(x.name === 'hermes' ? 'Hermes' : x.name)}</button>`).join('');
+  setHTML($('agent-head'), `<section class="agent-head ac-panel">
+    <div class="row wrap between"><button class="text-button" data-action="agent-clear">← Mission</button><div class="row wrap agent-switch" role="group" aria-label="Agents">${switcher}</div></div>
+    <div class="agent-head__id"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'}">${esc(hermes ? 'H' : a.name.replace(/\D/g, '') || 'C')}</span>
+      <div><h2>${esc(hermes ? 'Hermes' : agentName(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span></h2>
+      <p class="small muted">${esc(a.role || '')}${a.runtime ? ' · ' + esc(a.runtime) : ''}${a.model ? ' · ' + esc(a.model) : ''}${ws?.branch ? ` · <span class="mono">${esc(ws.branch)}</span>` : ''}${current.isolation === 'container' ? ' · in the run’s container' : ''}</p>
+      ${a.task ? `<p class="small">${esc(a.task)}</p>` : ''}</div></div>
+    <p class="small muted">${hermes ? 'Hermes plans every turn below; notes you send go to it directly.' : `Showing only ${esc(a.name)}’s turns, requests and changes. Notes you send go to Hermes, marked for ${esc(a.name)}; Hermes decides what ${esc(a.name)} is told.`}</p>
+  </section>`);
+}
 // ---- skills (M9) ----------------------------------------------------------
 const SKILL_WAITING = ['proposed', 'awaiting_fetch'];
 function pendingSkills() { return (data?.skills?.log || []).filter(i => SKILL_WAITING.includes(i.state)); }
@@ -827,7 +993,7 @@ function renderSkillsPanel() {
   const ws = current.workspace;
   if (!ws || ws.mode !== 'worktree' || ws.discarded) { setHTML($('skills-panel'), ''); return; }
   const installs = data.skills?.installs || [], finished = ended.has(current.status) || ws.applied;
-  const agents = Object.keys(ws.agents || {});
+  const agents = Object.keys(ws.agents || {}).filter(a => !coderFilter() || a === coderFilter());
   const byAgent = agents.map(agent => {
     const mine = installs.filter(i => i.agent === agent && i.state === 'installed');
     const later = (current.skills_reload || []).includes(agent) ? '<small class="muted"> · changes apply from its next turn</small>' : '';
@@ -1300,10 +1466,11 @@ async function submitReview(action) {
 // Navigation and actions
 // ---------------------------------------------------------------------------
 function showView(next) {
-  if (!['runs', 'approvals', 'activity', 'new', 'project', 'skills'].includes(next)) return;
+  if (!VIEWS.includes(next)) return;
   view = next;
+  if (next !== 'new') { try { localStorage.setItem('ac-view', next); } catch {} }
   document.querySelectorAll('.view').forEach(e => e.classList.toggle('hidden', e.id !== 'view-' + next));
-  document.querySelectorAll('.nav [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
+  document.querySelectorAll('.nav [data-view], .tabbar [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
   closeDrawer();
   if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } }
 }
@@ -1442,9 +1609,9 @@ function addCheckInput(text = '') {
   $('new-checks').append(row);
   if (!text) row.querySelector('textarea').focus();
 }
-async function control(action, text = '', id = current?.id) {
+async function control(action, text = '', id = current?.id, agent = null) {
   if (!id) throw Error('Choose a run first.');
-  const result = await api('/api/control', 'POST', {run: id, action, text});
+  const result = await api('/api/control', 'POST', {run: id, action, text, ...(agent ? {agent} : {})});
   pageError('');
   await refresh();
   return result;
@@ -1524,6 +1691,7 @@ const ACTIONS = {
   drawer: toggleDrawer,
   'drawer-close': closeDrawer,
   'focus-steer': focusSteer,
+  'agent-clear': () => { agentFilter = null; selectedTurn = null; termReset(null); showView('mission'); if (data) renderRun(); },
   'focus-approval': focusApproval,
   stop: askStop,
   pause: togglePause,
@@ -1623,14 +1791,23 @@ function handleShortcut(event) {
 // ---------------------------------------------------------------------------
 async function onClick(event) {
   const b = event.target.closest('button');
+  // The whole agent card opens that agent; its own buttons keep their meaning.
+  const card = !b && event.target.closest?.('[data-agent-card]');
+  if (card && !String(globalThis.getSelection?.() || '')) { openAgent(card.dataset.agentCard); return; }
   if (!b || b.disabled) return;
   try {
     if (b.dataset.theme) setTheme(b.dataset.theme);
     if (b.dataset.close) $(b.dataset.close).close();
     if (b.dataset.view) showView(b.dataset.view);
     if (b.dataset.action) await act(b.dataset.action, b);
-    if (b.dataset.run) { selected = b.dataset.run; selectedTurn = null; termReset(null); showView('runs'); await refresh(); }
-    if (b.dataset.turn) { selectedTurn = ['latest'].includes(b.dataset.turn) ? null : b.dataset.turn; if (data) renderRun(); }
+    if (b.dataset.run) { selected = b.dataset.run; selectedTurn = null; agentFilter = null; termReset(null); showView('runs'); await refresh(); }
+    if (b.dataset.agent) openAgent(b.dataset.agent);
+    if (b.dataset.turn) {
+      selectedTurn = ['latest'].includes(b.dataset.turn) ? null : b.dataset.turn;
+      if (selectedTurn && agentFilter && !agentSteps().some(s => s.id === selectedTurn)) agentFilter = null;
+      if (view === 'mission') showView('runs');
+      if (data) renderRun();
+    }
     if (b.dataset.stageTab) showStage(b.dataset.stageTab);
     if (b.dataset.previewWidth) {
       preview.width = b.dataset.previewWidth;
@@ -1717,11 +1894,11 @@ function init() {
   $('verify-enabled').onchange = () => { $('verify').disabled = !$('verify-enabled').checked; $('verify').required = $('verify-enabled').checked; };
   $('steering-form').onsubmit = async event => {
     event.preventDefault();
-    const field = $('steering'), note = field.value.trim(), runId = current.id;
+    const field = $('steering'), note = field.value.trim(), runId = current.id, about = coderFilter();
     try {
-      await control('instruction', note, runId);
+      await control('instruction', note, runId, about);
       if (field.value.trim() === note) { field.value = ''; growSteering(); }
-      $('steering-feedback').textContent = 'Saved for the next Hermes prompt.';
+      $('steering-feedback').textContent = about ? `Saved for Hermes, marked for ${about}.` : 'Saved for the next Hermes prompt.';
     } catch (error) { $('steering-feedback').textContent = error.message; }
   };
   $('steering').addEventListener('input', growSteering);
@@ -1792,6 +1969,7 @@ function init() {
     const name = STAGES[Math.min(STAGES.length - 1, index)][0];
     document.querySelectorAll('[data-stage-tab]').forEach(t => t.setAttribute('aria-selected', String(t.dataset.stageTab === name)));
   });
+  showView(view);
   refresh().then(() => { schedule(); connectEvents(); });
 }
 if (typeof document !== 'undefined') init();

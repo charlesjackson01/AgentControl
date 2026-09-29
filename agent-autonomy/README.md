@@ -73,6 +73,25 @@ this does not resend its coding prompt.
   evidence. OpenCode keeps one session for the whole run. Durable history lives
   in the controller's SQLite journal.
 
+## Mission control
+
+**Mission** is the dashboard's home. It shows the selected run (normally the active one) at a glance:
+- **One card per agent**, Hermes first, then each coder. A card shows:
+  - its state: working, waiting on you, idle, paused, or needs attention
+  - its current task, and the last lines of its latest turn's output, live
+  - its tokens, turns and tool calls
+  - its branch, skills, and whether it runs in the container
+  - a button when a request from that agent is waiting for you
+- **Tasks:** for a team, a dependency view in which a task starts once the tasks it depends on are merged. For one agent, the latest turns. Selecting either opens that turn.
+- **Resources:** the model server and its queue (who is generating, who is waiting), the container, and the preview.
+- **Latest activity.**
+
+Select an agent card to open **that agent's view**. It is the run page, filtered to the agent's own turns, live terminal, requests, skills, usage and changed files. The switcher at the top moves between agents, and **← Mission** goes back. A note written there is still sent to Hermes, marked "Note for coder-2: …"; Hermes decides what the coder is told, so nothing bypasses planning or your approvals. **Runs** without an agent selected is the same page as before.
+
+On a phone, a **tab bar** along the bottom holds Mission, Approvals (with the waiting count), Run, Project and More (the drawer with recent runs, Activity, Skills and themes). It takes the place of the terminal theme's shortcut bar and XP's taskbar there. The dashboard remembers the last section you used in this browser.
+
+One run is active at a time; mission control shows that run's agents.
+
 ## Controls
 
 | Control | Effect |
@@ -80,7 +99,7 @@ this does not resend its coding prompt.
 | Start run | Begins one bounded project run from your goal. |
 | Pause | Lets the current coding/verification step finish, then waits before the next model request or coding prompt. A planning turn already running can finish. |
 | Resume | Continues a paused run, or reconciles a run interrupted by a restart/network failure. |
-| Send instruction | Adds a requirement before the next coding prompt. If a planning response is in flight, that response is discarded and regenerated with your new instruction. |
+| Send instruction | Adds a requirement before the next coding prompt. If a planning response is in flight, that response is discarded and regenerated with your new instruction. From an agent's view the note is marked for that agent and still goes to Hermes. |
 | Stop (with confirmation) | Stops the controller's current Hermes/check subprocess and asks OpenCode to abort its managed session. Existing code changes remain. |
 | Maximum coding prompts | Hard cap on how many coding prompts this run can submit, including corrections. |
 

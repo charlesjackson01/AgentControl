@@ -11,6 +11,7 @@
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true"><defs>
+  <symbol id="icon-mission" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></symbol>
   <symbol id="icon-runs" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
   <symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6z"/><path d="M12 8v5m0 3v.1"/></symbol>
   <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M2 12h5l3-8 4 16 3-8h5"/></symbol>
@@ -46,7 +47,7 @@
     <nav class="xp-menu xp-only" aria-label="Window menu">
       <details><summary>File</summary><div><button data-action="new">New run</button><button data-action="followup">Start follow-up run</button></div></details>
       <details><summary>Edit</summary><div><button data-action="focus-steer">Write a steering note</button></div></details>
-      <details><summary>View</summary><div><button data-view="runs">Runs</button><button data-view="approvals">Approvals</button><button data-view="activity">Activity</button><button data-view="project">Project preview</button><button data-view="skills">Skills</button></div></details>
+      <details><summary>View</summary><div><button data-view="mission">Mission</button><button data-view="runs">Runs</button><button data-view="approvals">Approvals</button><button data-view="activity">Activity</button><button data-view="project">Project preview</button><button data-view="skills">Skills</button></div></details>
       <details><summary>Run</summary><div><button data-action="pause">Pause / Resume</button><button data-action="stop">Stop…</button></div></details>
       <details><summary>Tools</summary><div><button data-action="connections">Connections</button></div></details>
       <details><summary>Help</summary><div><button data-action="help">How AgentControl works</button></div></details>
@@ -56,7 +57,8 @@
         <div class="mac-dots mac-only" aria-hidden="true"><i></i><i></i><i></i></div>
         <div class="brand sidebar-brand"><span>AgentControl</span><button class="icon-button drawer-close" data-action="drawer-close" aria-label="Close navigation">×</button></div>
         <section class="nav-group"><h2 class="section-label" id="project-name">Project</h2><nav class="nav" aria-label="Main navigation">
-          <button data-view="runs" class="active"><svg class="icon"><use href="#icon-runs"/></svg>Runs</button>
+          <button data-view="mission" class="active"><svg class="icon"><use href="#icon-mission"/></svg>Mission</button>
+          <button data-view="runs"><svg class="icon"><use href="#icon-runs"/></svg>Runs</button>
           <button data-view="approvals"><svg class="icon"><use href="#icon-shield"/></svg>Approvals<span id="nav-count" class="badge hidden">0</span></button>
           <button data-view="activity"><svg class="icon"><use href="#icon-activity"/></svg>Activity</button>
           <button data-view="project"><svg class="icon"><use href="#icon-window"/></svg>Project<span id="preview-dot" class="preview-dot hidden" aria-label="Preview running"></span></button>
@@ -78,10 +80,16 @@
       <div class="addressbar xp-only"><span>Address</span><span id="xp-address" class="address-value">Runs</span></div>
       <main id="workspace" class="workspace">
         <div id="connection-banner" class="notice hidden" role="status"></div><div id="page-error" class="notice danger hidden row between" role="alert"><span id="page-error-text"></span><button class="icon-button" data-action="dismiss-error" aria-label="Dismiss error">×</button></div>
-        <section id="view-runs" class="view">
+        <section id="view-mission" class="view" aria-labelledby="mission-title">
+          <div id="mission-head"></div>
+          <div id="mission-agents" class="mission-grid" aria-label="Agents"></div>
+          <div class="mission-row"><div id="mission-tasks"></div><div id="mission-resources"></div></div>
+          <div id="mission-activity"></div>
+        </section>
+        <section id="view-runs" class="view hidden">
           <div id="empty-state" class="ac-panel empty-state hidden"><div class="eyebrow">AgentControl</div><h1>Give the work a direction.</h1><p>Write a brief. Hermes plans the next turn, OpenCode builds it, and AgentControl keeps the work and your decisions in view.</p><button class="ac-btn primary" data-action="new">Start a new run</button></div>
           <div id="run-layout" class="run-layout hidden">
-            <div class="run-top"><div id="run-header"></div><div id="outcome"></div><div id="inline-approvals" class="inline-approvals"></div><div id="team-panel"></div>
+            <div class="run-top"><div id="agent-head"></div><div id="run-header"></div><div id="outcome"></div><div id="inline-approvals" class="inline-approvals"></div><div id="team-panel"></div>
               <section id="workflow" class="workflow" aria-label="Workflow">
                 <div id="turn-rail" class="turn-rail"></div>
                 <div id="stage-board" class="stage-board">
@@ -206,6 +214,13 @@
     <footer class="window-status xp-only"><span id="xp-status">Ready</span><span id="xp-budget"></span><span id="xp-folder"></span></footer>
   </div>
   <div class="terminal-keybar terminal-only" aria-label="Keyboard shortcuts"><button data-action="key-approve"><kbd>a</kbd>approve</button><button data-action="key-deny"><kbd>d</kbd>deny + redirect</button><button data-action="pause" aria-keyshortcuts="p"><kbd>p</kbd>pause / resume</button><button class="hidden" data-action="verify-now" data-capability="verify_now" aria-keyshortcuts="v"><kbd>v</kbd>verify now</button><button data-action="term-expand" aria-keyshortcuts="t"><kbd>t</kbd>terminal</button><button data-action="help" aria-keyshortcuts="?"><kbd>?</kbd>help</button><button data-action="stop" aria-keyshortcuts="x"><kbd>x</kbd>stop</button><button data-action="focus-steer" aria-keyshortcuts="/"><kbd>/</kbd>steer</button></div>
+  <nav id="tabbar" class="tabbar" aria-label="Sections">
+    <button data-view="mission"><svg class="icon"><use href="#icon-mission"/></svg><span>Mission</span></button>
+    <button data-view="approvals"><svg class="icon"><use href="#icon-shield"/></svg><span>Approvals</span><span id="tab-count" class="badge hidden">0</span></button>
+    <button data-view="runs"><svg class="icon"><use href="#icon-terminal"/></svg><span>Run</span></button>
+    <button data-view="project"><svg class="icon"><use href="#icon-window"/></svg><span>Project</span></button>
+    <button data-action="drawer" data-tab="more" aria-controls="sidebar"><svg class="icon"><use href="#icon-menu"/></svg><span>More</span></button>
+  </nav>
   <div class="xp-taskbar xp-only"><button class="xp-agents" data-action="connections">◉ agents</button><button class="xp-task" data-view="runs">AgentControl</button><button id="xp-tray" class="xp-tray" data-action="focus-approval"><span id="tray-count"></span><time id="tray-clock"></time></button></div>
   <button id="xp-notification" class="xp-notification xp-only hidden" data-action="focus-approval"><strong>⚠ Approval needed</strong><span id="notification-text"></span><span>Click here to review.</span></button>
 </div>

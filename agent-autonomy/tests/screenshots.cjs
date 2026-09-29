@@ -18,6 +18,32 @@ const themes = ['mac', 'terminal', 'xp'];
 
 const CLEAN_GIT = {is_repo: true, usable: true, reason: '', branch: 'main', subdir: '', changes: [], untracked: [], dirty_count: 0};
 const SANDBOX = {runtime: 'podman', rootless: true, version: '5.2.0', image: true, error: '', unavailable: '', allow_rootful: false, models_configured: true, build_command: ''};
+function teamState() { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding'; s.run.mode = 'team';
+    s.run.team = {state: 'running', agents: {'coder-1': {label: 'core'}, 'coder-2': {label: 'docs-ui'}},
+      tasks: [{id: 't1', title: 'JSON storage with tests', agent: 'coder-1', depends_on: [], status: 'done', attempts: 1, steps: [s.steps[0].id]},
+              {id: 't2', title: 'Static HTML task list', agent: 'coder-2', depends_on: [], status: 'running', attempts: 2, reason: 'conflicts with already-merged work in demo_app/README.md', steps: [s.steps[1].id]},
+              {id: 't3', title: 'CLI commands and README usage', agent: 'coder-1', depends_on: ['t1'], status: 'running', attempts: 1, steps: []}]};
+    s.steps[0].agent = 'coder-1'; s.steps[1].agent = 'coder-2'; s.steps[1].title = 't2: Static HTML task list';
+    s.agents = [{name: 'hermes', state: 'idle'}, {name: 'coder-1', state: 'working', task: 't3: CLI commands'}, {name: 'coder-2', state: 'working', task: 't2: Static HTML task list'}];
+    return s;
+}
+
+// Mission control (M11): agent identities, per-agent usage, a request for coder-2, the model queue.
+function withMission(s) {
+  const team = s.run.mode === 'team';
+  s.agents = [{name: 'hermes', type: 'orchestrator', role: 'Orchestrator', runtime: 'hermes-cli', model: 'Hermes profile test-profile', state: team ? 'idle' : 'idle', task: '', stats: {turns: 3, tool_calls: 0}},
+    {name: 'coder-1', type: 'coder', role: 'Coder', runtime: 'opencode', model: "OpenCode server's configured model", state: 'working', task: team ? 't3: CLI commands and README usage' : s.steps.at(-1).title, stats: {turns: team ? 1 : s.steps.length, tool_calls: 7}},
+    ...(team ? [{name: 'coder-2', type: 'coder', role: 'Coder', runtime: 'opencode', model: "OpenCode server's configured model", state: 'waiting_on_you', task: 't2: Static HTML task list', stats: {turns: 1, tool_calls: 4}}] : [])];
+  s.run.plan = ['Storage module with tests', 'CLI commands', 'README usage'];
+  s.run.decision_count = 3;
+  s.run.workspace = {mode: 'worktree', base_branch: 'main', base: 'abc123', integration: {branch: `agentcontrol/${s.run.id}/integration`},
+    agents: Object.fromEntries(s.agents.filter(a => a.type === 'coder').map(a => [a.name, {branch: `agentcontrol/${s.run.id}/${a.name}`}]))};
+  if (team) { s.inbox = [{...fx.richActive().inbox[0], run: s.run.id, agent: 'coder-2'}]; s.steps[1].status = 'running'; }
+  s.models = {configured: true, endpoints: [{id: 'local', url: 'http://127.0.0.1:8080', slots: 1, default: true, in_flight: [{agent: 'coder-1'}], queued: team ? [{agent: 'hermes'}] : [], health: {state: 'online', latency_ms: 11}}]};
+  s.usage = {total: {calls: 6, tokens_in: 31200, tokens_out: 3900, cost: 0}, by_agent: {hermes: {calls: 3, tokens_in: 12480, tokens_out: 1500}, 'coder-1': {calls: 2, tokens_in: 11920, tokens_out: 1700},
+    ...(team ? {'coder-2': {calls: 1, tokens_in: 6800, tokens_out: 700}} : {})}};
+  return s;
+}
 const scenarios = {
   login: {state: fx.richActive, key: false},
   empty: {state: fx.empty},
@@ -46,14 +72,7 @@ const scenarios = {
                 {id: 't2', title: 'Static HTML task list', agent: 'coder-2', depends_on: [], files: ['demo_app/index.html', 'demo_app/README.md']},
                 {id: 't3', title: 'CLI commands and README usage', agent: 'coder-1', depends_on: ['t1'], files: ['demo_app/todo.py', 'demo_app/README.md']}]}};
     return s; }},
-  team: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding'; s.run.mode = 'team';
-    s.run.team = {state: 'running', agents: {'coder-1': {label: 'core'}, 'coder-2': {label: 'docs-ui'}},
-      tasks: [{id: 't1', title: 'JSON storage with tests', agent: 'coder-1', depends_on: [], status: 'done', attempts: 1, steps: [s.steps[0].id]},
-              {id: 't2', title: 'Static HTML task list', agent: 'coder-2', depends_on: [], status: 'running', attempts: 2, reason: 'conflicts with already-merged work in demo_app/README.md', steps: [s.steps[1].id]},
-              {id: 't3', title: 'CLI commands and README usage', agent: 'coder-1', depends_on: ['t1'], status: 'running', attempts: 1, steps: []}]};
-    s.steps[0].agent = 'coder-1'; s.steps[1].agent = 'coder-2'; s.steps[1].title = 't2: Static HTML task list';
-    s.agents = [{name: 'hermes', state: 'idle'}, {name: 'coder-1', state: 'working', task: 't3: CLI commands'}, {name: 'coder-2', state: 'working', task: 't2: Static HTML task list'}];
-    return s; }},
+  team: {state: () => teamState()},
   skills: {state: () => withSkills(fx.richActive()), click: '[data-view="approvals"]'},
   skillsrun: {state: () => withSkills(fx.richActive())},
   skillstab: {state: () => withSkills(fx.richActive()), click: '[data-view="skills"]'},
@@ -67,6 +86,10 @@ const scenarios = {
     s.usage = {total: {calls: 4, tokens_in: 21400, tokens_out: 2300, cost: 0}, by_agent: {
       hermes: {calls: 3, tokens_in: 10480, tokens_out: 1300, queued_ms: 4000}, 'coder-1': {calls: 1, tokens_in: 10920, tokens_out: 1000, queued_ms: 0}}};
     return s; }},
+  mission: {state: () => withMission(teamState()), view: 'mission'},
+  missionsingle: {state: () => withMission((() => { const s = fx.richActive(); s.inbox[0].agent = 'coder-1'; return s; })()), view: 'mission'},
+  missionempty: {state: fx.empty, view: 'mission'},
+  agent: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent="coder-2"]'},
   containernew: {state: () => ({...fx.empty(), sandbox: SANDBOX}), click: ['#empty-state [data-action="new"]', '#iso-container'], preflight: CLEAN_GIT},
   containeroff: {state: () => ({...fx.empty(), sandbox: {...SANDBOX, rootless: false, unavailable: 'docker runs as root on this machine. Agent containers need rootless Docker or Podman (see the README), or start AgentControl with --allow-rootful-containers.'}}),
     click: '#empty-state [data-action="new"]', preflight: CLEAN_GIT},
@@ -119,10 +142,11 @@ async function open(browser, theme, [width, height], scenario) {
   const context = await browser.newContext({viewport: {width, height}, deviceScaleFactor: 1, reducedMotion: 'reduce', colorScheme: process.env.COLOR_SCHEME || 'light'});
   const page = await context.newPage();
   const state = scenario.state();
-  await page.addInitScript(([theme, key]) => {
+  await page.addInitScript(([theme, key, view]) => {
     localStorage.setItem('ac-theme', theme);
+    localStorage.setItem('ac-view', view);
     if (key) sessionStorage.setItem('trial-dashboard-key', 'screenshot-key');
-  }, [theme, scenario.key !== false]);
+  }, [theme, scenario.key !== false, scenario.view || 'runs']);
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/api/')) {

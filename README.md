@@ -56,6 +56,9 @@ Hermes CLI and the OpenCode API without starting a model.
 - **Skills.** Give agents OpenCode skills from your own library or a pinned git
   commit. Every install is reviewed and approved by you, installed per agent,
   logged, and removable.
+- **Mission control.** A home view with a live card per agent (state, task,
+  output, tokens, requests waiting), the task graph and the model queue; open
+  any agent for its own filtered view. Phones get a bottom tab bar.
 - **Containers.** Opt in per run to run the agents in a rootless Docker or
   Podman container: only the run's worktrees, no network after setup, CPU and
   memory limits, and your approvals still apply. Desktop previews run inside

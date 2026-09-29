@@ -196,7 +196,7 @@ def handler(controller, key):
                     return self.reply(200, controller.auto_decision(str(body.get('goal', ''))[:12000], checks, verifier.split(),
                                                                     steps if type(steps) is int else 8))
                 if self.path == '/api/control':
-                    return self.reply(200, controller.control(body['run'], body['action'], body.get('text', '')))
+                    return self.reply(200, controller.control(body['run'], body['action'], body.get('text', ''), body.get('agent')))
                 if self.path == '/api/review':
                     # The API always acts as the person; automatic rule approvals only happen inside the engine.
                     result = controller.review(body['run'], body['kind'], body['request_id'],

@@ -22,6 +22,8 @@ the toolbar. Read `UPDATE_REPORT.md` for the change log and known gaps.
 
 ## Start or update
 
+Needs Python 3.10 or newer (standard library only). The test suite is run on 3.10 and 3.11.
+
 Stop the old dashboard with Ctrl+C in its terminal and keep your OpenCode
 server running. Then, from the repository root:
 
@@ -389,13 +391,14 @@ The container is removed when you apply or discard the branch. Container runs ne
 1. **Use a rootless runtime.** Membership in the `docker` group is equivalent to root, so AgentControl refuses a root-owned Docker daemon for agent containers. Choose one:
    - **Podman** (rootless by default):
      ```
-     sudo pacman -S podman        # or: sudo apt install podman
+     sudo apt install podman uidmap        # Zorin/Ubuntu/Debian   (Arch: sudo pacman -S podman)
      grep $USER /etc/subuid /etc/subgid   # both need a range; if not: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
      podman info --format '{{.Host.Security.Rootless}}'   # prints true
      ```
    - **Rootless Docker**, next to your existing Docker:
      ```
-     yay -S docker-rootless-extras           # Arch (AUR); Debian/Ubuntu: sudo apt install docker-ce-rootless-extras uidmap
+     sudo apt install uidmap docker-ce-rootless-extras   # Zorin/Ubuntu, from Docker's own apt repository
+     #   (Ubuntu's docker.io package has no dockerd-rootless-setuptool.sh; Arch: yay -S docker-rootless-extras)
      dockerd-rootless-setuptool.sh install
      systemctl --user enable --now docker
      export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock   # start AgentControl with this set

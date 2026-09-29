@@ -18,6 +18,7 @@ from adapters.hermes import Hermes
 from proc import process
 from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
 from events import EventBus
+from lifecycle import Lifecycle, StopEvent
 import agents as agent_registry
 import roles
 import permissions
@@ -157,14 +158,15 @@ class Controller:
             self.s.project = chosen.resolve()   # the project you last picked in the dashboard wins over --project
         self.events = EventBus()
         self.store = Store(self.s.data / 'autonomy.sqlite3')
-        self.store.listener = self.events.publish
+        self.shutdown = StopEvent()
+        self.lifecycle = Lifecycle(self.store, settings.profile, shutdown=self.shutdown)
+        self.store.listener = self._store_changed
         self.api = api or OpenCode(settings)
         self.manager = manager or Hermes(settings)
         self.lock = threading.RLock()
         self.threads = {}
         self.verifying = set()
         self.pending_signatures = {}  # last approval list written per run, to avoid rewriting unchanged state
-        self.shutdown = threading.Event()
         self.preview = PreviewManager(self.s.project, self.s.preview_idle)
         self.preview.on_change = lambda: self.events.publish('preview', self.preview.run or None)
         self.health = {'ready': False, 'message': 'Checking connections…'}
@@ -195,6 +197,13 @@ class Controller:
                 self.store.update('runs', run['id'], status='interrupted', pause=True,
                     summary='Controller restarted. Resume will reconcile the current session before continuing.')
                 self.store.event(run['id'], 'recovery', 'Run interrupted by restart; no prompt was replayed.')
+        self.lifecycle.flush()   # record restart changes now; the thread then only follows new activity
+        self.lifecycle.start()
+        self.threads['lifecycle'] = self.lifecycle.thread   # joined with the run threads on shutdown
+
+    def _store_changed(self, kind, run):
+        self.events.publish(kind, run)
+        self.lifecycle.changed(kind, run)
 
     def check(self):
         agents = {}
@@ -2823,7 +2832,8 @@ class Controller:
         if inbox is None:
             inbox = [{**p, 'run': run['id']} for p in run.get('pending', [])] if run['status'] not in TERMINAL else []
         recorded = self.store.agents(run['id']) or agent_registry.default_agents(run, self.s.profile)
-        return agent_registry.describe(recorded, run, steps, inbox, self.store.events(run['id'], limit=1000))
+        return agent_registry.describe(recorded, run, steps, inbox, self.store.events(run['id'], limit=1000),
+                                       self.lifecycle.latest(run['id']))
 
     # ---- projects ---------------------------------------------------------------
     @staticmethod

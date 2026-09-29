@@ -10,7 +10,7 @@
    the theme. */
 
 const WS_KEY = 'ac-workspaces';
-let wsState = wsLoad();          // {run, open: [names], active, known: [names], fresh: [names]}
+let wsState = wsLoad();          // {run, open, active, known, fresh, changed: [names], states: {name: state}}
 const wsTurn = {};               // agent -> the turn chosen in its pane (null = follow the latest)
 const wsTerm = makeTerm(() => ({box: $('ws-term'), body: $('ws-term-body'), held: $('ws-term-held'), empty: $('ws-term-empty'),
   title: $('ws-term-title'), meta: $('ws-term-meta'), jump: $('ws-term-jump'), follow: $('ws-term-follow')}), () => wsState.active || 'opencode');
@@ -19,8 +19,9 @@ let wsShown = '';                 // which agent the pane currently shows
 function wsLoad() {
   try {
     const saved = JSON.parse(readItem('local', WS_KEY) || '{}');
-    return {run: saved.run || '', open: saved.open || [], active: saved.active || '', known: saved.known || [], fresh: saved.fresh || []};
-  } catch { return {run: '', open: [], active: '', known: [], fresh: []}; }
+    return {run: saved.run || '', open: saved.open || [], active: saved.active || '', known: saved.known || [], fresh: saved.fresh || [],
+      changed: saved.changed || [], states: saved.states || {}};
+  } catch { return {run: '', open: [], active: '', known: [], fresh: [], changed: [], states: {}}; }
 }
 function wsSave() { try { localStorage.setItem(WS_KEY, JSON.stringify(wsState)); } catch {} }
 
@@ -31,10 +32,22 @@ function wsSync() {
   const agents = missionAgents(), names = agents.map(a => a.name);
   if (wsState.run !== current.id) {
     const first = agents.find(a => a.state === 'waiting_on_you') || agents.find(a => a.state === 'working' && a.name !== 'hermes') || agents.find(a => a.name !== 'hermes') || agents[0];
-    wsState = {run: current.id, open: [...names], active: first?.name || '', known: [...names], fresh: []};
+    wsState = {run: current.id, open: [...names], active: first?.name || '', known: [...names], fresh: [], changed: [],
+      states: Object.fromEntries(agents.map(a => [a.name, a.state]))};
     wsSave();
     return agents;
   }
+  // A tab you are not looking at is marked when its agent starts waiting on you, needs attention,
+  // fails or finishes. Opening the tab clears the mark.
+  let moved = false;
+  for (const a of agents) {
+    if (wsState.states[a.name] === a.state) continue;
+    const watching = view === 'workspace' && wsState.active === a.name;
+    if (wsState.states[a.name] && WS_NOTICE.has(a.state) && !watching && !wsState.changed.includes(a.name)) wsState.changed.push(a.name);
+    wsState.states[a.name] = a.state;
+    moved = true;
+  }
+  if (moved) wsSave();
   const added = names.filter(n => !wsState.known.includes(n));
   if (added.length) {
     wsState.known.push(...added);
@@ -53,6 +66,7 @@ function openWorkspace(name) {
   if (!wsState.open.includes(name)) wsState.open.push(name);
   wsState.active = name;
   wsState.fresh = wsState.fresh.filter(n => n !== name);
+  wsState.changed = wsState.changed.filter(n => n !== name);
   wsSave();
   closeWsMenu();
   showView('workspace');
@@ -72,6 +86,14 @@ function stepWorkspace(delta) {
 }
 function closeWsMenu() { $('ws-menu')?.classList.add('hidden'); $('ws-add')?.setAttribute('aria-expanded', 'false'); }
 
+const WS_NOTICE = new Set(['waiting_on_you', 'needs_attention', 'failed', 'finished', 'blocked', 'limit_reached']);
+/* "for 5 min" within the hour, else "since 10:42". Only shown when the server recorded the change. */
+function wsSince(value) {
+  const date = new Date(value);
+  if (!value || isNaN(date)) return '';
+  const seconds = (Date.now() - date) / 1000;
+  return seconds < 45 ? 'just now' : seconds < 3600 ? `for ${Math.round(seconds / 60)} min` : `since ${timeLabel(value)}`;
+}
 const WS_MARK = {working: '●', waiting_on_you: '!', needs_attention: '!', paused: '‖', idle: '○', finished: '✓', failed: '×', stopped: '■', blocked: '!', limit_reached: '!'};
 function workspaceActive() { return wsState.active ? wsAgentLabel(wsState.active) : ''; }
 function wsAgentLabel(name) { return name === 'hermes' ? 'Hermes' : name; }
@@ -81,10 +103,10 @@ function renderWsTabs(agents) {
   const byName = Object.fromEntries(agents.map(a => [a.name, a]));
   const tabs = wsState.open.map((name, i) => {
     const a = byName[name] || {name, state: 'idle'}, [label] = AGENT_STATE[a.state] || [a.state || 'idle'];
-    const active = name === wsState.active, fresh = wsState.fresh.includes(name);
+    const active = name === wsState.active, fresh = wsState.fresh.includes(name), changed = wsState.changed.includes(name), since = wsSince(a.since);
     return `<span class="ws-tab ${active ? 'active' : ''} ${esc(wsTone(a))}" data-index="${i + 1}">
-      <button role="tab" aria-selected="${active}" data-ws-open="${esc(name)}" title="${esc(wsAgentLabel(name))} · ${esc(label)}${i < 9 ? ` · key ${i + 1}` : ''}">
-        <span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span class="ws-tab-name">${esc(wsAgentLabel(name))}</span>${fresh ? '<span class="ws-new">new</span>' : ''}<span class="sr-only">, ${esc(label)}</span></button>
+      <button role="tab" aria-selected="${active}" data-ws-open="${esc(name)}" title="${esc(wsAgentLabel(name))} · ${esc(label)}${since ? ' ' + esc(since) : ''}${changed ? ' · changed while you were away' : ''}${i < 9 ? ` · key ${i + 1}` : ''}">
+        <span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span class="ws-tab-name">${esc(wsAgentLabel(name))}</span>${fresh ? '<span class="ws-new">new</span>' : ''}${changed ? '<span class="ws-changed" aria-hidden="true"></span>' : ''}<span class="sr-only">, ${esc(label)}${changed ? ', changed while you were away' : ''}</span></button>
       <button class="ws-close" data-ws-close="${esc(name)}" aria-label="Close ${esc(wsAgentLabel(name))}'s workspace (the agent keeps working)" title="Close tab · the agent keeps working">×</button></span>`;
   }).join('');
   setHTML($('ws-tabs'), `<button class="ws-tab ws-home" data-view="mission" title="Back to Mission">Mission</button>${tabs}`);
@@ -92,10 +114,11 @@ function renderWsTabs(agents) {
   const bar = $('ws-tabs'), tab = bar.querySelector('.ws-tab.active');
   if (tab && (tab.offsetLeft < bar.scrollLeft || tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth)) bar.scrollLeft = Math.max(0, tab.offsetLeft - 8);
   const closed = agents.filter(a => !wsState.open.includes(a.name));
-  $('ws-add-new').classList.toggle('hidden', !wsState.fresh.length);
+  $('ws-add-new').classList.toggle('hidden', !wsState.fresh.length && !wsState.changed.some(n => !wsState.open.includes(n)));
   setHTML($('ws-menu'), agents.map(a => {
     const [label] = AGENT_STATE[a.state] || [a.state || 'idle'];
-    return `<button role="menuitem" data-ws-open="${esc(a.name)}"><span class="ws-mark ${esc(wsTone(a))}" aria-hidden="true">${WS_MARK[a.state] || '○'}</span>${esc(wsAgentLabel(a.name))}<small class="muted">${esc(a.role || '')} · ${esc(label)}${wsState.open.includes(a.name) ? '' : ' · closed'}</small></button>`;
+    const changed = wsState.changed.includes(a.name);
+    return `<button role="menuitem" data-ws-open="${esc(a.name)}"><span class="ws-mark ${esc(wsTone(a))}" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span>${esc(wsAgentLabel(a.name))}${changed ? ' <span class="ws-changed" aria-hidden="true"></span>' : ''}</span><small class="muted">${esc(a.role || '')} · ${esc(label)}${a.since ? ' ' + esc(wsSince(a.since)) : ''}${changed ? ' · changed' : ''}${wsState.open.includes(a.name) ? '' : ' · closed'}</small></button>`;
   }).join('') + (closed.length ? '' : '<p class="small muted">Every agent of this run is open.</p>'));
   const waiting = agents.filter(a => a.state === 'waiting_on_you').length;
   const badge = $('ws-nav-count');
@@ -162,7 +185,7 @@ function renderWsHead(a, steps) {
     ['Works in', where],
     ['Usage', `${hermes ? plural(current.decision_count || 0, 'decision') : `${plural(steps.length, 'turn')} · ${plural(a.stats?.tool_calls || 0, 'tool call')}`}${u ? ` · ${tokens(u.tokens_in)} in / ${tokens(u.tokens_out)} out${u.cost ? ' · ' + money(u.cost, 4) : ''}` : ' · no model calls yet'}`]];
   setHTML($('ws-head'), `<div class="ws-id"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(role)}">${esc(roleMark(a.name))}</span>
-      <div><h1 id="ws-title">${esc(wsAgentLabel(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span></h1>
+      <div><h1 id="ws-title">${esc(wsAgentLabel(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span>${a.since ? `<span class="small muted ws-since" title="${esc(new Date(a.since).toLocaleString())}">${esc(wsSince(a.since))}</span>` : ''}</h1>
       <p class="small muted">${esc(title || a.role || '')}${a.runtime ? ' · ' + esc(a.runtime) : ''} · run “${esc(runTitle(current, 60))}”</p>
       ${a.task ? `<p class="small ws-now">${esc(a.task)}</p>` : ''}</div></div>
     <dl class="ws-facts small">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`);
@@ -217,7 +240,11 @@ function wsEventAgent(e) {
 function renderWsNotes(a) {
   const notes = (current.instructions || []).filter(n => a.type === 'orchestrator' ? !n.agent : n.agent === a.name)
     .map(n => `<li><span class="muted small">${when(n.created)}</span> <strong class="small">Your note${n.agent ? ' for ' + esc(n.agent) : ''}</strong> <span class="small">${esc(n.text)}</span></li>`);
-  const mine = (data.events || []).filter(e => wsEventAgent(e) === a.name).slice(-30).reverse().map(e => {
+  const lifecycle = (data.events || []).filter(e => e.kind === 'agent state' && wsEventAgent(e) === a.name).slice(-12).reverse().map(e => {
+    let d = {}; try { d = JSON.parse(e.detail); } catch {}
+    return `<li><span class="muted small">${when(e.created)}</span> <span class="small">${esc(stateName(d.from))} → <strong>${esc(stateName(d.to))}</strong>${d.task ? ' · ' + esc(d.task) : ''}</span></li>`;
+  });
+  const mine = (data.events || []).filter(e => e.kind !== 'agent state' && wsEventAgent(e) === a.name).slice(-30).reverse().map(e => {
     let parsed; try { parsed = JSON.parse(e.detail); } catch {}
     return `<li><span class="muted small">${when(e.created)}</span> <strong class="small">${esc(e.kind)}</strong> <span class="small">${esc(String(eventSummary(e, parsed) || '').slice(0, 200))}</span></li>`;
   });
@@ -226,6 +253,7 @@ function renderWsNotes(a) {
   const finished = ended.has(current.status);
   setHTML($('ws-notes'), `<section class="ac-panel"><h2 class="ac-panel__title">Notes &amp; activity</h2>
     <p class="small muted">Recorded instructions, Hermes’s summaries and this agent’s events. Private model reasoning is not recorded and is never shown.</p>
+    ${lifecycle.length ? `<h3 class="ws-subhead small">State changes</h3><ul class="ws-list ws-lifecycle">${lifecycle.join('')}</ul>` : ''}
     ${[...notes, ...decisions].length ? `<ul class="ws-list">${[...notes, ...decisions].join('')}</ul>` : ''}
     ${mine.length ? `<ul class="ws-list">${mine.join('')}</ul>` : '<p class="small muted">No events recorded for this agent yet.</p>'}
     ${finished ? '' : `<form class="ws-note" data-ws-note="${esc(a.name)}"><label class="sr-only" for="ws-note-text">Note</label><input id="ws-note-text" maxlength="5000" placeholder="${a.type === 'orchestrator' ? 'Tell Hermes something' : 'Note for Hermes about ' + esc(a.name)}" autocomplete="off"><button class="ac-btn">Send</button></form>

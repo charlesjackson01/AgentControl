@@ -1046,5 +1046,35 @@ test('the Workspace view without a run offers a new run',async()=>{
  assert.match(h.document.getElementById('ws-empty').textContent,/No run yet/);
  assert(h.document.getElementById('ws-pane').classList.contains('hidden'));
 });
+test('lifecycle: since, a changed mark on background tabs, the state history, and Activity wording',async()=>{
+ const s=missionFixture();const recent=new Date(Date.now()-5*60000).toISOString();
+ s.agents[2].since=recent;
+ s.events=[{id:1,kind:'agent state',created:recent,detail:JSON.stringify({agent:'coder-2',from:null,to:'idle',task:''})},
+  {id:2,kind:'agent state',created:recent,detail:JSON.stringify({agent:'coder-2',from:'idle',to:'working',task:'t2: HTML list'})},
+  {id:3,kind:'agent state',created:recent,detail:JSON.stringify({agent:'coder-2',from:'working',to:'waiting_on_you',task:'t2: HTML list'})},
+  {id:4,kind:'verification',created:recent,detail:'passed'}];
+ const h=await harness(s);
+ assert.doesNotMatch(h.document.getElementById('mission-activity').textContent,/agent state/,'Mission’s short list leaves state changes out');
+ assert.match(h.document.getElementById('mission-activity').textContent,/verification/);
+ await h.click('[data-workspace="coder-2"]');
+ assert.match(h.document.getElementById('ws-head').textContent,/Waiting on you\s*for 5 min/);
+ assert.match(h.document.querySelector('#ws-tabs [data-ws-open="coder-2"]').getAttribute('title'),/for 5 min/);
+ const history=h.document.querySelector('.ws-lifecycle').textContent;
+ assert.match(history,/working → waiting on you · t2: HTML list/);assert.match(history,/joined → idle/);
+ assert.doesNotMatch(h.document.querySelector('.ws-lifecycle').textContent,/verification/);
+ // coder-1 is in the background; it finishing marks its tab until you open it. Changes you watch are not marked.
+ h.state.agents[1].state='finished';h.state.agents[2].state='working';
+ await h.poll();
+ assert(h.document.querySelector('#ws-tabs [data-ws-open="coder-1"] .ws-changed'),'background change is marked');
+ assert(!h.document.querySelector('#ws-tabs [data-ws-open="coder-2"] .ws-changed'),'the tab you are watching is not marked');
+ assert.deepEqual(JSON.parse(h.storage.get('ac-workspaces')).changed,['coder-1']);
+ h.state.agents[0].state='working';await h.poll();
+ assert(!h.document.querySelector('#ws-tabs [data-ws-open="hermes"] .ws-changed'),'becoming busy is not something that needs you');
+ await h.click('#ws-tabs [data-ws-open="coder-1"]');
+ assert(!h.document.querySelector('#ws-tabs [data-ws-open="coder-1"] .ws-changed'),'opening the tab clears the mark');
+ await h.click('[data-view="activity"]');
+ assert.match(h.document.getElementById('activity-list').textContent,/coder-2: working → waiting on you · t2: HTML list/);
+ assert.equal(h.calls.filter(c=>c.method==='POST').length,0,'nothing is sent to the server');
+});
 function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

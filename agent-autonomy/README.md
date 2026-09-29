@@ -154,6 +154,14 @@ Tabs are only views:
 - On XP, open workspaces also appear on the taskbar and flash while their agent waits for you.
 - In the Workspace section, `1`–`9` pick a tab, and `]` / `[` move to the next or previous one.
 
+**Agent state history.** AgentControl records each change of an agent's state as an **Agent state** event in the journal. The events come from the same derived state the dashboard shows, so they cannot disagree with it.
+- The workspace header and the tab tooltips say how long an agent has been in its state ("Waiting on you · for 6 min").
+- Each workspace lists its **state changes**.
+- The Activity page can filter to **Agent states**.
+- If an agent in a tab you aren't looking at starts waiting on you, needs attention, fails or finishes, its tab gets a mark (a dot, or `#` like tmux in the Terminal theme). The mark clears when you open the tab.
+- States are sampled at most twice a second, so a state that lasts less than about half a second may not get its own entry.
+- Older runs are never given a history after the fact.
+
 Split and windowed layouts come in later steps.
 
 ## Controls

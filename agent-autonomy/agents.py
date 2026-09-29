@@ -138,8 +138,29 @@ def live_state(agent, run, steps, pending):
     return 'idle', ''
 
 
-def describe(agents, run, steps, pending, events=()):
-    """Agents for the API: identity + type info + derived state + simple counters."""
+def states(agents, run, steps, pending):
+    """{name: (state, task)} for a run's agents, the same states describe() reports."""
+    mine = [p for p in pending if p.get('run', run['id']) == run['id']]
+    return {a['name']: live_state(a, run, steps, mine) for a in agents}
+
+
+def transitions(previous, current):
+    """State changes between two {name: (state, task)} maps, as lifecycle event details.
+    An agent missing from `previous` has just joined (from None). Agents that left are ignored:
+    agents are never removed from a run."""
+    changes = []
+    for name, (state, task) in current.items():
+        before = previous.get(name)
+        if before is None or before[0] != state:
+            changes.append({'agent': name, 'from': before[0] if before else None, 'to': state, 'task': task})
+    return changes
+
+
+def describe(agents, run, steps, pending, events=(), lifecycle=None):
+    """Agents for the API: identity + type info + derived state + simple counters.
+    `lifecycle` maps an agent to its latest recorded 'agent state' event; `since` is that event's
+    time only while it still matches the derived state, so it can never contradict it."""
+    lifecycle = lifecycle or {}
     counts = {}
     for event in events:
         name = agent_for_event(event.get('kind', ''), event.get('detail'))
@@ -153,6 +174,7 @@ def describe(agents, run, steps, pending, events=()):
         result.append({**agent, 'role': kind.role if kind else agent['type'], 'runtime': kind.runtime if kind else 'unknown',
                        'description': kind.description if kind else '', 'tools': list(kind.tools) if kind else [],
                        'state': state, 'task': task,
+                       'since': (lifecycle.get(agent['name']) or {}).get('created') if (lifecycle.get(agent['name']) or {}).get('to') == state else None,
                        'stats': {'turns': len(own) if agent['type'] != 'orchestrator' else run.get('decision_count', 0),
                                  'tool_calls': tools, 'activity': counts.get(agent['name'], 0)}})
     return result

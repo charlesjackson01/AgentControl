@@ -192,6 +192,17 @@ class RealOpenCodeTeamTest(unittest.TestCase):
         self.assertEqual([author(n) for n in ('api.py', 'ui.html', 'wire.txt')],
                          ['coder-1 (AgentControl)', 'coder-2 (AgentControl)', 'coder-1 (AgentControl)'])
         self.assertFalse((self.repo / 'api.py').exists(), 'your checkout is untouched until Apply')
+        # W2: the journal holds each agent's state changes, including the restart, ending with finished.
+        restarted.lifecycle.flush()
+        changes = [json.loads(e['detail']) for e in reversed(restarted.store.latest_events(ident, 'agent state'))]
+        for name in ('hermes', 'coder-1', 'coder-2'):
+            mine = [(d['from'], d['to']) for d in changes if d['agent'] == name]
+            self.assertEqual(mine[0][0], None, f'{name} joined')
+            self.assertIn('needs_attention', [to for _, to in mine], f'{name} was interrupted by the kill')
+            self.assertEqual(mine[-1][1], 'finished', f'{name} ended finished')
+            self.assertTrue(all(a != b for a, b in mine), 'only real changes are recorded')
+        for name in ('coder-1', 'coder-2'):
+            self.assertIn('working', [d['to'] for d in changes if d['agent'] == name], f'{name} was seen working')
 
 
     def test_installed_skill_reaches_the_agent_on_its_next_turn(self):

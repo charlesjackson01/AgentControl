@@ -330,6 +330,9 @@ Live team run in the dashboard: worked, once the OpenCode server was running. Th
   - Each workspace has its terminal, task, approvals, files, notes and preview.
   - Hermes and the researcher show recorded call logs.
   - Tabs persist per browser, and the themes have their own tab styles, including the XP taskbar.
-- Next: W2, lifecycle events.
+- W2 is complete: every change of an agent's derived state is recorded as an `agent state` event (`lifecycle.py`, debounced to at most two samples a second, with no history added to older runs).
+  - The API reports how long each agent has been in its state.
+  - Workspaces show that duration, a state history, and a changed mark on background tabs.
+- Next: W3, measured transport deltas.
 
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

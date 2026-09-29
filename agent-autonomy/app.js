@@ -924,7 +924,7 @@ function agentCard(a) {
   return `<article class="agent-card ${tone}" data-agent-card="${esc(name)}">
     <header class="agent-card__head"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(roleOf(name))}">${esc(roleMark(name))}</span>
       <button class="agent-card__name" data-agent="${esc(name)}" aria-label="Open ${esc(name)}"><strong>${esc(hermes ? 'Hermes' : name)}</strong><small>${esc(title || a.role || (hermes ? 'Orchestrator' : 'Coder'))}</small></button>
-      <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span></header>
+      <span class="ac-status ${tone}" ${a.since ? `title="${esc(label)} since ${esc(new Date(a.since).toLocaleString())}"` : ''}><span class="dot"></span>${esc(label)}</span></header>
     ${body}
     <footer class="agent-card__foot"><span class="small muted">${stats.map(esc).join(' · ')}</span><span class="agent-where small muted">${where}</span>
       <button class="ac-btn compact" data-workspace="${esc(name)}" aria-label="Open ${esc(hermes ? 'Hermes' : name)}'s workspace">Workspace</button>
@@ -1002,7 +1002,8 @@ function renderMission() {
   setHTML($('mission-agents'), missionAgents().map(agentCard).join(''));
   setHTML($('mission-tasks'), renderMissionTasks());
   setHTML($('mission-resources'), renderMissionResources());
-  const events = (data.events || []).slice(-8).reverse().map(e => {
+  // State changes are listed on the Activity page and in each workspace; here they would crowd out the rest.
+  const events = (data.events || []).filter(e => e.kind !== 'agent state').slice(-8).reverse().map(e => {
     let parsed; try { parsed = JSON.parse(e.detail); } catch {}
     return `<li><span class="muted small">${when(e.created)}</span> <strong class="small">${esc(e.kind)}</strong> <span class="small">${esc(String(eventSummary(e, parsed) || '').slice(0, 160))}</span></li>`;
   }).join('');
@@ -1354,8 +1355,10 @@ function renderApprovals() {
     return `<button class="history-button" data-review="${esc(requestKey(r))}"><span class="${tone}">${mark}</span><span><strong>${esc(receiptLabel(r))} · ${esc(requestTitle(r.request))}</strong><small>${esc(requestText(r.request).slice(0, 120))}</small></span>${when(r.updated)}</button>`;
   }).join('') : '<p class="small muted">Decisions for the selected run will be recorded here.</p>');
 }
+function stateName(state) { return state ? (AGENT_STATE[state]?.[0] || String(state).replaceAll('_', ' ')).toLowerCase() : 'joined'; }
 function eventSummary(e, parsed) {
   if (!parsed || typeof parsed !== 'object') return e.detail;
+  if (e.kind === 'agent state' && parsed.agent) return `${parsed.agent}: ${stateName(parsed.from)} → ${stateName(parsed.to)}${parsed.task ? ' · ' + parsed.task : ''}`;
   if (parsed.tool) return `${parsed.tool}${parsed.title ? ': ' + parsed.title : ''}${parsed.status ? ' · ' + parsed.status : ''}`;
   return parsed.summary || parsed.title || (parsed.text ? String(parsed.text) : '') || parsed.status || '';
 }

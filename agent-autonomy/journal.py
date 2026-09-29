@@ -166,6 +166,13 @@ class Store:
             rows = c.execute('SELECT id,created,kind,detail FROM events WHERE run=? ORDER BY id DESC LIMIT ?', (run, limit)).fetchall()
         return [dict(zip(('id', 'created', 'kind', 'detail'), r)) for r in reversed(rows)]
 
+    def latest_events(self, run, kind, limit=300):
+        """The most recent events of one kind for a run, newest first."""
+        with self.connection() as c:
+            rows = c.execute('SELECT id,created,kind,detail FROM events WHERE run=? AND kind=? ORDER BY id DESC LIMIT ?',
+                             (run, kind, limit)).fetchall()
+        return [dict(zip(('id', 'created', 'kind', 'detail'), r)) for r in rows]
+
     def review(self, run, kind, request):
         key = f'{run}:{kind}:{request}'
         with self.connection() as c:

@@ -29,6 +29,17 @@ function teamState() { const s = fx.richActive(); s.inbox = []; s.run.status = '
 }
 
 // Mission control (M11): agent identities, per-agent usage, a request for coder-2, the model queue.
+function withLifecycle(s) {
+  const at = minutes => new Date(Date.now() - minutes * 60000).toISOString();
+  s.agents[1].state = 'finished'; s.agents[1].since = at(1);
+  s.agents[2].since = at(6);
+  s.events = [...(s.events || []),
+    {id: 901, kind: 'agent state', created: at(14), detail: JSON.stringify({agent: 'coder-2', from: null, to: 'idle', task: ''})},
+    {id: 902, kind: 'agent state', created: at(12), detail: JSON.stringify({agent: 'coder-2', from: 'idle', to: 'working', task: 't2: Static HTML task list'})},
+    {id: 903, kind: 'agent state', created: at(6), detail: JSON.stringify({agent: 'coder-2', from: 'working', to: 'waiting_on_you', task: 't2: Static HTML task list'})},
+    {id: 904, kind: 'agent state', created: at(1), detail: JSON.stringify({agent: 'coder-1', from: 'working', to: 'finished', task: ''})}];
+  return s;
+}
 function withMission(s) {
   const team = s.run.mode === 'team';
   s.agents = [{name: 'hermes', type: 'orchestrator', role: 'Orchestrator', runtime: 'hermes-cli', model: 'Hermes profile test-profile', state: team ? 'idle' : 'idle', task: '', stats: {turns: 3, tool_calls: 0}},
@@ -138,6 +149,10 @@ const scenarios = {
   workspace: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="coder-2"] [data-workspace]'},
   workspacehermes: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="hermes"] [data-workspace]'},
   workspaceempty: {state: fx.empty, view: 'workspace'},
+  // W2: coder-1 finished while you were reading coder-2, so its tab carries the changed mark; the state history is recorded.
+  workspacechanged: {state: () => withLifecycle(withMission(teamState())), view: 'workspace',
+    storage: {'ac-workspaces': JSON.stringify({run: 'run_test', open: ['hermes', 'coder-1', 'coder-2'], active: 'coder-2', known: ['hermes', 'coder-1', 'coder-2'],
+      fresh: [], changed: ['coder-1'], states: {hermes: 'idle', 'coder-1': 'finished', 'coder-2': 'waiting_on_you'}})}},
   researchask: {state: () => withSpecialists(teamState()), view: 'approvals'},
   findings: {state: () => withSpecialists(teamState()), view: 'runs'},
   paidrun: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'paused'; s.run.pause = true; s.run.models = {orchestrator: 'router'}; s.run.spend_cap = 0.5;
@@ -203,11 +218,12 @@ async function open(browser, theme, [width, height], scenario) {
   const context = await browser.newContext({viewport: {width, height}, deviceScaleFactor: 1, reducedMotion: 'reduce', colorScheme: process.env.COLOR_SCHEME || 'light'});
   const page = await context.newPage();
   const state = scenario.state();
-  await page.addInitScript(([theme, key, view]) => {
+  await page.addInitScript(([theme, key, view, stored]) => {
     localStorage.setItem('ac-theme', theme);
     localStorage.setItem('ac-view', view);
+    for (const [name, value] of Object.entries(stored)) localStorage.setItem(name, value);
     if (key) sessionStorage.setItem('trial-dashboard-key', 'screenshot-key');
-  }, [theme, scenario.key !== false, scenario.view || 'runs']);
+  }, [theme, scenario.key !== false, scenario.view || 'runs', scenario.storage || {}]);
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/vm/screen') {

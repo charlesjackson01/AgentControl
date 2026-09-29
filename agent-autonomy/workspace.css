@@ -102,6 +102,24 @@ button.ws-tab {
   padding:0 6px;
 }
 
+/* An agent that changed state (now waiting, failed, finished…) while its tab was in the background. */
+.ws-changed {
+  display:inline-block;
+  width:8px;
+  height:8px;
+  border-radius:var(--ac-radius-circle);
+  background:var(--ac-warning);
+}
+
+.ws-since {
+  font-weight:400;
+}
+
+.ws-subhead {
+  margin:8px 0 4px;
+  color:var(--ac-text-muted);
+}
+
 .ws-add-wrap {
   position:relative;
   flex:0 0 auto;
@@ -560,6 +578,23 @@ button.ws-tab {
   background:none;
   height:100%;
   font-family:var(--ac-font-mono);
+}
+
+/* tmux marks a window with activity with "#". */
+:root[data-theme=terminal] .ws-changed {
+  width:auto;
+  height:auto;
+  border-radius:0;
+  background:none;
+  color:var(--ac-warning);
+}
+
+:root[data-theme=terminal] .ws-changed::before {
+  content:"#";
+}
+
+:root[data-theme=terminal] .ws-tab.active .ws-changed {
+  color:inherit;
 }
 
 :root[data-theme=terminal] .ws-new {

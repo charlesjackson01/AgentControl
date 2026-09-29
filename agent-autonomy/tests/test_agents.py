@@ -163,6 +163,101 @@ class ControllerAgentTests(unittest.TestCase):
         self.api.finish()
 
 
+class LifecycleTests(unittest.TestCase):
+    """W2: each change of an agent's derived state is recorded once, as an 'agent state' event."""
+
+    def test_transitions_report_joins_and_changes_only(self):
+        before = {'hermes': ('working', 'Planning'), 'coder-1': ('idle', '')}
+        now = {'hermes': ('working', 'Planning again'), 'coder-1': ('working', 'Add storage'), 'coder-2': ('idle', '')}
+        self.assertEqual(agents.transitions(before, now), [
+            {'agent': 'coder-1', 'from': 'idle', 'to': 'working', 'task': 'Add storage'},
+            {'agent': 'coder-2', 'from': None, 'to': 'idle', 'task': ''}])
+        self.assertEqual(agents.transitions(now, now), [])
+
+    def test_since_is_shown_only_while_the_recorded_state_still_holds(self):
+        run = {**RUN, 'status': 'coding', 'phase': 'code'}
+        turn = {'agent': 'coder-1', 'status': 'running', 'title': 'Add storage'}
+        recorded = {'coder-1': {'to': 'working', 'created': 't1'}, 'hermes': {'to': 'working', 'created': 't0'}}
+        described = {a['name']: a for a in agents.describe([HERMES, CODER], run, [turn], [], lifecycle=recorded)}
+        self.assertEqual(described['coder-1']['since'], 't1')
+        self.assertIsNone(described['hermes']['since'], 'Hermes is idle now, so its old "working" time is not shown')
+
+
+class ControllerLifecycleTests(ControllerAgentTests):
+    def lifecycle(self, run, agent=None):
+        self.c.lifecycle.flush()
+        events = [json.loads(e['detail']) for e in reversed(self.c.store.latest_events(run['id'], 'agent state'))]
+        return [(e['agent'], e['from'], e['to']) for e in events if agent in (None, e['agent'])]
+
+    def test_a_turn_records_join_work_approval_and_finish(self):
+        self.api.hold = True
+        run = self.c.new('Build a thing')
+        self.wait(lambda: ('coder-1', 'idle', 'working') in self.lifecycle(run))
+        self.assertEqual(self.lifecycle(run)[:2], [('hermes', None, 'working'), ('coder-1', None, 'idle')])
+        self.api.pending_items = [{'kind': 'permission', 'id': 'per_1', 'sessionID': 'ses_test', 'permission': 'bash', 'patterns': ['ls'], 'always': []}]
+        self.wait(lambda: ('coder-1', 'working', 'waiting_on_you') in self.lifecycle(run))
+        packet = self.c.state()['inbox'][0]
+        self.c.review(run['id'], packet['kind'], packet['request_id'], packet['fingerprint'], 'approve', None)
+        self.wait(lambda: self.lifecycle(run, 'coder-1')[-1] == ('coder-1', 'waiting_on_you', 'working'))
+        live = self.by_name(self.c.store.get('runs', run['id']))
+        self.assertEqual(live['coder-1']['state'], 'working')
+        self.assertTrue(live['coder-1']['since'])
+        self.api.hold = False
+        self.api.finish()
+        self.wait(lambda: self.c.store.get('runs', run['id'])['status'] == 'completed')
+        self.assertEqual(self.lifecycle(run, 'coder-1')[-1], ('coder-1', 'working', 'finished'))
+
+    def test_repeated_writes_without_a_state_change_record_nothing(self):
+        self.api.hold = True
+        run = self.c.new('Build a thing')
+        self.wait(lambda: ('coder-1', 'idle', 'working') in self.lifecycle(run))
+        count = len(self.lifecycle(run))
+        step = self.c.store.steps(run['id'])[-1]
+        for i in range(50):
+            self.c.store.update('steps', step['id'], result=f'output {i}')
+        self.assertEqual(len(self.lifecycle(run)), count)
+        self.api.hold = False
+        self.api.finish()
+
+    def test_a_restart_records_needs_attention_once_and_old_runs_stay_untouched(self):
+        legacy = {'id': 'old', 'created': '2026-08-01T00:00:00+00:00', 'goal': 'Old run', 'status': 'completed',
+                  'summary': 'done', 'pending': [], 'stop': False, 'decision_count': 3}
+        self.c.store.put('runs', legacy)
+        self.api.hold = True
+        run = self.c.new('Build a thing')
+        self.wait(lambda: ('coder-1', 'idle', 'working') in self.lifecycle(run))
+        before = self.lifecycle(run)
+        self.c.shutdown.set()   # the stopped controller's tracker records nothing more
+        for thread in list(self.c.threads.values()):
+            thread.join(2)
+        self.c.preview.close()
+        restarted = Controller(self.settings, self.api, FakeManager([complete()]))
+        try:
+            restarted.lifecycle.flush()
+            events = [json.loads(e['detail']) for e in reversed(restarted.store.latest_events(run['id'], 'agent state'))]
+            after = [(e['agent'], e['from'], e['to']) for e in events]
+            self.assertEqual(after[:len(before)], before)
+            self.assertEqual(sorted(after[len(before):]), [('coder-1', 'working', 'needs_attention'), ('hermes', 'idle', 'needs_attention')],
+                             'recorded once, by whichever tracker saw it first')
+            restarted.store.put('runs', restarted.store.get('runs', 'old'))
+            restarted.lifecycle.flush()
+            self.assertEqual(restarted.store.latest_events('old', 'agent state'), [], 'no history is added to old runs')
+        finally:
+            restarted.shutdown.set()
+            restarted.preview.close()
+            self.api.hold = False
+        self.assertFalse(restarted.lifecycle.thread.join(2) or restarted.lifecycle.thread.is_alive(), 'the tracker stops on shutdown')
+
+    def test_an_agent_added_later_records_joining(self):
+        self.api.hold = True
+        run = self.c.new('Build a thing')
+        self.wait(lambda: ('coder-1', 'idle', 'working') in self.lifecycle(run))
+        self.c.store.put_agent({'id': f"{run['id']}:tester-1", 'run': run['id'], 'name': 'tester-1', 'type': 'tester', 'created': run['created']})
+        self.assertIn(('tester-1', None, 'idle'), self.lifecycle(run))
+        self.api.hold = False
+        self.api.finish()
+
+
 class MigrationTests(unittest.TestCase):
     def test_v1_journal_gains_the_agents_table(self):
         with tempfile.TemporaryDirectory() as temp:

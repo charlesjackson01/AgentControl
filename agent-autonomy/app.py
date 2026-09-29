@@ -106,6 +106,12 @@ def handler(controller, key):
             if path.path == '/api/preview/output':
                 since = urllib.parse.parse_qs(path.query).get('since', ['0'])[0]
                 return self.reply(200, controller.preview.output(int(since) if since.isdigit() else 0))
+            if path.path == '/api/vm/screen':
+                ident = (urllib.parse.parse_qs(path.query).get('run') or [''])[0]
+                try:
+                    return self.reply(200, controller.vm_console(ident), 'image/png')
+                except (ValueError, KeyError, RuntimeError) as exc:
+                    return self.reply(409, {'error': str(exc)})
             if path.path == '/api/preview/frame':
                 try:
                     return self.reply(200, controller.preview.frame(), 'image/png')
@@ -199,6 +205,9 @@ def handler(controller, key):
                     verifier = str(body.get('verifier') or '')[:2000]
                     return self.reply(200, controller.auto_decision(str(body.get('goal', ''))[:12000], checks, verifier.split(),
                                                                     steps if type(steps) is int else 8))
+                if self.path == '/api/vm/input':
+                    extra = {k: body[k] for k in ('x', 'y', 'width', 'height', 'text', 'key', 'button') if k in body}
+                    return self.reply(200, controller.vm_input(body['run'], body.get('action'), **extra))
                 if self.path == '/api/models/set':
                     cap = body.get('spend_cap')
                     return self.reply(200, controller.set_models(body['run'], body.get('models') or {}, cap, body.get('confirm', '')))
@@ -292,6 +301,12 @@ def main():
     p.add_argument('--research-toolsets', default='', help='Hermes toolsets the researcher may use, comma-separated (see spikes/hermes_research_probe.py). Empty: no researcher')
     p.add_argument('--hermes-provider', default='', help="A provider in your Hermes config.yaml whose base_url is this gateway; lets Hermes use a per-run model (see README)")
     p.add_argument('--max-parallel-agents', type=int, default=None, help='Agents that may work at once (default: model slots + 1)')
+    p.add_argument('--vm-baseline', type=Path, default=None, help='ai-arch baseline qcow2 that VM runs clone (read-only); unset = no VM runs')
+    p.add_argument('--vm-template', default='ai-arch-dev', help='libvirt domain whose definition VM runs start from (never modified)')
+    p.add_argument('--vm-uri', default='qemu:///system')
+    p.add_argument('--vm-ssh-key', type=Path, default=Path('~/.ssh/id_ed25519'), help="Private key authorized for the baseline's admin user")
+    p.add_argument('--vm-user', default='archdev', help="The baseline's admin user (sudo) used only to provision each clone")
+    p.add_argument('--vm-opencode', type=Path, default=None, help='OpenCode binary copied into VMs (default: the one on PATH)')
     p.add_argument('--container-runtime', choices=('podman', 'docker'), default=None, help='Container runtime for isolated runs (default: whichever is found)')
     p.add_argument('--allow-rootful-containers', action='store_true',
                    help='Allow agent containers on a root-owned Docker daemon (not recommended; use rootless Docker or Podman)')
@@ -320,7 +335,9 @@ def main():
                  skills_library=a.skills_library, container_runtime=a.container_runtime,
                  allow_rootful_containers=a.allow_rootful_containers,
                  research_toolsets=tuple(t.strip() for t in a.research_toolsets.split(',') if t.strip()),
-                 max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider)
+                 max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider,
+                 vm_baseline=a.vm_baseline.expanduser() if a.vm_baseline else None, vm_template=a.vm_template, vm_uri=a.vm_uri,
+                 vm_ssh_key=a.vm_ssh_key.expanduser(), vm_user=a.vm_user, vm_opencode=a.vm_opencode)
     if a.build_agent_image:
         return build_agent_image(a)
     controller = Controller(s)
@@ -373,8 +390,10 @@ def main():
             preview_server.shutdown()
         if gateway_server:
             gateway_server.shutdown()
-        for server in list(controller.run_gateways.values()):
-            server.shutdown()
+        for run_gateway in list(controller.run_gateways.values()):
+            run_gateway.shutdown()
+        for machine in list(controller.vms.values()):
+            machine.close_tunnel()   # VMs keep running; Resume reconnects
         server.server_close()
         for thread in list(controller.threads.values()):
             thread.join(timeout=5)

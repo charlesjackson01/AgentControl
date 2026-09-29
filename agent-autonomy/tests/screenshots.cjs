@@ -73,6 +73,15 @@ const USAGE_REPORT = {period: 'month', monthly_cap: 20, total: {calls: 14, token
   {run: 'run_live', title: 'Todo app', agent: 'researcher-1', endpoint: 'local', paid: false, calls: 3, tokens_in: 20400, tokens_out: 2200, cost: 0}]};
 const MODEL_OPTIONS = {default: 'local', monthly_cap: 20, endpoints: [{id: 'router', model: 'anthropic/claude-sonnet', paid: true, cost_per_mtok_in: 3, cost_per_mtok_out: 15}],
   unavailable: {orchestrator: '', coder: '', tester: '', reviewer: '', researcher: 'Hermes reaches other models only through the gateway: start with --gateway-port and --hermes-provider (see the README).'}};
+// A VM run (M13): a KVM clone, cut off to the host-only network after setup.
+function withVm(s) {
+  s.inbox = []; s.run.status = 'coding'; s.run.isolation = 'vm';
+  s.run.workspace = {mode: 'worktree', base_branch: 'main', base: 'abc123', integration: {branch: `agentcontrol/${s.run.id}/integration`}, agents: {'coder-1': {branch: `agentcontrol/${s.run.id}/coder-1`}}};
+  s.workspace = {state: 'open', exists: true, commits: 1, shortstat: '1 file changed, 12 insertions(+)', apply_blocked: '', last_integration: {status: 'merged', files: []}};
+  s.vm = {name: `agentcontrol-${s.run.id}`, baseline: '/home/you/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2', cpus: 4, memory_gb: 8, network: 'setup',
+    state: 'running', live: 'running', network_state: 'none', network_cut: s.run.created, ip: '192.168.231.20'};
+  return s;
+}
 const scenarios = {
   login: {state: fx.richActive, key: false},
   empty: {state: fx.empty},
@@ -129,6 +138,10 @@ const scenarios = {
     s.models = {configured: true, endpoints: [{id: 'local', slots: 1, default: true, in_flight: [], queued: [], health: {state: 'online'}}]}; return s; }},
   modelsnew: {state: () => ({...fx.empty(), model_options: MODEL_OPTIONS}), click: ['#empty-state [data-action="new"]'], preflight: CLEAN_GIT},
   usage: {state: fx.richActive, view: 'usage', api: {'/api/usage': USAGE_REPORT}},
+  vmnew: {state: () => ({...fx.empty(), vm_env: {unavailable: '', models_configured: true, version: 'libvirt 10.9.0', baseline: '/home/you/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2'}}),
+    click: ['#empty-state [data-action="new"]', '#iso-vm'], preflight: CLEAN_GIT},
+  vmrun: {state: () => withVm(fx.richActive()), view: 'runs'},
+  vmconsole: {state: () => withVm(fx.richActive()), view: 'project'},
   containernew: {state: () => ({...fx.empty(), sandbox: SANDBOX}), click: ['#empty-state [data-action="new"]', '#iso-container'], preflight: CLEAN_GIT},
   containeroff: {state: () => ({...fx.empty(), sandbox: {...SANDBOX, rootless: false, unavailable: 'docker runs as root on this machine. Agent containers need rootless Docker or Podman (see the README), or start AgentControl with --allow-rootful-containers.'}}),
     click: '#empty-state [data-action="new"]', preflight: CLEAN_GIT},
@@ -188,6 +201,9 @@ async function open(browser, theme, [width, height], scenario) {
   }, [theme, scenario.key !== false, scenario.view || 'runs']);
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/api/vm/screen') {
+      return route.fulfill({status: 200, contentType: 'image/png', body: fs.readFileSync(path.join(__dirname, 'assets', 'vm-console.png'))});
+    }
     if (url.pathname.startsWith('/api/')) {
       if (scenario.key === false) return route.fulfill({status: 401, contentType: 'application/json', body: JSON.stringify({error: 'Enter the dashboard key printed in your server terminal.'})});
       const body = (scenario.api || {})[url.pathname] ? scenario.api[url.pathname]

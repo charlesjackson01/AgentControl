@@ -27,6 +27,7 @@ import planner
 import modes
 import capabilities
 import sandbox
+import vmenv
 import gateway
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
@@ -68,6 +69,12 @@ class Settings:
     research_seconds: int = 600
     max_parallel_agents: int = None         # None = model slots + 1 (tools and tests overlap one generating agent)
     hermes_provider: str = ''               # a provider in your Hermes config that points at AgentControl's gateway (M12)
+    vm_baseline: Path = None                # ai-arch baseline qcow2 cloned for VM runs (M13); None = VMs off
+    vm_template: str = 'ai-arch-dev'        # libvirt domain whose definition the clones start from
+    vm_uri: str = 'qemu:///system'
+    vm_ssh_key: Path = Path('~/.ssh/id_ed25519')   # authorized for the baseline's admin user
+    vm_user: str = 'archdev'
+    vm_opencode: Path = None                # OpenCode binary copied into VMs; default: the one on PATH
 
 
 def review_packet(request, messages=()):
@@ -160,6 +167,10 @@ class Controller:
         self.run_gateways = {}      # run id -> the gateway on that run container's model socket (M10)
         self.container_apis = {}    # run id -> OpenCode adapter bound to that run container's socket
         self.research_threads = {}  # step id -> the thread running that approved research task (M12)
+        self.vms = {}               # run id -> its VirtualMachine (M13)
+        self.vm_factory = None      # tests supply a stand-in VM
+        self.vm_detect = None
+        self._vm_cache = None
         self.container_api_factory = None  # tests replace the container adapter
         self.sandbox_factory = lambda runtime: sandbox.Sandbox(runtime)
         self._sandbox_cache = None
@@ -227,9 +238,9 @@ class Controller:
         if not isinstance(setup, str) or len(setup) > 2000:
             raise ValueError('Setup command is too long')
         setup_argv = shlex.split(setup) if setup.strip() else []
-        if isolation not in ('host', 'container'):
-            raise ValueError('Isolation must be host or container')
-        if isolation == 'container':
+        if isolation not in ('host', 'container', 'vm'):
+            raise ValueError('Isolation must be host, container, or vm')
+        if isolation in ('container', 'vm'):
             if type(cpus) not in (int, float) or not 0.5 <= cpus <= 32 or type(memory_gb) is not int or not 1 <= memory_gb <= 128:
                 raise ValueError('Give the container 0.5-32 CPUs and 1-128 GB of memory')
             if network not in sandbox.NETWORKS:
@@ -269,6 +280,8 @@ class Controller:
                 mode = auto['mode']
             if isolation == 'container':
                 self._container_ready_for_new()
+            if isolation == 'vm':
+                self._vm_ready_for_new()
             if mode == 'team' and not workspaces.git_info(self.s.project)['usable']:
                 raise ValueError('Team runs need a git project, because each agent works in its own worktree. '
                                  'Initialise a repository with a first commit, or start a single-agent run.')
@@ -283,6 +296,7 @@ class Controller:
                    'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto, 'isolation': isolation,
                    'models': model_choice, 'spend_cap': cap,
                    'container': self._container_record(ident, cpus, memory_gb, network) if isolation == 'container' else None,
+                   'vm': self._vm_record(ident, cpus, memory_gb, network) if isolation == 'vm' else None,
                    'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': [],
                             'auto': bool(auto)} if mode == 'team' else None}
             if mode == 'team':
@@ -393,6 +407,7 @@ class Controller:
             if self.preview.run == ident:
                 self.preview.stop()
             self._remove_container(ident, 'the branch was applied')
+            self._remove_vm(ident, 'the branch was applied')
             workspaces.remove_worktrees(ws)
             self._retire_skills(ident, 'the branch was applied and its worktrees removed')
             ws['applied'] = {'commit': result['commit'], 'time': now()}
@@ -413,6 +428,7 @@ class Controller:
             if self.preview.run == ident:
                 self.preview.stop()
             self._remove_container(ident, 'the branch was discarded')
+            self._remove_vm(ident, 'the branch was discarded')
             workspaces.discard(ws)
             self._retire_skills(ident, 'the branch was discarded')
             ws['discarded'] = now()
@@ -454,8 +470,8 @@ class Controller:
 
         def verify():
             try:
-                if self._container(run):
-                    self._prepare_container(ident)
+                if self._isolated(run):
+                    self._prepare_isolated(ident)
                 code, out, err = self._run_check(run, run['verifier'], self._result_dir(run), self.s.verify_timeout, self.shutdown.is_set)
                 result = {'status': 'passed' if code == 0 else 'failed', 'exit_code': code, 'output': (out + '\n' + err)[-16000:]}
             except (TimeoutError, OSError) as exc:
@@ -739,8 +755,9 @@ class Controller:
 
     def _end(self, ident, status, summary):
         run = self.store.get('runs', ident)
-        if self._container(run) and not (status == 'completed' and run.get('preview')):
+        if self._isolated(run) and not (status == 'completed' and run.get('preview')):
             self._stop_container(ident, 'the run ended')  # before the run reads as finished
+            self._stop_vm(ident, 'the run ended')
         self.store.update('runs', ident, status=status, summary=summary, ended=now(), pending=[])
         self.store.event(ident, status, summary)
         self._push(ident, summary[:250])
@@ -767,8 +784,8 @@ class Controller:
             if 'args' in body and spec['mode'] == 'cli':
                 # Arguments typed in the Project tab replace the saved defaults for this start only.
                 spec['args'] = body['args']
-            if self._container(run):
-                self._prepare_container(ident)
+            if self._isolated(run):
+                self._prepare_isolated(ident)
             status = self.preview.start(ident, spec, cwd=self._result_dir(run), runner=self._preview_runner(run))
             self.store.event(ident, 'preview', f'Preview started: {spec.get("command") or spec.get("path")}')
             return status
@@ -844,6 +861,8 @@ class Controller:
         if role == 'researcher':
             self.store.update('steps', step['id'], verified=True)
             return snapshot(self._result_dir(run) if ws else self._dir(run))
+        if role != 'reviewer':
+            self._vm_pull(run, agent)   # bring the agent's work back from its VM (M13)
         if role == 'reviewer' and ws:
             return self._settle_review(ident, run, step, agent)
         after = snapshot(self._dir(run, agent))
@@ -966,7 +985,7 @@ class Controller:
     def _drive(self, ident):
         run = self._boundary(ident)
         self._prepare_workspace(ident)
-        self._prepare_container(ident)
+        self._prepare_isolated(ident)
         run = self.store.get('runs', ident)
         self._hermes_routes(run)
         self._api(run).health()
@@ -1434,7 +1453,7 @@ class Controller:
                 reasons[role] = ('' if self.s.hermes_provider and gateway_on else
                                  'Hermes reaches other models only through the gateway: start with --gateway-port and --hermes-provider (see the README).')
             else:
-                reasons[role] = ('' if isolation == 'container' or gateway_on else
+                reasons[role] = ('' if isolation in ('container', 'vm') or gateway_on else
                                  'OpenCode on this machine reaches other models only through the gateway: start with --gateway-port and add the agentcontrol provider (see the README), or use a container.')
         return {'endpoints': [{k: e[k] for k in ('id', 'model', 'paid', 'cost_per_mtok_in', 'cost_per_mtok_out')} for e in endpoints],
                 'default': self.broker.registry.get('default'), 'unavailable': reasons,
@@ -2105,7 +2124,7 @@ class Controller:
 
     def _api(self, run):
         """The OpenCode server for this run: yours on the host, or the one inside the run's container."""
-        c = self._container(run)
+        c = self._isolated(run)
         if not c:
             return self.api
         api = self.container_apis.get(run['id'])
@@ -2117,12 +2136,21 @@ class Controller:
 
     def _run_check(self, run, argv, cwd, timeout, cancel):
         """Setup and verification commands run where the agents work."""
+        if self._vm_rec(run):
+            # The VM works on its own copy: bring it up to date with this folder first.
+            self._vm(run).push_tree(str(cwd), str(cwd))
+            return self._vm(run).exec(argv, cwd, timeout, cancel)
         c = self._container(run)
         if not c:
             return process(argv, cwd, timeout, cancel)
         return self.sandbox_factory(c['runtime']).exec(c['name'], argv, cwd, timeout, cancel)
 
     def _preview_runner(self, run):
+        v = self._vm_rec(run)
+        if v:
+            result = self._result_dir(run)
+            self._vm(run).push_tree(str(result), str(result))
+            return vmenv.SshRunner(self._vm(run), v['sockets'])
         c = self._container(run)
         return sandbox.ContainerRunner(c['runtime'], c['name'], c['sockets']) if c else None
 
@@ -2198,6 +2226,13 @@ class Controller:
             c = self._container_update(ident, network_state='none', network_cut=now())
         self._container_update(ident, state='running')
 
+    def _prepare_isolated(self, ident):
+        run = self.store.get('runs', ident)
+        if self._container(run):
+            self._prepare_container(ident)
+        elif self._vm_rec(run):
+            self._prepare_vm(ident)
+
     def _stop_container(self, ident, reason):
         run = self.store.get('runs', ident)
         c = self._container(run)
@@ -2234,21 +2269,23 @@ class Controller:
 
     def _container_control(self, ident, action):
         run = self.store.get('runs', ident)
-        c = self._container(run)
+        c = self._isolated(run)
+        what = 'VM' if self._vm_rec(run) else 'container'
         if not c or c.get('state') == 'removed':
-            raise ValueError('This run has no container')
+            raise ValueError('This run has no container or VM')
         if action == 'container_stop':
             if run['status'] not in TERMINAL and run['status'] not in ('paused', 'interrupted', 'attention') and not run.get('pause'):
-                raise ValueError('Pause the run before stopping its container; agents are working in it.')
+                raise ValueError(f'Pause the run before stopping its {what}; agents are working in it.')
             self._stop_container(ident, 'stopped by you')
+            self._stop_vm(ident, 'stopped by you')
         else:
             threading.Thread(target=self._start_in_background, args=(ident,), daemon=True).start()
         return self.store.get('runs', ident)
 
     def _start_in_background(self, ident):
         try:
-            self._prepare_container(ident)
-            self.store.event(ident, 'container', 'Started by you.')
+            self._prepare_isolated(ident)
+            self.store.event(ident, 'vm' if self._vm_rec(self.store.get('runs', ident)) else 'container', 'Started by you.')
         except Exception as exc:
             self.store.event(ident, 'container', f'Could not start: {exc}')
 
@@ -2262,6 +2299,244 @@ class Controller:
             live = box.state(c['name'])
             c = {**c, 'networks': box.networks(c['name']) if live == 'running' else []}
         return {**c, 'live': live}
+
+    # ---- virtual machines (M13) -------------------------------------------------
+    def vm_info(self, refresh=False):
+        cached = self._vm_cache
+        if refresh or not cached or time.monotonic() - cached[0] > 30:
+            info = (self.vm_detect or vmenv.detect)(self.s.vm_uri, self.s.vm_baseline, self.s.vm_template, self.s.vm_ssh_key)
+            self._vm_cache = cached = (time.monotonic(), info)
+        return cached[1]
+
+    def _vm_opencode(self):
+        found = self.s.vm_opencode or shutil.which('opencode')
+        return str(Path(found).expanduser().resolve()) if found and Path(found).expanduser().exists() else ''
+
+    def vm_env_status(self):
+        info = self.vm_info()
+        reason = info.get('reason') or ('' if self._vm_opencode() else 'Your opencode binary was not found; start with --vm-opencode /path/to/opencode.')
+        return {**info, 'unavailable': reason, 'models_configured': self.broker.configured}
+
+    def _vm_ready_for_new(self):
+        if not workspaces.git_info(self.s.project)['usable']:
+            raise ValueError('VM runs need a git project: the VM works on copies of the run\'s worktrees.')
+        self.vm_info(refresh=True)
+        reason = self.vm_env_status()['unavailable']
+        if reason:
+            raise ValueError(reason)
+        if not self.broker.configured:
+            raise ValueError('VM runs reach your model server only through AgentControl. Describe it in state/models.json first.')
+
+    def _vm_record(self, ident, cpus, memory_gb, network):
+        return {'name': f'agentcontrol-{ident}', 'uri': self.s.vm_uri, 'baseline': str(self.s.vm_baseline), 'template': self.s.vm_template,
+                'cpus': cpus, 'memory_gb': memory_gb, 'network': network, 'state': 'pending',
+                'base': str(self.s.data / 'vms' / ident), 'sockets': str(sandbox.sockets_dir(self.s.data, ident))}
+
+    @staticmethod
+    def _vm_rec(run):
+        return (run or {}).get('vm') if (run or {}).get('isolation') == 'vm' else None
+
+    def _isolated(self, run):
+        """The container or VM record of a run that is isolated, else None."""
+        return self._container(run) or self._vm_rec(run)
+
+    def _vm(self, run):
+        v = self._vm_rec(run)
+        machine = self.vms.get(run['id'])
+        if machine is None:
+            machine = (self.vm_factory(run) if self.vm_factory else
+                       vmenv.VirtualMachine(v['uri'], v['name'], v['base'], self.s.vm_ssh_key, self.s.vm_user))
+            self.vms[run['id']] = machine
+        return machine
+
+    def _vm_update(self, ident, **changes):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            v = {**run['vm'], **changes}
+            self.store.update('runs', ident, vm=v)
+            return v
+
+    def _start_run_gateway(self, ident, sockets):
+        if ident not in self.run_gateways:
+            server = gateway.serve_unix(self.broker, self.store.usage_add, ident, str(Path(sockets) / 'model.sock'),
+                                        authorize=lambda r, a, e: self.authorize_paid(r, a, e))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.run_gateways[ident] = server
+
+    def _vm_folders(self, ws):
+        return [ws['integration']['dir']] + [a['dir'] for a in ws['agents'].values()]
+
+    def _vm_opencode_up(self, ident, vm, workdir):
+        """OpenCode as the agent user inside the VM, reached through the tunnel's api.sock."""
+        code, out, err = vm.run_script(f"if ! pgrep -u {vmenv.AGENT_USER} -f 'opencode serve' >/dev/null; then cd {shlex.quote(str(workdir))} && "
+                                       f"nohup opencode serve --hostname 127.0.0.1 --port {vmenv.OPENCODE_PORT} >$HOME/opencode.log 2>&1 </dev/null & fi",
+                                       user=vmenv.AGENT_USER, timeout=60)
+        if code:
+            raise Attention(f'OpenCode did not start in the VM: {(err or out)[-400:]}')
+        run = self.store.get('runs', ident)
+        self.container_apis.pop(ident, None)
+        until = time.monotonic() + 90
+        while True:
+            try:
+                self._api(run).health()
+                return
+            except Exception as exc:
+                if time.monotonic() > until:
+                    raise Attention(f'OpenCode in the VM did not answer: {exc}') from exc
+                time.sleep(1)
+
+    def _prepare_vm(self, ident):
+        """Create or start the run's VM, provision it on first boot, run setup while it has network,
+        then move it to the host-only network before any agent is prompted. Safe to repeat."""
+        run = self.store.get('runs', ident)
+        v = self._vm_rec(run)
+        if not v:
+            return
+        if v.get('state') == 'removed':
+            raise Attention('This run\'s VM was removed with its branch. Start a follow-up run instead.')
+        ws = self._ws(run)
+        sockets = Path(v['sockets'])
+        sockets.mkdir(parents=True, exist_ok=True)
+        self._start_run_gateway(ident, sockets)
+        vm = self._vm(run)
+        try:
+            if vm.state() == 'missing':
+                vm.ensure_isolated_network()
+                notes = vm.create(v['baseline'], v['template'], v['cpus'], v['memory_gb'], vmenv.SETUP_NETWORK,
+                                  vm_dir=Path(v['baseline']).parent)
+                for note in notes:
+                    self.store.event(ident, 'vm', note)
+                self.store.event(ident, 'vm', f"Created {v['name']}: a copy-on-write clone of {Path(v['baseline']).name} "
+                                 f"({v['cpus']} CPUs, {v['memory_gb']} GB; network on for provisioning).")
+                self.store.audit_append(ident, {'action': 'vm created', 'actor': 'AgentControl', 'name': v['name'],
+                                                'baseline': v['baseline'], 'network': vmenv.SETUP_NETWORK})
+                v = self._vm_update(ident, network_state='online', created=now(), provisioned=None)
+            if vm.state() != 'running':
+                vm.start()
+            online = v.get('network_state') == 'online'
+            ip = vm.wait_address(180, None if online else '192.168.231.')
+            v = self._vm_update(ident, ip=ip)
+            if not v.get('provisioned'):
+                code, out, err = vm.run_script(vmenv.provision_script([str(Path(ws['integration']['path']).parent)] + self._vm_folders(ws)))
+                if code:
+                    raise Attention(f'Preparing the VM failed: {(err or out)[-600:]}')
+                vm.copy_in(self._vm_opencode(), '/tmp/opencode')
+                config = json.dumps(sandbox.opencode_config(self.broker.endpoint().get('model') or 'local-model', sandbox.host_permission(),
+                                                            extra_models=[e['id'] for e in self.broker.endpoints]), indent=2)
+                code, out, err = vm.run_script('sudo install -m 755 /tmp/opencode /usr/local/bin/opencode && rm -f /tmp/opencode')
+                if code:
+                    raise Attention(f'Installing OpenCode in the VM failed: {(err or out)[-400:]}')
+                code, out, err = vm.run_script(f"cat > ~/.config/opencode/opencode.json <<'AGENTCONTROL_EOF'\n{config}\nAGENTCONTROL_EOF\n", user=vmenv.AGENT_USER)
+                if code:
+                    raise Attention(f'Writing the OpenCode config in the VM failed: {(err or out)[-400:]}')
+                self.store.event(ident, 'vm', 'Provisioned: Tailscale off in this clone, agent user without sudo, tools and OpenCode installed.')
+                v = self._vm_update(ident, provisioned=now())
+            vm.open_tunnel(str(sockets / 'api.sock'), str(sockets / 'model.sock'))
+            for folder in self._vm_folders(ws):
+                vm.push_tree(folder, folder)
+            self._vm_opencode_up(ident, vm, ws['agents']['coder-1']['dir'])
+            if run.get('setup') and not ws.get('setup_done'):
+                for folder in self._vm_folders(ws):
+                    self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in the VM, {folder})")
+                    code, out, err = vm.exec(run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
+                    if code:
+                        raise Attention(f"The setup command failed in {folder} (exit {code}): {(err or out)[-600:]} "
+                                        'Fix it and press Resume; setup will run again.')
+                ws['setup_done'] = now()
+                self.store.update('runs', ident, workspace=ws)
+            if v['network'] != 'internet' and v.get('network_state') == 'online':
+                ip, how = vm.switch_network(vmenv.ISOLATED, '192.168.231.')
+                vm.open_tunnel(str(sockets / 'api.sock'), str(sockets / 'model.sock'))
+                self._vm_opencode_up(ident, vm, ws['agents']['coder-1']['dir'])
+                self.store.event(ident, 'vm', f"Network cut off ({'live' if how == 'live' else 'with a reboot'}): the VM now reaches only this machine.")
+                self.store.audit_append(ident, {'action': 'vm network cut', 'actor': 'AgentControl', 'name': v['name'], 'how': how})
+                v = self._vm_update(ident, network_state='none', network_cut=now(), ip=ip)
+        except vmenv.VMError as exc:
+            raise Attention(f'The run VM: {exc}') from exc
+        self._vm_update(ident, state='running')
+
+    def _vm_push(self, run, agent):
+        if self._vm_rec(run):
+            folder = str(self._dir(run, agent))
+            try:
+                self._vm(run).push_tree(folder, folder)
+            except vmenv.VMError as exc:
+                raise Attention(str(exc)) from exc
+
+    def _vm_pull(self, run, agent):
+        if not self._vm_rec(run):
+            return
+        folder = str(self._dir(run, agent))
+        try:
+            result = self._vm(run).pull_tree(folder, folder, keep=self._skill_paths(run['id'], agent))
+        except vmenv.VMError as exc:
+            raise Attention(str(exc)) from exc
+        if result['refused']:
+            self.store.event(run['id'], 'vm files refused', f"Not copied back (links or paths outside the worktree): {', '.join(result['refused'][:10])}")
+            self.store.audit_append(run['id'], {'action': 'vm files refused', 'actor': 'AgentControl', 'files': result['refused'][:20]})
+
+    def _stop_vm(self, ident, reason):
+        run = self.store.get('runs', ident)
+        v = self._vm_rec(run)
+        if not v or v.get('state') in ('removed', 'stopped', 'pending'):
+            return
+        if self.preview.run == ident:
+            self.preview.stop()
+        self._vm(run).stop()
+        self._close_gateway(ident)
+        self._vm_update(ident, state='stopped', stopped=now())
+        self.store.event(ident, 'vm', f'Stopped: {reason}.')
+
+    def _remove_vm(self, ident, reason):
+        run = self.store.get('runs', ident)
+        v = self._vm_rec(run)
+        if not v or v.get('state') == 'removed':
+            return
+        if self.preview.run == ident:
+            self.preview.stop()
+        self._vm(run).remove()
+        self.vms.pop(ident, None)
+        self._close_gateway(ident)
+        shutil.rmtree(v['sockets'], ignore_errors=True)
+        self._vm_update(ident, state='removed', removed=now())
+        self.store.event(ident, 'vm', f'Removed: {reason}.')
+        self.store.audit_append(ident, {'action': 'vm removed', 'actor': 'AgentControl', 'name': v['name'], 'reason': reason})
+
+    def vm_status(self, run):
+        v = self._vm_rec(run)
+        if not v:
+            return None
+        live = v.get('state')
+        if live not in ('removed', 'pending'):
+            live = self._vm(run).state()
+        return {**v, 'live': live}
+
+    def vm_console(self, ident):
+        run = self.store.get('runs', ident)
+        if not self._vm_rec(run) or self._vm(run).state() != 'running':
+            raise ValueError('This run has no running VM.')
+        return self._vm(run).screenshot()
+
+    def vm_input(self, ident, action, x=0, y=0, width=1, height=1, text='', key='', button=1):
+        """Your clicks and keys on the VM console. Recorded in the audit log (not the text you type)."""
+        run = self.store.get('runs', ident)
+        if not self._vm_rec(run) or self._vm(run).state() != 'running':
+            raise ValueError('This run has no running VM.')
+        vm = self._vm(run)
+        if action == 'click':
+            if not all(type(n) in (int, float) for n in (x, y, width, height)) or not (0 <= x < width and 0 <= y < height):
+                raise ValueError('Click inside the screen')
+            vm.click(x, y, width, height, button if button in (1, 2, 3) else 1)
+        elif action == 'type':
+            if not isinstance(text, str) or not 1 <= len(text) <= 500:
+                raise ValueError('Type 1-500 characters')
+            vm.type_text(text)
+        elif action == 'key':
+            vm.press(key)
+        else:
+            raise ValueError('Action must be click, type, or key')
+        self.store.audit_append(ident, {'action': f'vm console {action}', 'actor': HUMAN, 'name': self._vm_rec(run)['name']})
+        return {'ok': True}
 
     def _model_gate(self, ident, target):
         """Before handing work to an agent, make sure the model server answers (M0: a stopped
@@ -2318,7 +2593,7 @@ class Controller:
         if missing:
             raise Attention(f"The run's worktree is missing ({', '.join(missing)}). It may have been removed outside "
                             'AgentControl. Nothing was sent. Stop this run and start a follow-up.')
-        if run.get('setup') and not ws.get('setup_done') and not self._container(run):
+        if run.get('setup') and not ws.get('setup_done') and not self._isolated(run):
             for folder in [ws['integration']['dir']] + [a['dir'] for a in ws['agents'].values()]:
                 self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in {folder})")
                 code, out, err = process(run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
@@ -2332,6 +2607,8 @@ class Controller:
         self._boundary(ident)
         if step['status'] == 'prepared':
             self._model_gate(ident, 'OpenCode')
+            # A VM works on its own copy of the agent's folder: send the current one before the prompt.
+            self._vm_push(self.store.get('runs', ident), step.get('agent', 'coder-1'))
         with self.lock:
             run = self.store.get('runs', ident)
             if run['pause'] or run['stop']:
@@ -2542,6 +2819,8 @@ class Controller:
                 'workspace': self.workspace_status(run) if run else None,
                 'container': self.container_status(run) if run else None,
                 'sandbox': self.sandbox_status(),
+                'vm': self.vm_status(run) if run else None,
+                'vm_env': self.vm_env_status(),
                 'skills': self.skills_status(run),
                 'usage': self.store.usage_summary(ident) if run else None,
                 'agents': self.agents(run, steps, inbox) if run else [],

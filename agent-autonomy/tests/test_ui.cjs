@@ -861,4 +861,58 @@ test('the Usage view reports calls, tokens and spend, local calls cost nothing',
  assert.match(text,/\$0\.0214/);assert.match(text,/of \$20\.00 monthly cap/);assert.match(text,/local · \$0/);assert.match(text,/paid/);
  assert(h.calls.some(c=>c.url==='/api/usage?period=month'));
 });
+test('New run offers a VM when KVM is ready, with the reason when it is not',async()=>{
+ let h=await harness({...gitNew(),vm_env:{unavailable:'/dev/kvm is missing: enable virtualization (SVM/VT-x) and load kvm_amd or kvm_intel.',models_configured:true}});
+ await h.click('[data-action="new"]');
+ assert(h.document.getElementById('iso-vm').disabled);
+ assert.match(h.document.getElementById('vm-unavailable').textContent,/\/dev\/kvm is missing/);
+ h=await harness({...gitNew(),vm_env:{unavailable:'',models_configured:true,version:'libvirt 10.9',baseline:'/vms/ai-arch-baseline-with-tailscale.qcow2'}});
+ await h.click('[data-action="new"]');
+ const vm=h.document.getElementById('iso-vm');assert(!vm.disabled);
+ assert.match(h.document.getElementById('vm-unavailable').textContent,/clones ai-arch-baseline-with-tailscale\.qcow2/);
+ vm.checked=true;vm.onchange();
+ assert(!h.document.getElementById('container-fields').classList.contains('hidden'),'limits and network apply to VMs too');
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('container-cpus').value='4';h.document.getElementById('container-memory').value='8';
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const body=h.calls.find(c=>c.url==='/api/runs').body;
+ assert.deepEqual([body.isolation,body.cpus,body.memory_gb,body.network],['vm',4,8,'setup']);
+});
+function vmFixture(extra={},status='completed'){
+ const s=branchFixture();s.run.status=status;s.run.isolation='vm';
+ s.vm={name:'agentcontrol-run_test',baseline:'/vms/ai-arch-baseline-with-tailscale.qcow2',cpus:4,memory_gb:8,network:'setup',state:'running',live:'running',
+  network_state:'none',network_cut:'2026-09-28T10:42:00Z',ip:'192.168.231.20',...extra};
+ return s;
+}
+test('the VM panel shows the clone, its network and address, and shuts down or starts it',async()=>{
+ let h=await harness(vmFixture());await h.click('[data-view="runs"]');
+ const panel=()=>h.document.getElementById('vm-panel').textContent;
+ assert.match(panel(),/Running/);assert.match(panel(),/ai-arch-baseline-with-tailscale\.qcow2/);assert.match(panel(),/4 vCPUs · 8 GB/);
+ assert.match(panel(),/Host-only since/);assert.match(panel(),/192\.168\.231\.20/);assert.match(panel(),/unprivileged user/);
+ await h.click('[data-action="container-stop"]');
+ assert.equal(h.calls.find(c=>c.url==='/api/control').body.action,'container_stop');
+ h=await harness(vmFixture({live:'stopped'}));await h.click('[data-view="runs"]');
+ await h.click('[data-action="container-start"]');
+ assert.equal(h.calls.find(c=>c.url==='/api/control').body.action,'container_start');
+ h=await harness(vmFixture({},'coding'));await h.click('[data-view="runs"]');
+ assert(h.document.querySelector('[data-action="container-stop"]').disabled,'agents are working in it');
+ h=await harness(vmFixture({live:'removed',removed:runTime()}));await h.click('[data-view="runs"]');
+ assert.match(panel(),/Removed/);
+});
+test('the Project tab shows the VM screen and sends clicks, text and keys',async()=>{
+ const h=await harness(vmFixture());await h.click('.nav [data-view="project"]');
+ assert(!h.document.getElementById('vm-console').classList.contains('hidden'));
+ const img=h.document.getElementById('vm-screen');
+ Object.defineProperty(img,'naturalWidth',{value:1280});Object.defineProperty(img,'naturalHeight',{value:800});
+ img.getBoundingClientRect=()=>({left:0,top:0,width:640,height:400});
+ img.dispatchEvent(Object.assign(new h.context.window.Event('click'),{clientX:320,clientY:100,button:0}));await tick();
+ assert.deepEqual(h.calls.find(c=>c.url==='/api/vm/input').body,{run:'run_test',action:'click',x:640,y:200,width:1280,height:800,button:1});
+ h.document.getElementById('vm-type').value='ls -la';
+ await h.document.getElementById('vm-type-form').onsubmit({preventDefault(){}});await tick();
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/vm/input').pop().body,{run:'run_test',action:'type',text:'ls -la'});
+ await h.click('[data-vm-key="Return"]');
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/vm/input').pop().body,{run:'run_test',action:'key',key:'Return'});
+ const stopped=await harness(vmFixture({live:'stopped'}));await stopped.click('.nav [data-view="project"]');
+ assert(stopped.document.getElementById('vm-console').classList.contains('hidden'));
+});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

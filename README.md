@@ -56,6 +56,9 @@ Hermes CLI and the OpenCode API without starting a model.
 - **Skills.** Give agents OpenCode skills from your own library or a pinned git
   commit. Every install is reviewed and approved by you, installed per agent,
   logged, and removable.
+- **Virtual machines.** Opt in per run to run the agents in a KVM clone of your
+  ai-arch baseline: files move over SSH, the VM reaches only your host after
+  setup, agents have no sudo, and you can watch and use its screen.
 - **Specialists.** Hermes can add a tester (only test changes merge), a
   read-only reviewer, or a web researcher (each question needs your typed
   approval) when the work needs one.

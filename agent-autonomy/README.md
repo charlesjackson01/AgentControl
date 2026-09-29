@@ -421,6 +421,55 @@ The test checks, for a real run inside a real container (with a scripted model):
 - stopping the preview ends it inside the container
 - Apply removes the container
 
+## Running agents in a virtual machine (KVM)
+
+For work that needs a whole machine, choose **Virtual machine** in New run. The run gets its own KVM clone of your ai-arch baseline, and AgentControl and Hermes stay on your host.
+
+**What the VM is**
+- **A thin copy-on-write clone:** a new qcow2 overlay whose backing file is your baseline, so the baseline is only read. It uses a libvirt domain built from your `ai-arch-dev` definition (never modified) and switched to KVM with your CPU. It gets:
+  - the CPUs and memory you choose
+  - its own firmware variables
+  - displays on 127.0.0.1 only
+  - no shared host folders or passed-through devices
+- **Provisioned on first boot,** over SSH as your baseline's admin user (`archdev`):
+  - **Tailscale is stopped and disabled in the clone,** so it never appears on your tailnet as `ai-arch-dev`.
+  - An unprivileged `agent` user is created **without sudo**; every agent command runs as that user.
+  - `git`, `python`, the Xvfb tools and ImageMagick are installed with pacman if missing.
+  - Your own OpenCode binary is copied in, with a config whose only model provider is AgentControl's run gateway, and your host `permission` rules.
+- **Your files never get mounted:**
+  - Before each prompt, the agent's folder is copied into the VM over SSH, at the same path: the tracked and unignored files, with deletions mirrored. The VM keeps its own git snapshot of it.
+  - After the turn, the folder comes back the same way. Only regular files with plain paths inside the worktree are accepted; links and paths that point outside are refused and logged. Files ignored by git (for example `node_modules`) stay in the VM.
+  - Commits, merges, Apply and Discard happen on your host as always. The verification command and the setup command run inside the VM.
+- **Transport:** one SSH connection carries AgentControl → OpenCode in the VM, and the VM's model requests → the run's gateway. Your approvals, spend caps and usage work exactly as elsewhere.
+- **Network:**
+  - The VM uses libvirt's NAT only while it is provisioned and your setup command runs.
+  - It then moves to `agentcontrol-isolated`, a host-only network that AgentControl creates, where the VM can reach only your host. The move is tried live first; if that doesn't give a working address, the VM is rebooted on the new network.
+  - "Internet while agents work" keeps the NAT and needs your typed `approve`.
+- **Screen:** the Project tab shows the VM's own console, refreshed about once a second. Your clicks go in as absolute mouse events, and your typing and keys through libvirt (a US key map). Each is recorded in the audit log, but not the text you type. Web, terminal and desktop previews also run inside the VM.
+- **Lifecycle:**
+  - The run page's Virtual machine panel shows state, clone, limits, network and address, with Shut down and Start buttons.
+  - The VM shuts down when the run ends (unless a preview starts) and is removed with its overlay when you apply or discard the branch.
+
+**Setup on your server**
+```
+# your user needs libvirt access, /dev/kvm, and your SSH key authorized in the baseline (it is, for archdev)
+python3 agent-autonomy/app.py --vm-baseline ~/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2
+#   optional: --vm-template ai-arch-dev  --vm-ssh-key ~/.ssh/id_ed25519  --vm-user archdev  --vm-opencode /path/to/opencode
+```
+The option is disabled in New run, with the reason, until this works: libvirt at `qemu:///system`, `/dev/kvm`, the baseline, the template domain, the key, your OpenCode binary, and `models.json`. To try the whole thing once (it boots a VM and needs internet the first time):
+```
+cd agent-autonomy && AGENTCONTROL_VM_TESTS=1 AGENTCONTROL_VM_BASELINE=~/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2 \
+  python3 -m unittest tests.test_vm_e2e
+```
+That test checks:
+- the agent's file comes back through SSH
+- there is no internet inside after setup
+- the agent user has no sudo
+- Tailscale is off in the clone
+- a console frame is shown and a click works
+- Apply removes the VM
+- the baseline file is unchanged
+
 ## Auto mode
 
 Choose **Auto** in New run to let AgentControl pick between one agent and a team.

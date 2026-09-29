@@ -500,6 +500,7 @@ function renderRun() {
   renderModelUsage();
   renderBranch();
   renderContainer();
+  renderVm();
   renderSpecialistPanels();
   renderSkillsPanel();
   renderFiles(fileStats(steps));
@@ -1038,7 +1039,7 @@ function renderSpecialistPanels() {
 }
 // Models picker in New run: only shown when models.json lists more than your local model.
 function renderModelsPicker() {
-  const o = data?.model_options, isolation = $('iso-container')?.checked ? 'container' : 'host';
+  const o = data?.model_options, isolation = $('iso-container')?.checked || $('iso-vm')?.checked ? 'container' : 'host';
   $('models-section').classList.toggle('hidden', !o?.endpoints?.length);
   if (!o?.endpoints?.length) return;
   const roles = [['orchestrator', 'Hermes (planning)'], ['coder', 'Coders'], ['tester', 'Tester'], ['reviewer', 'Reviewer'], ['researcher', 'Researcher']];
@@ -1411,6 +1412,10 @@ function renderProject() {
     $('preview-args').value = spec?.args || '';
   }
   togglePreviewFields('cfg');
+  const vmLive = data.vm?.live === 'running';
+  $('vm-console').classList.toggle('hidden', !vmLive);
+  $('vm-console-meta').textContent = vmLive ? `· ${data.vm.name}` : '';
+  if (vmLive && view === 'project' && !vmScreenURL) refreshVmScreen().catch(() => {});
 }
 function renderPreviewStrip() {
   if (!current) { setHTML($('preview-strip'), ''); return; }
@@ -1466,6 +1471,7 @@ async function pollPreview() {
       }
       if (previewLive(p) && p.mode === 'desktop') await refreshScreen();
     }
+    if (key && connected && view === 'project' && data?.vm?.live === 'running' && !document.hidden) await refreshVmScreen();
   } catch {}
   preview.timer = setTimeout(pollPreview, delay);
 }
@@ -1695,7 +1701,20 @@ function containerBlocker() {
   if (!s.models_configured) return 'Describe your model server in state/models.json first; the container reaches it only through AgentControl.';
   return '';
 }
+function vmBlocker() {
+  const v = data?.vm_env;
+  if (!v) return 'Checking for KVM and libvirt…';
+  if (v.unavailable) return v.unavailable;
+  if (!preflight?.usable) return 'VMs need a git project with at least one commit: the VM works on copies of the run’s worktrees.';
+  if (!v.models_configured) return 'Describe your model server in state/models.json first; the VM reaches it only through AgentControl.';
+  return '';
+}
 function renderIsolation() {
+  const vmBlocked = vmBlocker(), vmOption = $('iso-vm');
+  vmOption.disabled = Boolean(vmBlocked);
+  if (vmBlocked && vmOption.checked) { vmOption.checked = false; $('iso-host').checked = true; }
+  setHTML($('vm-unavailable'), vmBlocked ? `<p class="small muted">Virtual machine can’t be used yet: ${esc(vmBlocked)}</p>`
+    : data?.vm_env ? `<p class="small muted">KVM · ${esc(data.vm_env.version || 'libvirt')} · clones ${esc((data.vm_env.baseline || '').split('/').pop())}</p>` : '');
   const blocked = containerBlocker(), option = $('iso-container'), s = data?.sandbox;
   option.disabled = Boolean(blocked);
   if (blocked && option.checked) { option.checked = false; $('iso-host').checked = true; }
@@ -1703,14 +1722,15 @@ function renderIsolation() {
   setHTML($('container-unavailable'), blocked ? `<p class="small muted">Container can’t be used yet: ${esc(blocked)}</p>
     ${imageMissing ? details('Build the agent image', s.build_command, 'image-build') : ''}<button type="button" class="text-button small" data-action="sandbox-check">Check again</button>`
     : s?.runtime ? `<p class="small muted">${esc(s.runtime)} ${esc(s.version || '')} · ${s.rootless ? 'rootless ✓' : '<span class="warning-text">runs as root (allowed by --allow-rootful-containers)</span>'}</p>` : '');
-  const on = $('iso-container').checked;
+  const on = $('iso-container').checked || $('iso-vm').checked;
   $('container-fields').classList.toggle('hidden', !on);
   $('container-confirm-field').classList.toggle('hidden', !on || $('container-network').value !== 'internet');
 }
 function isolationBody() {
-  if (!$('iso-container').checked) return {};
+  const isolation = $('iso-vm').checked ? 'vm' : $('iso-container').checked ? 'container' : '';
+  if (!isolation) return {};
   const network = $('container-network').value;
-  return {isolation: 'container', cpus: Number($('container-cpus').value), memory_gb: Number($('container-memory').value), network,
+  return {isolation, cpus: Number($('container-cpus').value), memory_gb: Number($('container-memory').value), network,
     ...(network === 'internet' ? {confirm: $('container-confirm').value.trim()} : {})};
 }
 const NETWORK_LABEL = {setup: 'internet for setup only', none: 'none', internet: 'internet while agents work'};
@@ -1734,6 +1754,44 @@ function renderContainer() {
     <dt>Network</dt><dd>${net}</dd></dl>
     ${button ? `<div class="row wrap">${button}</div>` : ''}${working && c.live === 'running' ? '<p class="small muted">Pause the run to stop the container.</p>' : ''}
     <p class="small muted">The Project tab shows previews running inside this container, including its desktop.</p></section>`);
+}
+function renderVm() {
+  const v = data.vm;
+  if (!v) { setHTML($('vm-panel'), ''); return; }
+  const title = '<h2 class="ac-panel__title">Virtual machine</h2>';
+  if (v.live === 'removed') { setHTML($('vm-panel'), `<section class="ac-panel">${title}<p class="small muted">Removed ${v.removed ? when(v.removed) : ''} with the run’s branch.</p></section>`); return; }
+  const live = {running: 'Running', stopped: 'Stopped', paused: 'Paused', missing: 'Not created yet', pending: 'Starts with the first turn'}[v.live] || v.live;
+  const net = v.network === 'internet' ? '<span class="warning-text">Internet on while agents work</span>'
+    : v.network_cut ? `Host-only since ${esc(timeLabel(v.network_cut))}` : v.network_state === 'online' ? '<span class="warning-text">On for provisioning and setup</span>' : 'Host-only';
+  const working = !ended.has(current.status) && !current.pause && !['paused', 'interrupted', 'attention'].includes(current.status);
+  const button = v.live === 'running' ? `<button class="ac-btn compact" data-action="container-stop" ${!connected || working ? 'disabled' : ''}>Shut down VM</button>`
+    : ['stopped', 'missing'].includes(v.live) ? `<button class="ac-btn compact" data-action="container-start" ${connected ? '' : 'disabled'}>Start VM</button>` : '';
+  setHTML($('vm-panel'), `<section class="ac-panel">${title}
+    <dl class="facts small"><dt>State</dt><dd class="${v.live === 'running' ? 'success-text' : ''}">${esc(live)}</dd>
+    <dt>Clone of</dt><dd class="mono">${esc((v.baseline || '').split('/').pop())}</dd><dt>Limits</dt><dd>${esc(String(v.cpus))} vCPUs · ${esc(String(v.memory_gb))} GB</dd>
+    <dt>Network</dt><dd>${net}</dd>${v.ip ? `<dt>Address</dt><dd class="mono">${esc(v.ip)}</dd>` : ''}</dl>
+    ${button ? `<div class="row wrap">${button}</div>` : ''}${working && v.live === 'running' ? '<p class="small muted">Pause the run to shut the VM down.</p>' : ''}
+    <p class="small muted">Agents work as an unprivileged user inside. The Project tab shows the VM’s screen; you can click and type into it.</p></section>`);
+}
+let vmScreenURL = '', vmSize = [0, 0];
+async function refreshVmScreen() {
+  if (!current || data?.vm?.live !== 'running') return;
+  const response = await fetch('/api/vm/screen?run=' + encodeURIComponent(current.id), {headers: {Authorization: 'Bearer ' + key}});
+  if (!response.ok) { $('vm-console-meta').textContent = '· screen unavailable'; return; }
+  const blob = await response.blob(), url = URL.createObjectURL(blob);
+  $('vm-screen').src = url;
+  if (vmScreenURL) URL.revokeObjectURL(vmScreenURL);
+  vmScreenURL = url;
+}
+async function vmInput(body) {
+  try { await api('/api/vm/input', 'POST', {run: current.id, ...body}); await refreshVmScreen(); } catch (error) { pageError(error.message); }
+}
+function vmClick(event) {
+  const img = $('vm-screen'), rect = img.getBoundingClientRect(), width = img.naturalWidth, height = img.naturalHeight;
+  if (!rect.width || !width) return;
+  const x = Math.min(width - 1, Math.max(0, Math.round((event.clientX - rect.left) / rect.width * width)));
+  const y = Math.min(height - 1, Math.max(0, Math.round((event.clientY - rect.top) / rect.height * height)));
+  vmInput({action: 'click', x, y, width, height, button: event.button === 2 ? 3 : 1});
 }
 function openNew(followup = false) {
   if (followup && !current) return;
@@ -1970,6 +2028,7 @@ async function onClick(event) {
       document.querySelectorAll('[data-preview-width]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
     }
     if (b.dataset.previewKey) await previewAction('input', {text: b.dataset.previewKey});
+    if (b.dataset.vmKey) await vmInput({action: 'key', key: b.dataset.vmKey});
     if (b.dataset.desktopKey) { await previewAction('key', {key: b.dataset.desktopKey}); await refreshScreen(); }
     if (b.dataset.review) openReview(b.dataset.review, b.dataset.intent);
     if (b.dataset.diff) openDiff(b.dataset.diff);
@@ -2023,7 +2082,7 @@ function init() {
     event.preventDefault();
     $('start-error').textContent = '';
     if ($('verify-enabled').checked && !$('verify').value.trim()) { $('start-error').textContent = 'Enter a verification command or turn off independent verification.'; return; }
-    if ($('iso-container').checked && $('container-network').value === 'internet' && $('container-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to let agents use the internet, or choose another network setting.'; return; }
+    if (($('iso-container').checked || $('iso-vm').checked) && $('container-network').value === 'internet' && $('container-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to let agents use the internet, or choose another network setting.'; return; }
     if (paidChosen() && $('paid-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to allow paid models, or pick your local model for every role.'; return; }
     if (preflight?.usable && preflight.dirty_count && !$('allow-dirty')?.checked) { $('start-error').textContent = 'Your project has uncommitted changes. Commit them, or tick “Start from my last commit anyway”.'; return; }
     $('start-run').disabled = true;
@@ -2047,6 +2106,7 @@ function init() {
   };
   document.querySelectorAll('input[name="run-mode"]').forEach(radio => { radio.onchange = scheduleAutoPreview; });
   document.querySelectorAll('input[name="isolation"]').forEach(radio => { radio.onchange = () => { renderIsolation(); renderModelsPicker(); }; });
+  // A VM, like a container, reaches other models through the run gateway.
   $('models-picker').addEventListener('change', togglePaidFields);
   $('usage-period').onchange = loadUsage;
   $('container-network').onchange = renderIsolation;
@@ -2115,6 +2175,14 @@ function init() {
     try { await previewAction('type', {text: $('desktop-type').value}); $('desktop-type').value = ''; await refreshScreen(); } catch (error) { pageError(error.message); }
   };
   $('preview-screen').addEventListener('click', screenClick);
+  $('vm-screen').addEventListener('click', vmClick);
+  $('vm-screen').addEventListener('contextmenu', event => { event.preventDefault(); vmClick(event); });
+  $('vm-type-form').onsubmit = async event => {
+    event.preventDefault();
+    if (!$('vm-type').value) return;
+    await vmInput({action: 'type', text: $('vm-type').value});
+    $('vm-type').value = '';
+  };
   $('preview-screen').addEventListener('contextmenu', event => { event.preventDefault(); screenClick(event); });
   $('term-body').addEventListener('scroll', () => {
     const body = $('term-body'), atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;

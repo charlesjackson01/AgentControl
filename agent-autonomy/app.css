@@ -5118,3 +5118,16 @@ button.task-node {
   text-align:right;
   white-space:nowrap;
 }
+
+/* VM console (M13) */
+.vm-console .desktop-screen {
+  max-width:100%;
+  overflow:hidden;
+}
+
+.vm-console img {
+  display:block;
+  max-width:100%;
+  height:auto;
+  cursor:crosshair;
+}

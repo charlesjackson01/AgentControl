@@ -14,6 +14,7 @@ from adapters.hermes import Hermes
 from proc import process
 from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
 from events import EventBus
+import agents as agent_registry
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
@@ -188,6 +189,8 @@ class Controller:
                    'parent_run': parent_run or None, 'title': title, 'preview': preview,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None}
             self.store.put('runs', run)
+            for agent in agent_registry.default_agents(run, self.s.profile):
+                self.store.put_agent(agent)
             self.store.event(ident, 'goal', goal)
             self._launch(ident)
             return run
@@ -611,7 +614,7 @@ class Controller:
                 self._end(ident, 'blocked', 'Three consecutive failed steps. ' + decision['summary'])
                 return
             delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self.s.project) + '. Preserve unrelated files. Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
-            step = {'id': uuid.uuid4().hex, 'run': ident, 'number': len(steps) + 1, 'title': str(decision.get('title', 'Coding task'))[:160],
+            step = {'id': uuid.uuid4().hex, 'run': ident, 'agent': 'coder-1', 'number': len(steps) + 1, 'title': str(decision.get('title', 'Coding task'))[:160],
                     'status': 'prepared', 'created': now(), 'prompt': delivered, 'manager_prompt': decision['prompt'],
                     'kind': decision.get('kind', 'task'), 'plan_summary': str(decision.get('summary', ''))[:2000],
                     'plan': [str(x)[:300] for x in plan[:20]] if isinstance(plan, list) else [],
@@ -739,6 +742,15 @@ class Controller:
             # Poll a little faster while coding so the dashboard terminal feels live.
             time.sleep(min(self.s.poll, 1.0))
 
+    def agents(self, run, steps=None, inbox=None):
+        """A run's agents with live state. Runs recorded before agents existed get the same
+        default pair, shown but not written back, so their history is untouched."""
+        steps = self.store.steps(run['id']) if steps is None else steps
+        if inbox is None:
+            inbox = [{**p, 'run': run['id']} for p in run.get('pending', [])] if run['status'] not in TERMINAL else []
+        recorded = self.store.agents(run['id']) or agent_registry.default_agents(run, self.s.profile)
+        return agent_registry.describe(recorded, run, steps, inbox, self.store.events(run['id'], limit=1000))
+
     def state(self, selected=''):
         runs = self.store.runs()
         ident = selected or (runs[0]['id'] if runs else '')
@@ -767,5 +779,7 @@ class Controller:
                 'opencode_url': self.s.opencode_url, 'runs': [{'id': r['id'], 'goal': r['goal'][:120], 'title': r.get('title', ''), 'status': r['status'],
                     'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id'])} for r in runs[:30]],
                 'preview': self.preview.status(),
+                'agent_types': agent_registry.types(),
+                'agents': self.agents(run, steps, inbox) if run else [],
                 'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],
                 'inbox': inbox, 'reviews': self.store.reviews(ident) if run else []}

@@ -20,8 +20,13 @@ def _v1(c):
         CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, run TEXT, created TEXT, kind TEXT, detail TEXT);''')
 
 
+def _v2(c):
+    """Per-run agent identities (M3)."""
+    c.execute('CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, run TEXT NOT NULL, value TEXT NOT NULL)')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1]
+MIGRATIONS = [_v1, _v2]
 
 
 def migrate(c):
@@ -139,6 +144,18 @@ class Store:
                       (key, item['run'], json.dumps(item)))
         self._changed('review', item['run'])
         return item
+
+    def put_agent(self, agent):
+        with self.connection() as c:
+            c.execute('INSERT INTO agents VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET run=excluded.run, value=excluded.value',
+                      (agent['id'], agent['run'], json.dumps(agent)))
+        self._changed('agent', agent['run'])
+        return agent
+
+    def agents(self, run):
+        """A run's agents in the order they joined."""
+        with self.connection() as c:
+            return [json.loads(r[0]) for r in c.execute('SELECT value FROM agents WHERE run=? ORDER BY rowid', (run,))]
 
     def reviews(self, run):
         with self.connection() as c:

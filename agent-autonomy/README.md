@@ -244,6 +244,18 @@ Window decorations are decorative and contain no real OS logos.
 Shortcuts are ignored in editable fields, while a modifier key is held, and
 inside unrelated dialogs. Reduced-motion preferences disable the terminal cursor.
 
+## Agents
+
+Every run records the agents working on it:
+- **`hermes`**: the orchestrator, using your Hermes profile.
+- **`coder-1`**: the OpenCode coder.
+
+Each coding turn is tagged with the agent that did it.
+
+`GET /api/agents?run=<id>` (also included in `/api/state`) returns each agent's role, runtime, model, current state (`working`, `waiting_on_you`, `paused`, `idle`, `needs_attention`, `finished`…), current task, and counters.
+
+States are worked out from the run's own record, so they always agree with it. Runs from before this version show the same two agents without their history being changed. This is the groundwork for multi-agent runs; the dashboard views for agents come later.
+
 ## Live updates
 
 The dashboard gets changes pushed to it the moment they happen: new turns, OpenCode output, approvals, activity, and preview status. It uses a Server-Sent Events stream at `/api/events`, protected by the dashboard key like every other API call.

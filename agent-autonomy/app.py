@@ -15,6 +15,7 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import agents as agent_registry
 from engine import Controller, ReviewConflict, Settings
 
 ROOT = Path(__file__).resolve().parent
@@ -58,6 +59,13 @@ def handler(controller, key):
                 return self.reply(401, {'error': 'Enter the dashboard key printed in your server terminal.'})
             if path.path == '/api/events':
                 return self.stream_events()
+            if path.path == '/api/agents':
+                ident = urllib.parse.parse_qs(path.query).get('run', [''])[0]
+                try:
+                    run = controller.store.get('runs', ident)
+                except KeyError:
+                    return self.reply(404, {'error': 'Unknown run'})
+                return self.reply(200, {'run': ident, 'agents': controller.agents(run), 'types': agent_registry.types()})
             if path.path == '/api/state':
                 selected = urllib.parse.parse_qs(path.query).get('run', [''])[0]
                 return self.reply(200, controller.state(selected))

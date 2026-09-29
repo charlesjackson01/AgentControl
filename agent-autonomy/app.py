@@ -307,6 +307,8 @@ def main():
     p.add_argument('--vm-ssh-key', type=Path, default=Path('~/.ssh/id_ed25519'), help="Private key authorized for the baseline's admin user")
     p.add_argument('--vm-user', default='archdev', help="The baseline's admin user (sudo) used only to provision each clone")
     p.add_argument('--vm-opencode', type=Path, default=None, help='OpenCode binary copied into VMs (default: the one on PATH)')
+    p.add_argument('--vm-storage', type=Path, default=None,
+                   help="folder for the clones' disks; QEMU must be able to reach it (default: agentcontrol-runs next to the baseline)")
     p.add_argument('--container-runtime', choices=('podman', 'docker'), default=None, help='Container runtime for isolated runs (default: whichever is found)')
     p.add_argument('--allow-rootful-containers', action='store_true',
                    help='Allow agent containers on a root-owned Docker daemon (not recommended; use rootless Docker or Podman)')
@@ -337,7 +339,8 @@ def main():
                  research_toolsets=tuple(t.strip() for t in a.research_toolsets.split(',') if t.strip()),
                  max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider,
                  vm_baseline=a.vm_baseline.expanduser() if a.vm_baseline else None, vm_template=a.vm_template, vm_uri=a.vm_uri,
-                 vm_ssh_key=a.vm_ssh_key.expanduser(), vm_user=a.vm_user, vm_opencode=a.vm_opencode)
+                 vm_ssh_key=a.vm_ssh_key.expanduser(), vm_user=a.vm_user, vm_opencode=a.vm_opencode,
+                 vm_storage=a.vm_storage.expanduser() if a.vm_storage else None)
     if a.build_agent_image:
         return build_agent_image(a)
     controller = Controller(s)

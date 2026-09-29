@@ -179,6 +179,8 @@ class VMRunTests(unittest.TestCase):
         self.assertEqual(verify[0][1], ws['integration']['dir'])
         self.assertEqual(result['vm']['state'], 'stopped', 'stopped when the run ended')
         self.assertEqual(result['vm']['network_state'], 'none')
+        # The clone's disk lives next to the baseline (QEMU can reach it), not in AgentControl's state folder.
+        self.assertEqual(result['vm']['storage'], str(self.settings.vm_baseline.resolve().parent / 'agentcontrol-runs' / run['id']))
         actions = [e['action'] for e in c.store.audit(run['id'])]
         self.assertIn('vm created', actions)
         self.assertIn('vm network cut', actions)
@@ -193,6 +195,13 @@ class VMRunTests(unittest.TestCase):
         run = c.new('Build it', isolation='vm', network='internet', confirm='approve')
         self.assertEqual(self.done(run['id'])['status'], 'completed')
         self.assertNotIn('switch', [e[0] for e in self.vm.log])
+
+    def test_the_disk_folder_can_be_chosen(self):
+        self.settings.vm_storage = Path(self.temp.name) / 'vmdisks'
+        c = self.controller([complete()])
+        run = c.new('Build it', isolation='vm', network='none')
+        self.assertEqual(run['vm']['storage'], str(Path(self.temp.name) / 'vmdisks' / run['id']))
+        self.done(run['id'])
 
     def test_unavailable_vms_are_refused_with_the_reason(self):
         c = self.controller([], reason='/dev/kvm is missing: enable virtualization')

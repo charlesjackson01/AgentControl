@@ -458,7 +458,9 @@ For work that needs a whole machine, choose **Virtual machine** in New run. The 
 # your user needs libvirt access, /dev/kvm, and your SSH key authorized in the baseline (it is, for archdev)
 python3 agent-autonomy/app.py --vm-baseline ~/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2
 #   optional: --vm-template ai-arch-dev  --vm-ssh-key ~/.ssh/id_ed25519  --vm-user archdev  --vm-opencode /path/to/opencode
+#             --vm-storage DIR   (where clone disks go; default: agentcontrol-runs next to the baseline)
 ```
+**Where the clone's disk goes.** QEMU runs as its own user (`libvirt-qemu` on Zorin/Ubuntu), so it must be able to enter every folder above the clone's disk. By default each run's overlay disk, firmware variables and definition go in `agentcontrol-runs/<run>` next to your baseline, because your existing VMs already boot from there. AgentControl's own state folder keeps only the SSH and socket files. If you choose another folder with `--vm-storage` and starting fails with "Permission denied", either pick a folder QEMU can reach or allow it to pass through, once: `sudo setfacl -m u:libvirt-qemu:x /home/you /home/you/that-folder`.
 The option is disabled in New run, with the reason, until this works: libvirt at `qemu:///system`, `/dev/kvm`, the baseline, the template domain, the key, your OpenCode binary, and `models.json`. To try the whole thing once (it boots a VM and needs internet the first time):
 ```
 cd agent-autonomy && AGENTCONTROL_VM_TESTS=1 AGENTCONTROL_VM_BASELINE=~/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2 \

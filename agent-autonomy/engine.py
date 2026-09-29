@@ -75,6 +75,7 @@ class Settings:
     vm_ssh_key: Path = Path('~/.ssh/id_ed25519')   # authorized for the baseline's admin user
     vm_user: str = 'archdev'
     vm_opencode: Path = None                # OpenCode binary copied into VMs; default: the one on PATH
+    vm_storage: Path = None                 # clone disks; QEMU must reach it. Default: <baseline folder>/agentcontrol-runs
 
 
 def review_packet(request, messages=()):
@@ -2330,7 +2331,13 @@ class Controller:
     def _vm_record(self, ident, cpus, memory_gb, network):
         return {'name': f'agentcontrol-{ident}', 'uri': self.s.vm_uri, 'baseline': str(self.s.vm_baseline), 'template': self.s.vm_template,
                 'cpus': cpus, 'memory_gb': memory_gb, 'network': network, 'state': 'pending',
-                'base': str(self.s.data / 'vms' / ident), 'sockets': str(sandbox.sockets_dir(self.s.data, ident))}
+                'base': str(self.s.data / 'vms' / ident), 'sockets': str(sandbox.sockets_dir(self.s.data, ident)),
+                'storage': str(self._vm_storage() / ident)}
+
+    def _vm_storage(self):
+        if self.s.vm_storage:
+            return Path(self.s.vm_storage).expanduser()
+        return Path(self.s.vm_baseline).expanduser().resolve().parent / 'agentcontrol-runs'
 
     @staticmethod
     def _vm_rec(run):
@@ -2345,7 +2352,8 @@ class Controller:
         machine = self.vms.get(run['id'])
         if machine is None:
             machine = (self.vm_factory(run) if self.vm_factory else
-                       vmenv.VirtualMachine(v['uri'], v['name'], v['base'], self.s.vm_ssh_key, self.s.vm_user))
+                       vmenv.VirtualMachine(v['uri'], v['name'], v['base'], self.s.vm_ssh_key, self.s.vm_user,
+                                            storage=v.get('storage')))
             self.vms[run['id']] = machine
         return machine
 

@@ -384,8 +384,11 @@ def unpack_into(data, folder, keep=()):
 
 # ---- one run's VM -------------------------------------------------------------------------------
 class VirtualMachine:
-    def __init__(self, uri, name, base, key, admin='archdev', cli=run_cli):
+    def __init__(self, uri, name, base, key, admin='archdev', cli=run_cli, storage=None):
+        # base: AgentControl's own files (SSH known_hosts); storage: the clone's disk, firmware
+        # variables and definition, which QEMU (another user) must be able to reach.
         self.uri, self.name, self.base = uri, name, Path(base)
+        self.storage = Path(storage) if storage else self.base
         self.key, self.admin, self.cli = str(Path(key).expanduser()), admin, cli
         self.known_hosts = self.base / 'known_hosts'
         self.tunnel = None
@@ -419,19 +422,28 @@ class VirtualMachine:
 
     def create(self, baseline, template, cpus, memory_gb, network, vm_dir=None):
         self.base.mkdir(parents=True, exist_ok=True)
-        overlay = self.base / 'disk.qcow2'
+        self.storage.mkdir(parents=True, exist_ok=True)
+        overlay = self.storage / 'disk.qcow2'
         code, _, err = self.cli(['qemu-img', 'create', '-q', '-f', 'qcow2', '-F', 'qcow2', '-b', str(Path(baseline).expanduser().resolve()), str(overlay)], 120)
         if code:
             raise VMError(f'qemu-img could not create the overlay: {_text(err).strip()[:300]}')
         source = self.virsh('dumpxml', '--inactive', template)
-        xml, notes = domain_xml(source, self.name, overlay, self.base, cpus, memory_gb, network, vm_dir)
-        (self.base / 'domain.xml').write_text(xml)
-        self.virsh('define', str(self.base / 'domain.xml'))
+        xml, notes = domain_xml(source, self.name, overlay, self.storage, cpus, memory_gb, network, vm_dir)
+        (self.storage / 'domain.xml').write_text(xml)
+        self.virsh('define', str(self.storage / 'domain.xml'))
         return notes
 
     def start(self):
         if self.state() != 'running':
-            self.virsh('start', self.name)
+            try:
+                self.virsh('start', self.name)
+            except VMError as exc:
+                if 'Permission denied' in str(exc):
+                    raise VMError(f'{exc} -- QEMU runs as its own user and must be able to enter every folder above '
+                                  f'{self.storage}. Start AgentControl with --vm-storage pointing to a folder it can reach '
+                                  '(next to your baseline works when your existing VMs boot from there), or allow it once: '
+                                  f'sudo setfacl -m u:libvirt-qemu:x <each parent folder of {self.storage}>') from exc
+                raise
 
     def stop(self, timeout=60):
         if self.state() != 'running':
@@ -449,6 +461,7 @@ class VirtualMachine:
         if self.state() != 'missing':
             self.virsh('destroy', self.name, check=False)
             self.virsh('undefine', self.name, '--nvram', check=False)
+        shutil.rmtree(self.storage, ignore_errors=True)
         shutil.rmtree(self.base, ignore_errors=True)
 
     def network(self):
@@ -495,8 +508,8 @@ class VirtualMachine:
             root = ET.fromstring(self.virsh('dumpxml', '--inactive', self.name))
             source = root.find("devices/interface/source")
             source.attrib = {'network': network}
-            (self.base / 'domain.xml').write_text(ET.tostring(root, encoding='unicode'))
-            self.virsh('define', str(self.base / 'domain.xml'))
+            (self.storage / 'domain.xml').write_text(ET.tostring(root, encoding='unicode'))
+            self.virsh('define', str(self.storage / 'domain.xml'))
             self.start()
             return self.wait_address(180, prefix), 'reboot'
 

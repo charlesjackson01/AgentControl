@@ -219,6 +219,29 @@ class MachineTests(unittest.TestCase):
         self.assertIn(['virsh', '-c', 'qemu:///system', 'define', str(self.base / 'domain.xml')], cli.calls)
         self.assertNotIn('ai-arch-dev.qcow2', (self.base / 'domain.xml').read_text(), 'the original disk is never used')
 
+    def test_disk_and_firmware_go_to_the_storage_folder_qemu_can_reach(self):
+        storage = Path(self.temp.name) / 'vms' / 'agentcontrol-runs' / 'run1'
+        cli = Recorder({'dumpxml': (0, TEMPLATE.encode(), b''), 'domstate': (0, b'shut off', b'')})
+        vm = vmenv.VirtualMachine('qemu:///system', 'agentcontrol-run1', self.base, '/keys/id', cli=cli, storage=storage)
+        vm.create('/vms/baseline.qcow2', 'ai-arch-dev', 2, 4, 'default')
+        self.assertEqual(next(c for c in cli.calls if c[0] == 'qemu-img')[-1], str(storage / 'disk.qcow2'))
+        xml = (storage / 'domain.xml').read_text()
+        self.assertIn(str(storage / 'disk.qcow2'), xml)
+        self.assertIn(str(storage / 'agentcontrol-run1_VARS.fd'), xml)
+        self.assertNotIn(str(self.base), xml, "AgentControl's private folder is not handed to QEMU")
+        self.assertEqual(vm.known_hosts, self.base / 'known_hosts')
+        vm.remove()
+        self.assertFalse(storage.exists())
+        self.assertFalse(self.base.exists())
+
+    def test_a_permission_denied_start_says_how_to_fix_it(self):
+        cli = Recorder({'domstate': (0, b'shut off', b''),
+                        'start': (1, b'', b"error: Cannot access storage file '/home/me/tmp/disk.qcow2' (as uid:64055, gid:109): Permission denied")})
+        vm = vmenv.VirtualMachine('qemu:///system', 'vm1', self.base, '/keys/id', cli=cli, storage='/home/me/tmp')
+        with self.assertRaisesRegex(vmenv.VMError, '--vm-storage') as caught:
+            vm.start()
+        self.assertIn('setfacl -m u:libvirt-qemu:x', str(caught.exception))
+
     def test_network_switch_falls_back_to_a_reboot(self):
         states = iter(['running', 'stopped', 'stopped', 'running'])
         leases = {'n': 0}

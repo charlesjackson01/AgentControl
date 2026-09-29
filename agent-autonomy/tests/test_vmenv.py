@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
@@ -304,6 +305,13 @@ class MachineTests(unittest.TestCase):
         self.assertNotIn('NOPASSWD', script)
         self.assertIn('for d in /home/me/proj/state/worktrees/r1;', script)
         self.assertIn("'/tmp/a b'", vmenv.provision_script(['/tmp/a b']), 'unusual paths are quoted')
+
+    def test_detached_commands_let_the_session_end(self):
+        started = time.monotonic()
+        done = subprocess.run(['bash', '-s'], input=(vmenv.detached('cd / && exec sleep 20') + '\n').encode(), capture_output=True, timeout=15)
+        self.assertEqual(done.returncode, 0)
+        self.assertLess(time.monotonic() - started, 5)
+        subprocess.run(['pkill', '-x', '-f', 'sleep 20'], check=False)
 
     def test_ssh_runner_marks_preview_processes(self):
         vm = vmenv.VirtualMachine('qemu:///system', 'vm1', self.base, '/keys/id')

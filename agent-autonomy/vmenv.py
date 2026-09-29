@@ -583,6 +583,9 @@ class VirtualMachine:
                 self.tunnel.wait(5)
             except subprocess.TimeoutExpired:
                 self.tunnel.kill()
+                self.tunnel.wait()
+        if self.tunnel and self.tunnel.stderr:
+            self.tunnel.stderr.close()
         self.tunnel = None
 
     # files
@@ -624,6 +627,12 @@ class VirtualMachine:
         self.virsh('send-key', self.name, code, timeout=15)
 
 
+def detached(command, log='/dev/null'):
+    """A shell line that starts `command` (which may be `cd X && ...`) in the background with every
+    stream redirected, so the SSH session that started it can end at once."""
+    return f'( {command} ) >{log} 2>&1 </dev/null &'
+
+
 def provision_script(user_dirs, packages=PACKAGES):
     """First boot, as your baseline's admin user: keep the clone off your tailnet, create the
     unprivileged agent user, install what agents and previews need, and make the run's folders."""
@@ -655,7 +664,7 @@ class SshRunner:
     def wrap(self, argv, cwd, env=None, tty=False, detach=False):
         command = self.vm.remote(argv, cwd, {'AGENTCONTROL_PREVIEW': '1', **(env or {})})
         if detach:
-            command = f'nohup {command} >/dev/null 2>&1 &'
+            command = detached(command)
         return self.vm.ssh_argv(AGENT_USER, extra=('-tt',) if tty else ()) + [command]
 
     def run(self, argv, env=None, timeout=10):

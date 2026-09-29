@@ -2379,8 +2379,8 @@ class Controller:
 
     def _vm_opencode_up(self, ident, vm, workdir):
         """OpenCode as the agent user inside the VM, reached through the tunnel's api.sock."""
-        code, out, err = vm.run_script(f"if ! pgrep -u {vmenv.AGENT_USER} -f 'opencode serve' >/dev/null; then cd {shlex.quote(str(workdir))} && "
-                                       f"nohup opencode serve --hostname 127.0.0.1 --port {vmenv.OPENCODE_PORT} >$HOME/opencode.log 2>&1 </dev/null & fi",
+        serve = f'cd {shlex.quote(str(workdir))} && exec nohup opencode serve --hostname 127.0.0.1 --port {vmenv.OPENCODE_PORT}'
+        code, out, err = vm.run_script(f"if ! pgrep -u {vmenv.AGENT_USER} -f 'opencode serve' >/dev/null; then {vmenv.detached(serve, '$HOME/opencode.log')} fi",
                                        user=vmenv.AGENT_USER, timeout=60)
         if code:
             raise Attention(f'OpenCode did not start in the VM: {(err or out)[-400:]}')
@@ -2393,7 +2393,8 @@ class Controller:
                 return
             except Exception as exc:
                 if time.monotonic() > until:
-                    raise Attention(f'OpenCode in the VM did not answer: {exc}') from exc
+                    _, log, _ = vm.run_script('tail -n 15 "$HOME/opencode.log" 2>/dev/null', user=vmenv.AGENT_USER, timeout=30)
+                    raise Attention(f'OpenCode in the VM did not answer: {exc}. Its log: {(log or "(empty)")[-800:]}') from exc
                 time.sleep(1)
 
     def _prepare_vm(self, ident):

@@ -196,6 +196,28 @@ class VMRunTests(unittest.TestCase):
         self.assertEqual(self.done(run['id'])['status'], 'completed')
         self.assertNotIn('switch', [e[0] for e in self.vm.log])
 
+    def test_starting_opencode_in_the_vm_does_not_hold_the_ssh_session(self):
+        c = self.controller([{'action': 'code', 'title': 't', 'summary': 's', 'prompt': 'CREATE a.txt'}, complete()])
+        run = c.new('Build it', isolation='vm', network='none')
+        self.done(run['id'])
+        script = next(text for user, text in self.vm.scripts if 'opencode serve' in text)
+        root = Path(self.temp.name)
+        bin_dir = root / 'fakebin'
+        bin_dir.mkdir()
+        (bin_dir / 'opencode').write_text('#!/bin/sh\nsleep 30\n')
+        (bin_dir / 'pgrep').write_text('#!/bin/sh\nexit 1\n')
+        for tool in ('opencode', 'pgrep'):
+            (bin_dir / tool).chmod(0o755)
+        script = script.replace(str(self.settings.data), str(root)).replace('$HOME/opencode.log', str(root / 'opencode.log'))
+        work = next(iter(re.findall(r"cd (\S+) &&", script)))
+        Path(work.strip("'")).mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
+        done = subprocess.run(['bash', '-s'], input=script.encode(), capture_output=True, timeout=20,
+                              env={'PATH': f'{bin_dir}:/usr/bin:/bin', 'HOME': str(root)})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertLess(time.monotonic() - started, 5, 'the SSH command returns while OpenCode keeps running')
+        subprocess.run(['pkill', '-f', f'{bin_dir}/opencode'], check=False)
+
     def test_the_disk_folder_can_be_chosen(self):
         self.settings.vm_storage = Path(self.temp.name) / 'vmdisks'
         c = self.controller([complete()])

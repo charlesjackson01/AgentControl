@@ -70,6 +70,10 @@ def handler(controller, key):
                 return self.reply(200, {k: info[k] for k in ('is_repo', 'usable', 'reason', 'branch', 'subdir')} |
                                   {'changes': info['changes'][:50], 'untracked': info['untracked'][:50],
                                    'dirty_count': len(info['changes']) + len(info['untracked'])})
+            if path.path == '/api/sandbox':
+                if urllib.parse.parse_qs(path.query).get('check'):
+                    controller.sandbox_info(refresh=True)
+                return self.reply(200, controller.sandbox_status())
             if path.path == '/api/skills':
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0]
                 run = None
@@ -168,7 +172,9 @@ def handler(controller, key):
                     run = controller.new(body.get('goal', ''), body.get('verifier', ''), body.get('max_steps', 8),
                                          body.get('goal_checks'), body.get('run_minutes'), body.get('parent_run'), body.get('title'), body.get('preview'),
                                          allow_dirty=body.get('allow_dirty') is True, setup=body.get('setup', ''),
-                                         mode=body.get('mode', 'single'), **({'team_size': body['team_size']} if 'team_size' in body else {}))
+                                         mode=body.get('mode', 'single'), **({'team_size': body['team_size']} if 'team_size' in body else {}),
+                                         isolation=body.get('isolation', 'host'), cpus=body.get('cpus', 4), memory_gb=body.get('memory_gb', 8),
+                                         network=body.get('network', 'setup'), confirm=body.get('confirm'))
                     return self.reply(201, {'id': run['id']})
                 if self.path == '/api/preview/ticket':
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})
@@ -232,6 +238,27 @@ def _interrupt(signum, frame):
     raise KeyboardInterrupt
 
 
+def build_agent_image(a):
+    """Build the agent image with your OpenCode binary. Prints the exact command first."""
+    import shutil
+    import subprocess
+    import sandbox
+    info = sandbox.detect(a.container_runtime)
+    if not info['runtime']:
+        print(info['error'])
+        return 1
+    binary = a.opencode_binary or (Path(shutil.which('opencode')).resolve() if shutil.which('opencode') else None)
+    if not binary or not Path(binary).is_file():
+        print('Could not find your opencode binary; pass --opencode-binary /path/to/opencode')
+        return 1
+    command = sandbox.build_command(info['runtime'], Path(binary).resolve())
+    print('$ ' + ' '.join(command), flush=True)
+    if not info['rootless']:
+        print(f"Note: {info['runtime']} runs as root here. Agent containers are refused unless you use rootless Docker/Podman "
+              'or start AgentControl with --allow-rootful-containers.', flush=True)
+    return subprocess.run(command).returncode
+
+
 def active_run(controller):
     """The run model calls through the gateway are counted against (one active run at a time today)."""
     return next((r['id'] for r in controller.store.runs() if r['status'] not in TERMINAL), None)
@@ -252,6 +279,11 @@ def main():
     p.add_argument('--no-preview', action='store_true', help='Disable the live preview listener')
     p.add_argument('--skills-library', type=Path, default=Path(os.environ.get('AGENTCONTROL_SKILLS', '~/agentcontrol/skills')),
                    help='Folder of skills you curate (each a folder with SKILL.md)')
+    p.add_argument('--container-runtime', choices=('podman', 'docker'), default=None, help='Container runtime for isolated runs (default: whichever is found)')
+    p.add_argument('--allow-rootful-containers', action='store_true',
+                   help='Allow agent containers on a root-owned Docker daemon (not recommended; use rootless Docker or Podman)')
+    p.add_argument('--build-agent-image', action='store_true', help='Build the agent container image, then exit')
+    p.add_argument('--opencode-binary', type=Path, default=None, help='OpenCode binary to put in the agent image (default: the one on PATH)')
     p.add_argument('--models', type=Path, default=None, help='Model registry JSON (default: state/models.json; an ai-arch.json also works)')
     p.add_argument('--gateway-port', type=int, default=int(os.environ.get('AGENTCONTROL_GATEWAY_PORT', '0')),
                    help='Serve the local model gateway on this loopback port (0 = off)')
@@ -272,7 +304,10 @@ def main():
                  profile=a.profile, push_target=a.target, notifications=not a.no_notifications,
                  password=os.environ.get('OPENCODE_SERVER_PASSWORD', ''), username=os.environ.get('OPENCODE_SERVER_USERNAME', 'opencode'),
                  preview_idle=max(0, a.preview_idle_minutes) * 60, models=a.models,
-                 skills_library=a.skills_library)
+                 skills_library=a.skills_library, container_runtime=a.container_runtime,
+                 allow_rootful_containers=a.allow_rootful_containers)
+    if a.build_agent_image:
+        return build_agent_image(a)
     controller = Controller(s)
     if a.doctor:
         status = controller.check()
@@ -322,6 +357,8 @@ def main():
             preview_server.shutdown()
         if gateway_server:
             gateway_server.shutdown()
+        for server in list(controller.run_gateways.values()):
+            server.shutdown()
         server.server_close()
         for thread in list(controller.threads.values()):
             thread.join(timeout=5)

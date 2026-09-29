@@ -7,20 +7,25 @@ import urllib.parse
 import urllib.request
 
 from errors import OpenCodeHTTPError, ReviewConflict
+from sandbox import UnixHTTPConnection
 
 
 class OpenCode:
-    def __init__(self, settings):
+    def __init__(self, settings, socket_path=None, project=None):
         self.s = settings
+        self.socket_path = socket_path      # set for an OpenCode server inside a run container
+        self.project = Path(project) if project else None
         # Local API must not be sent through a configured outbound HTTP proxy.
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def request(self, path, method='GET', data=None, directory=None):
         # OpenCode scopes sessions, status, approvals, and replies by directory. Single
         # mode uses the project folder; each multi-agent worktree passes its own.
-        query = urllib.parse.urlencode({'directory': str(directory or self.s.project)})
-        url = self.s.opencode_url.rstrip('/') + path + ('&' if '?' in path else '?') + query
+        query = urllib.parse.urlencode({'directory': str(directory or self.project or self.s.project)})
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        if self.socket_path:
+            return self._unix(path + ('&' if '?' in path else '?') + query, method, data, headers, path)
+        url = self.s.opencode_url.rstrip('/') + path + ('&' if '?' in path else '?') + query
         if self.s.password:
             auth = base64.b64encode((self.s.username + ':' + self.s.password).encode()).decode()
             headers['Authorization'] = 'Basic ' + auth
@@ -34,10 +39,27 @@ class OpenCode:
             message = exc.read(4000).decode(errors='replace')
             raise OpenCodeHTTPError(method, path, exc.code, message) from exc
 
+    def _unix(self, target, method, data, headers, path):
+        body = None if data is None else json.dumps(data).encode()
+        connection = UnixHTTPConnection(self.socket_path)
+        try:
+            connection.request(method, target, body=body, headers=headers)
+            response = connection.getresponse()
+            raw = response.read()
+        except OSError as exc:
+            raise RuntimeError(f'OpenCode in the run container is not reachable: {exc}') from exc
+        finally:
+            connection.close()
+        if response.status >= 400:
+            raise OpenCodeHTTPError(method, path, response.status, raw[:4000].decode(errors='replace'))
+        return json.loads(raw) if raw else None
+
     def health(self):
         health = self.request('/global/health')
         if not isinstance(health, dict) or not health.get('healthy'):
             raise RuntimeError('OpenCode health check did not report healthy')
+        if self.socket_path:
+            return health  # the container's server runs in the run's own worktree, not your project folder
         path = self.request('/path')
         actual = path.get('directory') if isinstance(path, dict) else None
         if not actual or Path(actual).resolve() != self.s.project.resolve():

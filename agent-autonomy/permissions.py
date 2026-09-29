@@ -68,6 +68,10 @@ CRITICAL_COMMANDS = [
 SECRET_PATHS = r'(~|\$HOME|/home/[^/\s]+|/root)?/?\.(ssh|gnupg|aws|kube|docker/config\.json)\b|\bid_(rsa|ed25519|ecdsa)\b|(^|/)\.env(\.|\b)|\b(credentials?|secrets?)\.(json|ya?ml|toml|txt)\b|\.(pem|key|p12|pfx)\b|keepassxc'
 
 
+# Editing these would let an agent change its own permissions or tools (OpenCode reads them).
+AGENT_CONFIG = r'(^|[\s/"\'])(opencode\.jsonc?|\.opencode/)'
+
+
 def _text(packet):
     """The command and paths a request is about, from OpenCode's request and the tool input."""
     input_ = (packet.get('context') or {}).get('input') or {}
@@ -95,6 +99,8 @@ def classify(packet):
                 reasons.append(reason)
     if re.search(SECRET_PATHS, text, re.I):
         reasons.append('touches credentials or keys')
+    if permission in ('edit', 'write', 'patch', 'multiedit', 'bash') and re.search(AGENT_CONFIG, text):
+        reasons.append("changes the agent's own OpenCode configuration or permissions")
     if reasons and klass != 'critical':
         klass = 'critical'
     return {'class': klass, 'level': LEVELS[klass], 'label': LABELS[klass], 'permission': permission,

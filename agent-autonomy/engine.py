@@ -23,6 +23,8 @@ import workspaces
 import planner
 import modes
 import capabilities
+import sandbox
+import gateway
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
@@ -54,6 +56,9 @@ class Settings:
     preview_idle: float = 1800
     models: Path = None          # model registry file; default <data>/models.json (absent = model features off)
     skills_library: Path = Path('~/agentcontrol/skills')  # your curated skill folders (M9)
+    container_runtime: str = None          # 'podman' or 'docker'; None = whichever is found (M10)
+    allow_rootful_containers: bool = False  # a root-owned daemon is refused unless you override it
+    container_image: str = sandbox.IMAGE
 
 
 def review_packet(request, messages=()):
@@ -142,6 +147,11 @@ class Controller:
         self.health = {'ready': False, 'message': 'Checking connections…'}
         self.models_error = ''
         self.gateway_info = None  # set by app.py when the model gateway is listening
+        self.run_gateways = {}      # run id -> the gateway on that run container's model socket (M10)
+        self.container_apis = {}    # run id -> OpenCode adapter bound to that run container's socket
+        self.container_api_factory = None  # tests replace the container adapter
+        self.sandbox_factory = lambda runtime: sandbox.Sandbox(runtime)
+        self._sandbox_cache = None
         try:
             registry = models.load_registry(self.s.models or self.s.data / 'models.json')
         except models.RegistryError as exc:
@@ -194,7 +204,8 @@ class Controller:
         return self.health
 
     def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None,
-            allow_dirty=False, setup='', mode='single', team_size=planner.MAX_AGENTS):
+            allow_dirty=False, setup='', mode='single', team_size=planner.MAX_AGENTS,
+            isolation='host', cpus=4, memory_gb=8, network='setup', confirm=None):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
         title = self._title(title)
@@ -205,6 +216,15 @@ class Controller:
         if not isinstance(setup, str) or len(setup) > 2000:
             raise ValueError('Setup command is too long')
         setup_argv = shlex.split(setup) if setup.strip() else []
+        if isolation not in ('host', 'container'):
+            raise ValueError('Isolation must be host or container')
+        if isolation == 'container':
+            if type(cpus) not in (int, float) or not 0.5 <= cpus <= 32 or type(memory_gb) is not int or not 1 <= memory_gb <= 128:
+                raise ValueError('Give the container 0.5-32 CPUs and 1-128 GB of memory')
+            if network not in sandbox.NETWORKS:
+                raise ValueError('Network must be setup, none, or internet')
+            if network == 'internet' and str(confirm or '').strip().lower() != permissions.CONFIRM_WORD:
+                raise ValueError(f'Internet access while agents work is critical: type {permissions.CONFIRM_WORD} to confirm.')
         if mode not in ('single', 'team', 'auto'):
             raise ValueError('Mode must be single, team, or auto')
         if mode in ('team', 'auto') and (type(team_size) is not int or not 2 <= team_size <= planner.MAX_AGENTS):
@@ -235,6 +255,8 @@ class Controller:
             if mode == 'auto':
                 auto = self.auto_decision(goal, checks, argv, max_steps)
                 mode = auto['mode']
+            if isolation == 'container':
+                self._container_ready_for_new()
             if mode == 'team' and not workspaces.git_info(self.s.project)['usable']:
                 raise ValueError('Team runs need a git project, because each agent works in its own worktree. '
                                  'Initialise a repository with a first commit, or start a single-agent run.')
@@ -246,7 +268,8 @@ class Controller:
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
                    'parent_run': parent_run or None, 'title': title, 'preview': preview,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
-                   'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto,
+                   'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto, 'isolation': isolation,
+                   'container': self._container_record(ident, cpus, memory_gb, network) if isolation == 'container' else None,
                    'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': [],
                             'auto': bool(auto)} if mode == 'team' else None}
             if mode == 'team':
@@ -255,6 +278,10 @@ class Controller:
             for agent in agent_registry.default_agents(run, self.s.profile):
                 self.store.put_agent(agent)
             self.store.event(ident, 'goal', goal)
+            if isolation == 'container':
+                c = run['container']
+                self.store.audit_append(ident, {'action': 'container requested', 'actor': HUMAN, 'runtime': c['runtime'], 'rootless': c['rootless'],
+                                                'cpus': c['cpus'], 'memory_gb': c['memory_gb'], 'network': network})
             if auto:
                 self.store.event(ident, 'auto mode', f"Auto chose {'to ask Hermes for a team plan' if mode == 'team' else 'one agent'} "
                                  f"(rule {auto['rule']}): " + ' '.join(auto['reasons']))
@@ -350,6 +377,7 @@ class Controller:
                                  'Your branch is unchanged. Merge the branch yourself, or start a follow-up run to reconcile.')
             if self.preview.run == ident:
                 self.preview.stop()
+            self._remove_container(ident, 'the branch was applied')
             workspaces.remove_worktrees(ws)
             self._retire_skills(ident, 'the branch was applied and its worktrees removed')
             ws['applied'] = {'commit': result['commit'], 'time': now()}
@@ -369,6 +397,7 @@ class Controller:
                 raise ValueError('Stop the run before discarding its branch.')
             if self.preview.run == ident:
                 self.preview.stop()
+            self._remove_container(ident, 'the branch was discarded')
             workspaces.discard(ws)
             self._retire_skills(ident, 'the branch was discarded')
             ws['discarded'] = now()
@@ -410,7 +439,9 @@ class Controller:
 
         def verify():
             try:
-                code, out, err = process(run['verifier'], self._result_dir(run), self.s.verify_timeout, self.shutdown.is_set)
+                if self._container(run):
+                    self._prepare_container(ident)
+                code, out, err = self._run_check(run, run['verifier'], self._result_dir(run), self.s.verify_timeout, self.shutdown.is_set)
                 result = {'status': 'passed' if code == 0 else 'failed', 'exit_code': code, 'output': (out + '\n' + err)[-16000:]}
             except (TimeoutError, OSError) as exc:
                 result = {'status': 'failed', 'output': str(exc)}
@@ -438,6 +469,8 @@ class Controller:
             return self._discard(ident)
         if action in ('approve_team', 'single_agent', 'repropose'):
             return self._team_decision(ident, action, text)
+        if action in ('container_stop', 'container_start'):
+            return self._container_control(ident, action)
         if action == 'title':
             with self.lock:
                 self.store.update('runs', ident, title=self._title(text))
@@ -523,14 +556,14 @@ class Controller:
                 raise ReviewConflict('A decision was already sent for this request. Refresh to see its status.')
             candidate, agent, session = None, 'coder-1', run['session']
             for name, sid in self._agent_sessions(run):
-                found = next((p for p in self.api.pending(sid, **self._oc(run, name)) if p['kind'] == kind and p.get('sessionID') == sid
+                found = next((p for p in self._api(run).pending(sid, **self._oc(run, name)) if p['kind'] == kind and p.get('sessionID') == sid
                               and (p.get('id') or p.get('requestID')) == request_id), None)
                 if found:
                     candidate, agent, session = found, name, sid
                     break
             if candidate is None:
                 raise ReviewConflict('This request is no longer pending. Refresh the approval list.')
-            messages = self.api.request(f"/session/{session}/message", **self._oc(run, agent)) or []
+            messages = self._api(run).request(f"/session/{session}/message", **self._oc(run, agent)) or []
             packet = review_packet(candidate, messages)
             if not hmac.compare_digest(packet['fingerprint'], fingerprint):
                 raise ReviewConflict('The requested action changed. Close this window and review the updated request.')
@@ -572,7 +605,7 @@ class Controller:
             self.store.event(ident, 'approval decision', {'request_id': request_id, 'kind': kind, 'action': action, 'answers': answers, 'redirect': redirect, 'actor': record['actor'],
                                                           'risk': risk['level']})
             try:
-                response = self.api.respond(session, candidate, action, answers, **self._oc(run, agent))
+                response = self._api(run).respond(session, candidate, action, answers, **self._oc(run, agent))
                 if response is False:
                     raise ValueError('OpenCode did not accept the decision')
             except (ValueError, OpenCodeHTTPError) as exc:
@@ -600,7 +633,7 @@ class Controller:
             # A 200 response alone is insufficient: old OpenCode versions could
             # acknowledge replies to the wrong directory without resolving them.
             try:
-                remaining = [{**review_packet(p, messages), 'agent': agent} for p in self.api.pending(session, **self._oc(run, agent))]
+                remaining = [{**review_packet(p, messages), 'agent': agent} for p in self._api(run).pending(session, **self._oc(run, agent))]
                 # Other agents' requests stay as they were; only this agent's list is refreshed.
                 others = [p for p in self.store.get('runs', ident).get('pending', []) if p.get('sessionID') != session]
                 self._sync_reviews(ident, remaining + others)
@@ -670,13 +703,16 @@ class Controller:
         threading.Thread(target=send, daemon=True).start()
 
     def _end(self, ident, status, summary):
+        run = self.store.get('runs', ident)
+        if self._container(run) and not (status == 'completed' and run.get('preview')):
+            self._stop_container(ident, 'the run ended')  # before the run reads as finished
         self.store.update('runs', ident, status=status, summary=summary, ended=now(), pending=[])
         self.store.event(ident, status, summary)
         self._push(ident, summary[:250])
         run = self.store.get('runs', ident)
         if status == 'completed' and run.get('preview'):
             try:
-                self.preview.start(ident, run['preview'], cwd=self._result_dir(run))
+                self.preview.start(ident, run['preview'], cwd=self._result_dir(run), runner=self._preview_runner(run))
                 self.store.event(ident, 'preview', 'Live preview started after completion.')
             except Exception as exc:
                 self.store.event(ident, 'preview', f'Live preview could not start: {exc}')
@@ -696,7 +732,9 @@ class Controller:
             if 'args' in body and spec['mode'] == 'cli':
                 # Arguments typed in the Project tab replace the saved defaults for this start only.
                 spec['args'] = body['args']
-            status = self.preview.start(ident, spec, cwd=self._result_dir(run))
+            if self._container(run):
+                self._prepare_container(ident)
+            status = self.preview.start(ident, spec, cwd=self._result_dir(run), runner=self._preview_runner(run))
             self.store.event(ident, 'preview', f'Preview started: {spec.get("command") or spec.get("path")}')
             return status
         if self.preview.run != ident:
@@ -726,9 +764,9 @@ class Controller:
             if agent not in working:
                 continue
             try:
-                self.api.request(f"/session/{session}/abort", 'POST', {}, **self._oc(run, agent))
+                self._api(run).request(f"/session/{session}/abort", 'POST', {}, **self._oc(run, agent))
                 for _ in range(4):
-                    status = (self.api.request('/session/status', **self._oc(run, agent)) or {}).get(session, {'type': 'idle'})
+                    status = (self._api(run).request('/session/status', **self._oc(run, agent)) or {}).get(session, {'type': 'idle'})
                     if status.get('type') == 'idle':
                         break
                     time.sleep(self.s.poll)
@@ -790,7 +828,7 @@ class Controller:
                             'output': f"Not run: this turn does not merge cleanly into the integration branch ({', '.join(integration['files'][:10])})."}
         elif run['verifier']:
             try:
-                code, out, err = process(run['verifier'], self._result_dir(run), self.s.verify_timeout, lambda: self._process_cancel(ident))
+                code, out, err = self._run_check(run, run['verifier'], self._result_dir(run), self.s.verify_timeout, lambda: self._process_cancel(ident))
                 verification = {'status': 'passed' if code == 0 else 'failed', 'exit_code': code, 'argv': run['verifier'], 'output': (out + '\n' + err)[-16000:]}
             except (TimeoutError, OSError) as exc:
                 verification = {'status': 'failed', 'argv': run['verifier'], 'output': str(exc)}
@@ -851,10 +889,12 @@ class Controller:
 
     def _drive(self, ident):
         run = self._boundary(ident)
-        self.api.health()
         self._prepare_workspace(ident)
+        self._prepare_container(ident)
+        run = self.store.get('runs', ident)
+        self._api(run).health()
         if not run['session']:
-            session = self.api.request('/session', 'POST', {'title': 'AgentControl ' + ident}, **self._oc(run))
+            session = self._api(run).request('/session', 'POST', {'title': 'AgentControl ' + ident}, **self._oc(run))
             self.store.update('runs', ident, session=session['id'])
             self.store.event(ident, 'session', session['id'])
         if self.store.get('runs', ident).get('mode') == 'team':
@@ -1092,12 +1132,12 @@ class Controller:
                 if run.get('setup'):
                     folder = ws['agents'][name]['dir']
                     self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in {folder})")
-                    code, out, err = process(run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
+                    code, out, err = self._run_check(run, run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
                     if code:
                         raise Attention(f'The setup command failed for {name} (exit {code}): {(err or out)[-600:]}')
             session = run['session'] if name == 'coder-1' else (team['agents'].get(name) or {}).get('session')
             if not session:
-                created = self.api.request('/session', 'POST', {'title': f'AgentControl {ident} {name}'}, directory=ws['agents'][name]['dir'])
+                created = self._api(run).request('/session', 'POST', {'title': f'AgentControl {ident} {name}'}, directory=ws['agents'][name]['dir'])
                 session = created['id']
                 self.store.event(ident, 'session', f'{name}: {session}')
             self._team_update(ident, agents={**team['agents'], name: {**info, 'session': session}})
@@ -1459,7 +1499,7 @@ class Controller:
         if agent not in run.get('skills_reload', []):
             return
         try:
-            self.api.request('/instance/dispose', 'POST', {}, directory=str(self._dir(run, agent)))
+            self._api(run).request('/instance/dispose', 'POST', {}, directory=str(self._dir(run, agent)))
             self.store.event(ident, 'skills reloaded', f'OpenCode re-read the skills for {agent}.')
         except Exception as exc:
             self.store.event(ident, 'skills reload failed', f'{agent}: {exc}')
@@ -1489,6 +1529,200 @@ class Controller:
                 self.propose_capability(ident, agent, source, 'hermes', request.get('why', ''))
             except (ValueError, KeyError) as exc:
                 self.store.event(ident, 'skill request refused', f'{request}: {exc}'[:600])
+
+    # ---- containers (M10) -----------------------------------------------------
+    def sandbox_info(self, refresh=False):
+        cached = self._sandbox_cache
+        if refresh or not cached or time.monotonic() - cached[0] > 30:
+            info = sandbox.detect(self.s.container_runtime, self.s.container_image)
+            self._sandbox_cache = cached = (time.monotonic(), info)
+        return cached[1]
+
+    def sandbox_status(self):
+        info = self.sandbox_info()
+        opencode = shutil.which('opencode') or '/path/to/opencode'
+        return {**info, 'unavailable': sandbox.usable(info, self.s.allow_rootful_containers),
+                'allow_rootful': self.s.allow_rootful_containers, 'models_configured': self.broker.configured,
+                'build_command': ' '.join(sandbox.build_command(info.get('runtime') or 'docker', opencode, self.s.container_image))}
+
+    def _container_ready_for_new(self):
+        if not workspaces.git_info(self.s.project)['usable']:
+            raise ValueError('Container runs need a git project: the container works on the run\'s own worktrees.')
+        reason = sandbox.usable(self.sandbox_info(refresh=True), self.s.allow_rootful_containers)
+        if reason:
+            raise ValueError(reason)
+        if not self.broker.configured:
+            raise ValueError('Container runs reach your model server only through AgentControl. Describe it in '
+                             'state/models.json first (see "Model server" in the README).')
+
+    def _container_record(self, ident, cpus, memory_gb, network):
+        info = self.sandbox_info()
+        return {'name': f'agentcontrol-{ident}', 'runtime': info['runtime'], 'rootless': info['rootless'],
+                'image': self.s.container_image, 'cpus': cpus, 'memory_gb': memory_gb, 'network': network, 'state': 'pending',
+                'base': str(self.s.data / 'containers' / ident), 'sockets': str(sandbox.sockets_dir(self.s.data, ident))}
+
+    @staticmethod
+    def _container(run):
+        return (run or {}).get('container') if (run or {}).get('isolation') == 'container' else None
+
+    def _api(self, run):
+        """The OpenCode server for this run: yours on the host, or the one inside the run's container."""
+        c = self._container(run)
+        if not c:
+            return self.api
+        api = self.container_apis.get(run['id'])
+        if api is None:
+            api = (self.container_api_factory(run) if self.container_api_factory
+                   else OpenCode(self.s, socket_path=str(Path(c['sockets']) / 'api.sock'), project=self._dir(run)))
+            self.container_apis[run['id']] = api
+        return api
+
+    def _run_check(self, run, argv, cwd, timeout, cancel):
+        """Setup and verification commands run where the agents work."""
+        c = self._container(run)
+        if not c:
+            return process(argv, cwd, timeout, cancel)
+        return self.sandbox_factory(c['runtime']).exec(c['name'], argv, cwd, timeout, cancel)
+
+    def _preview_runner(self, run):
+        c = self._container(run)
+        return sandbox.ContainerRunner(c['runtime'], c['name'], c['sockets']) if c else None
+
+    def _container_update(self, ident, **changes):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            c = {**run['container'], **changes}
+            self.store.update('runs', ident, container=c)
+            return c
+
+    def _prepare_container(self, ident):
+        """Create or start the run's container, run setup with network if allowed, then cut the
+        network before any agent is prompted. Safe to call repeatedly (Resume, Verify now, previews)."""
+        run = self.store.get('runs', ident)
+        c = self._container(run)
+        if not c:
+            return
+        if c.get('state') == 'removed':
+            raise Attention('This run\'s container was removed with its branch. Start a follow-up run instead.')
+        ws = self._ws(run)
+        base, sockets = Path(c['base']), Path(c['sockets'])
+        (base / 'home' / '.config' / 'opencode').mkdir(parents=True, exist_ok=True)
+        sockets.mkdir(parents=True, exist_ok=True)
+        endpoint = self.broker.endpoint()
+        config = base / 'opencode.json'
+        config.write_text(json.dumps(sandbox.opencode_config(endpoint.get('model') or 'local-model', sandbox.host_permission()), indent=2))
+        if ident not in self.run_gateways:
+            server = gateway.serve_unix(self.broker, self.store.usage_add, ident, str(sockets / 'model.sock'))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.run_gateways[ident] = server
+        box = self.sandbox_factory(c['runtime'])
+        setup_pending = bool(run.get('setup')) and not ws.get('setup_done')
+        state = box.state(c['name'])
+        if state == 'missing':
+            online = c['network'] == 'internet' or (c['network'] == 'setup' and setup_pending)
+            git_dir = workspaces.git(ws['toplevel'], 'rev-parse', '--path-format=absolute', '--git-common-dir').stdout.strip()
+            spec = {'image': c['image'], 'cpus': c['cpus'], 'memory_gb': c['memory_gb'], 'network': 'bridge' if online else 'none',
+                    'run_root': str(Path(ws['integration']['path']).parent), 'git_dir': git_dir, 'home': str(base / 'home'),
+                    'config': str(config), 'sockets': str(sockets), 'workdir': ws['agents']['coder-1']['dir'],
+                    'rootless': c['rootless'], 'uid': os.getuid(), 'gid': os.getgid()}
+            try:
+                box.create(c['name'], spec)
+            except sandbox.SandboxError as exc:
+                raise Attention(str(exc)) from exc
+            self.store.event(ident, 'container', f"Created {c['name']} ({c['runtime']}{', rootless' if c['rootless'] else ''}; "
+                             f"{c['cpus']} CPUs, {c['memory_gb']} GB; network {'on for setup' if online else 'off'}).")
+            self.store.audit_append(ident, {'action': 'container created', 'actor': 'AgentControl', 'name': c['name'],
+                                            'network': 'on' if online else 'none', 'image': c['image']})
+            c = self._container_update(ident, network_state='online' if online else 'none', created=now())
+        if box.state(c['name']) != 'running':
+            for stale in ('ready', 'api.sock'):
+                (sockets / stale).unlink(missing_ok=True)
+            try:
+                box.start(c['name'])
+                box.wait_ready(c['name'], sockets)
+            except sandbox.SandboxError as exc:
+                raise Attention(f'The run container did not start: {exc}') from exc
+            self.container_apis.pop(ident, None)
+        if setup_pending:
+            for folder in [ws['integration']['dir']] + [a['dir'] for a in ws['agents'].values()]:
+                self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in the container, {folder})")
+                code, out, err = self._run_check(run, run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
+                if code:
+                    raise Attention(f"The setup command failed in {folder} (exit {code}): {(err or out)[-600:]} "
+                                    'Fix it and press Resume; setup will run again.')
+            ws['setup_done'] = now()
+            self.store.update('runs', ident, workspace=ws)
+        if c['network'] != 'internet' and box.networks(c['name']) not in ([], ['none']):
+            box.disconnect(c['name'])
+            self.store.event(ident, 'container', 'Network cut off: agents work without internet from here on.')
+            self.store.audit_append(ident, {'action': 'container network cut', 'actor': 'AgentControl', 'name': c['name']})
+            c = self._container_update(ident, network_state='none', network_cut=now())
+        self._container_update(ident, state='running')
+
+    def _stop_container(self, ident, reason):
+        run = self.store.get('runs', ident)
+        c = self._container(run)
+        if not c or c.get('state') in ('removed', 'stopped'):
+            return
+        if self.preview.run == ident:
+            self.preview.stop()
+        self.sandbox_factory(c['runtime']).stop(c['name'])
+        self._close_gateway(ident)
+        self._container_update(ident, state='stopped', stopped=now())
+        self.store.event(ident, 'container', f'Stopped: {reason}.')
+
+    def _close_gateway(self, ident):
+        server = self.run_gateways.pop(ident, None)
+        if server:
+            server.shutdown()
+            server.server_close()
+        self.container_apis.pop(ident, None)
+
+    def _remove_container(self, ident, reason):
+        run = self.store.get('runs', ident)
+        c = self._container(run)
+        if not c or c.get('state') == 'removed':
+            return
+        if self.preview.run == ident:
+            self.preview.stop()
+        self.sandbox_factory(c['runtime']).remove(c['name'])
+        self._close_gateway(ident)
+        shutil.rmtree(c['base'], ignore_errors=True)
+        shutil.rmtree(c['sockets'], ignore_errors=True)
+        self._container_update(ident, state='removed', removed=now())
+        self.store.event(ident, 'container', f'Removed: {reason}.')
+        self.store.audit_append(ident, {'action': 'container removed', 'actor': 'AgentControl', 'name': c['name'], 'reason': reason})
+
+    def _container_control(self, ident, action):
+        run = self.store.get('runs', ident)
+        c = self._container(run)
+        if not c or c.get('state') == 'removed':
+            raise ValueError('This run has no container')
+        if action == 'container_stop':
+            if run['status'] not in TERMINAL and run['status'] not in ('paused', 'interrupted', 'attention') and not run.get('pause'):
+                raise ValueError('Pause the run before stopping its container; agents are working in it.')
+            self._stop_container(ident, 'stopped by you')
+        else:
+            threading.Thread(target=self._start_in_background, args=(ident,), daemon=True).start()
+        return self.store.get('runs', ident)
+
+    def _start_in_background(self, ident):
+        try:
+            self._prepare_container(ident)
+            self.store.event(ident, 'container', 'Started by you.')
+        except Exception as exc:
+            self.store.event(ident, 'container', f'Could not start: {exc}')
+
+    def container_status(self, run):
+        c = self._container(run)
+        if not c:
+            return None
+        live = c.get('state')
+        if live not in ('removed', 'pending'):
+            box = self.sandbox_factory(c['runtime'])
+            live = box.state(c['name'])
+            c = {**c, 'networks': box.networks(c['name']) if live == 'running' else []}
+        return {**c, 'live': live}
 
     def _model_gate(self, ident, target):
         """Before handing work to an agent, make sure the model server answers (M0: a stopped
@@ -1545,7 +1779,7 @@ class Controller:
         if missing:
             raise Attention(f"The run's worktree is missing ({', '.join(missing)}). It may have been removed outside "
                             'AgentControl. Nothing was sent. Stop this run and start a follow-up.')
-        if run.get('setup') and not ws.get('setup_done'):
+        if run.get('setup') and not ws.get('setup_done') and not self._container(run):
             for folder in [ws['integration']['dir']] + [a['dir'] for a in ws['agents'].values()]:
                 self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in {folder})")
                 code, out, err = process(run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
@@ -1574,7 +1808,7 @@ class Controller:
             payload = {'messageID': step['message_id'], 'parts': [{'type': 'text', 'text': step['prompt']}]}
             try:
                 agent = step.get('agent', 'coder-1')
-                self.api.request(f"/session/{self._session(run, agent)}/prompt_async", 'POST', payload, **self._oc(run, agent))
+                self._api(run).request(f"/session/{self._session(run, agent)}/prompt_async", 'POST', payload, **self._oc(run, agent))
             except Exception as exc:
                 # Request might have been accepted even if its acknowledgement was lost.
                 self.store.event(ident, 'submission uncertain', str(exc))
@@ -1635,9 +1869,9 @@ class Controller:
             raise TimeoutError(f'OpenCode step timed out ({agent})')
         try:
             oc = self._oc(run, agent)
-            messages = self.api.request(f'/session/{session}/message', **oc) or []
-            statuses = self.api.request('/session/status', **oc) or {}
-            pending = [review_packet(p, messages) for p in self.api.pending(session, **oc)]
+            messages = self._api(run).request(f'/session/{session}/message', **oc) or []
+            statuses = self._api(run).request('/session/status', **oc) or {}
+            pending = [review_packet(p, messages) for p in self._api(run).pending(session, **oc)]
             w['failures'] = 0
         except Exception as exc:
             w['failures'] += 1
@@ -1754,6 +1988,8 @@ class Controller:
                 'audit_chain': dict(zip(('intact', 'broken_at'), self.store.audit_verify())),
                 'models': self.models_status(),
                 'workspace': self.workspace_status(run) if run else None,
+                'container': self.container_status(run) if run else None,
+                'sandbox': self.sandbox_status(),
                 'skills': self.skills_status(run),
                 'usage': self.store.usage_summary(ident) if run else None,
                 'agents': self.agents(run, steps, inbox) if run else [],

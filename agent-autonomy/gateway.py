@@ -13,6 +13,8 @@ gateway (queue, cancellation, usage metering, health), in Python instead of Qt/D
 Loopback only. Standard library only.
 """
 import http.client
+import os
+import socketserver
 import json
 import re
 import time
@@ -102,7 +104,8 @@ def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_ti
             self.forward()
 
         def forward(self):
-            if not self.client_address[0].startswith('127.') and self.client_address[0] != '::1':
+            unix = isinstance(self.server, socketserver.UnixStreamServer)  # a run container's socket (M10)
+            if not unix and not self.client_address[0].startswith('127.') and self.client_address[0] != '::1':
                 return self.fail(403, 'The model gateway only accepts local connections.')
             parsed = urllib.parse.urlsplit(self.path)
             match = AGENT.match(parsed.path)
@@ -197,6 +200,20 @@ def gateway_handler(broker, record, active_run=lambda: None, roles=None, slot_ti
                         'cost': models.cost(endpoint, tokens[0], tokens[1])})
 
     return Handler
+
+
+class UnixGateway(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+
+def serve_unix(broker, record, run_id, path):
+    """The gateway for one run container: a Unix socket in the run's folder, which is the
+    container's only way to reach the model server. Usage is always recorded against that run."""
+    if os.path.exists(path):
+        os.unlink(path)
+    server = UnixGateway(path, gateway_handler(broker, record, lambda: run_id))
+    os.chmod(path, 0o660)
+    return server
 
 
 def serve(broker, record, active_run, port, host='127.0.0.1'):

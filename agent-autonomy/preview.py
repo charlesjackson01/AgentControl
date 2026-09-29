@@ -29,6 +29,8 @@ import threading
 import time
 import urllib.parse
 
+from sandbox import UnixHTTPConnection
+
 MODES = ('web', 'static', 'cli', 'desktop')
 DESKTOP_TOOLS = ('Xvfb', 'xdotool', 'import')
 BUFFER_LIMIT = 200_000
@@ -127,6 +129,7 @@ class PreviewManager:
     def __init__(self, project, idle_seconds=1800, clock=time.monotonic):
         self.project = Path(project).resolve()
         self.cwd = self.project  # where the current preview runs: the project, or a run's integration worktree (M6)
+        self.runner = None       # set when the preview runs inside the run's container (M10)
         self.idle_seconds = idle_seconds
         self.clock = clock
         self.lock = threading.RLock()
@@ -165,7 +168,7 @@ class PreviewManager:
                 pass
 
     # ---- lifecycle -------------------------------------------------------
-    def start(self, run, spec, cwd=None):
+    def start(self, run, spec, cwd=None, runner=None):
         cwd = Path(cwd).resolve() if cwd else self.project
         spec = validate_spec(spec, cwd)
         if not spec:
@@ -178,6 +181,7 @@ class PreviewManager:
             generation = self.generation
             self.spec, self.run, self.error, self.exit_code = spec, run, '', None
             self.cwd = cwd
+            self.runner = runner
             self.buffer, self.offset = bytearray(), 0
             self.started = time.time()
             self.touch()
@@ -192,12 +196,14 @@ class PreviewManager:
                 if mode == 'cli':
                     self._start_cli(env, generation)
                 elif mode == 'web':
-                    if _port_open(spec['port']):
+                    if self._port_open(spec['port']):
                         self.state = 'failed'
                         self.error = (f'Port {spec["port"]} is already in use, so the preview would show some other program. '
                                       'Stop whatever is using it (perhaps an earlier preview) or choose another port.')
                         return self.status()
                     env.update(PORT=str(spec['port']), HOST='127.0.0.1')
+                    if runner:
+                        runner.start_relay(spec['port'])
                     self._start_piped(env, generation)
                     threading.Thread(target=self._wait_for_port, args=(generation,), daemon=True).start()
                 else:
@@ -208,7 +214,8 @@ class PreviewManager:
                 return self.status()
             if mode != 'web':
                 self.state = 'running'
-            self._log(f'$ {spec["command"]}{" " + spec["args"] if spec.get("args") else ""}\n')
+            self._log(f'$ {spec["command"]}{" " + spec["args"] if spec.get("args") else ""}'
+                      f'{"   (inside the run container)" if runner else ""}\n')
         return self.status()
 
     def _start_cli(self, env, generation):
@@ -216,7 +223,8 @@ class PreviewManager:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 100, 0, 0))
         env.update(TERM='dumb', COLUMNS='100', LINES='32', PYTHONUNBUFFERED='1')
         try:
-            self.proc = subprocess.Popen(self.spec['argv'], cwd=self.cwd, stdin=slave, stdout=slave, stderr=slave,
+            argv, cwd = self._argv(env, tty=True)
+            self.proc = subprocess.Popen(argv, cwd=cwd, stdin=slave, stdout=slave, stderr=slave,
                                          env=env, start_new_session=True, close_fds=True)
         finally:
             os.close(slave)
@@ -225,12 +233,25 @@ class PreviewManager:
         threading.Thread(target=self._wait_exit, args=(self.proc, generation), daemon=True).start()
 
     def _start_piped(self, env, generation):
-        self.proc = subprocess.Popen(self.spec['argv'], cwd=self.cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        argv, cwd = self._argv(env)
+        self.proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, env=env, start_new_session=True, close_fds=True)
         threading.Thread(target=self._read_fd, args=(self.proc.stdout.fileno(), generation), daemon=True).start()
         threading.Thread(target=self._wait_exit, args=(self.proc, generation), daemon=True).start()
 
+    def _argv(self, env, tty=False):
+        """The command and host working folder; inside the container only the preview's own variables are passed."""
+        if not self.runner:
+            return self.spec['argv'], self.cwd
+        keys = ('PORT', 'HOST', 'DISPLAY', 'TERM', 'COLUMNS', 'LINES', 'PYTHONUNBUFFERED')
+        return self.runner.wrap(self.spec['argv'], self.cwd, {k: env[k] for k in keys if k in env}, tty=tty), Path(__file__).resolve().parent
+
+    def _port_open(self, port):
+        return self.runner.port_open(port) if self.runner else _port_open(port)
+
     def _start_desktop(self, env, generation):
+        if self.runner:
+            return self._start_container_desktop(env, generation)
         display = next((n for n in range(90, 190) if not Path(f'/tmp/.X11-unix/X{n}').exists() and not Path(f'/tmp/.X{n}-lock').exists()), None)
         if display is None:
             raise OSError('no free X display number')
@@ -247,6 +268,20 @@ class PreviewManager:
         env['DISPLAY'] = self.display
         self._start_piped(env, generation)
 
+    def _start_container_desktop(self, env, generation):
+        size = f'{self.spec["width"]}x{self.spec["height"]}x24'
+        display = self.runner.display
+        self.xvfb = subprocess.Popen(self.runner.wrap(['Xvfb', display, '-screen', '0', size, '-nolisten', 'tcp'], '/'),
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.monotonic() + 15
+        while not self.runner.exists(f'/tmp/.X11-unix/X{display[1:]}'):
+            if self.xvfb.poll() is not None or time.monotonic() > deadline:
+                raise OSError('the virtual display (Xvfb) did not start in the container')
+            time.sleep(.2)
+        self.display = display
+        env['DISPLAY'] = display
+        self._start_piped(env, generation)
+
     def stop(self):
         with self.lock:
             was = self.state
@@ -258,6 +293,9 @@ class PreviewManager:
         return self.status()
 
     def _kill_all(self):
+        if self.runner:
+            # Stopping `docker exec` does not stop the program inside; end the marked preview processes there.
+            self.runner.kill()
         _kill_group(self.proc)
         _kill_group(self.xvfb)
         if self.proc and self.proc.stdout:
@@ -311,10 +349,7 @@ class PreviewManager:
             with self.lock:
                 if generation != self.generation or self.state != 'starting':
                     return
-            try:
-                with socket.create_connection(('127.0.0.1', self.spec['port']), timeout=1):
-                    pass
-            except OSError:
+            if not self._port_open(self.spec['port']):
                 time.sleep(.25)
                 continue
             with self.lock:
@@ -378,6 +413,9 @@ class PreviewManager:
                 raise ValueError('The desktop preview is not running')
             self.touch()
             env = {**os.environ, 'DISPLAY': self.display}
+            runner = self.runner
+        if runner:
+            return runner.run(list(args), {'DISPLAY': self.display})
         return subprocess.run(args, env=env, capture_output=True, timeout=10, check=False)
 
     def click(self, x, y, button=1):
@@ -512,7 +550,8 @@ class PreviewManager:
         if cookies:
             headers['Cookie'] = '; '.join(cookies)
         headers['Host'] = f'127.0.0.1:{spec["port"]}'
-        connection = http.client.HTTPConnection('127.0.0.1', spec['port'], timeout=60)
+        connection = (UnixHTTPConnection(self.runner.preview_socket, timeout=60) if self.runner
+                      else http.client.HTTPConnection('127.0.0.1', spec['port'], timeout=60))
         try:
             connection.request(handler.command, handler.path, body=body, headers=headers)
             response = connection.getresponse()

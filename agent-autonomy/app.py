@@ -16,7 +16,8 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import agents as agent_registry
-from engine import Controller, ReviewConflict, Settings
+from engine import Controller, ReviewConflict, Settings, TERMINAL
+import gateway
 
 ROOT = Path(__file__).resolve().parent
 MAX_EVENT_STREAMS = 12       # each open dashboard tab holds one thread
@@ -63,6 +64,13 @@ def handler(controller, key):
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
                 intact, broken_at = controller.store.audit_verify()
                 return self.reply(200, {'entries': controller.store.audit(ident), 'chain_intact': intact, 'broken_at': broken_at})
+            if path.path == '/api/models':
+                ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
+                if urllib.parse.parse_qs(path.query).get('check'):
+                    for endpoint in controller.broker.endpoints:
+                        controller.broker.health(endpoint['id'], max_age=0)
+                return self.reply(200, {**controller.models_status(), 'usage': controller.store.usage_summary(ident),
+                                        'calls': controller.store.usage(ident, limit=100)})
             if path.path == '/api/agents':
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0]
                 try:
@@ -192,6 +200,11 @@ def _interrupt(signum, frame):
     raise KeyboardInterrupt
 
 
+def active_run(controller):
+    """The run model calls through the gateway are counted against (one active run at a time today)."""
+    return next((r['id'] for r in controller.store.runs() if r['status'] not in TERMINAL), None)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--host', default=os.environ.get('DASHBOARD_HOST', '127.0.0.1'))
@@ -205,6 +218,9 @@ def main():
     p.add_argument('--doctor', action='store_true', help='Check connections and CLI flags; do not run a model')
     p.add_argument('--preview-port', type=int, default=None, help='Port for live previews (default: dashboard port + 1)')
     p.add_argument('--no-preview', action='store_true', help='Disable the live preview listener')
+    p.add_argument('--models', type=Path, default=None, help='Model registry JSON (default: state/models.json; an ai-arch.json also works)')
+    p.add_argument('--gateway-port', type=int, default=int(os.environ.get('AGENTCONTROL_GATEWAY_PORT', '0')),
+                   help='Serve the local model gateway on this loopback port (0 = off)')
     p.add_argument('--preview-idle-minutes', type=float, default=30, help='Stop an unused preview after this many minutes')
     a = p.parse_args()
     project = a.project.expanduser().resolve()
@@ -221,7 +237,7 @@ def main():
     s = Settings(project=project, data=data, opencode_url=a.opencode, hermes=a.hermes,
                  profile=a.profile, push_target=a.target, notifications=not a.no_notifications,
                  password=os.environ.get('OPENCODE_SERVER_PASSWORD', ''), username=os.environ.get('OPENCODE_SERVER_USERNAME', 'opencode'),
-                 preview_idle=max(0, a.preview_idle_minutes) * 60)
+                 preview_idle=max(0, a.preview_idle_minutes) * 60, models=a.models)
     controller = Controller(s)
     if a.doctor:
         status = controller.check()
@@ -247,6 +263,15 @@ def main():
             threading.Thread(target=preview_server.serve_forever, daemon=True).start()
         except OSError as exc:
             print(f'Live preview disabled: cannot bind {a.host}:{preview_port}: {exc}. Use --preview-port to choose another.')
+    gateway_server = None
+    if a.gateway_port:
+        try:
+            gateway_server = gateway.serve(controller.broker, controller.store.usage_add, lambda: active_run(controller), a.gateway_port)
+            controller.gateway_info = {'port': gateway_server.server_port, 'url': f'http://127.0.0.1:{gateway_server.server_port}/agent/<name>/v1'}
+            threading.Thread(target=gateway_server.serve_forever, daemon=True).start()
+        except OSError as exc:
+            print(f'Model gateway disabled: cannot bind 127.0.0.1:{a.gateway_port}: {exc}.')
+    print(f'Model gateway: {controller.gateway_info["url"] if gateway_server else "off"}', flush=True)
     print(f'AgentControl: http://{a.host}:{server.server_port}\nProject: {project}\nOpenCode: {a.opencode}\nHermes profile: {a.profile or "current"}\nLive preview port: {controller.preview.listen_port or "off"}\nDashboard key: {key}', flush=True)
     threading.Thread(target=controller.check, daemon=True).start()
     # Treat `kill` like Ctrl+C so previews and their child processes are cleaned up.
@@ -260,6 +285,8 @@ def main():
         controller.preview.close()
         if preview_server:
             preview_server.shutdown()
+        if gateway_server:
+            gateway_server.shutdown()
         server.server_close()
         for thread in list(controller.threads.values()):
             thread.join(timeout=5)

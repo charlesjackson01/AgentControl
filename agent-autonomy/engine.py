@@ -16,6 +16,7 @@ from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
 from events import EventBus
 import agents as agent_registry
 import permissions
+import models
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ class Settings:
     username: str = 'opencode'
     notifications: bool = True
     preview_idle: float = 1800
+    models: Path = None          # model registry file; default <data>/models.json (absent = model features off)
 
 
 def review_packet(request, messages=()):
@@ -125,6 +127,14 @@ class Controller:
         self.preview = PreviewManager(self.s.project, self.s.preview_idle)
         self.preview.on_change = lambda: self.events.publish('preview', self.preview.run or None)
         self.health = {'ready': False, 'message': 'Checking connections…'}
+        self.models_error = ''
+        self.gateway_info = None  # set by app.py when the model gateway is listening
+        try:
+            registry = models.load_registry(self.s.models or self.s.data / 'models.json')
+        except models.RegistryError as exc:
+            registry, self.models_error = None, str(exc)
+        self.broker = models.Broker(registry)
+        self.broker.on_change = lambda: self.events.publish('models')
         for run in self.store.runs():
             if (run.get('manual_verification') or {}).get('status') == 'running':
                 self.store.update('runs', run['id'], manual_verification={**run['manual_verification'], 'status': 'interrupted',
@@ -151,6 +161,20 @@ class Controller:
         except Exception as exc:
             agents['hermes'] = {'state': 'unavailable', 'label': 'CLI unavailable'}
             errors.append(str(exc))
+        if self.models_error:
+            agents['model'] = {'state': 'unavailable', 'label': 'Model registry has an error'}
+            errors.append('Model registry: ' + self.models_error)
+        elif self.broker.configured:
+            endpoint = self.broker.endpoint()
+            health = self.broker.health(max_age=0)
+            if health['state'] == 'offline':
+                agents['model'] = {'state': 'unavailable', 'label': f"{endpoint['id']} not responding"}
+                errors.append(f"Model server {endpoint['id']} at {endpoint['url']} is not responding: {health['error']}")
+            else:
+                agents['model'] = {'state': 'ready' if health['state'] == 'online' else 'warning',
+                                   'label': f"{endpoint['id']} online · {health['latency_ms']} ms" if health['state'] == 'online' else health['error']}
+                if agents.get('hermes', {}).get('state') == 'ready':
+                    agents['hermes']['label'] = 'CLI ready; model server online'
         self.health = {'ready': not errors, 'message': '; '.join(errors) if errors else 'Hermes CLI and OpenCode API ready',
                        'opencode_version': info.get('version'), 'agents': agents, 'checked_at': now()}
         self.events.publish('health')
@@ -632,11 +656,15 @@ class Controller:
             if run['decision_count'] >= run['max_steps'] + 3:
                 self._end(ident, 'limit_reached', 'Hermes decision limit reached. Review the recorded work.')
                 return
+            self._model_gate(ident, 'Hermes')
             self.store.update('runs', ident, status='planning' if not steps else 'reviewing', phase='manager',
                               summary='Hermes is deciding the next action.', decision_count=run['decision_count'] + 1)
             prompt = self._manager_prompt(run, snap, steps)
             self.store.event(ident, 'Hermes request', prompt)
-            decision = self.manager.decide(prompt, lambda: self._process_cancel(ident))
+            try:
+                decision = self.manager.decide(prompt, lambda: self._process_cancel(ident))
+            finally:
+                self._record_hermes_usage(ident)
             if getattr(self.manager, 'last_repair', None):
                 self.store.event(ident, 'Hermes JSON repaired', f'First reply was not valid JSON ({self.manager.last_repair}); one repair request succeeded.')
             self.store.event(ident, 'Hermes decision', decision)
@@ -692,8 +720,46 @@ class Controller:
             self.store.update('runs', ident, phase='code', corrections=corrections)
             self._dispatch(ident, step)
 
+    def _model_gate(self, ident, target):
+        """Before handing work to an agent, make sure the model server answers (M0: a stopped
+        llama-server made Hermes fail only after minutes). Offline pauses the run; nothing is sent."""
+        if not self.broker.configured:
+            return
+        endpoint = self.broker.endpoint()
+        health = self.broker.health(max_age=2)
+        if health['state'] == 'offline':
+            raise Attention(f"Model server {endpoint['id']} at {endpoint['url']} is not responding ({health['error']}). "
+                            f'Nothing was sent to {target}. Start the model server, then press Resume.')
+        if health['state'] == 'wrong_model':
+            self.store.event(ident, 'model warning', health['error'])
+
+    def _record_hermes_usage(self, ident):
+        endpoint = self.broker.registry.get('default')
+        for call in getattr(self.manager, 'last_calls', None) or []:
+            self.store.usage_add({'run': ident, 'agent': 'hermes', 'source': 'hermes-cli', 'endpoint': endpoint,
+                                  'model': call.get('model') or '', 'tokens_in': call.get('tokens_in'), 'tokens_out': call.get('tokens_out'),
+                                  'duration_ms': call.get('duration_ms'), 'status': call.get('status', 'ok'), 'cost': 0.0,
+                                  'ref': f"hermes:{call['session']}" if call.get('session') else None})
+
+    def _record_opencode_usage(self, ident, step, messages):
+        """Token counts OpenCode reports on each finished assistant message. Idempotent by message id."""
+        for message in messages:
+            info = message.get('info', {})
+            tokens = info.get('tokens') or {}
+            if not info.get('id') or not tokens or not (info.get('time') or {}).get('completed'):
+                continue
+            times = info.get('time') or {}
+            duration = times['completed'] - times['created'] if isinstance(times.get('created'), (int, float)) and isinstance(times['completed'], (int, float)) else None
+            self.store.usage_add({'run': ident, 'agent': step.get('agent', 'coder-1'), 'source': 'opencode',
+                                  'endpoint': info.get('providerID') or '', 'model': info.get('modelID') or '',
+                                  'tokens_in': tokens.get('input'), 'tokens_out': (tokens.get('output') or 0) + (tokens.get('reasoning') or 0),
+                                  'duration_ms': duration if duration is None or duration >= 0 else None, 'status': 'error' if info.get('error') else 'ok',
+                                  'cost': float(info.get('cost') or 0), 'ref': 'opencode:' + info['id']})
+
     def _dispatch(self, ident, step):
         self._boundary(ident)
+        if step['status'] == 'prepared':
+            self._model_gate(ident, 'OpenCode')
         with self.lock:
             run = self.store.get('runs', ident)
             if run['pause'] or run['stop']:
@@ -803,12 +869,17 @@ class Controller:
                 final = result or '\n'.join(tool_lines) or '(No textual response)'
                 if errors:
                     final += '\nOpenCode errors: ' + json.dumps(errors)
+                self._record_opencode_usage(ident, step, matching)
                 self.store.update('steps', step['id'], status='failed' if errors else 'finished', result=final[-40000:], ended=now())
                 self.store.event(ident, 'OpenCode result', final[-40000:])
                 self._push(ident, f'Step {step["number"]} finished. Hermes is reviewing it.')
                 return
             # Poll a little faster while coding so the dashboard terminal feels live.
             time.sleep(min(self.s.poll, 1.0))
+
+    def models_status(self):
+        return {'configured': self.broker.configured, 'error': self.models_error, 'source': self.broker.registry.get('source'),
+                'endpoints': self.broker.status(), 'gateway': self.gateway_info}
 
     def agents(self, run, steps=None, inbox=None):
         """A run's agents with live state. Runs recorded before agents existed get the same
@@ -852,6 +923,8 @@ class Controller:
                                 'confirm_word': permissions.CONFIRM_WORD},
                 'audit': self.store.audit(ident, limit=60) if run else [],
                 'audit_chain': dict(zip(('intact', 'broken_at'), self.store.audit_verify())),
+                'models': self.models_status(),
+                'usage': self.store.usage_summary(ident) if run else None,
                 'agents': self.agents(run, steps, inbox) if run else [],
                 'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],
                 'inbox': inbox, 'reviews': self.store.reviews(ident) if run else []}

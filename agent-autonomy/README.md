@@ -198,6 +198,8 @@ no notifications:
 python3 -m unittest discover -s agent-autonomy/tests -v
 ```
 
+The model tests use ai-arch's scripted mock endpoint (`ai-arch/tests/mock-endpoint/server.py`) as the model server, so they need the `ai-arch/` folder next to `agent-autonomy/`.
+
 To check the actual local connections without starting a model:
 
 ```bash
@@ -260,6 +262,49 @@ Every OpenCode request gets a risk class from AgentControl's own registry (`perm
 - Critical requests can never be remembered, and the class is re-checked every time a rule is matched.
 - The API always records decisions as *You, via dashboard*. Only AgentControl's own rule check can approve automatically, and only with a rule you created.
 - **Audit log:** every request, decision, block, rule added and rule revoked is appended to an audit table in the journal. Each entry stores the hash of the one before it, so an edited or deleted entry breaks the chain. The dashboard shows whether the chain is intact. `GET /api/audit?run=<id>` returns `{entries, chain_intact, broken_at}`.
+
+## Model server, usage, and the optional gateway
+
+AgentControl can watch the model server your agents use (for example your local
+llama-server). Describe it in `agent-autonomy/state/models.json`, or pass
+`--models FILE`. An ai-arch `ai-arch.json` also works as-is and becomes one
+endpoint named `ai-arch`.
+
+```json
+{
+  "default": "local",
+  "endpoints": [
+    {"id": "local", "url": "http://127.0.0.1:8080", "model": "", "slots": 1}
+  ]
+}
+```
+
+- `url` is where llama-server listens. `model` is optional; if set, AgentControl warns when the server does not list it.
+- `slots` is how many requests the server should get at once. Match llama-server's `-np`. The M0 benchmark showed `-np 1` gives no extra throughput for parallel requests, so 1 is right today.
+- `api_key_ref` is optional and names a file in ai-arch's secret store (`~/.local/share/ai-arch/secrets`, mode 600). The key is never written to AgentControl's files or shown in the dashboard.
+- A provider marked `"paid": true` (with `cost_per_mtok_in`/`cost_per_mtok_out`) can be listed but can never be the default. Nothing needs a paid provider.
+- With no `models.json`, all of this is off and AgentControl behaves as before.
+
+When an endpoint is configured:
+
+- **Health.** Check connections includes the model server. Before each Hermes decision and before each new OpenCode prompt, AgentControl checks that the server answers. If it does not, the run pauses with *Model server … is not responding. Nothing was sent*. Start the server and press **Resume**; the unsent prompt goes out then.
+- **Usage.** Token counts are recorded per call: Hermes from its `stream-json` result, and OpenCode from its own message totals. The run page shows **Model usage** per agent. `GET /api/models?run=<id>` returns the endpoints, their health and queue, usage totals, and recent calls (`&check=1` re-checks health now).
+
+**Optional gateway.** Start AgentControl with `--gateway-port 8768` to open a
+local, OpenAI-compatible gateway in front of the model server (loopback only).
+Then point your agents at it instead of at llama-server:
+
+- OpenCode: set your provider's `baseURL` to `http://127.0.0.1:8768/agent/opencode/v1`.
+- Hermes: set the model base URL in your Hermes profile to `http://127.0.0.1:8768/agent/hermes/v1`.
+
+The gateway forwards each request unchanged and streams the reply back. It:
+
+- lets at most `slots` requests through at once and queues the rest, with Hermes planning ahead of coding requests
+- records every call with its queue time and tokens against the active run
+- adds the server key from `api_key_ref` if one is set, so agents never see it
+- marks a stream that ends without `[DONE]` as *incomplete*
+
+This follows the design of ai-arch's `aid` gateway. It is optional; without it, AgentControl still records usage from what Hermes and OpenCode report.
 
 ## Agents
 

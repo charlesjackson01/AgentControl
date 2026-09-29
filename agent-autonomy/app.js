@@ -444,9 +444,12 @@ function renderRecentRuns(inbox) {
 }
 function renderAgents(project) {
   const agents = data.health.agents || {};
-  setHTML($('agent-list'), [['hermes', 'Hermes', 'Orchestrator', data.profile], ['opencode', 'OpenCode', 'Coder', project]].map(([id, name, role, host]) => {
+  const rows = [['hermes', 'Hermes', 'Orchestrator', data.profile], ['opencode', 'OpenCode', 'Coder', project]];
+  const endpoint = data.models?.endpoints?.find(e => e.default);
+  if (endpoint || agents.model) rows.push(['model', 'Model server', endpoint ? `${endpoint.slots} slot${endpoint.slots === 1 ? '' : 's'}` : 'Registry', endpoint?.url || 'models.json']);
+  setHTML($('agent-list'), rows.map(([id, name, role, host]) => {
     const agent = agents[id];
-    const tone = agent?.state === 'ready' ? 'success-text' : agent?.state === 'unavailable' ? 'error' : 'muted';
+    const tone = agent?.state === 'ready' ? 'success-text' : agent?.state === 'unavailable' ? 'error' : agent?.state === 'warning' ? 'warning-text' : 'muted';
     return `<div class="agent-row"><span class="agent-avatar ${id}">${name[0]}</span><div><strong>${name}</strong><small>${role} · ${esc(host)}</small>
       <div class="agent-status ${tone}"><span class="dot"></span> ${esc(!connected ? 'Unknown · disconnected' : agent?.label || 'Not checked')}</div></div></div>`;
   }).join(''));
@@ -478,6 +481,7 @@ function renderRun() {
   setHTML($('inline-approvals'), pending.map(approvalCard).join('') || (finished ? '' : recentDecisionHTML()));
   renderChecks();
   renderVerification();
+  renderModelUsage();
   renderFiles(fileStats(steps));
   renderTimeline();
   setHTML($('original-brief'), finished ? `<section class="ac-panel"><h2 class="ac-panel__title">Original brief</h2><p class="small">${esc(current.goal)}</p></section>` : '');
@@ -710,6 +714,17 @@ function renderVerification() {
   const button = data.capabilities?.verify_now && current.verifier.length
     ? `<button class="ac-btn compact" data-action="verify-now" ${canVerifyNow() ? '' : 'disabled'} aria-keyshortcuts="v">Verify now</button>${canVerifyNow() || m?.status === 'running' ? '' : '<p class="small muted">Pause the run to verify on demand, so the check cannot overlap a coding turn.</p>'}` : '';
   setHTML($('verification'), `<section class="ac-panel"><h2 class="ac-panel__title">Independent verification</h2>${latest}${manual}${button}</section>`);
+}
+function tokens(n) { return n >= 10000 ? Math.round(n / 1000) + 'k' : String(n || 0); }
+function renderModelUsage() {
+  const usage = data.usage, models = data.models || {}, endpoint = (models.endpoints || []).find(e => e.default);
+  if (!usage?.total?.calls && !endpoint) { setHTML($('model-usage'), ''); return; }
+  const queue = endpoint ? `<p class="small muted">${esc(endpoint.id)} · ${endpoint.in_flight.length} of ${endpoint.slots} busy${endpoint.queued.length ? ` · ${endpoint.queued.length} waiting (${esc(endpoint.queued.map(q => q.agent).join(', '))})` : ''}${models.gateway ? ' · gateway on' : ''}</p>` : '';
+  const agents = Object.entries(usage?.by_agent || {}).map(([name, u]) => `<div class="usage-row"><span>${esc(name)}</span><span class="mono small">${u.calls} call${u.calls === 1 ? '' : 's'} · ${tokens(u.tokens_in)} in · ${tokens(u.tokens_out)} out${u.queued_ms ? ` · waited ${Math.round(u.queued_ms / 1000)} s` : ''}</span></div>`).join('');
+  const total = usage?.total || {calls: 0, cost: 0};
+  setHTML($('model-usage'), `<section class="ac-panel"><h2 class="ac-panel__title">Model usage</h2>${queue}
+    ${agents || '<p class="small muted">Token counts appear after Hermes or OpenCode finish a call.</p>'}
+    <p class="small muted">${total.cost > 0 ? `Spend on paid providers: $${total.cost.toFixed(4)}` : 'Local model · no spend'}</p></section>`);
 }
 function renderFiles(files) {
   const rows = files.map(f => `<div class="file-row">${icon('file')}<span class="file-path">${esc(f.path)}</span><span class="file-change">${esc(f.change)}</span>${f.added !== null ? `<span class="file-counts"><span class="added">+${f.added}</span><span class="removed">−${f.removed}${f.partial ? '*' : ''}</span></span>` : ''}</div>`).join('');

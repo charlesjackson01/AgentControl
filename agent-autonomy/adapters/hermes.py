@@ -8,11 +8,22 @@ import tempfile
 from proc import process
 
 
+def usage_of(result):
+    """Usage from a stream-json result event: tokens {input, output, ...} and duration_ms (seen in M0)."""
+    tokens = result.get('tokens') if isinstance(result.get('tokens'), dict) else {}
+    number = lambda v: v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else None
+    return {'tokens_in': number(tokens.get('input')), 'tokens_out': number(tokens.get('output')),
+            'duration_ms': number(result.get('duration_ms')), 'session': str(result.get('session_id') or '')[:80],
+            'model': str(result.get('model') or '')[:200],
+            'status': 'ok' if result.get('exit_code', 0) == 0 and not result.get('error') else 'error'}
+
+
 class Hermes:
     def __init__(self, settings):
         self.s = settings
         self.capabilities = None
         self.last_repair = None
+        self.last_calls = []   # usage of the most recent run_json: one entry per Hermes process
 
     def prefix(self):
         return [self.s.hermes] + (['--profile', self.s.profile] if self.s.profile else [])
@@ -59,6 +70,8 @@ class Hermes:
                     continue
                 if isinstance(item, dict) and item.get('type') == 'result':
                     records.append(item)
+            if records:
+                self.last_calls.append(usage_of(records[-1]))
             if not records or records[-1].get('exit_code', 0) != 0 or records[-1].get('error'):
                 raise RuntimeError('Hermes did not return a successful terminal result: ' + err[-1200:])
             out = records[-1].get('text', '')
@@ -73,6 +86,7 @@ class Hermes:
         """Ask Hermes for one JSON object. A reply that is not valid JSON gets exactly one repair
         attempt (M0: a local model dropped braces in 1 of 3 large replies); a second failure raises."""
         self.last_repair = None
+        self.last_calls = []
         cleaned = self._ask(prompt, cancel)
         try:
             return json.loads(cleaned)

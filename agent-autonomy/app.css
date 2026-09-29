@@ -536,6 +536,7 @@ button:hover:not(:disabled) {
 .recent {
   flex:1;
   min-height:110px;
+  overflow-y:auto;  /* scroll the run list rather than overlap the agents below */
 }
 
 .recent-run {
@@ -610,6 +611,10 @@ button:hover:not(:disabled) {
 
 .agent-avatar.opencode {
   background:var(--ac-opencode);
+}
+
+.agent-avatar.model {
+  background:var(--ac-text-muted);
 }
 
 .agent-row strong {
@@ -4423,4 +4428,19 @@ kbd {
 .audit-list {
   max-height:360px;
   overflow:auto;
+}
+
+/* Model usage (M5) */
+.usage-row {
+  display:grid;
+  grid-template-columns:minmax(64px,auto) minmax(0,1fr);
+  gap:10px;
+  text-align:right;
+  padding:6px 0;
+  border-bottom:1px solid var(--ac-border);
+  font-size:var(--ac-text-sm);
+}
+
+.usage-row > :first-child {
+  text-align:left;
 }

@@ -32,8 +32,18 @@ def _v3(c):
                  entry TEXT NOT NULL, prev_hash TEXT NOT NULL, hash TEXT NOT NULL)''')
 
 
+def _v4(c):
+    """Model usage per call: who, which endpoint, tokens, time, and cost (M5)."""
+    c.execute('''CREATE TABLE IF NOT EXISTS usage (id INTEGER PRIMARY KEY AUTOINCREMENT, run TEXT, agent TEXT, source TEXT,
+                 endpoint TEXT, model TEXT, created TEXT NOT NULL, tokens_in INTEGER, tokens_out INTEGER,
+                 duration_ms INTEGER, queued_ms INTEGER, status TEXT, cost REAL, ref TEXT)''')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS usage_ref ON usage(ref) WHERE ref IS NOT NULL')
+    c.execute('CREATE INDEX IF NOT EXISTS usage_run ON usage(run)')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1, _v2, _v3]
+MIGRATIONS = [_v1, _v2, _v3, _v4]
+USAGE_FIELDS = ('run', 'agent', 'source', 'endpoint', 'model', 'tokens_in', 'tokens_out', 'duration_ms', 'queued_ms', 'status', 'cost', 'ref')
 GENESIS = '0' * 64
 
 
@@ -186,6 +196,32 @@ class Store:
                     return False, seq
                 prev = digest
         return True, None
+
+    def usage_add(self, record):
+        """Record one model call. A `ref` (e.g. an OpenCode message id) makes the write idempotent."""
+        values = [record.get(k) for k in USAGE_FIELDS]
+        with self.connection() as c:
+            c.execute(f'INSERT OR IGNORE INTO usage(created,{",".join(USAGE_FIELDS)}) VALUES (?{",?" * len(USAGE_FIELDS)})',
+                      [record.get('created') or now()] + values)
+        self._changed('usage', record.get('run'))
+
+    def usage(self, run=None, limit=200):
+        with self.connection() as c:
+            query = f'SELECT id,created,{",".join(USAGE_FIELDS)} FROM usage' + (' WHERE run=?' if run else '') + ' ORDER BY id DESC LIMIT ?'
+            rows = c.execute(query, ((run,) if run else ()) + (limit,)).fetchall()
+        return [dict(zip(('id', 'created') + USAGE_FIELDS, r)) for r in reversed(rows)]
+
+    def usage_summary(self, run=None):
+        """Totals and per-agent totals for a run (or everything)."""
+        with self.connection() as c:
+            where, args = (' WHERE run=?', (run,)) if run else ('', ())
+            rows = c.execute('SELECT agent, COUNT(*), COALESCE(SUM(tokens_in),0), COALESCE(SUM(tokens_out),0), COALESCE(SUM(duration_ms),0),'
+                             ' COALESCE(SUM(queued_ms),0), COALESCE(SUM(cost),0) FROM usage' + where + ' GROUP BY agent ORDER BY agent', args).fetchall()
+        keys = ('calls', 'tokens_in', 'tokens_out', 'duration_ms', 'queued_ms', 'cost')
+        by_agent = {agent or 'unknown': dict(zip(keys, values)) for agent, *values in rows}
+        total = {k: sum(a[k] for a in by_agent.values()) for k in keys}
+        total['cost'] = round(total['cost'], 6)
+        return {'total': total, 'by_agent': by_agent}
 
     def put_agent(self, agent):
         with self.connection() as c:

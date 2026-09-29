@@ -364,4 +364,24 @@ test('approvals view lists remembered rules with revoke and the audit chain',asy
  h.state.audit_chain={intact:false,broken_at:7};await h.poll();
  assert.match(h.document.getElementById('audit-list').textContent,/broken at entry 7/);
 });
+test('model server and usage appear only when configured',async()=>{
+ let h=await harness();
+ assert.equal(h.document.getElementById('model-usage').textContent.trim(),'');
+ assert(!h.document.getElementById('agent-list').textContent.includes('Model server'));
+ const s=fixture();
+ s.health.agents.model={state:'ready',label:'local online · 12 ms'};
+ s.models={configured:true,endpoints:[{id:'local',url:'http://127.0.0.1:8080',slots:1,default:true,in_flight:[{agent:'opencode'}],queued:[{agent:'hermes',role:'orchestrator'}],health:{state:'online'}}],gateway:{port:8768}};
+ s.usage={total:{calls:3,tokens_in:12500,tokens_out:900,cost:0},by_agent:{hermes:{calls:2,tokens_in:2500,tokens_out:400,queued_ms:3000},'coder-1':{calls:1,tokens_in:10000,tokens_out:500,queued_ms:0}}};
+ h=await harness(s);
+ assert.match(h.document.getElementById('agent-list').textContent,/Model server/);
+ assert.match(h.document.getElementById('agent-list').textContent,/local online/);
+ const panel=h.document.getElementById('model-usage').textContent;
+ assert.match(panel,/1 of 1 busy · 1 waiting \(hermes\)/);
+ assert.match(panel,/gateway on/);
+ assert.match(panel,/2 calls · 2500 in · 400 out · waited 3 s/);
+ assert.match(panel,/10k in/);
+ assert.match(panel,/no spend/);
+ h.state.usage.total.cost=0.0123;await h.poll();
+ assert.match(h.document.getElementById('model-usage').textContent,/\$0\.0123/);
+});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

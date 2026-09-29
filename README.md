@@ -45,6 +45,10 @@ Hermes CLI and the OpenCode API without starting a model.
   preview you saved and shows the project running. It can be a web app in a
   frame, a static page, a command-line program you can type into, or a desktop
   app on a virtual screen. See `agent-autonomy/README.md` for setup.
+- **Model server.** Optionally describe your model server (for example
+  llama-server) in `state/models.json`. AgentControl checks that it answers
+  before sending work, records token usage per agent, and can run a local
+  gateway that queues model calls. See `agent-autonomy/README.md`.
 - **Themes.** Mac (follows the system light/dark setting), Terminal, and XP.
 
 ## Tests

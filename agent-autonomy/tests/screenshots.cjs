@@ -31,6 +31,13 @@ const scenarios = {
   newrun: {state: fx.empty, click: '#empty-state [data-action="new"]'},
   critical: {state: () => withRisk(fx.richActive()), click: '#inline-approvals [data-intent="approve"]'},
   rules: {state: () => withRisk(fx.richActive()), click: '[data-view="approvals"]'},
+  models: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding';
+    s.health.agents.model = {state: 'ready', label: 'local online · 12 ms'};
+    s.models = {configured: true, gateway: {port: 8768}, endpoints: [{id: 'local', url: 'http://127.0.0.1:8080', slots: 1, default: true,
+      in_flight: [{agent: 'opencode'}], queued: [{agent: 'hermes', role: 'orchestrator'}], health: {state: 'online', latency_ms: 12}}]};
+    s.usage = {total: {calls: 4, tokens_in: 21400, tokens_out: 2300, cost: 0}, by_agent: {
+      hermes: {calls: 3, tokens_in: 10480, tokens_out: 1300, queued_ms: 4000}, 'coder-1': {calls: 1, tokens_in: 10920, tokens_out: 1000, queued_ms: 0}}};
+    return s; }},
 };
 
 // Permission risk (M4): a critical request, one remembered rule, and a short audit trail.

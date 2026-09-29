@@ -17,6 +17,7 @@ from events import EventBus
 import agents as agent_registry
 import permissions
 import models
+import workspaces
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
@@ -180,7 +181,8 @@ class Controller:
         self.events.publish('health')
         return self.health
 
-    def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None):
+    def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None,
+            allow_dirty=False, setup=''):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
         title = self._title(title)
@@ -188,6 +190,9 @@ class Controller:
         if not isinstance(verifier, str) or len(verifier) > 2000:
             raise ValueError('Verification command is too long')
         argv = shlex.split(verifier) if verifier.strip() else []
+        if not isinstance(setup, str) or len(setup) > 2000:
+            raise ValueError('Setup command is too long')
+        setup_argv = shlex.split(setup) if setup.strip() else []
         if type(max_steps) is not int or not 1 <= max_steps <= 20:
             raise ValueError('Prompt limit must be 1–20')
         checks = [] if goal_checks is None else goal_checks
@@ -210,19 +215,130 @@ class Controller:
             if not self.health.get('ready'):
                 raise ValueError('Connections are not ready. Use Check connections.')
             ident = uuid.uuid4().hex[:12]
+            workspace = self._new_workspace(ident, parent, allow_dirty)
             run = {'id': ident, 'created': now(), 'goal': goal.strip(), 'status': 'planning', 'phase': 'manager',
                    'summary': 'Hermes is preparing the first task.', 'session': '', 'pause': False, 'stop': False,
                    'max_steps': max_steps, 'corrections': 0, 'plan': [], 'instructions': [], 'decision_count': 0,
                    'verifier': argv, 'deadline': time.time() + duration, 'time_limit_seconds': duration, 'pending': [],
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
                    'parent_run': parent_run or None, 'title': title, 'preview': preview,
-                   'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None}
+                   'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
+                   'workspace': workspace, 'setup': setup_argv}
             self.store.put('runs', run)
             for agent in agent_registry.default_agents(run, self.s.profile):
                 self.store.put_agent(agent)
             self.store.event(ident, 'goal', goal)
+            if workspace['mode'] == 'worktree':
+                self.store.event(ident, 'workspace', f"Working on branch {workspace['agents']['coder-1']['branch']} from "
+                                 f"{workspace['base_branch']} ({workspace['base'][:10]}). Your checkout is not changed.")
+            elif workspace.get('reason'):
+                self.store.event(ident, 'workspace', 'Working directly in the project folder: ' + workspace['reason'] + '.')
             self._launch(ident)
             return run
+
+    # ---- workspaces (M6) ---------------------------------------------------
+    def _new_workspace(self, ident, parent, allow_dirty):
+        """A worktree for git projects; the project folder otherwise (today's behaviour)."""
+        info = workspaces.git_info(self.s.project)
+        if not info['usable']:
+            return {'mode': 'folder', 'reason': info['reason'] if info['is_repo'] else ''}
+        dirty = info['changes'] + info['untracked']
+        if dirty and not allow_dirty:
+            listed = ', '.join(dirty[:6]) + (f' and {len(dirty) - 6} more' if len(dirty) > 6 else '')
+            raise ValueError(f'Your project has uncommitted changes ({listed}). The run starts from your last commit on '
+                             f"{info['branch']}, so the agent will not see them. Commit them first, or choose to start from "
+                             'the last commit anyway.')
+        base = None
+        pws = self._ws(parent) if parent else None
+        if pws and not pws.get('applied') and not pws.get('discarded'):
+            head = workspaces.summary(pws).get('head')
+            base = head or None  # a follow-up continues from the unapplied branch of its parent
+        try:
+            return {**workspaces.create(info, self.s.data / 'worktrees', ident, ('coder-1',), base), 'dirty_at_start': dirty[:50]}
+        except workspaces.WorkspaceError as exc:
+            raise ValueError(f'Could not create the run worktree: {exc}') from exc
+
+    @staticmethod
+    def _ws(run):
+        ws = (run or {}).get('workspace') or {}
+        return ws if ws.get('mode') == 'worktree' else None
+
+    def _dir(self, run, agent='coder-1'):
+        """Where an agent works: its worktree, or the project folder."""
+        ws = self._ws(run)
+        return Path(ws['agents'][agent]['dir']) if ws else self.s.project
+
+    def _oc(self, run, agent='coder-1'):
+        """OpenCode keyword arguments: worktree agents must pass their directory on every call (M0).
+        Folder mode passes nothing, so its requests are unchanged."""
+        ws = self._ws(run)
+        return {'directory': ws['agents'][agent]['dir']} if ws else {}
+
+    def _result_dir(self, run):
+        """Where the merged result lives: the integration worktree until applied, else the project."""
+        ws = self._ws(run)
+        if ws and not ws.get('applied') and Path(ws['integration']['dir']).is_dir():
+            return Path(ws['integration']['dir'])
+        return self.s.project
+
+    def workspace_status(self, run):
+        ws = self._ws(run)
+        if not ws:
+            return None
+        if ws.get('discarded'):
+            return {'state': 'discarded'}
+        try:
+            info = workspaces.summary(ws)
+            ready = '' if ws.get('applied') else workspaces.apply_ready(ws)
+        except workspaces.WorkspaceError as exc:
+            return {'state': 'error', 'error': str(exc)}
+        last = next((s.get('integration') for s in reversed(self.store.steps(run['id'])) if s.get('integration')), None)
+        return {'state': 'applied' if ws.get('applied') else 'open', **info, 'apply_blocked': ready, 'last_integration': last}
+
+    def _apply(self, ident):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            ws = self._ws(run)
+            if not ws or ws.get('applied') or ws.get('discarded'):
+                raise ValueError('This run has no branch waiting to be applied.')
+            if run['status'] not in TERMINAL or ident in self.verifying:
+                raise ValueError('Apply after the run has finished.')
+            label = run.get('title') or run['goal'].splitlines()[0][:72]
+            try:
+                result = workspaces.apply(ws, f'AgentControl: {label}\n\nRun {ident}, branch {ws["integration"]["branch"]}.')
+            except workspaces.WorkspaceError as exc:
+                raise ValueError(str(exc)) from exc
+            if result['status'] != 'applied':
+                self.store.event(ident, 'apply conflict', result)
+                self.store.audit_append(ident, {'action': 'apply stopped', 'actor': HUMAN, 'files': result['files'][:50]})
+                raise ValueError(f"Apply stopped: {', '.join(result['files'][:8]) or 'the merge failed'} conflict with your branch. "
+                                 'Your branch is unchanged. Merge the branch yourself, or start a follow-up run to reconcile.')
+            if self.preview.run == ident:
+                self.preview.stop()
+            workspaces.remove_worktrees(ws)
+            ws['applied'] = {'commit': result['commit'], 'time': now()}
+            self.store.update('runs', ident, workspace=ws)
+            self.store.event(ident, 'applied', f"Merged {ws['integration']['branch']} into {ws['base_branch']} ({result['commit'][:10]}).")
+            self.store.audit_append(ident, {'action': 'applied to branch', 'actor': HUMAN, 'branch': ws['base_branch'],
+                                            'commit': result['commit'], 'from': ws['integration']['branch']})
+            return self.store.get('runs', ident)
+
+    def _discard(self, ident):
+        with self.lock:
+            run = self.store.get('runs', ident)
+            ws = self._ws(run)
+            if not ws or ws.get('discarded'):
+                raise ValueError('This run has no branch to discard.')
+            if run['status'] not in TERMINAL:
+                raise ValueError('Stop the run before discarding its branch.')
+            if self.preview.run == ident:
+                self.preview.stop()
+            workspaces.discard(ws)
+            ws['discarded'] = now()
+            self.store.update('runs', ident, workspace=ws)
+            self.store.event(ident, 'discarded', 'The run branch and its worktrees were deleted.')
+            self.store.audit_append(ident, {'action': 'branch discarded', 'actor': HUMAN, 'branch': ws['integration']['branch']})
+            return self.store.get('runs', ident)
 
     def _launch(self, ident):
         thread = self.threads.get(ident)
@@ -257,7 +373,7 @@ class Controller:
 
         def verify():
             try:
-                code, out, err = process(run['verifier'], self.s.project, self.s.verify_timeout, self.shutdown.is_set)
+                code, out, err = process(run['verifier'], self._result_dir(run), self.s.verify_timeout, self.shutdown.is_set)
                 result = {'status': 'passed' if code == 0 else 'failed', 'exit_code': code, 'output': (out + '\n' + err)[-16000:]}
             except (TimeoutError, OSError) as exc:
                 result = {'status': 'failed', 'output': str(exc)}
@@ -279,6 +395,10 @@ class Controller:
     def control(self, ident, action, text=''):
         if action == 'verify':
             return self._verify_now(ident)
+        if action == 'apply':
+            return self._apply(ident)
+        if action == 'discard_workspace':
+            return self._discard(ident)
         if action == 'title':
             with self.lock:
                 self.store.update('runs', ident, title=self._title(text))
@@ -362,11 +482,11 @@ class Controller:
                 if previous['action'] == action and previous['fingerprint'] == fingerprint and previous.get('answers') == answers and previous.get('redirect') == redirect:
                     return previous  # Duplicate tap/retry never sends another decision.
                 raise ReviewConflict('A decision was already sent for this request. Refresh to see its status.')
-            pending = self.api.pending(run['session'])
+            pending = self.api.pending(run['session'], **self._oc(run))
             candidate = next((p for p in pending if p['kind'] == kind and p.get('sessionID') == run['session'] and (p.get('id') or p.get('requestID')) == request_id), None)
             if candidate is None:
                 raise ReviewConflict('This request is no longer pending. Refresh the approval list.')
-            messages = self.api.request(f"/session/{run['session']}/message") or []
+            messages = self.api.request(f"/session/{run['session']}/message", **self._oc(run)) or []
             packet = review_packet(candidate, messages)
             if not hmac.compare_digest(packet['fingerprint'], fingerprint):
                 raise ReviewConflict('The requested action changed. Close this window and review the updated request.')
@@ -408,7 +528,7 @@ class Controller:
             self.store.event(ident, 'approval decision', {'request_id': request_id, 'kind': kind, 'action': action, 'answers': answers, 'redirect': redirect, 'actor': record['actor'],
                                                           'risk': risk['level']})
             try:
-                response = self.api.respond(run['session'], candidate, action, answers)
+                response = self.api.respond(run['session'], candidate, action, answers, **self._oc(run))
                 if response is False:
                     raise ValueError('OpenCode did not accept the decision')
             except (ValueError, OpenCodeHTTPError) as exc:
@@ -436,7 +556,7 @@ class Controller:
             # A 200 response alone is insufficient: old OpenCode versions could
             # acknowledge replies to the wrong directory without resolving them.
             try:
-                remaining = [review_packet(p, messages) for p in self.api.pending(run['session'])]
+                remaining = [review_packet(p, messages) for p in self.api.pending(run['session'], **self._oc(run))]
                 self._sync_reviews(ident, remaining)
                 self.store.update('runs', ident, pending=remaining)
             except Exception as exc:
@@ -509,7 +629,7 @@ class Controller:
         run = self.store.get('runs', ident)
         if status == 'completed' and run.get('preview'):
             try:
-                self.preview.start(ident, run['preview'])
+                self.preview.start(ident, run['preview'], cwd=self._result_dir(run))
                 self.store.event(ident, 'preview', 'Live preview started after completion.')
             except Exception as exc:
                 self.store.event(ident, 'preview', f'Live preview could not start: {exc}')
@@ -529,7 +649,7 @@ class Controller:
             if 'args' in body and spec['mode'] == 'cli':
                 # Arguments typed in the Project tab replace the saved defaults for this start only.
                 spec['args'] = body['args']
-            status = self.preview.start(ident, spec)
+            status = self.preview.start(ident, spec, cwd=self._result_dir(run))
             self.store.event(ident, 'preview', f'Preview started: {spec.get("command") or spec.get("path")}')
             return status
         if self.preview.run != ident:
@@ -554,9 +674,9 @@ class Controller:
         if not run['session'] or not any(s['status'] in PENDING - {'prepared'} for s in steps):
             return True
         try:
-            self.api.request(f"/session/{run['session']}/abort", 'POST', {})
+            self.api.request(f"/session/{run['session']}/abort", 'POST', {}, **self._oc(run))
             for _ in range(4):
-                status = (self.api.request('/session/status') or {}).get(run['session'], {'type': 'idle'})
+                status = (self.api.request('/session/status', **self._oc(run)) or {}).get(run['session'], {'type': 'idle'})
                 if status.get('type') == 'idle':
                     return True
                 time.sleep(self.s.poll)
@@ -589,17 +709,37 @@ class Controller:
 
     def _verify(self, ident, step):
         self.store.update('runs', ident, status='reviewing', phase='verify', summary='Collecting file changes and verification output.')
-        after = snapshot(self.s.project)
-        proof = evidence(step['before'], after)
         run = self.store.get('runs', ident)
-        verification = {'status': 'not configured', 'output': 'No independent command configured. Completion will be labelled review only.'}
-        if run['verifier']:
+        ws = self._ws(run)
+        agent = step.get('agent', 'coder-1')
+        after = snapshot(self._dir(run, agent))
+        integration = None
+        if ws:
+            # Commit the turn on the agent's branch, merge it into integration, verify the merged result.
             try:
-                code, out, err = process(run['verifier'], self.s.project, self.s.verify_timeout, lambda: self._process_cancel(ident))
+                turn = workspaces.commit_turn(ws['agents'][agent]['path'], f"{agent}: turn {step['number']}: {step['title']}", agent)
+                if turn['status'] == 'unresolved':
+                    integration = {'status': 'unresolved', 'files': turn['files'], 'commit': turn['commit']}
+                else:
+                    integration = workspaces.integrate(ws, agent)
+                proof = workspaces.evidence(ws['agents'][agent]['path'], step.get('before_commit') or ws['base'], turn['commit'], ws['subdir'])
+            except workspaces.WorkspaceError as exc:
+                raise Attention(f'Git could not record this turn on the run branch: {exc}') from exc
+            self.store.event(ident, 'integration', integration)
+        else:
+            proof = evidence(step['before'], after)
+        verification = {'status': 'not configured', 'output': 'No independent command configured. Completion will be labelled review only.'}
+        if integration and integration['status'] in ('conflict', 'unresolved'):
+            verification = {'status': 'failed', 'argv': run['verifier'],
+                            'output': f"Not run: this turn does not merge cleanly into the integration branch ({', '.join(integration['files'][:10])})."}
+        elif run['verifier']:
+            try:
+                code, out, err = process(run['verifier'], self._result_dir(run), self.s.verify_timeout, lambda: self._process_cancel(ident))
                 verification = {'status': 'passed' if code == 0 else 'failed', 'exit_code': code, 'argv': run['verifier'], 'output': (out + '\n' + err)[-16000:]}
             except (TimeoutError, OSError) as exc:
                 verification = {'status': 'failed', 'argv': run['verifier'], 'output': str(exc)}
-        self.store.update('steps', step['id'], evidence=proof, verification=verification, verified=True)
+        self.store.update('steps', step['id'], evidence=proof, verification=verification, verified=True,
+                          **({'integration': integration} if integration else {}))
         self.store.event(ident, 'verification', verification)
         self.store.event(ident, 'file changes', proof)
         return after
@@ -612,12 +752,24 @@ class Controller:
                     'changed_files': x.get('evidence', {}).get('changed_files', [])} for x in steps[-8:]]
         latest = steps[-1].get('evidence', {}) if steps else {}
         files = {name: value['text'] for name, value in snap['files'].items()}
-        context = {'goal': run['goal'], 'project': str(self.s.project), 'instructions': run['instructions'],
+        context = {'goal': run['goal'], 'project': str(self._dir(run)), 'instructions': run['instructions'],
                    'goal_checks': run.get('goal_checks', []), 'parent_run_context': run.get('parent_context'),
                    'plan': run.get('plan', []), 'steps_remaining': run['max_steps'] - len(steps),
                    'verification_command': run['verifier'], 'step_history': history, 'latest_file_changes': latest,
                    'current_file_previews': files, 'preview_limitations': 'Files may be truncated; secret-like names, hidden dirs, binaries, and controller sources excluded.',
                    'omitted_files': snap['omitted_files']}
+        ws = self._ws(run)
+        if ws:
+            last = steps[-1].get('integration') if steps else None
+            note = ''
+            if last and last['status'] == 'conflict':
+                note = ('The last turn conflicts with the integration branch in these files. '
+                        + ('The coder worktree now contains conflict markers from merging integration; the next prompt must resolve them and keep both intents.'
+                           if last.get('handed_to_agent') else 'Ask the coder to reconcile its branch with the integration branch.'))
+            elif last and last['status'] == 'unresolved':
+                note = 'Conflict markers are still present in these files; the next prompt must resolve them before anything else.'
+            context['workspace'] = {'branch': ws['agents'][steps[-1].get('agent', 'coder-1') if steps else 'coder-1']['branch'],
+                                    'integration_branch': ws['integration']['branch'], 'last_integration': last, 'note': note}
         # Leave room for the reply on local models. Prioritize history and latest diff.
         encoded = json.dumps(context, ensure_ascii=False)
         while len(encoded) > 45_000 and context['current_file_previews']:
@@ -633,8 +785,9 @@ class Controller:
     def _drive(self, ident):
         run = self._boundary(ident)
         self.api.health()
+        self._prepare_workspace(ident)
         if not run['session']:
-            session = self.api.request('/session', 'POST', {'title': 'AgentControl ' + ident})
+            session = self.api.request('/session', 'POST', {'title': 'AgentControl ' + ident}, **self._oc(run))
             self.store.update('runs', ident, session=session['id'])
             self.store.event(ident, 'session', session['id'])
         while True:
@@ -648,7 +801,7 @@ class Controller:
                 self._watch(ident, self.store.get('steps', step['id']))
                 steps = self.store.steps(ident)
             run = self._boundary(ident)
-            snap = snapshot(self.s.project)
+            snap = snapshot(self._dir(run))
             if steps and not steps[-1].get('verified'):
                 snap = self._verify(ident, steps[-1])
                 steps = self.store.steps(ident)
@@ -707,14 +860,14 @@ class Controller:
             if failures >= 3:
                 self._end(ident, 'blocked', 'Three consecutive failed steps. ' + decision['summary'])
                 return
-            delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self.s.project) + '. Preserve unrelated files. Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
+            delivered = decision['prompt'].strip() + '\n\nWORKFLOW CONSTRAINTS:\nWork only in ' + str(self._dir(run)) + '. Preserve unrelated files. Do not modify agent-autonomy/, dashboard.py, or activity.sqlite3. Do not deploy, publish, edit credentials, or install system packages. Report changed files and actual checks, including failures.\n'
             step = {'id': uuid.uuid4().hex, 'run': ident, 'agent': 'coder-1', 'number': len(steps) + 1, 'title': str(decision.get('title', 'Coding task'))[:160],
                     'status': 'prepared', 'created': now(), 'prompt': delivered, 'manager_prompt': decision['prompt'],
                     'kind': decision.get('kind', 'task'), 'plan_summary': str(decision.get('summary', ''))[:2000],
                     'plan': [str(x)[:300] for x in plan[:20]] if isinstance(plan, list) else [],
                     'instructions_seen': [i['text'] for i in latest_run['instructions'][-5:]],
                     'message_id': 'msg_' + format(int(time.time() * 1000) * 4096, 'x').zfill(12) + uuid.uuid4().hex[:20],
-                    'before': snap, 'verified': False, 'result': '', 'seen': [], 'started': time.time()}
+                    'before': snap, 'before_commit': self._head(run), 'verified': False, 'result': '', 'seen': [], 'started': time.time()}
             step['instructions_count'] = len(latest_run['instructions'])
             self.store.put('steps', step)
             self.store.update('runs', ident, phase='code', corrections=corrections)
@@ -756,6 +909,35 @@ class Controller:
                                   'duration_ms': duration if duration is None or duration >= 0 else None, 'status': 'error' if info.get('error') else 'ok',
                                   'cost': float(info.get('cost') or 0), 'ref': 'opencode:' + info['id']})
 
+    def _head(self, run, agent='coder-1'):
+        ws = self._ws(run)
+        if not ws:
+            return None
+        return workspaces.git(ws['agents'][agent]['path'], 'rev-parse', 'HEAD').stdout.strip()
+
+    def _prepare_workspace(self, ident):
+        """Before any agent work: the worktrees must exist (Resume after they were removed must not
+        fall back to your checkout), and the optional setup command runs once in each of them."""
+        run = self.store.get('runs', ident)
+        ws = self._ws(run)
+        if not ws:
+            return
+        if ws.get('applied') or ws.get('discarded'):
+            raise Attention('This run\'s branch was already applied or discarded. Start a follow-up run instead.')
+        missing = workspaces.check(ws)
+        if missing:
+            raise Attention(f"The run's worktree is missing ({', '.join(missing)}). It may have been removed outside "
+                            'AgentControl. Nothing was sent. Stop this run and start a follow-up.')
+        if run.get('setup') and not ws.get('setup_done'):
+            for folder in [ws['integration']['dir']] + [a['dir'] for a in ws['agents'].values()]:
+                self.store.event(ident, 'setup', f"$ {' '.join(run['setup'])}  (in {folder})")
+                code, out, err = process(run['setup'], folder, self.s.verify_timeout, lambda: self._process_cancel(ident))
+                if code:
+                    raise Attention(f"The setup command failed in {folder} (exit {code}): {(err or out)[-600:]} "
+                                    'Fix it and press Resume; setup will run again.')
+            ws['setup_done'] = now()
+            self.store.update('runs', ident, workspace=ws)
+
     def _dispatch(self, ident, step):
         self._boundary(ident)
         if step['status'] == 'prepared':
@@ -773,7 +955,7 @@ class Controller:
             self.store.event(ident, 'OpenCode prompt', {'step': step['number'], 'message_id': step['message_id'], 'text': step['prompt']})
             payload = {'messageID': step['message_id'], 'parts': [{'type': 'text', 'text': step['prompt']}]}
             try:
-                self.api.request(f"/session/{run['session']}/prompt_async", 'POST', payload)
+                self.api.request(f"/session/{run['session']}/prompt_async", 'POST', payload, **self._oc(run, step.get('agent', 'coder-1')))
             except Exception as exc:
                 # Request might have been accepted even if its acknowledgement was lost.
                 self.store.event(ident, 'submission uncertain', str(exc))
@@ -799,9 +981,10 @@ class Controller:
             if time.time() - step['started'] > self.s.step_timeout:
                 raise TimeoutError('OpenCode step timed out')
             try:
-                messages = self.api.request(f'/session/{session}/message') or []
-                statuses = self.api.request('/session/status') or {}
-                pending = [review_packet(p, messages) for p in self.api.pending(session)]
+                oc = self._oc(run, step.get('agent', 'coder-1'))
+                messages = self.api.request(f'/session/{session}/message', **oc) or []
+                statuses = self.api.request('/session/status', **oc) or {}
+                pending = [review_packet(p, messages) for p in self.api.pending(session, **oc)]
                 failures = 0
             except Exception as exc:
                 failures += 1
@@ -924,6 +1107,7 @@ class Controller:
                 'audit': self.store.audit(ident, limit=60) if run else [],
                 'audit_chain': dict(zip(('intact', 'broken_at'), self.store.audit_verify())),
                 'models': self.models_status(),
+                'workspace': self.workspace_status(run) if run else None,
                 'usage': self.store.usage_summary(ident) if run else None,
                 'agents': self.agents(run, steps, inbox) if run else [],
                 'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],

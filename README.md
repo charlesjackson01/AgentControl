@@ -45,6 +45,9 @@ Hermes CLI and the OpenCode API without starting a model.
   preview you saved and shows the project running. It can be a web app in a
   frame, a static page, a command-line program you can type into, or a desktop
   app on a virtual screen. See `agent-autonomy/README.md` for setup.
+- **Runs work on their own branch** (git projects). Your checkout is not
+  touched until you press **Apply**, which merges the run's branch with a merge
+  commit. Verification runs on the merged result.
 - **Model server.** Optionally describe your model server (for example
   llama-server) in `state/models.json`. AgentControl checks that it answers
   before sending work, records token usage per agent, and can run a local

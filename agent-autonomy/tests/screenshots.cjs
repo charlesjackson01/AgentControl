@@ -30,6 +30,12 @@ const scenarios = {
   review: {state: fx.richActive, click: '#inline-approvals [data-intent="approve"]'},
   newrun: {state: fx.empty, click: '#empty-state [data-action="new"]'},
   critical: {state: () => withRisk(fx.richActive()), click: '#inline-approvals [data-intent="approve"]'},
+  branch: {state: () => { const s = fx.richCompleted();
+    s.run.workspace = {mode: 'worktree', base_branch: 'main', base: 'abc123', integration: {branch: `agentcontrol/${s.run.id}/integration`}, agents: {'coder-1': {branch: `agentcontrol/${s.run.id}/coder-1`}}};
+    s.workspace = {state: 'open', exists: true, commits: 2, shortstat: '2 files changed, 105 insertions(+)', apply_blocked: '', last_integration: {status: 'merged', files: []}};
+    return s; }},
+  dirty: {state: fx.empty, click: '#empty-state [data-action="new"]',
+    preflight: {is_repo: true, usable: true, reason: '', branch: 'main', subdir: '', changes: ['demo_app/todo.py'], untracked: ['notes.txt'], dirty_count: 2}},
   rules: {state: () => withRisk(fx.richActive()), click: '[data-view="approvals"]'},
   models: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding';
     s.health.agents.model = {state: 'ready', label: 'local online · 12 ms'};
@@ -69,7 +75,8 @@ async function open(browser, theme, [width, height], scenario) {
     const url = new URL(route.request().url());
     if (url.pathname.startsWith('/api/')) {
       if (scenario.key === false) return route.fulfill({status: 401, contentType: 'application/json', body: JSON.stringify({error: 'Enter the dashboard key printed in your server terminal.'})});
-      const body = url.pathname === '/api/state' ? (typeof scenario.live === 'function' ? scenario.live(state) : state) : {ok: true};
+      const body = url.pathname === '/api/state' ? (typeof scenario.live === 'function' ? scenario.live(state) : state)
+        : url.pathname === '/api/workspace/preflight' ? (scenario.preflight || {is_repo: false, usable: false, reason: '', changes: [], untracked: [], dirty_count: 0}) : {ok: true};
       return route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify(body)});
     }
     const file = path.join(root, url.pathname === '/' ? 'index.html' : url.pathname.slice(1));

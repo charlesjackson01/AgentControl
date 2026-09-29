@@ -126,6 +126,7 @@ def _kill_group(proc, grace=3.0):
 class PreviewManager:
     def __init__(self, project, idle_seconds=1800, clock=time.monotonic):
         self.project = Path(project).resolve()
+        self.cwd = self.project  # where the current preview runs: the project, or a run's integration worktree (M6)
         self.idle_seconds = idle_seconds
         self.clock = clock
         self.lock = threading.RLock()
@@ -164,8 +165,9 @@ class PreviewManager:
                 pass
 
     # ---- lifecycle -------------------------------------------------------
-    def start(self, run, spec):
-        spec = validate_spec(spec, self.project)
+    def start(self, run, spec, cwd=None):
+        cwd = Path(cwd).resolve() if cwd else self.project
+        spec = validate_spec(spec, cwd)
         if not spec:
             raise ValueError('This run has no preview configured')
         if spec['mode'] == 'desktop' and desktop_missing():
@@ -175,13 +177,14 @@ class PreviewManager:
             self.generation += 1
             generation = self.generation
             self.spec, self.run, self.error, self.exit_code = spec, run, '', None
+            self.cwd = cwd
             self.buffer, self.offset = bytearray(), 0
             self.started = time.time()
             self.touch()
             mode = spec['mode']
             if mode == 'static':
                 self.state = 'running'
-                self._log(f'Serving {spec["path"]} from the project folder.\n')
+                self._log(f'Serving {spec["path"]} from {"the project folder" if cwd == self.project else "the run branch (" + str(cwd) + ")"}.\n')
                 return self.status()
             self.state = 'starting'
             env = {**os.environ, 'AGENTCONTROL_PREVIEW': '1'}
@@ -213,7 +216,7 @@ class PreviewManager:
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 32, 100, 0, 0))
         env.update(TERM='dumb', COLUMNS='100', LINES='32', PYTHONUNBUFFERED='1')
         try:
-            self.proc = subprocess.Popen(self.spec['argv'], cwd=self.project, stdin=slave, stdout=slave, stderr=slave,
+            self.proc = subprocess.Popen(self.spec['argv'], cwd=self.cwd, stdin=slave, stdout=slave, stderr=slave,
                                          env=env, start_new_session=True, close_fds=True)
         finally:
             os.close(slave)
@@ -222,7 +225,7 @@ class PreviewManager:
         threading.Thread(target=self._wait_exit, args=(self.proc, generation), daemon=True).start()
 
     def _start_piped(self, env, generation):
-        self.proc = subprocess.Popen(self.spec['argv'], cwd=self.project, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        self.proc = subprocess.Popen(self.spec['argv'], cwd=self.cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                      stderr=subprocess.STDOUT, env=env, start_new_session=True, close_fds=True)
         threading.Thread(target=self._read_fd, args=(self.proc.stdout.fileno(), generation), daemon=True).start()
         threading.Thread(target=self._wait_exit, args=(self.proc, generation), daemon=True).start()
@@ -405,7 +408,7 @@ class PreviewManager:
             return {'state': self.state, 'run': self.run, 'mode': spec.get('mode'), 'command': spec.get('command', ''), 'args': spec.get('args', ''),
                     'port': spec.get('port'), 'path': spec.get('path'), 'width': spec.get('width'), 'height': spec.get('height'),
                     'started': self.started, 'exit_code': self.exit_code, 'error': self.error, 'offset': self.offset,
-                    'listen_port': self.listen_port, 'pid': self.proc.pid if self.proc and self.proc.poll() is None else None}
+                    'listen_port': self.listen_port, 'cwd': str(self.cwd) if self.cwd != self.project else '', 'pid': self.proc.pid if self.proc and self.proc.poll() is None else None}
 
     # ---- preview origin: tickets, sessions, static files, web proxy --------
     def issue_ticket(self):
@@ -472,7 +475,7 @@ class PreviewManager:
             handler.wfile.write(body)
 
     def _static(self, handler, spec, path, ancestors):
-        base = (self.project / spec['path'])
+        base = (self.cwd / spec['path'])
         root, index = (base.parent, base.name) if base.is_file() else (base, 'index.html')
         relative = urllib.parse.unquote(path).lstrip('/')
         if not relative or relative.endswith('/'):

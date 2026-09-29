@@ -4444,3 +4444,23 @@ kbd {
 .usage-row > :first-child {
   text-align:left;
 }
+
+/* Worktree runs (M6): uncommitted-changes warning and the Branch panel */
+.notice.warning {
+  border-color:var(--ac-warning);
+  background:var(--ac-warning-soft);
+}
+
+.notice.warning pre {
+  max-height:140px;
+  overflow:auto;
+}
+
+.branch-name {
+  overflow-wrap:anywhere;
+}
+
+.branch-actions {
+  gap:8px;
+  margin:10px 0 6px;
+}

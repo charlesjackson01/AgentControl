@@ -27,6 +27,8 @@ async function harness(state=fixture(),savedTheme='mac') {
   fetch:async(url,options)=>{
    const body=options.body?JSON.parse(options.body):null;calls.push({url,method:options.method,body});
    let result;
+   if(url==='/api/control'&&state.failControl)return {status:400,ok:false,json:async()=>({error:state.failControl})};
+   if(url==='/api/workspace/preflight')return {status:200,ok:true,json:async()=>clone(state.preflight||{is_repo:false,usable:false,reason:'',changes:[],untracked:[],dirty_count:0})};
    if(url.startsWith('/api/state'))result=clone(state);
    else if(url==='/api/review'){
     const p=state.inbox.find(p=>p.request_id===body.request_id);
@@ -383,5 +385,78 @@ test('model server and usage appear only when configured',async()=>{
  assert.match(panel,/no spend/);
  h.state.usage.total.cost=0.0123;await h.poll();
  assert.match(h.document.getElementById('model-usage').textContent,/\$0\.0123/);
+});
+test('new run on a dirty git project needs consent and sends the setup command',async()=>{
+ const s=fixture();s.run.status='completed';s.inbox=[];
+ s.preflight={is_repo:true,usable:true,reason:'',branch:'main',subdir:'',changes:['README.md'],untracked:['notes.txt'],dirty_count:2};
+ const h=await harness(s);await h.click('[data-action="new"]');
+ const pre=h.document.getElementById('workspace-preflight').textContent;
+ assert.match(pre,/own branch, starting from your last commit on main/);
+ assert.match(pre,/2 uncommitted files/);assert.match(pre,/README\.md/);
+ assert(!h.document.getElementById('setup-field').classList.contains('hidden'));
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('setup-cmd').value='npm ci';
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ assert.equal(h.calls.filter(c=>c.url==='/api/runs').length,0);
+ assert.match(h.document.getElementById('start-error').textContent,/uncommitted changes/);
+ h.document.getElementById('allow-dirty').checked=true;
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const body=h.calls.find(c=>c.url==='/api/runs').body;
+ assert.equal(body.allow_dirty,true);assert.equal(body.setup,'npm ci');
+});
+test('non-git projects say the run works in the folder and send no worktree options',async()=>{
+ const s=fixture();s.run.status='completed';s.inbox=[];
+ const h=await harness(s);await h.click('[data-action="new"]');
+ assert.match(h.document.getElementById('workspace-preflight').textContent,/directly in the project folder \(not a git repository\)/);
+ assert(h.document.getElementById('setup-field').classList.contains('hidden'));
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const body=h.calls.find(c=>c.url==='/api/runs').body;
+ assert.equal(body.allow_dirty,undefined);assert.equal(body.setup,undefined);
+});
+function branchFixture(extra={}){
+ const s=fixture();s.run.status='completed';s.inbox=[];
+ s.run.workspace={mode:'worktree',base_branch:'main',base:'abc',integration:{branch:'agentcontrol/run_test/integration'},agents:{'coder-1':{branch:'agentcontrol/run_test/coder-1'}}};
+ s.workspace={state:'open',exists:true,commits:2,shortstat:'3 files changed, 40 insertions(+)',apply_blocked:'',last_integration:{status:'merged',files:[]},...extra};
+ return s;
+}
+test('branch panel applies after confirmation and shows why apply is blocked',async()=>{
+ let h=await harness(branchFixture({apply_blocked:'your checkout has uncommitted changes (a.py); commit or stash them first'}));
+ const panel=()=>h.document.getElementById('branch-panel').textContent;
+ assert.match(panel(),/agentcontrol\/run_test\/integration/);assert.match(panel(),/2 commits · 3 files changed/);
+ assert(h.document.querySelector('[data-action="apply-branch"]').disabled);
+ assert.match(panel(),/Apply is unavailable: your checkout has uncommitted changes/);
+ h=await harness(branchFixture());
+ await h.click('[data-action="apply-branch"]');
+ assert(h.document.getElementById('confirm-dialog').open);
+ assert.match(h.document.getElementById('confirm-body').textContent,/merge commit/);
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').length,0,'nothing happens before confirming');
+ h.state.failControl='Apply stopped: app.py conflict with your branch. Your branch is unchanged.';
+ await h.click('#confirm-go');
+ assert.match(h.document.getElementById('confirm-error').textContent,/Your branch is unchanged/);
+ assert(h.document.getElementById('confirm-dialog').open);
+ h.state.failControl=null;h.state.workspace.state='applied';h.state.run.workspace.applied={commit:'0123456789abcdef'};
+ await h.click('#confirm-go');
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').pop().body.action,'apply');
+ assert(!h.document.getElementById('confirm-dialog').open);
+ assert.match(panel(),/Applied to main \(0123456789\)/);
+});
+test('branch panel discards only after a danger confirmation and reports conflicts',async()=>{
+ const h=await harness(branchFixture({last_integration:{status:'conflict',files:['app.py']}}));
+ assert.match(h.document.getElementById('branch-panel').textContent,/conflicts with the integration branch: app\.py/);
+ await h.click('[data-action="discard-branch"]');
+ assert.match(h.document.getElementById('confirm-go').className,/danger-button/);
+ h.state.workspace={state:'discarded'};
+ await h.click('#confirm-go');
+ assert.equal(h.calls.find(c=>c.url==='/api/control').body.action,'discard_workspace');
+ assert.match(h.document.getElementById('branch-panel').textContent,/discarded/);
+});
+test('running worktree runs keep apply hidden, folder runs show no branch panel',async()=>{
+ const s=branchFixture();s.run.status='coding';
+ let h=await harness(s);
+ assert(!h.document.querySelector('[data-action="apply-branch"]'));
+ assert.match(h.document.getElementById('branch-panel').textContent,/Apply becomes available when the run finishes/);
+ h=await harness();
+ assert.equal(h.document.getElementById('branch-panel').textContent,'');
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

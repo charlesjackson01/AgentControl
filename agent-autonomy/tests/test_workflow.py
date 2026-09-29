@@ -61,14 +61,17 @@ class FakeAPI:
         self.decisions = []
         self.keep_pending = False
         self.respond_error = None
+        self.directories = []  # every directory= passed by the engine (worktree runs, M6)
 
     def health(self):
         return {'healthy': True, 'version': 'test'}
 
-    def pending(self, session):
+    def pending(self, session, directory=None):
+        self.directories.append(('pending', directory))
         return copy.deepcopy([p for p in self.pending_items if p.get('sessionID') == session])
 
-    def respond(self, session, request, action, answers=None):
+    def respond(self, session, request, action, answers=None, directory=None):
+        self.directories.append(('respond', directory))
         self.decisions.append((session, request['id'], action, answers))
         if self.respond_error:
             raise self.respond_error
@@ -76,7 +79,8 @@ class FakeAPI:
             self.pending_items = [p for p in self.pending_items if p['id'] != request['id']]
         return True
 
-    def request(self, path, method='GET', data=None):
+    def request(self, path, method='GET', data=None, directory=None):
+        self.directories.append((path.rsplit('/', 1)[-1], directory))
         if self.offline:
             raise OSError('Connection lost')
         if path == '/session' and method == 'POST':

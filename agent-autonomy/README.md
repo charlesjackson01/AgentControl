@@ -263,6 +263,26 @@ Every OpenCode request gets a risk class from AgentControl's own registry (`perm
 - The API always records decisions as *You, via dashboard*. Only AgentControl's own rule check can approve automatically, and only with a rule you created.
 - **Audit log:** every request, decision, block, rule added and rule revoked is appended to an audit table in the journal. Each entry stores the hash of the one before it, so an edited or deleted entry breaks the chain. The dashboard shows whether the chain is intact. `GET /api/audit?run=<id>` returns `{entries, chain_intact, broken_at}`.
 
+## Runs on git projects work on their own branch
+
+If the project folder is a git repository, each run works in its own **git
+worktree** on branch `agentcontrol/<run>/coder-1`. Your checkout stays as it is
+while the run works. Worktrees live under `agent-autonomy/state/worktrees/`.
+Projects that are not git repositories keep working directly in the folder, as
+before.
+
+- **Starting.** The run starts from your last commit on the current branch. If you have uncommitted changes, New run lists them and asks you to tick *Start from my last commit anyway*; your changes stay in your checkout. A detached HEAD, an unfinished merge, or a repository with no commits means the run works in the folder instead, and says why.
+- **Setup command** (optional, in New run). A fresh worktree has only committed files, so dependencies like `node_modules` or `.venv` are missing. A setup command such as `npm ci` runs once in each worktree before the first turn.
+- **Each turn** is committed on the agent's branch and merged into `agentcontrol/<run>/integration`. The verification command runs on the integration branch, and changed files and diffs come from git, with no 100-file limit.
+- **Conflicts.** If a turn does not merge cleanly into integration (for example, when two agents edit the same lines), integration is left untouched. The conflict markers go to the agent's worktree, Hermes is told which files conflict, and the next prompt resolves them. Files that still contain markers are never committed.
+- **Apply.** When the run has finished, the **Branch** panel on the run page offers **Apply to <branch>**. After you confirm, it merges the integration branch into your branch with a merge commit. It is only available when your checkout is on that branch, has no uncommitted changes to tracked files, and has no merge in progress; the panel says what is blocking it. Your git hooks run as usual. If the merge conflicts, it is undone, your branch is unchanged, and you can merge it yourself. After Apply, the worktrees are removed and the branches kept.
+- **Discard branch** deletes the run's branches and worktrees after confirmation.
+- **Follow-up runs** of a run that was not applied continue from its branch.
+- Live previews and **Verify now** use the integration branch until you apply.
+- Apply and Discard are recorded in the audit log.
+
+AgentControl's own commits and merges on the run branches use an AgentControl identity and skip your repository's hooks, so they need no git configuration and never run project code.
+
 ## Model server, usage, and the optional gateway
 
 AgentControl can watch the model server your agents use (for example your local

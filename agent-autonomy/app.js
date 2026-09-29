@@ -482,6 +482,7 @@ function renderRun() {
   renderChecks();
   renderVerification();
   renderModelUsage();
+  renderBranch();
   renderFiles(fileStats(steps));
   renderTimeline();
   setHTML($('original-brief'), finished ? `<section class="ac-panel"><h2 class="ac-panel__title">Original brief</h2><p class="small">${esc(current.goal)}</p></section>` : '');
@@ -725,6 +726,41 @@ function renderModelUsage() {
   setHTML($('model-usage'), `<section class="ac-panel"><h2 class="ac-panel__title">Model usage</h2>${queue}
     ${agents || '<p class="small muted">Token counts appear after Hermes or OpenCode finish a call.</p>'}
     <p class="small muted">${total.cost > 0 ? `Spend on paid providers: $${total.cost.toFixed(4)}` : 'Local model · no spend'}</p></section>`);
+}
+function renderBranch() {
+  const w = data.workspace, ws = current.workspace;
+  if (!w || !ws || ws.mode !== 'worktree') { setHTML($('branch-panel'), ''); return; }
+  const title = '<h2 class="ac-panel__title">Branch</h2>';
+  if (w.state === 'discarded') { setHTML($('branch-panel'), `<section class="ac-panel">${title}<p class="small muted">The run branch was discarded.</p></section>`); return; }
+  if (w.state === 'error') { setHTML($('branch-panel'), `<section class="ac-panel">${title}<p class="small error">${esc(w.error)}</p></section>`); return; }
+  const branch = ws.integration.branch, base = ws.base_branch, li = w.last_integration;
+  let html = `<p class="mono small branch-name">${esc(branch)}</p>
+    <p class="small muted">From ${esc(base)} · ${plural(w.commits || 0, 'commit')}${w.shortstat ? ' · ' + esc(w.shortstat) : ''}</p>`;
+  if (li && ['conflict', 'unresolved'].includes(li.status))
+    html += `<p class="small error">${li.status === 'conflict' ? 'Last turn conflicts with the integration branch' : 'Conflict markers remain'}: ${esc(li.files.join(', '))}. Hermes has been told.</p>`;
+  if (w.state === 'applied') {
+    html += `<p class="small success-text">Applied to ${esc(base)} (${esc(ws.applied.commit.slice(0, 10))}).</p>`;
+  } else if (ended.has(current.status)) {
+    const blocked = w.apply_blocked;
+    html += `<div class="row wrap branch-actions"><button class="ac-btn primary compact" data-action="apply-branch" ${blocked || !connected ? 'disabled' : ''}>Apply to ${esc(base)}</button><button class="ac-btn compact" data-action="discard-branch" ${connected ? '' : 'disabled'}>Discard branch</button></div>
+      ${blocked ? `<p class="small warning-text">Apply is unavailable: ${esc(blocked)}.</p>` : `<p class="small muted">Apply merges the branch into ${esc(base)} with a merge commit.</p>`}`;
+  } else {
+    html += '<p class="small muted">Your checkout is untouched. Apply becomes available when the run finishes.</p>';
+  }
+  if (w.state !== 'applied')
+    html += details('Inspect it yourself', `git log --oneline ${base}..${branch}\ngit diff ${base}...${branch}\ngit merge --no-ff ${branch}`, 'branch-commands');
+  setHTML($('branch-panel'), `<section class="ac-panel">${title}${html}</section>`);
+}
+let confirming = null;
+function askConfirm(title, body, label, danger, run) {
+  confirming = run;
+  $('confirm-title').textContent = title;
+  $('confirm-body').innerHTML = body;
+  $('confirm-error').textContent = '';
+  $('confirm-go').textContent = label;
+  $('confirm-go').className = 'ac-btn ' + (danger ? 'danger-button' : 'primary');
+  $('confirm-go').disabled = false;
+  $('confirm-dialog').showModal();
 }
 function renderFiles(files) {
   const rows = files.map(f => `<div class="file-row">${icon('file')}<span class="file-path">${esc(f.path)}</span><span class="file-change">${esc(f.change)}</span>${f.added !== null ? `<span class="file-counts"><span class="added">+${f.added}</span><span class="removed">−${f.removed}${f.partial ? '*' : ''}</span></span>` : ''}</div>`).join('');
@@ -1129,8 +1165,34 @@ function showView(next) {
   closeDrawer();
   if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } }
 }
+let preflight = null;
+async function loadPreflight() {
+  try { preflight = await api('/api/workspace/preflight'); } catch { preflight = null; }
+  renderPreflight();
+}
+function renderPreflight() {
+  const p = preflight, parent = parentRun && data?.runs ? current : null;
+  $('setup-field').classList.toggle('hidden', !p?.usable);
+  if (!p) { setHTML($('workspace-preflight'), ''); return; }
+  if (!p.usable) {
+    setHTML($('workspace-preflight'), `<p class="small muted">Works directly in the project folder${p.is_repo ? ': ' + esc(p.reason) : ' (not a git repository)'}.</p>`);
+    return;
+  }
+  const from = parent?.workspace?.mode === 'worktree' && !parent.workspace.applied && !parent.workspace.discarded
+    ? `the unapplied branch of run #${esc(parent.id.slice(0, 6))}` : `your last commit on <strong>${esc(p.branch)}</strong>`;
+  let html = `<p class="small">Works on its own branch, starting from ${from}. Your checkout is not changed until you press <strong>Apply</strong>.</p>`;
+  if (p.dirty_count) {
+    const files = [...p.changes, ...p.untracked];
+    html += `<div class="notice warning"><strong>${plural(p.dirty_count, 'uncommitted file')} in your project</strong>
+      <p class="small">The run starts from your last commit, so the agent will not see these changes:</p>
+      <pre class="small">${esc(files.slice(0, 12).join('\n'))}${files.length > 12 ? '\n…' : ''}</pre>
+      <label class="choice"><input type="checkbox" id="allow-dirty"><span><strong>Start from my last commit anyway</strong><small>Your uncommitted changes stay in your checkout, untouched.</small></span></label></div>`;
+  }
+  setHTML($('workspace-preflight'), html);
+}
 function openNew(followup = false) {
   if (followup && !current) return;
+  loadPreflight();
   parentRun = followup ? current.id : null;
   if (followup) {
     $('goal').value = '';
@@ -1239,6 +1301,17 @@ const ACTIONS = {
   pause: togglePause,
   'add-check': () => { if (!current || ended.has(current.status)) return; $('check-error').textContent = ''; $('check-dialog').showModal(); $('criterion').focus(); },
   'ask-status': () => { focusSteer(); $('steering').value = 'At your next planning turn, summarize what is complete, what remains, and any blockers.'; $('steering').focus(); },
+  'apply-branch': () => {
+    const ws = current.workspace, w = data.workspace, id = current.id;
+    askConfirm(`Apply to ${ws.base_branch}?`, `<p>Merge <code>${esc(ws.integration.branch)}</code> into <strong>${esc(ws.base_branch)}</strong> with a merge commit.</p>
+      <p class="small muted">${plural(w.commits || 0, 'commit')}${w.shortstat ? ' · ' + esc(w.shortstat) : ''}. Your repository's git hooks run as usual. If the merge conflicts, it is undone and your branch stays as it is.</p>`,
+      `Apply to ${ws.base_branch}`, false, async () => { await control('apply', '', id); toast(`Applied to ${ws.base_branch}.`); });
+  },
+  'discard-branch': () => {
+    const ws = current.workspace, id = current.id;
+    askConfirm('Discard this branch?', `<p>Delete <code>${esc(ws.integration.branch)}</code>, the agent branch, and their worktrees.</p><p class="small muted">Work that was not applied is lost. Your checkout is not touched.</p>`,
+      'Discard branch', true, async () => { await control('discard_workspace', '', id); toast('Branch discarded.'); });
+  },
   'revoke-rule': async button => { await control('revoke_rule', button.dataset.rule); toast('Rule revoked. Matching requests will be asked again.'); },
   'verify-now': async () => {
     if (!canVerifyNow()) { toast(current?.verifier?.length ? 'Pause the run first; Verify now cannot overlap a coding turn.' : 'This run has no verification command.'); return; }
@@ -1372,13 +1445,16 @@ function init() {
     event.preventDefault();
     $('start-error').textContent = '';
     if ($('verify-enabled').checked && !$('verify').value.trim()) { $('start-error').textContent = 'Enter a verification command or turn off independent verification.'; return; }
+    if (preflight?.usable && preflight.dirty_count && !$('allow-dirty')?.checked) { $('start-error').textContent = 'Your project has uncommitted changes. Commit them, or tick “Start from my last commit anyway”.'; return; }
     $('start-run').disabled = true;
     try {
       const result = await api('/api/runs', 'POST', {goal: $('goal').value, verifier: $('verify-enabled').checked ? $('verify').value : '',
         max_steps: Number($('max-prompts').value), run_minutes: Number($('run-minutes').value),
         goal_checks: [...$('new-checks').querySelectorAll('textarea')].map(e => e.value.trim()), parent_run: parentRun,
         ...($('run-title').value.trim() ? {title: $('run-title').value.trim()} : {}),
-        ...(readPreviewSpec('new').mode !== 'none' ? {preview: readPreviewSpec('new')} : {})});
+        ...(readPreviewSpec('new').mode !== 'none' ? {preview: readPreviewSpec('new')} : {}),
+        ...($('allow-dirty')?.checked ? {allow_dirty: true} : {}),
+        ...(preflight?.usable && $('setup-cmd').value.trim() ? {setup: $('setup-cmd').value.trim()} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');
       await refresh();
@@ -1401,6 +1477,13 @@ function init() {
     const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !coarse && $('steering').value.trim()) { event.preventDefault(); $('steering-form').requestSubmit(); }
   });
+  $('confirm-go').onclick = async () => {
+    if (!confirming) return;
+    $('confirm-go').disabled = true;
+    try { await confirming(); $('confirm-dialog').close(); confirming = null; }
+    catch (error) { $('confirm-error').textContent = error.message; }
+    finally { $('confirm-go').disabled = false; }
+  };
   $('confirm-stop').onclick = async () => {
     const id = stopRunId;
     $('confirm-stop').disabled = true;

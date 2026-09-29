@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import agents as agent_registry
 from engine import Controller, ReviewConflict, Settings, TERMINAL
 import gateway
+import workspaces
 
 ROOT = Path(__file__).resolve().parent
 MAX_EVENT_STREAMS = 12       # each open dashboard tab holds one thread
@@ -64,6 +65,11 @@ def handler(controller, key):
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
                 intact, broken_at = controller.store.audit_verify()
                 return self.reply(200, {'entries': controller.store.audit(ident), 'chain_intact': intact, 'broken_at': broken_at})
+            if path.path == '/api/workspace/preflight':
+                info = workspaces.git_info(controller.s.project)
+                return self.reply(200, {k: info[k] for k in ('is_repo', 'usable', 'reason', 'branch', 'subdir')} |
+                                  {'changes': info['changes'][:50], 'untracked': info['untracked'][:50],
+                                   'dirty_count': len(info['changes']) + len(info['untracked'])})
             if path.path == '/api/models':
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
                 if urllib.parse.parse_qs(path.query).get('check'):
@@ -151,7 +157,8 @@ def handler(controller, key):
                     return self.reply(202, {'ok': True})
                 if self.path == '/api/runs':
                     run = controller.new(body.get('goal', ''), body.get('verifier', ''), body.get('max_steps', 8),
-                                         body.get('goal_checks'), body.get('run_minutes'), body.get('parent_run'), body.get('title'), body.get('preview'))
+                                         body.get('goal_checks'), body.get('run_minutes'), body.get('parent_run'), body.get('title'), body.get('preview'),
+                                         allow_dirty=body.get('allow_dirty') is True, setup=body.get('setup', ''))
                     return self.reply(201, {'id': run['id']})
                 if self.path == '/api/preview/ticket':
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})

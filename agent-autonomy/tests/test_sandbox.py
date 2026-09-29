@@ -61,6 +61,31 @@ class FlagTests(unittest.TestCase):
         self.assertIn('--build-agent-image', sandbox.usable(podman))
         self.assertIn('podman', sandbox.detect('podman', runner=fake({}))['error'])
 
+    def test_containers_are_refused_until_every_limit_can_be_enforced(self):
+        def fake(outputs):
+            return lambda argv, timeout=60: outputs.get(argv[1], (1, '', 'missing'))
+        # Ubuntu 22.04 default: systemd delegates only memory and pids to your user.
+        ubuntu = sandbox.detect('podman', runner=fake({'info': (0, 'true|3.4.4|v2|[memory pids]', ''), 'image': (0, '', '')}))
+        self.assertEqual(ubuntu['limits_missing'], ['cpu'])
+        reason = sandbox.usable(ubuntu)
+        self.assertIn('cpu limit', reason)
+        self.assertIn('Delegate=cpu cpuset io memory pids', reason)
+        delegated = sandbox.detect('podman', runner=fake({'info': (0, 'true|3.4.4|v2|[cpuset cpu io memory pids]', ''), 'image': (0, '', '')}))
+        self.assertEqual(sandbox.usable(delegated), '')
+        v1 = sandbox.detect('podman', runner=fake({'info': (0, 'true|3.4.4|v1|[]', ''), 'image': (0, '', '')}))
+        self.assertEqual(v1['limits_missing'], ['cpu', 'memory', 'pids'], 'rootless on cgroup v1 cannot limit anything')
+        docker = sandbox.detect('docker', runner=fake({'info': (0, '["name=rootless"]|29.0|false|true|true', ''), 'image': (0, '', '')}))
+        self.assertIn('cpu limit', sandbox.usable(docker))
+        # A Podman that cannot report controllers falls back to the plain query and is not refused for it.
+        calls = []
+        def old_podman(argv, timeout=60):
+            calls.append(argv)
+            if argv[1] == 'info':
+                return (1, '', "template: can't evaluate field CgroupControllers") if 'CgroupControllers' in argv[-1] else (0, 'true|3.0', '')
+            return (0, '', '')
+        old = sandbox.detect('podman', runner=old_podman)
+        self.assertEqual((old['runtime'], old['limits_missing'], sandbox.usable(old)), ('podman', None, ''))
+
     def test_opencode_config_never_widens_your_permissions(self):
         default = sandbox.opencode_config('qwen')
         self.assertEqual(default['permission']['bash'], 'ask')

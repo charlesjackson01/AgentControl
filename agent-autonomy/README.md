@@ -394,7 +394,13 @@ The container is removed when you apply or discard the branch. Container runs ne
      sudo apt install podman uidmap        # Zorin/Ubuntu/Debian   (Arch: sudo pacman -S podman)
      grep $USER /etc/subuid /etc/subgid   # both need a range; if not: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
      podman info --format '{{.Host.Security.Rootless}}'   # prints true
+     # Let your user's containers have CPU limits (Ubuntu/Zorin delegates only memory and pids by default):
+     sudo mkdir -p /etc/systemd/system/user@.service.d
+     printf '[Service]\nDelegate=cpu cpuset io memory pids\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf
+     sudo systemctl daemon-reload            # then log out and back in (or reboot)
+     podman info --format '{{.Host.CgroupControllers}}'   # must list cpu, memory and pids
      ```
+     AgentControl applies CPU, memory and process limits to every agent container. If your runtime can't enforce one of them, containers stay unavailable, and New run shows the missing limit and these commands.
    - **Rootless Docker**, next to your existing Docker:
      ```
      sudo apt install uidmap docker-ce-rootless-extras   # Zorin/Ubuntu, from Docker's own apt repository
@@ -559,9 +565,13 @@ python3 agent-autonomy/spikes/hermes_research_probe.py --try web  # optional: on
 ```
 Then start AgentControl with `--research-toolsets <names>`, for example `--research-toolsets web`. Until then, the researcher is shown as unavailable, with the reason, and Hermes is not offered it.
 
-On the ai-arch server (Hermes v0.21.4), the probe lists `web` (search and scraping) and `browser` (browser automation), and every flag the researcher uses is present. The chosen setting there is `--research-toolsets web,browser`.
-- `web` only reads.
-- `browser` can also click, fill in and submit forms on the sites it visits. The research approval card says so whenever `browser` is configured.
+On the ai-arch server (Hermes v0.21.4), the probe finds every flag the researcher uses, and the setting there is **`--research-toolsets web`**. It gives the researcher `web_search` and `web_extract`, and a real research call returned a cited answer.
+- Despite its name, Hermes 0.21's `browser` toolset is a **password vault**: `browser_vault_unlock`, `browser_vault_list`, `browser_vault_fill`, `browser_vault_save_login` and `browser_vault_enter_code`. So AgentControl **refuses** research toolsets that reach saved credentials: `browser`, and any name containing vault, credential, password, secret, login, keychain or keyring. The researcher then shows as unavailable with the reason, and Hermes is never started with them.
+- To see exactly which tools a toolset gives (local model only, no internet):
+  ```
+  cd /tmp && hermes --profile ai-arch-dev chat --quiet --toolsets web --max-turns 1 \
+    -q "List the exact names of every tool you can call right now, one per line. Do not call any tool."
+  ```
 - Each question still waits for your typed `approve`.
 
 ## Paid models (optional), spend caps and usage

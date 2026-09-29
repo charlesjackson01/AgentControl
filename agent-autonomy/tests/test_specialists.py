@@ -206,6 +206,12 @@ class SpecialistRunTests(TeamRunTests):
         self.assertIn('--research-toolsets', c.role_status()['researcher'])
         self.assertNotIn('researcher', c.available_roles())
 
+    def test_researcher_is_refused_with_credential_toolsets(self):
+        self.settings.research_toolsets = ('web', 'browser')
+        c, _ = self.controller([], [])
+        self.assertIn('saved credentials', c.role_status()['researcher'])
+        self.assertNotIn('researcher', c.available_roles(), 'Hermes is not offered a researcher')
+
     def test_capacity_follows_the_model_slots(self):
         self.settings.max_parallel_agents = 1
         c, _ = self.controller([proposal()], [complete()])

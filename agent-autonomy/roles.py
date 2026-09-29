@@ -33,6 +33,26 @@ Finish with ONE JSON object and nothing after it:
  "open_questions":["what you could not settle"]}
 '''
 
+# Toolsets that reach your saved credentials. Hermes 0.21's `browser` toolset is only browser_vault_* tools
+# (unlock, list, fill, save_login, enter_code), checked on the ai-arch server; research never gets them.
+CREDENTIAL_TOOLSETS = ('browser',)
+CREDENTIAL_WORDS = ('vault', 'credential', 'password', 'passwd', 'secret', 'login', 'keychain', 'keyring')
+
+
+def credential_tools(names):
+    """The names (toolsets or tool names) that would give an agent access to saved credentials."""
+    return [n for n in names if n.strip().lower() in CREDENTIAL_TOOLSETS
+            or any(word in n.strip().lower() for word in CREDENTIAL_WORDS)]
+
+
+def credential_refusal(toolsets):
+    """'' when the research toolsets are safe, else why they are refused."""
+    bad = credential_tools(toolsets)
+    if not bad:
+        return ''
+    return (f"Research toolsets {', '.join(bad)} are refused: they give access to saved credentials "
+            "(in Hermes 0.21 'browser' is a password vault). Use --research-toolsets web.")
+
 
 def is_test_file(path):
     p = PurePosixPath(str(path))

@@ -994,7 +994,7 @@ function researchCard(r, where = 'list') {
     <h2>Let ${esc(r.agent)} look this up on the web?</h2>
     <pre class="command">${esc(r.question)}</pre>
     ${r.why && r.why !== r.question ? `<p class="small"><strong>Why:</strong> ${esc(r.why.slice(0, 600))}</p>` : ''}
-    <p class="small">Hermes browses the internet <strong>from this machine</strong> with only these toolsets: <span class="mono">${esc((r.toolsets || []).join(', '))}</span>. At most ${esc(String(r.max_turns))} steps and ${Math.round((r.seconds || 0) / 60)} minutes. It gets no project files, shell or file tools. The question may reach search engines and websites.${(r.toolsets || []).includes('browser') ? ' <strong class="research-acts">With <span class="mono">browser</span> it can also click, fill in and submit forms on the sites it visits.</strong>' : ''}</p>
+    <p class="small">Hermes browses the internet <strong>from this machine</strong> with only these toolsets: <span class="mono">${esc((r.toolsets || []).join(', '))}</span>. At most ${esc(String(r.max_turns))} steps and ${Math.round((r.seconds || 0) / 60)} minutes. It gets no project files, shell or file tools. The question may reach search engines and websites.</p>
     <label for="${field}" class="small">Type <strong>approve</strong> to allow it</label>
     <input id="${field}" autocomplete="off" placeholder="approve">
     <p class="error small" role="alert"></p>

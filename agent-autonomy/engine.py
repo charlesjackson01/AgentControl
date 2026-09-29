@@ -1578,6 +1578,8 @@ class Controller:
         if not self.s.research_toolsets:
             status['researcher'] = ('Start AgentControl with --research-toolsets (run agent-autonomy/spikes/hermes_research_probe.py '
                                     'to see what your Hermes offers).')
+        elif roles.credential_refusal(self.s.research_toolsets):
+            status['researcher'] = roles.credential_refusal(self.s.research_toolsets)
         elif not hasattr(self.manager, 'research'):
             status['researcher'] = 'This Hermes adapter cannot run research tasks.'
         else:

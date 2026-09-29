@@ -35,7 +35,7 @@ class RepairTests(unittest.TestCase):
         self.assertIsNone(self.hermes.last_repair)
 
     def test_research_uses_only_the_named_toolsets_outside_the_project(self):
-        self.hermes.s.research_toolsets = ('web', 'browser')
+        self.hermes.s.research_toolsets = ('web', 'session_search')
         seen = {}
         def fake(argv, cwd, *a, **k):
             if '--help' in argv:
@@ -45,7 +45,7 @@ class RepairTests(unittest.TestCase):
         with patch('adapters.hermes.process', side_effect=fake):
             self.hermes.research('Which HTTP status fits a rate limit?', 'goal', lambda: False)
         argv = seen['argv']
-        self.assertEqual(argv[argv.index('--toolsets') + 1], 'web,browser')
+        self.assertEqual(argv[argv.index('--toolsets') + 1], 'web,session_search')
         self.assertEqual(argv[argv.index('--run-budget') + 1], '600')
         self.assertNotIn('--yolo', argv)
         self.assertNotEqual(Path(seen['cwd']).resolve(), self.hermes.s.project.resolve())
@@ -54,6 +54,15 @@ class RepairTests(unittest.TestCase):
         self.hermes.s.research_toolsets = ()
         with self.assertRaisesRegex(RuntimeError, 'research-toolsets'):
             self.hermes.research('Which HTTP status fits a rate limit?', '', lambda: False)
+
+    def test_research_never_gets_credential_toolsets(self):
+        calls = []
+        for toolsets in (('web', 'browser'), ('password_vault',), ('Secrets',)):
+            self.hermes.s.research_toolsets = toolsets
+            with patch('adapters.hermes.process', side_effect=lambda *a, **k: calls.append(a) or (0, HELP, '')):
+                with self.assertRaisesRegex(RuntimeError, 'saved credentials'):
+                    self.hermes.research('Which HTTP status fits a rate limit?', '', lambda: False)
+        self.assertEqual(calls, [], 'Hermes is never started with them')
 
     def test_malformed_then_valid_reply_is_repaired_once(self):
         prompts = []

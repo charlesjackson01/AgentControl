@@ -792,12 +792,7 @@ test('research waits in Approvals and inline, and approving sends the typed word
  assert.match(h.document.querySelector('[data-agent-card="researcher-1"]').textContent,/Approve the question/);
  await h.click('[data-view="approvals"]');
  const card=h.document.querySelector('#skill-proposals [data-research-card="step_ask"]');
- assert(card);assert.match(card.textContent,/How should Retry-After be formatted\?/);assert.match(card.textContent,/from this machine/);assert.match(card.textContent,/R3 · Critical/);
- assert.doesNotMatch(card.textContent,/submit forms/,'web alone only reads');
- const withBrowser=specialistFixture();withBrowser.research_requests[0].toolsets=['web','browser'];
- const hb=await harness(withBrowser);
- assert.match(hb.document.querySelector('#skill-proposals [data-research-card="step_ask"]').textContent,/can also click, fill in and submit forms/);
- card.querySelector('input').value='approve';
+ assert(card);assert.match(card.textContent,/How should Retry-After be formatted\?/);assert.match(card.textContent,/from this machine/);assert.match(card.textContent,/R3 · Critical/); card.querySelector('input').value='approve';
  await h.click('#skill-proposals [data-action="research-approve"]');
  assert.deepEqual(h.calls.find(c=>c.url==='/api/research/decide').body,{run:'run_test',step:'step_ask',action:'approve',fingerprint:'fp123',confirm:'approve'});
  h.state.failResearch='Research browses the internet from your machine: type approve to allow it.';

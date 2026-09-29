@@ -47,30 +47,57 @@ def run_cli(argv, timeout=60):
     return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
+LIMIT_CONTROLLERS = ('cpu', 'memory', 'pids')   # what --cpus, --memory and --pids-limit need
+DELEGATE_FIX = ('sudo mkdir -p /etc/systemd/system/user@.service.d && '
+                "printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && "
+                'sudo systemctl daemon-reload, then log out and back in')
+
+
+def _podman_info(cli, runner):
+    """Rootless, version, and which limit controllers are missing (None when this Podman cannot say)."""
+    code, out, err = runner([cli, 'info', '--format',
+                             '{{.Host.Security.Rootless}}|{{.Version.Version}}|{{.Host.CgroupsVersion}}|{{.Host.CgroupControllers}}'])
+    if code:
+        code, out, err = runner([cli, 'info', '--format', '{{.Host.Security.Rootless}}|{{.Version.Version}}'])
+    if code:
+        raise SandboxError(err or out)
+    parts = out.split('|')
+    rootless, version = (parts + ['', ''])[:2]
+    rootless = rootless.strip().lower() == 'true'
+    missing = None
+    if len(parts) >= 4:
+        cgroups = parts[2].strip().lower()
+        have = set(parts[3].strip().strip('[]').split())
+        if rootless and cgroups == 'v1':
+            missing = list(LIMIT_CONTROLLERS)   # rootless on cgroup v1 cannot limit anything
+        elif have:
+            missing = [c for c in LIMIT_CONTROLLERS if c not in have]
+    return rootless, version, missing
+
+
 def detect(prefer=None, image=IMAGE, runner=run_cli):
     """Which runtime is usable, whether it is rootless, and whether the agent image exists."""
-    found = {'runtime': None, 'rootless': False, 'version': '', 'image': False, 'error': ''}
+    found = {'runtime': None, 'rootless': False, 'version': '', 'image': False, 'error': '', 'limits_missing': None}
     for cli in ([prefer] if prefer else ['podman', 'docker']):
         if not shutil.which(cli) and runner is run_cli:
             continue
         try:
             if cli == 'podman':
-                code, out, err = runner([cli, 'info', '--format', '{{.Host.Security.Rootless}}|{{.Version.Version}}'])
-                if code:
-                    raise SandboxError(err or out)
-                rootless, version = (out.split('|') + [''])[:2]
-                rootless = rootless.strip().lower() == 'true'
+                rootless, version, missing = _podman_info(cli, runner)
             else:
-                code, out, err = runner([cli, 'info', '--format', '{{json .SecurityOptions}}|{{.ServerVersion}}'])
+                code, out, err = runner([cli, 'info', '--format', '{{json .SecurityOptions}}|{{.ServerVersion}}|{{.CPUCfsQuota}}|{{.MemoryLimit}}|{{.PidsLimit}}'])
                 if code:
                     raise SandboxError(err or out)
-                options, version = (out.split('|', 1) + [''])[:2]
+                parts = out.split('|')
+                options, version = (parts + ['', ''])[:2]
                 rootless = 'rootless' in options
+                flags = dict(zip(LIMIT_CONTROLLERS, (p.strip().lower() for p in parts[2:5]))) if len(parts) >= 5 else None
+                missing = [c for c, v in flags.items() if v != 'true'] if flags else None
         except SandboxError as exc:
             found['error'] = f'{cli}: {str(exc)[-300:]}'
             continue
         code, _, _ = runner([cli, 'image', 'inspect', image])
-        return {'runtime': cli, 'rootless': rootless, 'version': version.strip(), 'image': code == 0, 'error': ''}
+        return {'runtime': cli, 'rootless': rootless, 'version': version.strip(), 'image': code == 0, 'error': '', 'limits_missing': missing}
     if not found['error']:
         found['error'] = 'Neither podman nor docker is installed'
     return found
@@ -83,6 +110,9 @@ def usable(info, allow_rootful=False):
     if not info.get('rootless') and not allow_rootful:
         return (f"{info['runtime']} runs as root on this machine. Agent containers need rootless Docker or Podman "
                 '(see the README), or start AgentControl with --allow-rootful-containers.')
+    if info.get('limits_missing'):
+        return (f"{info['runtime']} cannot enforce the {', '.join(info['limits_missing'])} limit for your user, so agent containers "
+                f"are off (their CPU, memory and process limits are always applied). One-time fix: {DELEGATE_FIX}.")
     if not info.get('image'):
         return f'The agent image {IMAGE} is not built yet. Run: python3 agent-autonomy/app.py --build-agent-image'
     return ''

@@ -9,10 +9,15 @@ help and list output; nothing is sent to the internet unless you add --try, whic
 """
 import argparse
 import json
+from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import roles
 
 
 def run(argv, timeout=60, cwd=None):
@@ -49,11 +54,17 @@ def main():
             print(f'$ hermes {" ".join(argv)}')
             print(out.strip()[:4000])
             names = sorted(set(re.findall(r'\b([a-z][a-z0-9_-]*(?:web|browser|search|fetch)[a-z0-9_-]*|(?:web|browser|search|fetch)[a-z0-9_-]*)\b', out)))
-            print('   candidates for research:', ', '.join(names) or 'none recognised; pick from the list above')
+            refused = set(roles.credential_tools(names))
+            print('   candidates for research:', ', '.join(n for n in names if n not in refused) or 'none recognised; pick from the list above')
+            if refused:
+                print('   refused (reach saved credentials):', ', '.join(sorted(refused)))
             break
     else:
         print('   No list command worked. Pick toolset names from the help text above.')
     if a.try_toolsets:
+        if roles.credential_refusal(a.try_toolsets.split(',')):
+            print(roles.credential_refusal(a.try_toolsets.split(',')))
+            return
         answer = input(f'Run one research call with toolsets {a.try_toolsets}? It browses the internet. Type yes: ')
         if answer.strip().lower() != 'yes':
             return

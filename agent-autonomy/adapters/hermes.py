@@ -110,6 +110,8 @@ class Hermes:
         toolsets = ','.join(self.s.research_toolsets)
         if not toolsets:
             raise RuntimeError('No research toolsets are configured (start AgentControl with --research-toolsets).')
+        if roles.credential_refusal(self.s.research_toolsets):
+            raise RuntimeError(roles.credential_refusal(self.s.research_toolsets))
         self.last_calls = []
         caps = self.inspect()
         extra = (['--run-budget', str(int(self.s.research_seconds))] if caps.get('--run-budget') else []) + self.routes.get('researcher', [])

@@ -285,7 +285,7 @@ class WorkflowTests(unittest.TestCase):
         helper=Hermes(self.settings)
         helptext='--quiet --query --toolsets --max-turns --query-file --oneshot --ignore-rules stream-json'
         terminal=json.dumps({'type':'result','exit_code':0,'text':json.dumps(complete())})+'\n'
-        with patch('engine.process',side_effect=[(0,helptext,''),(0,terminal,'')]) as mocked:
+        with patch('adapters.hermes.process',side_effect=[(0,helptext,''),(0,terminal,'')]) as mocked:
             result=helper.decide('A goal with `literal text`',lambda:False)
         self.assertEqual(result['action'],'complete')
         argv=mocked.call_args_list[1].args[0]

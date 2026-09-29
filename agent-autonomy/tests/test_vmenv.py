@@ -306,6 +306,12 @@ class MachineTests(unittest.TestCase):
         self.assertIn('for d in /home/me/proj/state/worktrees/r1;', script)
         self.assertIn("'/tmp/a b'", vmenv.provision_script(['/tmp/a b']), 'unusual paths are quoted')
 
+    def test_first_boot_fails_if_tailscale_keeps_running(self):
+        script = vmenv.first_boot_script()
+        self.assertIn('systemctl disable --now tailscaled', script)
+        self.assertIn('is-active --quiet tailscaled', script)
+        self.assertNotIn('pacman', script, 'nothing that needs the network')
+
     def test_detached_commands_let_the_session_end(self):
         started = time.monotonic()
         done = subprocess.run(['bash', '-s'], input=(vmenv.detached('cd / && exec sleep 20') + '\n').encode(), capture_output=True, timeout=15)

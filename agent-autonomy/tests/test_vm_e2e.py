@@ -91,7 +91,9 @@ class VMRunE2E(unittest.TestCase):
         self.assertEqual((Path(ws['integration']['dir']) / 'hello.txt').read_text(), 'created for hello.txt\n')
         self.assertFalse((self.repo / 'hello.txt').exists())
         self.assertEqual(v['network_state'], 'none')
-        self.assertIn('vm network cut', [e['action'] for e in c.store.audit(ident)])
+        actions = [e['action'] for e in c.store.audit(ident)]
+        self.assertLess(actions.index('vm tailscale off'), actions.index('vm network on'), 'Tailscale was off before any route out')
+        self.assertIn('vm network cut', actions)
         # Start it again to look inside: host-only network, no sudo for agents, Tailscale off, a console.
         c.control(ident, 'container_start')
         self.wait(lambda: c.vm_status(c.store.get('runs', ident))['live'] == 'running' and c.store.get('runs', ident)['vm']['state'] == 'running', 300)

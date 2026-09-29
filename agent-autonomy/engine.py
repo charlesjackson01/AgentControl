@@ -2413,21 +2413,37 @@ class Controller:
         vm = self._vm(run)
         try:
             if vm.state() == 'missing':
+                # Born on the host-only network: a clone of a baseline that is on your tailnet must not
+                # reach Tailscale's servers with the original's identity before Tailscale is off.
                 vm.ensure_isolated_network()
-                notes = vm.create(v['baseline'], v['template'], v['cpus'], v['memory_gb'], vmenv.SETUP_NETWORK,
+                notes = vm.create(v['baseline'], v['template'], v['cpus'], v['memory_gb'], vmenv.ISOLATED,
                                   vm_dir=Path(v['baseline']).parent)
                 for note in notes:
                     self.store.event(ident, 'vm', note)
                 self.store.event(ident, 'vm', f"Created {v['name']}: a copy-on-write clone of {Path(v['baseline']).name} "
-                                 f"({v['cpus']} CPUs, {v['memory_gb']} GB; network on for provisioning).")
+                                 f"({v['cpus']} CPUs, {v['memory_gb']} GB; no route out until Tailscale is off).")
                 self.store.audit_append(ident, {'action': 'vm created', 'actor': 'AgentControl', 'name': v['name'],
-                                                'baseline': v['baseline'], 'network': vmenv.SETUP_NETWORK})
-                v = self._vm_update(ident, network_state='online', created=now(), provisioned=None)
+                                                'baseline': v['baseline'], 'network': vmenv.ISOLATED})
+                v = self._vm_update(ident, network_state='none', created=now(), provisioned=None, tailscale_off=None)
             if vm.state() != 'running':
                 vm.start()
             online = v.get('network_state') == 'online'
             ip = vm.wait_address(180, None if online else '192.168.231.')
             v = self._vm_update(ident, ip=ip)
+            if not v.get('tailscale_off') and not v.get('provisioned'):
+                code, out, err = vm.run_script(vmenv.first_boot_script())
+                if code:
+                    raise Attention(f'Turning Tailscale off in the new VM failed, so it stays without network: {(err or out)[-400:]}')
+                self.store.event(ident, 'vm', 'Tailscale disabled before the clone had a route out.')
+                self.store.audit_append(ident, {'action': 'vm tailscale off', 'actor': 'AgentControl', 'name': v['name']})
+                v = self._vm_update(ident, tailscale_off=now())
+            needs_network = (not v.get('provisioned') or (run.get('setup') and not ws.get('setup_done'))
+                             or v['network'] == 'internet')
+            if needs_network and v.get('network_state') != 'online':
+                ip, how = vm.switch_network(vmenv.SETUP_NETWORK, None)
+                self.store.event(ident, 'vm', 'Network on (libvirt NAT) for provisioning and your setup command.')
+                self.store.audit_append(ident, {'action': 'vm network on', 'actor': 'AgentControl', 'name': v['name'], 'how': how})
+                v = self._vm_update(ident, network_state='online', ip=ip)
             if not v.get('provisioned'):
                 code, out, err = vm.run_script(vmenv.provision_script([str(Path(ws['integration']['path']).parent)] + self._vm_folders(ws)))
                 if code:

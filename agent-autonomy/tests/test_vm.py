@@ -64,6 +64,8 @@ class FakeVM:
 
     def run_script(self, script, user=None, timeout=900, input=None):
         self.scripts.append((user, script))
+        kind = 'tailscale off' if script == vmenv.first_boot_script() else 'provision' if 'useradd' in script else 'script'
+        self.log.append((kind, self.network_name))
         return 0, 'provisioned', ''
 
     def copy_in(self, local, remote, user=None):
@@ -161,12 +163,13 @@ class VMRunTests(unittest.TestCase):
         self.assertEqual(result['status'], 'completed', result['summary'])
         ws = result['workspace']
         self.assertEqual(self.host_api.prompts, [], 'nothing goes to the OpenCode on your host')
-        # Created on the setup network, provisioned, then moved to the host-only network before any prompt.
-        self.assertEqual(self.vm.log[0], ('isolated network',))
-        self.assertEqual(self.vm.log[1], ('create', 2, 4, vmenv.SETUP_NETWORK))
-        order = [e[0] for e in self.vm.log]
-        self.assertLess(order.index('switch'), next(i for i, e in enumerate(self.vm.log) if e[0] == 'pull'))
-        provision = self.vm.scripts[0][1]
+        # Born with no route out, Tailscale off first, then NAT for provisioning, then host-only before any prompt.
+        self.assertEqual(self.vm.log[:5], [('isolated network',), ('create', 2, 4, vmenv.ISOLATED), ('start', vmenv.ISOLATED),
+                                           ('tailscale off', vmenv.ISOLATED), ('switch', vmenv.SETUP_NETWORK)])
+        self.assertEqual(self.vm.log[5], ('provision', vmenv.SETUP_NETWORK))
+        cut = self.vm.log.index(('switch', vmenv.ISOLATED))
+        self.assertLess(cut, next(i for i, e in enumerate(self.vm.log) if e[0] == 'pull'))
+        provision = self.vm.scripts[1][1]
         self.assertIn('tailscaled', provision)
         self.assertIn(Path(ws['integration']['path']).parent.as_posix(), provision)
         self.assertEqual(self.vm.copied[0][1], '/tmp/opencode')
@@ -183,6 +186,7 @@ class VMRunTests(unittest.TestCase):
         self.assertEqual(result['vm']['storage'], str(self.settings.vm_baseline.resolve().parent / 'agentcontrol-runs' / run['id']))
         actions = [e['action'] for e in c.store.audit(run['id'])]
         self.assertIn('vm created', actions)
+        self.assertLess(actions.index('vm tailscale off'), actions.index('vm network on'))
         self.assertIn('vm network cut', actions)
         c.control(run['id'], 'apply')
         self.assertEqual(self.vm.log[-1], ('remove',))
@@ -194,7 +198,8 @@ class VMRunTests(unittest.TestCase):
             c.new('Build it', isolation='vm', network='internet')
         run = c.new('Build it', isolation='vm', network='internet', confirm='approve')
         self.assertEqual(self.done(run['id'])['status'], 'completed')
-        self.assertNotIn('switch', [e[0] for e in self.vm.log])
+        self.assertIn(('switch', vmenv.SETUP_NETWORK), self.vm.log)
+        self.assertNotIn(('switch', vmenv.ISOLATED), self.vm.log, 'internet while working keeps the NAT')
 
     def test_starting_opencode_in_the_vm_does_not_hold_the_ssh_session(self):
         c = self.controller([{'action': 'code', 'title': 't', 'summary': 's', 'prompt': 'CREATE a.txt'}, complete()])
@@ -240,6 +245,8 @@ class VMRunTests(unittest.TestCase):
         while self.vm.status != 'running' and time.monotonic() < until:
             time.sleep(.02)
         self.assertTrue(c.vm_console(run['id']).startswith(b'\x89PNG'))
+        self.assertEqual(self.vm.log.count(('switch', vmenv.SETUP_NETWORK)), 1, 'a restart never turns the network back on')
+        self.assertEqual(self.vm.log.count(('tailscale off', vmenv.ISOLATED)), 1)
         c.vm_input(run['id'], 'click', x=10, y=5, width=640, height=400)
         c.vm_input(run['id'], 'type', text='ls')
         c.vm_input(run['id'], 'key', key='Return')

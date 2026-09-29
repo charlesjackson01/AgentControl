@@ -633,6 +633,15 @@ def detached(command, log='/dev/null'):
     return f'( {command} ) >{log} 2>&1 </dev/null &'
 
 
+def first_boot_script():
+    """Run while the clone has no route out: stop Tailscale for good, and fail if it still runs."""
+    return """set -e
+sudo systemctl disable --now tailscaled.service >/dev/null 2>&1 || true
+if systemctl is-active --quiet tailscaled.service; then echo 'tailscaled is still running' >&2; exit 1; fi
+echo tailscale-off
+"""
+
+
 def provision_script(user_dirs, packages=PACKAGES):
     """First boot, as your baseline's admin user: keep the clone off your tailnet, create the
     unprivileged agent user, install what agents and previews need, and make the run's folders."""

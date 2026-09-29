@@ -445,7 +445,8 @@ For work that needs a whole machine, choose **Virtual machine** in New run. The 
   - Commits, merges, Apply and Discard happen on your host as always. The verification command and the setup command run inside the VM.
 - **Transport:** one SSH connection carries AgentControl → OpenCode in the VM, and the VM's model requests → the run's gateway. Your approvals, spend caps and usage work exactly as elsewhere.
 - **Network:**
-  - The VM uses libvirt's NAT only while it is provisioned and your setup command runs.
+  - A new clone first boots on `agentcontrol-isolated`, with no route out. Over SSH, AgentControl turns Tailscale off, and only then moves the clone to libvirt's NAT. A clone of a baseline that is on your tailnet therefore never reaches Tailscale's servers with the original's identity. If Tailscale can't be stopped, the clone stays without network and the run asks for your attention.
+  - The VM uses libvirt's NAT only while it is provisioned and your setup command runs. Restarting a provisioned VM never turns the network back on.
   - It then moves to `agentcontrol-isolated`, a host-only network that AgentControl creates, where the VM can reach only your host. The move is tried live first; if that doesn't give a working address, the VM is rebooted on the new network.
   - "Internet while agents work" keeps the NAT and needs your typed `approve`.
 - **Screen:** the Project tab shows the VM's own console, refreshed about once a second. Your clicks go in as absolute mouse events, and your typing and keys through libvirt (a US key map). Each is recorded in the audit log, but not the text you type. Web, terminal and desktop previews also run inside the VM.

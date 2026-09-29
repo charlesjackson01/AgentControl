@@ -175,11 +175,13 @@
               <fieldset class="mode-choice"><legend class="small"><strong>How many coders</strong></legend>
                 <label class="choice"><input type="radio" name="run-mode" id="mode-single" value="single" checked><span><strong>One agent</strong><small>Hermes plans each turn for a single coder.</small></span></label>
                 <label class="choice"><input type="radio" name="run-mode" id="mode-team" value="team"><span><strong>A team</strong><small id="team-mode-note">Hermes proposes the agents and tasks; nothing runs until you approve the plan.</small></span></label>
+                <label class="choice"><input type="radio" name="run-mode" id="mode-auto" value="auto"><span><strong>Auto</strong><small>AgentControl decides from your brief; a team still needs your approval.</small></span></label>
+                <p id="auto-preview" class="small hidden" role="status"></p>
                 <label for="team-size" class="small">Largest team</label><select id="team-size"><option value="2">2 agents</option><option value="3" selected>3 agents</option></select>
                 <p class="small muted">Your model server answers one agent at a time, so a team helps most when time goes into tools and tests.</p>
               </fieldset></section>
             <section class="ac-panel"><h2 class="ac-panel__title">Limits</h2><label for="max-prompts">Maximum coding prompts</label><div class="stepper"><button type="button" class="ac-btn" data-step="-1" aria-label="Fewer coding prompts">−</button><input id="max-prompts" type="number" min="1" max="20" value="6" required><button type="button" class="ac-btn" data-step="1" aria-label="More coding prompts">+</button></div><label for="run-minutes">Time limit · minutes</label><input id="run-minutes" type="number" min="1" max="120" value="30" required><p class="small muted">Includes time waiting for your approval.</p></section>
-            <section class="ac-panel"><h2 class="ac-panel__title">Permissions</h2><p class="small muted">OpenCode’s configured permissions apply. Requests it sends will appear for your review.</p><p class="small muted">Plan approval and per-run policy switches are not supported yet.</p></section>
+            <section class="ac-panel"><h2 class="ac-panel__title">Permissions</h2><p class="small muted">OpenCode’s configured permissions apply. Every request it sends comes to you with a risk class; critical ones need you to type <strong>approve</strong>.</p><p class="small muted">Team plans need your approval before any agent starts.</p></section>
             <p id="start-reason" class="small warning-text hidden" role="status"></p><p id="start-error" class="error" role="alert"></p><button class="ac-btn primary wide" id="start-run">Start run</button>
           </aside></form>
         </section>

@@ -28,6 +28,7 @@ async function harness(state=fixture(),savedTheme='mac') {
    const body=options.body?JSON.parse(options.body):null;calls.push({url,method:options.method,body});
    let result;
    if(url==='/api/control'&&state.failControl)return {status:400,ok:false,json:async()=>({error:state.failControl})};
+   if(url==='/api/mode/preview')return {status:200,ok:true,json:async()=>clone(state.autoPreview||{mode:'single',rule:3,reasons:['The brief names one area of work.']})};
    if(url==='/api/workspace/preflight')return {status:200,ok:true,json:async()=>clone(state.preflight||{is_repo:false,usable:false,reason:'',changes:[],untracked:[],dirty_count:0})};
    if(url.startsWith('/api/state'))result=clone(state);
    else if(url==='/api/review'){
@@ -525,5 +526,31 @@ test('new run offers a team only for usable git projects and sends the size',asy
  h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
  const body=h.calls.find(c=>c.url==='/api/runs').body;
  assert.equal(body.mode,'team');assert.equal(body.team_size,2);
+});
+test('auto mode previews its choice and sends mode auto',async()=>{
+ const s=fixture();s.run.status='completed';s.inbox=[];
+ s.autoPreview={mode:'team',rule:5,reasons:['The brief has 3 parts (API or server, user interface, tests).','A team never starts without your approval of its plan.']};
+ const h=await harness(s);await h.click('[data-action="new"]');
+ for(const [id,on] of [['mode-single',false],['mode-auto',true]]){const r=h.document.getElementById(id);r.checked=on;on?r.setAttribute('checked',''):r.removeAttribute('checked');}
+ h.document.getElementById('goal').value='Build an API, a UI and tests';
+ await h.context.autoPreview();await tick();
+ const preview=h.document.getElementById('auto-preview');
+ assert(!preview.classList.contains('hidden'));
+ assert.match(preview.textContent,/Auto would ask Hermes for a team plan\./);assert.match(preview.textContent,/never starts without your approval/);
+ assert.equal(h.calls.find(c=>c.url==='/api/mode/preview').body.goal,'Build an API, a UI and tests');
+ h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ assert.equal(h.calls.find(c=>c.url==='/api/runs').body.mode,'auto');
+});
+test('runs chosen by auto mode explain why',async()=>{
+ const s=fixture();s.run.status='coding';s.inbox=[];s.run.mode='single';
+ s.run.auto={mode:'single',rule:3,reasons:['The brief names one area of work (found: tests), so there is nothing to split between agents.']};
+ let h=await harness(s);
+ assert.match(h.document.getElementById('team-panel').textContent,/Auto mode: one agent\. The brief names one area of work/);
+ const t=teamProposalFixture();t.run.auto={mode:'team',rule:5,reasons:['The brief has 4 parts.']};
+ h=await harness(t);
+ assert.match(h.document.getElementById('team-panel').textContent,/Auto mode: a team plan for your approval\. The brief has 4 parts/);
+ h=await harness();
+ assert.equal(h.document.getElementById('team-panel').textContent,'','runs you chose yourself show no auto note');
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

@@ -19,6 +19,7 @@ import permissions
 import models
 import workspaces
 import planner
+import modes
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
@@ -197,9 +198,9 @@ class Controller:
         if not isinstance(setup, str) or len(setup) > 2000:
             raise ValueError('Setup command is too long')
         setup_argv = shlex.split(setup) if setup.strip() else []
-        if mode not in ('single', 'team'):
-            raise ValueError('Mode must be single or team')
-        if mode == 'team' and (type(team_size) is not int or not 2 <= team_size <= planner.MAX_AGENTS):
+        if mode not in ('single', 'team', 'auto'):
+            raise ValueError('Mode must be single, team, or auto')
+        if mode in ('team', 'auto') and (type(team_size) is not int or not 2 <= team_size <= planner.MAX_AGENTS):
             raise ValueError(f'Team size must be 2-{planner.MAX_AGENTS} agents')
         if type(max_steps) is not int or not 1 <= max_steps <= 20:
             raise ValueError('Prompt limit must be 1–20')
@@ -223,6 +224,10 @@ class Controller:
             if not self.health.get('ready'):
                 raise ValueError('Connections are not ready. Use Check connections.')
             ident = uuid.uuid4().hex[:12]
+            auto = None
+            if mode == 'auto':
+                auto = self.auto_decision(goal, checks, argv, max_steps)
+                mode = auto['mode']
             if mode == 'team' and not workspaces.git_info(self.s.project)['usable']:
                 raise ValueError('Team runs need a git project, because each agent works in its own worktree. '
                                  'Initialise a repository with a first commit, or start a single-agent run.')
@@ -234,14 +239,18 @@ class Controller:
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
                    'parent_run': parent_run or None, 'title': title, 'preview': preview,
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
-                   'workspace': workspace, 'setup': setup_argv, 'mode': mode,
-                   'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': []} if mode == 'team' else None}
+                   'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto,
+                   'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': [],
+                            'auto': bool(auto)} if mode == 'team' else None}
             if mode == 'team':
                 run['summary'] = 'Hermes is proposing a team.'
             self.store.put('runs', run)
             for agent in agent_registry.default_agents(run, self.s.profile):
                 self.store.put_agent(agent)
             self.store.event(ident, 'goal', goal)
+            if auto:
+                self.store.event(ident, 'auto mode', f"Auto chose {'to ask Hermes for a team plan' if mode == 'team' else 'one agent'} "
+                                 f"(rule {auto['rule']}): " + ' '.join(auto['reasons']))
             if workspace['mode'] == 'worktree':
                 self.store.event(ident, 'workspace', f"Working on branch {workspace['agents']['coder-1']['branch']} from "
                                  f"{workspace['base_branch']} ({workspace['base'][:10]}). Your checkout is not changed.")
@@ -249,6 +258,11 @@ class Controller:
                 self.store.event(ident, 'workspace', 'Working directly in the project folder: ' + workspace['reason'] + '.')
             self._launch(ident)
             return run
+
+    def auto_decision(self, goal, goal_checks=(), verifier=(), max_steps=8):
+        """What Auto mode would do for this brief, from the rules in modes.py."""
+        slots = self.broker.endpoint()['slots'] if self.broker.configured else 1
+        return modes.decide(goal, goal_checks, verifier, max_steps, workspaces.git_info(self.s.project)['usable'], slots)
 
     # ---- workspaces (M6) ---------------------------------------------------
     def _new_workspace(self, ident, parent, allow_dirty):
@@ -982,6 +996,14 @@ class Controller:
                 break
             self.store.event(ident, 'proposal rejected', '; '.join(problems))
         count = team['proposals'] + 1
+        if team.get('auto') and (not proposal or len(proposal['agents']) == 1):
+            why = ('Hermes judged one agent enough' if proposal else
+                   'Hermes could not produce a usable team plan (' + '; '.join(problems)[:300] + ')')
+            self._team_update(ident, state='single', proposal=proposal, warnings=warnings, problems=problems, proposals=count)
+            self.store.update('runs', ident, status='planning', summary=f'{why}; Auto mode runs one agent.')
+            self.store.event(ident, 'auto mode', f'{why}. Running one agent; no approval is needed for that.')
+            self.store.audit_append(ident, {'action': 'auto: single agent', 'actor': 'AgentControl (Auto mode)', 'reason': why[:500]})
+            return
         if proposal:
             self._team_update(ident, state='proposed', proposal=proposal, warnings=warnings, problems=[], proposals=count)
             summary = (f"Hermes proposes {len(proposal['agents'])} agent{'s' if len(proposal['agents']) != 1 else ''} and "

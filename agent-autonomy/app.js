@@ -743,17 +743,20 @@ function taskRows(tasks, withStatus) {
 }
 function renderTeam() {
   const team = current.team;
-  if (!isTeam() || !team) { setHTML($('team-panel'), ''); return; }
+  if (!isTeam() || !team) {
+    setHTML($('team-panel'), current.auto && !ended.has(current.status) ? `<section class="ac-panel team-panel">${autoNote()}</section>` : '');
+    return;
+  }
   const finished = ended.has(current.status);
   if (team.state === 'proposing') {
-    setHTML($('team-panel'), finished ? '' : '<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team plan</h2><p class="small muted">Hermes is proposing a team. Nothing runs until you approve it.</p></section>');
+    setHTML($('team-panel'), finished ? '' : `<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team plan</h2>${autoNote()}<p class="small muted">Hermes is proposing a team. Nothing runs until you approve it.</p></section>`);
     return;
   }
   if (['proposed', 'unusable'].includes(team.state) && !finished) {
     const p = team.proposal, usable = team.state === 'proposed';
     const agents = usable ? Object.entries(p.agents).map(([name, a]) => `<li><strong>${esc(name)}</strong> <span class="muted">(${esc(a.label)})</span> · ${esc(a.responsibility)}</li>`).join('') : '';
     const left = 3 - (team.proposals || 0);
-    setHTML($('team-panel'), `<section class="ac-panel team-panel proposal" aria-live="polite"><h2 class="ac-panel__title">Team plan <span class="ac-status attention">needs your decision</span></h2>
+    setHTML($('team-panel'), `<section class="ac-panel team-panel proposal" aria-live="polite"><h2 class="ac-panel__title">Team plan <span class="ac-status attention">needs your decision</span></h2>${autoNote()}
       ${usable ? `<p class="small">${esc(p.reason || '')}</p><h3 class="small">Agents</h3><ul class="small team-agents">${agents}</ul>
         <h3 class="small">Tasks</h3><div class="table-wrap"><table class="team-table"><thead><tr><th>Task</th><th>What</th><th>Agent</th><th>After</th><th>Files</th></tr></thead><tbody>${taskRows(p.tasks, false)}</tbody></table></div>
         ${(team.warnings || []).map(w => `<p class="small warning-text">⚠ ${esc(w)}</p>`).join('')}
@@ -770,7 +773,7 @@ function renderTeam() {
     return;
   }
   if (team.state === 'single') {
-    setHTML($('team-panel'), '<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team plan</h2><p class="small muted">Running with one agent, as chosen.</p></section>');
+    setHTML($('team-panel'), `<section class="ac-panel team-panel"><h2 class="ac-panel__title">Team plan</h2>${current.auto ? autoNote() : '<p class="small muted">Running with one agent, as chosen.</p>'}</section>`);
     return;
   }
   const tasks = team.tasks || [], done = tasks.filter(t => t.status === 'done').length;
@@ -1224,6 +1227,37 @@ function showView(next) {
   if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } }
 }
 let preflight = null;
+function chosenMode() { return document.querySelector('input[name="run-mode"]:checked')?.value || 'single'; }
+function runModeBody() {
+  const mode = chosenMode();
+  if (mode === 'team' && preflight?.usable) return {mode: 'team', team_size: Number($('team-size').value)};
+  if (mode === 'auto') return {mode: 'auto', team_size: Number($('team-size').value)};
+  return {};
+}
+let autoTimer = null;
+function scheduleAutoPreview() {
+  const box = $('auto-preview');
+  if (chosenMode() !== 'auto') { box.classList.add('hidden'); return; }
+  clearTimeout(autoTimer);
+  autoTimer = setTimeout(autoPreview, 400);
+}
+async function autoPreview() {
+  const box = $('auto-preview');
+  if (chosenMode() !== 'auto') return;
+  box.classList.remove('hidden');
+  if (!$('goal').value.trim()) { box.textContent = 'Write the brief to see what Auto would choose.'; return; }
+  try {
+    const d = await api('/api/mode/preview', 'POST', {goal: $('goal').value, verifier: $('verify-enabled').checked ? $('verify').value : '',
+      max_steps: Number($('max-prompts').value), goal_checks: [...$('new-checks').querySelectorAll('textarea')].map(e => e.value.trim()).filter(Boolean)});
+    setHTML(box, `<strong>Auto would ${d.mode === 'team' ? 'ask Hermes for a team plan' : 'use one agent'}.</strong> ${esc(d.reasons.join(' '))}`);
+  } catch (error) { box.textContent = error.message; }
+}
+function autoNote(run = current) {
+  const a = run?.auto;
+  if (!a) return '';
+  const team = run.team, outcome = run.mode === 'single' ? 'one agent' : team?.state === 'single' ? 'one agent after Hermes’s review' : 'a team plan for your approval';
+  return `<p class="small auto-note"><strong>Auto mode:</strong> ${esc(outcome)}. <span class="muted">${esc(a.reasons.join(' '))}</span></p>`;
+}
 async function loadPreflight() {
   try { preflight = await api('/api/workspace/preflight'); } catch { preflight = null; }
   renderPreflight();
@@ -1526,7 +1560,7 @@ function init() {
         ...($('run-title').value.trim() ? {title: $('run-title').value.trim()} : {}),
         ...(readPreviewSpec('new').mode !== 'none' ? {preview: readPreviewSpec('new')} : {}),
         ...($('allow-dirty')?.checked ? {allow_dirty: true} : {}),
-        ...(document.querySelector('input[name="run-mode"]:checked')?.value === 'team' && preflight?.usable ? {mode: 'team', team_size: Number($('team-size').value)} : {}),
+        ...runModeBody(),
         ...(preflight?.usable && $('setup-cmd').value.trim() ? {setup: $('setup-cmd').value.trim()} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');
@@ -1534,6 +1568,8 @@ function init() {
       toast('Hermes is preparing the first turn.');
     } catch (error) { $('start-error').textContent = error.message; $('start-run').disabled = false; }
   };
+  document.querySelectorAll('input[name="run-mode"]').forEach(radio => { radio.onchange = scheduleAutoPreview; });
+  ['goal', 'verify', 'max-prompts'].forEach(id => $(id).addEventListener('input', scheduleAutoPreview));
   $('verify-enabled').onchange = () => { $('verify').disabled = !$('verify-enabled').checked; $('verify').required = $('verify-enabled').checked; };
   $('steering-form').onsubmit = async event => {
     event.preventDefault();

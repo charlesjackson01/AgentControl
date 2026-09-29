@@ -310,6 +310,22 @@ Every prompt and retry counts toward the run's prompt limit. The run page shows 
 
 Your model server answers one request at a time (M0: `-np 1`), so a team saves time mostly when agents spend time running tools and tests rather than generating text.
 
+## Auto mode
+
+Choose **Auto** in New run to let AgentControl pick between one agent and a team.
+While you write the brief, New run shows what Auto would do and why
+(`POST /api/mode/preview`). The rules come first; the first matching row wins:
+
+| # | When | Auto does |
+|---|---|---|
+| 1 | The project is not a git repository with a commit | One agent |
+| 2 | The prompt limit is below 3 | One agent |
+| 3 | The brief names fewer than 2 areas of work (UI, API, storage, CLI, tests, docs, packaging) or list items | One agent |
+| 4 | One model slot, no verification command, and fewer than 4 parts | One agent (extra agents would mostly wait on the model) |
+| 5 | Otherwise | Asks Hermes for a team plan |
+
+If Hermes then proposes one agent, or cannot produce a usable plan, Auto runs one agent without asking you. That is an ordinary run, and it is recorded in the activity and audit logs. **A team never starts without your approval:** when Hermes proposes several agents, you get the same plan review as in a team run, where you can still choose one agent. The run page says what Auto chose and why. Choosing **One agent** or **A team** yourself always skips Auto.
+
 ## Model server, usage, and the optional gateway
 
 AgentControl can watch the model server your agents use (for example your local

@@ -165,6 +165,12 @@ def handler(controller, key):
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})
                 if self.path == '/api/preview':
                     return self.reply(200, controller.preview_action(body['run'], body['action'], body))
+                if self.path == '/api/mode/preview':
+                    steps = body.get('max_steps', 8)
+                    checks = [c for c in (body.get('goal_checks') or []) if isinstance(c, str)][:20]
+                    verifier = str(body.get('verifier') or '')[:2000]
+                    return self.reply(200, controller.auto_decision(str(body.get('goal', ''))[:12000], checks, verifier.split(),
+                                                                    steps if type(steps) is int else 8))
                 if self.path == '/api/control':
                     return self.reply(200, controller.control(body['run'], body['action'], body.get('text', '')))
                 if self.path == '/api/review':

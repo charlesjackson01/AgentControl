@@ -51,6 +51,8 @@ Hermes CLI and the OpenCode API without starting a model.
 - **Team runs.** Hermes proposes a small team of coders and a task plan; after
   you approve it, the coders work in parallel on their own branches and their
   work is merged and verified. Every agent's approvals still come to you.
+- **Auto mode.** Let AgentControl choose between one agent and a team from
+  your brief; it explains its choice, and a team still needs your approval.
 - **Model server.** Optionally describe your model server (for example
   llama-server) in `state/models.json`. AgentControl checks that it answers
   before sending work, records token usage per agent, and can run a local

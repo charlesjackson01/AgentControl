@@ -16,6 +16,8 @@ const types = {'.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript
 const widths = {desktop: [1440, 900], laptop: [1024, 768], phone: [390, 844]};
 const themes = ['mac', 'terminal', 'xp'];
 
+const CLEAN_GIT = {is_repo: true, usable: true, reason: '', branch: 'main', subdir: '', changes: [], untracked: [], dirty_count: 0};
+const SANDBOX = {runtime: 'podman', rootless: true, version: '5.2.0', image: true, error: '', unavailable: '', allow_rootful: false, models_configured: true, build_command: ''};
 const scenarios = {
   login: {state: fx.richActive, key: false},
   empty: {state: fx.empty},
@@ -64,6 +66,15 @@ const scenarios = {
       in_flight: [{agent: 'opencode'}], queued: [{agent: 'hermes', role: 'orchestrator'}], health: {state: 'online', latency_ms: 12}}]};
     s.usage = {total: {calls: 4, tokens_in: 21400, tokens_out: 2300, cost: 0}, by_agent: {
       hermes: {calls: 3, tokens_in: 10480, tokens_out: 1300, queued_ms: 4000}, 'coder-1': {calls: 1, tokens_in: 10920, tokens_out: 1000, queued_ms: 0}}};
+    return s; }},
+  containernew: {state: () => ({...fx.empty(), sandbox: SANDBOX}), click: ['#empty-state [data-action="new"]', '#iso-container'], preflight: CLEAN_GIT},
+  containeroff: {state: () => ({...fx.empty(), sandbox: {...SANDBOX, rootless: false, unavailable: 'docker runs as root on this machine. Agent containers need rootless Docker or Podman (see the README), or start AgentControl with --allow-rootful-containers.'}}),
+    click: '#empty-state [data-action="new"]', preflight: CLEAN_GIT},
+  container: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'coding'; s.run.isolation = 'container';
+    s.run.workspace = {mode: 'worktree', base_branch: 'main', base: 'abc123', integration: {branch: `agentcontrol/${s.run.id}/integration`}, agents: {'coder-1': {branch: `agentcontrol/${s.run.id}/coder-1`}}};
+    s.workspace = {state: 'open', exists: true, commits: 1, shortstat: '1 file changed, 12 insertions(+)', apply_blocked: '', last_integration: {status: 'merged', files: []}};
+    s.container = {name: `agentcontrol-${s.run.id}`, runtime: 'podman', rootless: true, image: 'agentcontrol-agent:1', cpus: 4, memory_gb: 8, network: 'setup',
+      state: 'running', live: 'running', network_state: 'none', network_cut: s.run.created, networks: ['none']};
     return s; }},
 };
 
@@ -128,12 +139,12 @@ async function open(browser, theme, [width, height], scenario) {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('http://agentcontrol.test/', {waitUntil: 'domcontentloaded'});
   await page.waitForTimeout(400);
-  if (scenario.click) {
-    if (!(await page.locator(scenario.click + ':visible').count()) && (await page.locator('[data-action="drawer"]:visible').count())) {
+  for (const click of [].concat(scenario.click || [])) {
+    if (!(await page.locator(click + ':visible').count()) && (await page.locator('[data-action="drawer"]:visible').count())) {
       // Navigation lives in the drawer on phones.
       await page.click('[data-action="drawer"]:visible');
     }
-    await page.locator(scenario.click + ':visible').first().click({timeout: 5000});
+    await page.locator(click + ':visible').first().click({timeout: 5000});
     await page.waitForTimeout(250);
   }
   return {context, page, errors};

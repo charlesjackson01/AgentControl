@@ -386,6 +386,7 @@ function renderShell() {
   $('start-reason').classList.toggle('hidden', !blocker);
   document.querySelectorAll('[data-capability]').forEach(e => e.classList.toggle('hidden', !data.capabilities?.[e.dataset.capability]));
   togglePreviewFields('new');
+  renderIsolation();
 
   const crumbs = [project, {new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills'}[view]];
   if (current && view !== 'new') crumbs.push('#' + current.id.slice(0, 6));
@@ -485,6 +486,7 @@ function renderRun() {
   renderVerification();
   renderModelUsage();
   renderBranch();
+  renderContainer();
   renderSkillsPanel();
   renderFiles(fileStats(steps));
   renderTimeline();
@@ -1342,6 +1344,7 @@ async function loadPreflight() {
   renderPreflight();
 }
 function renderPreflight() {
+  renderIsolation();
   const p = preflight, parent = parentRun && data?.runs ? current : null;
   $('setup-field').classList.toggle('hidden', !p?.usable);
   const teamOption = $('mode-team');
@@ -1366,6 +1369,54 @@ function renderPreflight() {
       <label class="choice"><input type="checkbox" id="allow-dirty"><span><strong>Start from my last commit anyway</strong><small>Your uncommitted changes stay in your checkout, untouched.</small></span></label></div>`;
   }
   setHTML($('workspace-preflight'), html);
+}
+function containerBlocker() {
+  const s = data?.sandbox;
+  if (!s) return 'Checking for a container runtime…';
+  if (s.unavailable) return s.unavailable;
+  if (!preflight?.usable) return 'Containers need a git project with at least one commit: the container works on the run’s own worktrees.';
+  if (!s.models_configured) return 'Describe your model server in state/models.json first; the container reaches it only through AgentControl.';
+  return '';
+}
+function renderIsolation() {
+  const blocked = containerBlocker(), option = $('iso-container'), s = data?.sandbox;
+  option.disabled = Boolean(blocked);
+  if (blocked && option.checked) { option.checked = false; $('iso-host').checked = true; }
+  const imageMissing = s?.runtime && !s.image && s.build_command;
+  setHTML($('container-unavailable'), blocked ? `<p class="small muted">Container can’t be used yet: ${esc(blocked)}</p>
+    ${imageMissing ? details('Build the agent image', s.build_command, 'image-build') : ''}<button type="button" class="text-button small" data-action="sandbox-check">Check again</button>`
+    : s?.runtime ? `<p class="small muted">${esc(s.runtime)} ${esc(s.version || '')} · ${s.rootless ? 'rootless ✓' : '<span class="warning-text">runs as root (allowed by --allow-rootful-containers)</span>'}</p>` : '');
+  const on = $('iso-container').checked;
+  $('container-fields').classList.toggle('hidden', !on);
+  $('container-confirm-field').classList.toggle('hidden', !on || $('container-network').value !== 'internet');
+}
+function isolationBody() {
+  if (!$('iso-container').checked) return {};
+  const network = $('container-network').value;
+  return {isolation: 'container', cpus: Number($('container-cpus').value), memory_gb: Number($('container-memory').value), network,
+    ...(network === 'internet' ? {confirm: $('container-confirm').value.trim()} : {})};
+}
+const NETWORK_LABEL = {setup: 'internet for setup only', none: 'none', internet: 'internet while agents work'};
+function renderContainer() {
+  const c = data.container;
+  if (!c) { setHTML($('container-panel'), ''); return; }
+  const title = '<h2 class="ac-panel__title">Container</h2>';
+  if (c.live === 'removed') { setHTML($('container-panel'), `<section class="ac-panel">${title}<p class="small muted">Removed ${c.removed ? when(c.removed) : ''} with the run’s branch.</p></section>`); return; }
+  const live = {running: 'Running', exited: 'Stopped', created: 'Created', missing: 'Not created yet', pending: 'Starts with the first turn'}[c.live] || c.live;
+  const net = c.network === 'internet' ? '<span class="warning-text">Internet on while agents work</span>'
+    : c.network_cut ? `Cut off after setup at ${esc(timeLabel(c.network_cut))}`
+    : c.network_state === 'online' ? '<span class="warning-text">On for the setup command</span>' : 'None';
+  const working = !ended.has(current.status) && !current.pause && !['paused', 'interrupted', 'attention'].includes(current.status);
+  const button = c.live === 'running'
+    ? `<button class="ac-btn compact" data-action="container-stop" ${!connected || working ? 'disabled' : ''}>Stop container</button>`
+    : ['exited', 'created', 'missing'].includes(c.live) ? `<button class="ac-btn compact" data-action="container-start" ${connected ? '' : 'disabled'}>Start container</button>` : '';
+  setHTML($('container-panel'), `<section class="ac-panel">${title}
+    <dl class="facts small"><dt>State</dt><dd class="${c.live === 'running' ? 'success-text' : ''}">${esc(live)}</dd>
+    <dt>Runtime</dt><dd>${esc(c.runtime)} · ${c.rootless ? 'rootless ✓' : '<span class="warning-text">as root</span>'}</dd>
+    <dt>Image</dt><dd class="mono">${esc(c.image)}</dd><dt>Limits</dt><dd>${esc(String(c.cpus))} CPUs · ${esc(String(c.memory_gb))} GB</dd>
+    <dt>Network</dt><dd>${net}</dd></dl>
+    ${button ? `<div class="row wrap">${button}</div>` : ''}${working && c.live === 'running' ? '<p class="small muted">Pause the run to stop the container.</p>' : ''}
+    <p class="small muted">The Project tab shows previews running inside this container, including its desktop.</p></section>`);
 }
 function openNew(followup = false) {
   if (followup && !current) return;
@@ -1504,6 +1555,9 @@ const ACTIONS = {
     askConfirm('Discard this branch?', `<p>Delete <code>${esc(ws.integration.branch)}</code>, the agent branch, and their worktrees.</p><p class="small muted">Work that was not applied is lost. Your checkout is not touched.</p>`,
       'Discard branch', true, async () => { await control('discard_workspace', '', id); toast('Branch discarded.'); });
   },
+  'container-stop': async () => { await control('container_stop'); toast('Container stopped.'); },
+  'container-start': async () => { await control('container_start'); toast('Starting the container…'); },
+  'sandbox-check': async () => { try { data.sandbox = await api('/api/sandbox?check=1'); } catch (error) { toast(error.message); } renderIsolation(); },
   'revoke-rule': async button => { await control('revoke_rule', button.dataset.rule); toast('Rule revoked. Matching requests will be asked again.'); },
   'verify-now': async () => {
     if (!canVerifyNow()) { toast(current?.verifier?.length ? 'Pause the run first; Verify now cannot overlap a coding turn.' : 'This run has no verification command.'); return; }
@@ -1637,6 +1691,7 @@ function init() {
     event.preventDefault();
     $('start-error').textContent = '';
     if ($('verify-enabled').checked && !$('verify').value.trim()) { $('start-error').textContent = 'Enter a verification command or turn off independent verification.'; return; }
+    if ($('iso-container').checked && $('container-network').value === 'internet' && $('container-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to let agents use the internet, or choose another network setting.'; return; }
     if (preflight?.usable && preflight.dirty_count && !$('allow-dirty')?.checked) { $('start-error').textContent = 'Your project has uncommitted changes. Commit them, or tick “Start from my last commit anyway”.'; return; }
     $('start-run').disabled = true;
     try {
@@ -1647,6 +1702,7 @@ function init() {
         ...(readPreviewSpec('new').mode !== 'none' ? {preview: readPreviewSpec('new')} : {}),
         ...($('allow-dirty')?.checked ? {allow_dirty: true} : {}),
         ...runModeBody(),
+        ...isolationBody(),
         ...(preflight?.usable && $('setup-cmd').value.trim() ? {setup: $('setup-cmd').value.trim()} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');
@@ -1655,6 +1711,8 @@ function init() {
     } catch (error) { $('start-error').textContent = error.message; $('start-run').disabled = false; }
   };
   document.querySelectorAll('input[name="run-mode"]').forEach(radio => { radio.onchange = scheduleAutoPreview; });
+  document.querySelectorAll('input[name="isolation"]').forEach(radio => { radio.onchange = renderIsolation; });
+  $('container-network').onchange = renderIsolation;
   ['goal', 'verify', 'max-prompts'].forEach(id => $(id).addEventListener('input', scheduleAutoPreview));
   $('verify-enabled').onchange = () => { $('verify').disabled = !$('verify-enabled').checked; $('verify').required = $('verify-enabled').checked; };
   $('steering-form').onsubmit = async event => {

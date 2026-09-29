@@ -614,4 +614,79 @@ test('runs without their own branch show no skills panel',async()=>{
  const h=await harness();
  assert.equal(h.document.getElementById('skills-panel').textContent,'');
 });
+const SANDBOX={runtime:'podman',rootless:true,version:'5.2.0',image:true,error:'',unavailable:'',allow_rootful:false,models_configured:true,build_command:'podman build -t agentcontrol-agent:1 ...'};
+function gitNew(extra={}){
+ const s=fixture();s.run.status='completed';s.inbox=[];
+ s.preflight={is_repo:true,usable:true,reason:'',branch:'main',subdir:'',changes:[],untracked:[],dirty_count:0};
+ s.sandbox={...SANDBOX,...extra};return s;
+}
+test('container isolation sends limits and network, and internet needs the typed confirmation',async()=>{
+ const h=await harness(gitNew());await h.click('[data-action="new"]');
+ const option=h.document.getElementById('iso-container');
+ assert(!option.disabled);assert.match(h.document.getElementById('container-unavailable').textContent,/podman 5\.2\.0 · rootless ✓/);
+ assert(h.document.getElementById('container-fields').classList.contains('hidden'));
+ option.checked=true;option.onchange();
+ assert(!h.document.getElementById('container-fields').classList.contains('hidden'));
+ assert(h.document.getElementById('container-confirm-field').classList.contains('hidden'));
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('container-cpus').value='2';h.document.getElementById('container-memory').value='4';
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const body=h.calls.find(c=>c.url==='/api/runs').body;
+ assert.deepEqual([body.isolation,body.cpus,body.memory_gb,body.network,body.confirm],['container',2,4,'setup',undefined]);
+ const h2=await harness(gitNew());await h2.click('[data-action="new"]');
+ h2.document.getElementById('iso-container').checked=true;
+ const net=h2.document.getElementById('container-network');Object.defineProperty(net,'value',{value:'internet',writable:true});net.onchange();
+ assert(!h2.document.getElementById('container-confirm-field').classList.contains('hidden'));
+ h2.document.getElementById('goal').value='Build it';h2.document.getElementById('verify-enabled').checked=false;
+ h2.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ assert.equal(h2.calls.filter(c=>c.url==='/api/runs').length,0,'nothing is sent without the confirmation');
+ assert.match(h2.document.getElementById('start-error').textContent,/Type approve/);
+ h2.document.getElementById('container-confirm').value='approve';
+ h2.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ const sent=h2.calls.find(c=>c.url==='/api/runs').body;
+ assert.equal(sent.network,'internet');assert.equal(sent.confirm,'approve');
+});
+test('container isolation is disabled with the reason when it cannot be used',async()=>{
+ let h=await harness(gitNew({rootless:false,unavailable:'docker runs as root on this machine. Agent containers need rootless Docker or Podman'}));await h.click('[data-action="new"]');
+ assert(h.document.getElementById('iso-container').disabled);
+ assert.match(h.document.getElementById('container-unavailable').textContent,/runs as root/);
+ h=await harness(gitNew({image:false,unavailable:'The agent image agentcontrol-agent:1 is not built yet.'}));await h.click('[data-action="new"]');
+ assert.match(h.document.getElementById('container-unavailable').textContent,/Build the agent image.*podman build/s);
+ h=await harness(gitNew({models_configured:false}));await h.click('[data-action="new"]');
+ assert(h.document.getElementById('iso-container').disabled);
+ assert.match(h.document.getElementById('container-unavailable').textContent,/models\.json/);
+ const s=gitNew();delete s.preflight;h=await harness(s);await h.click('[data-action="new"]');
+ assert(h.document.getElementById('iso-container').disabled);
+ assert.match(h.document.getElementById('container-unavailable').textContent,/git project/);
+ h.document.getElementById('goal').value='Build it';h.document.getElementById('verify-enabled').checked=false;
+ h.document.getElementById('new-form').onsubmit({preventDefault(){}});await tick();
+ assert.equal(h.calls.find(c=>c.url==='/api/runs').body.isolation,undefined);
+});
+function containerFixture(extra={},status='completed'){
+ const s=branchFixture();s.run.status=status;s.run.isolation='container';
+ s.container={name:'agentcontrol-run_test',runtime:'podman',rootless:true,image:'agentcontrol-agent:1',cpus:4,memory_gb:8,network:'setup',
+  state:'running',live:'running',network_state:'none',network_cut:'2026-09-28T10:42:00Z',networks:['none'],...extra};
+ return s;
+}
+test('container panel shows limits and network state, and stops or starts the container',async()=>{
+ let h=await harness(containerFixture());
+ const panel=()=>h.document.getElementById('container-panel').textContent;
+ assert.match(panel(),/Running/);assert.match(panel(),/podman · rootless ✓/);assert.match(panel(),/4 CPUs · 8 GB/);
+ assert.match(panel(),/Cut off after setup at/);assert.match(panel(),/Project tab shows previews running inside this container/);
+ await h.click('[data-action="container-stop"]');
+ assert.equal(h.calls.find(c=>c.url==='/api/control').body.action,'container_stop');
+ h=await harness(containerFixture({live:'exited'}));
+ assert.match(panel(),/Stopped/);
+ await h.click('[data-action="container-start"]');
+ assert.equal(h.calls.find(c=>c.url==='/api/control').body.action,'container_start');
+ h=await harness(containerFixture({},'coding'));
+ assert(h.document.querySelector('[data-action="container-stop"]').disabled,'agents are working in it');
+ assert.match(panel(),/Pause the run to stop the container/);
+ h=await harness(containerFixture({network:'internet',network_cut:null,network_state:'online'}));
+ assert.match(panel(),/Internet on while agents work/);
+ h=await harness(containerFixture({live:'removed',removed:'2026-09-28T11:00:00Z'}));
+ assert.match(panel(),/Removed/);assert(!h.document.querySelector('[data-action="container-start"]'));
+ h=await harness();
+ assert.equal(h.document.getElementById('container-panel').textContent,'');
+});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

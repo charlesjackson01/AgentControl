@@ -336,6 +336,72 @@ Nothing is installed without you.
 - **Rollback.** **Remove** on the run page deletes the folder and stops the automatic approvals. Applying or discarding the branch removes all of the run's skills. Every request, fetch, install, rejection and removal is in the audit log and in the Skills tab's history.
 - Skills work in runs on their own branch (git projects). MCP tool servers, packages, and Hermes's own skills come in later milestones.
 
+## Running agents in a container
+
+By default OpenCode runs its tools (shell commands, edits) on this machine as
+your user. In **New run → Where agents run** you can choose **Container**
+instead, one run at a time. The run's OpenCode server then runs inside a
+locked-down container; AgentControl and Hermes stay on the host.
+
+**What the container gets**
+- **Files:** only the run's worktrees, read-write, plus the repository's `.git`, **read-only** (git works, history cannot be rewritten). Your checkout and home folder are not mounted.
+- **Locked down:**
+  - all Linux capabilities dropped, and `no-new-privileges`
+  - a read-only root filesystem, with `/tmp` in memory
+  - a process limit, plus the CPU and memory you choose (default 4 CPUs, 8 GB)
+  - no published ports; AgentControl talks to it over Unix sockets in `state/`
+- **Network**, one of:
+  - **Internet for the setup command only, then none** (default): the network is cut before the first prompt, and the time is shown on the run page.
+  - **None at all.**
+  - **Internet while agents work.** This is critical: you type `approve` to choose it.
+- **Model:** the container reaches your model server only through a per-run gateway on a Unix socket. It needs no network, every call is queued and counted as usual, and `state/models.json` must be configured (see "Model server" below).
+- **Your approvals still apply.** OpenCode inside uses the `permission` block from your OpenCode config (default: ask for edits, shell, web fetches and outside folders). Its requests come to Approvals as usual. Agents cannot change that config: an edit to `opencode.json` or `.opencode/` is always critical.
+- **Where commands run:** the setup command, the verification command and Verify now run inside the container. Commits, merges and Apply happen on the host.
+- **Previews:** web, terminal and desktop previews run inside the container. In the Project tab you see the container's virtual screen and can click and type into it.
+
+**On the run page** a Container panel shows:
+- state, runtime (rootless ✓), image, limits and network
+- **Stop container** (only while the run is paused or finished) and **Start container**
+
+The container is removed when you apply or discard the branch. Container runs need a git project, a rootless runtime and the agent image.
+
+**One-time setup on your server**
+
+1. **Use a rootless runtime.** Membership in the `docker` group is equivalent to root, so AgentControl refuses a root-owned Docker daemon for agent containers. Choose one:
+   - **Podman** (rootless by default):
+     ```
+     sudo pacman -S podman        # or: sudo apt install podman
+     grep $USER /etc/subuid /etc/subgid   # both need a range; if not: sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+     podman info --format '{{.Host.Security.Rootless}}'   # prints true
+     ```
+   - **Rootless Docker**, next to your existing Docker:
+     ```
+     yay -S docker-rootless-extras           # Arch (AUR); Debian/Ubuntu: sudo apt install docker-ce-rootless-extras uidmap
+     dockerd-rootless-setuptool.sh install
+     systemctl --user enable --now docker
+     export DOCKER_HOST=unix://$XDG_RUNTIME_DIR/docker.sock   # start AgentControl with this set
+     docker info | grep -i rootless                           # shows "rootless"
+     ```
+   AgentControl tries Podman first, then Docker; `--container-runtime docker|podman` picks one. `--allow-rootful-containers` lifts the refusal and shows a warning. Use it only for throwaway machines.
+2. **Build the agent image** (Debian slim with git, Python, Node, Xvfb, xdotool and ImageMagick, plus your own OpenCode binary, so the version matches the host):
+   ```
+   python3 agent-autonomy/app.py --build-agent-image
+   ```
+   The command is printed before it runs. If `opencode` on your PATH is a wrapper script and not the standalone binary, pass `--opencode-binary ~/.opencode/bin/opencode`. The image needs network only while it builds.
+3. Restart AgentControl. The Container option explains why when something is missing; **Check again** re-detects.
+
+A container test is included and runs only when you ask for it:
+```
+AGENTCONTROL_CONTAINER_TESTS=1 python3 -m unittest tests.test_container_e2e   # from agent-autonomy/
+```
+The test checks, for a real run inside a real container (with a scripted model):
+- the agent's edit request is approved as usual
+- the work appears in the worktree only
+- there is no internet, all capabilities are dropped, and the root filesystem is read-only
+- a desktop preview frame is drawn and a click goes through
+- stopping the preview ends it inside the container
+- Apply removes the container
+
 ## Auto mode
 
 Choose **Auto** in New run to let AgentControl pick between one agent and a team.

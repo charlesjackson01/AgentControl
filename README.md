@@ -56,6 +56,10 @@ Hermes CLI and the OpenCode API without starting a model.
 - **Skills.** Give agents OpenCode skills from your own library or a pinned git
   commit. Every install is reviewed and approved by you, installed per agent,
   logged, and removable.
+- **Containers.** Opt in per run to run the agents in a rootless Docker or
+  Podman container: only the run's worktrees, no network after setup, CPU and
+  memory limits, and your approvals still apply. Desktop previews run inside
+  it and stay clickable from the Project tab.
 - **Model server.** Optionally describe your model server (for example
   llama-server) in `state/models.json`. AgentControl checks that it answers
   before sending work, records token usage per agent, and can run a local

@@ -4544,3 +4544,29 @@ kbd {
   overflow:auto;
   white-space:pre-wrap;
 }
+
+/* Containers (M10) */
+.facts {
+  display:grid;
+  grid-template-columns:max-content 1fr;
+  gap:4px 12px;
+  margin:4px 0 10px;
+}
+
+.facts dt {
+  color:var(--ac-text-muted);
+}
+
+.facts dd {
+  margin:0;
+  overflow-wrap:anywhere;
+}
+
+.container-limits {
+  gap:12px;
+  margin:8px 0;
+}
+
+.container-limits input {
+  width:6em;
+}

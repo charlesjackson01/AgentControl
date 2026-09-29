@@ -2222,11 +2222,17 @@ class Controller:
                                     'Fix it and press Resume; setup will run again.')
             ws['setup_done'] = now()
             self.store.update('runs', ident, workspace=ws)
-        if c['network'] != 'internet' and box.networks(c['name']) not in ([], ['none']):
-            box.disconnect(c['name'])
-            self.store.event(ident, 'container', 'Network cut off: agents work without internet from here on.')
-            self.store.audit_append(ident, {'action': 'container network cut', 'actor': 'AgentControl', 'name': c['name']})
-            c = self._container_update(ident, network_state='none', network_cut=now())
+        try:
+            online_now = box.networks(c['name']) not in ([], ['none'])
+            if c['network'] != 'internet' and online_now:
+                box.disconnect(c['name'])
+                if box.networks(c['name']) not in ([], ['none']):
+                    raise sandbox.SandboxError('it is still attached to a network after the disconnect')
+                self.store.event(ident, 'container', 'Network cut off: agents work without internet from here on.')
+                self.store.audit_append(ident, {'action': 'container network cut', 'actor': 'AgentControl', 'name': c['name']})
+                c = self._container_update(ident, network_state='none', network_cut=now())
+        except sandbox.SandboxError as exc:
+            raise Attention(f'The container network could not be cut off, so no agent was started: {exc}') from exc
         self._container_update(ident, state='running')
 
     def _prepare_isolated(self, ident):
@@ -2300,7 +2306,11 @@ class Controller:
         if live not in ('removed', 'pending'):
             box = self.sandbox_factory(c['runtime'])
             live = box.state(c['name'])
-            c = {**c, 'networks': box.networks(c['name']) if live == 'running' else []}
+            try:
+                networks = box.networks(c['name']) if live == 'running' else []
+            except sandbox.SandboxError:
+                networks = ['unknown']
+            c = {**c, 'networks': networks}
         return {**c, 'live': live}
 
     # ---- virtual machines (M13) -------------------------------------------------

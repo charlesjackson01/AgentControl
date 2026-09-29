@@ -107,6 +107,11 @@ class ContainerRunE2E(unittest.TestCase):
                                       ws['integration']['dir'], 30)
         self.assertNotEqual(code, 0)
         self.assertEqual(runtime.networks(box['name']), ['none'])
+        # Seen from inside, whatever the runtime reports: only the loopback interface, and the limits are real.
+        code, out, _ = runtime.exec(box['name'], ['sh', '-c', "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '"], '/', 30)
+        self.assertEqual(out.split(), ['lo'], 'no network interface besides loopback')
+        code, out, _ = runtime.exec(box['name'], ['sh', '-c', 'cat /sys/fs/cgroup/cpu.max /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max'], '/', 30)
+        self.assertEqual(out.split(), ['100000', '100000', str(2 * 1024 ** 3), '512'], '1 CPU, 2 GB and 512 processes are enforced')
         # Locked down.
         code, out, _ = runtime.exec(box['name'], ['sh', '-c', 'grep CapEff /proc/self/status; touch /usr/x 2>&1 || true'], '/', 30)
         self.assertIn('0000000000000000', out)

@@ -56,7 +56,13 @@ class FlagTests(unittest.TestCase):
         rootful = sandbox.detect('docker', runner=fake({'info': (0, '["name=seccomp"]|29.0', ''), 'image': (0, '', '')}))
         self.assertIn('runs as root', sandbox.usable(rootful))
         self.assertEqual(sandbox.usable(rootful, allow_rootful=True), '')
-        podman = sandbox.detect('podman', runner=fake({'info': (0, 'true|5.2', ''), 'image': (1, '', 'no image')}))
+        with tempfile.TemporaryDirectory() as root:
+            uid = os.getuid()
+            (Path(root) / 'cgroup.controllers').write_text('cpu memory pids\n')
+            service = Path(root) / 'user.slice' / f'user-{uid}.slice' / f'user@{uid}.service'
+            service.mkdir(parents=True)
+            (service / 'cgroup.controllers').write_text('cpuset cpu io memory pids\n')
+            podman = sandbox.detect('podman', runner=fake({'info': (0, 'true|5.2', ''), 'image': (1, '', 'no image')}), cgroup_root=root)
         self.assertEqual((podman['rootless'], podman['image']), (True, False))
         self.assertIn('--build-agent-image', sandbox.usable(podman))
         self.assertIn('podman', sandbox.detect('podman', runner=fake({}))['error'])
@@ -64,27 +70,46 @@ class FlagTests(unittest.TestCase):
     def test_containers_are_refused_until_every_limit_can_be_enforced(self):
         def fake(outputs):
             return lambda argv, timeout=60: outputs.get(argv[1], (1, '', 'missing'))
-        # Ubuntu 22.04 default: systemd delegates only memory and pids to your user.
-        ubuntu = sandbox.detect('podman', runner=fake({'info': (0, 'true|3.4.4|v2|[memory pids]', ''), 'image': (0, '', '')}))
-        self.assertEqual(ubuntu['limits_missing'], ['cpu'])
-        reason = sandbox.usable(ubuntu)
-        self.assertIn('cpu limit', reason)
-        self.assertIn('Delegate=cpu cpuset io memory pids', reason)
-        delegated = sandbox.detect('podman', runner=fake({'info': (0, 'true|3.4.4|v2|[cpuset cpu io memory pids]', ''), 'image': (0, '', '')}))
-        self.assertEqual(sandbox.usable(delegated), '')
-        v1 = sandbox.detect('podman', runner=fake({'info': (0, 'true|3.4.4|v1|[]', ''), 'image': (0, '', '')}))
-        self.assertEqual(v1['limits_missing'], ['cpu', 'memory', 'pids'], 'rootless on cgroup v1 cannot limit anything')
+        uid = os.getuid()
+        podman = fake({'info': (0, 'true|3.4.4', ''), 'image': (0, '', '')})
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / 'cgroup.controllers').write_text('cpuset cpu io memory hugetlb pids rdma misc\n')
+            service = Path(root) / 'user.slice' / f'user-{uid}.slice' / f'user@{uid}.service'
+            service.mkdir(parents=True)
+            # Ubuntu 22.04 default: systemd delegates only memory and pids to your user.
+            (service / 'cgroup.controllers').write_text('memory pids\n')
+            ubuntu = sandbox.detect('podman', runner=podman, cgroup_root=root)
+            self.assertEqual(ubuntu['limits_missing'], ['cpu'])
+            reason = sandbox.usable(ubuntu)
+            self.assertIn('cpu limit', reason)
+            self.assertIn('Delegate=cpu cpuset io memory pids', reason)
+            # After delegate.conf and a daemon-reload the file says so, even while your login session is stale.
+            (service / 'cgroup.controllers').write_text('cpuset cpu io memory pids\n')
+            self.assertEqual(sandbox.usable(sandbox.detect('podman', runner=podman, cgroup_root=root)), '')
+            # Without the file, Podman's own report is used.
+            (service / 'cgroup.controllers').unlink()
+            reported = lambda argv, timeout=60: ((0, '[memory pids]', '') if 'CgroupControllers' in argv[-1] else podman(argv))
+            self.assertEqual(sandbox.detect('podman', runner=reported, cgroup_root=root)['limits_missing'], ['cpu'])
+            silent = lambda argv, timeout=60: ((1, '', "can't evaluate field") if 'CgroupControllers' in argv[-1] else podman(argv))
+            self.assertIsNone(sandbox.detect('podman', runner=silent, cgroup_root=root)['limits_missing'], 'unknown is not refused')
+        with tempfile.TemporaryDirectory() as v1:
+            self.assertEqual(sandbox.detect('podman', runner=podman, cgroup_root=v1)['limits_missing'], ['cpu', 'memory', 'pids'],
+                             'rootless on cgroup v1 cannot limit anything')
         docker = sandbox.detect('docker', runner=fake({'info': (0, '["name=rootless"]|29.0|false|true|true', ''), 'image': (0, '', '')}))
         self.assertIn('cpu limit', sandbox.usable(docker))
-        # A Podman that cannot report controllers falls back to the plain query and is not refused for it.
-        calls = []
-        def old_podman(argv, timeout=60):
-            calls.append(argv)
-            if argv[1] == 'info':
-                return (1, '', "template: can't evaluate field CgroupControllers") if 'CgroupControllers' in argv[-1] else (0, 'true|3.0', '')
-            return (0, '', '')
-        old = sandbox.detect('podman', runner=old_podman)
-        self.assertEqual((old['runtime'], old['limits_missing'], sandbox.usable(old)), ('podman', None, ''))
+
+    def test_network_state_fails_closed(self):
+        def box(answer):
+            return sandbox.Sandbox('podman', runner=lambda argv, timeout=60: answer)
+        self.assertEqual(box((0, 'none|{"none":{}}', '')).networks('c'), ['none'], 'docker --network none')
+        self.assertEqual(box((0, 'none|{}', '')).networks('c'), ['none'], 'podman 3.4 --network none lists nothing')
+        self.assertEqual(box((0, 'bridge|{"podman":{}}', '')).networks('c'), ['podman'])
+        self.assertEqual(box((0, 'bridge|{}', '')).networks('c'), [], 'detached from every network')
+        self.assertEqual(box((0, 'slirp4netns|null', '')).networks('c'), ['slirp4netns'], 'rootless default network is online')
+        with self.assertRaises(sandbox.SandboxError):
+            box((125, '', 'no such container')).networks('c')
+        with self.assertRaises(sandbox.SandboxError):
+            box((0, 'bridge|{broken', '')).networks('c')
 
     def test_opencode_config_never_widens_your_permissions(self):
         default = sandbox.opencode_config('qwen')
@@ -275,6 +300,19 @@ class ContainerRunTests(unittest.TestCase):
         self.assertTrue(all(e[3] == ['bridge'] for e in setups), 'setup has the network')
         self.assertLess(kinds.index('disconnect'), kinds.index('prompt'), 'network is cut before any agent is prompted')
         self.assertIn('container network cut', [e['action'] for e in c.store.audit(run['id'])])
+
+    def test_a_network_that_cannot_be_cut_stops_the_run_before_any_agent(self):
+        c = self.controller([{'action': 'code', 'title': 't', 'summary': 's', 'prompt': 'CREATE a.txt'}, complete()])
+        self.box.disconnect = lambda name: self.log.append(('disconnect',))   # the runtime ignores it
+        run = c.new('Build it', isolation='container', network='setup', setup='true')
+        result = self.done(c, run['id'])
+        self.assertEqual(result['status'], 'attention')
+        self.assertIn('could not be cut off', result['summary'])
+        self.assertEqual(self.inside.prompts, [], 'no agent was prompted while online')
+        c._container_update(run['id'], state='running')
+        self.box.state = lambda name: 'running'
+        self.box.networks = lambda name: (_ for _ in ()).throw(sandbox.SandboxError('inspect failed'))
+        self.assertEqual(c.container_status(c.store.get('runs', run['id']))['networks'], ['unknown'], 'the status page still renders')
 
     def test_network_none_means_setup_runs_offline_and_internet_needs_confirmation(self):
         c = self.controller([{'action': 'code', 'title': 't', 'summary': 's', 'prompt': 'CREATE a.txt'}, complete()])

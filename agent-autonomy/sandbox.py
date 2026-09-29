@@ -48,51 +48,63 @@ def run_cli(argv, timeout=60):
 
 
 LIMIT_CONTROLLERS = ('cpu', 'memory', 'pids')   # what --cpus, --memory and --pids-limit need
+ONLINE_MODES = ('slirp4netns', 'pasta', 'host', 'private')   # network modes that reach out without a listed network
 DELEGATE_FIX = ('sudo mkdir -p /etc/systemd/system/user@.service.d && '
                 "printf '[Service]\\nDelegate=cpu cpuset io memory pids\\n' | sudo tee /etc/systemd/system/user@.service.d/delegate.conf && "
-                'sudo systemctl daemon-reload, then log out and back in')
+                'sudo systemctl daemon-reload (log out and back in if it is still missing)')
 
 
-def _podman_info(cli, runner):
-    """Rootless, version, and which limit controllers are missing (None when this Podman cannot say)."""
-    code, out, err = runner([cli, 'info', '--format',
-                             '{{.Host.Security.Rootless}}|{{.Version.Version}}|{{.Host.CgroupsVersion}}|{{.Host.CgroupControllers}}'])
+def delegated_controllers(cgroup_root='/sys/fs/cgroup', uid=None):
+    """The cgroup controllers systemd hands to your user's service, where rootless containers live.
+    Read from the file itself: `podman info` reports the calling login session and goes stale
+    until you log in again. None when this is not a systemd cgroup v2 machine."""
+    uid = os.getuid() if uid is None else uid
+    path = Path(cgroup_root) / 'user.slice' / f'user-{uid}.slice' / f'user@{uid}.service' / 'cgroup.controllers'
+    try:
+        return set(path.read_text().split())
+    except OSError:
+        return None
+
+
+def _podman_info(cli, runner, cgroup_root):
+    """Rootless, version, and which limit controllers are missing (None when it cannot be told)."""
+    code, out, err = runner([cli, 'info', '--format', '{{.Host.Security.Rootless}}|{{.Version.Version}}'])
     if code:
-        code, out, err = runner([cli, 'info', '--format', '{{.Host.Security.Rootless}}|{{.Version.Version}}'])
+        raise SandboxError(err or out)
+    rootless, version = (out.split('|') + ['', ''])[:2]
+    rootless = rootless.strip().lower() == 'true'
+    if not rootless:
+        return rootless, version, None
+    if not (Path(cgroup_root) / 'cgroup.controllers').exists():
+        return rootless, version, list(LIMIT_CONTROLLERS)   # rootless on cgroup v1 cannot limit anything
+    have = delegated_controllers(cgroup_root)
+    if have is None:
+        code, out, _ = runner([cli, 'info', '--format', '{{.Host.CgroupControllers}}'])
+        have = set(out.strip().strip('[]').split()) if code == 0 and out.strip() else None
+    return rootless, version, (None if have is None else [c for c in LIMIT_CONTROLLERS if c not in have])
+
+
+def _docker_info(cli, runner):
+    code, out, err = runner([cli, 'info', '--format', '{{json .SecurityOptions}}|{{.ServerVersion}}|{{.CPUCfsQuota}}|{{.MemoryLimit}}|{{.PidsLimit}}'])
+    if code:
+        code, out, err = runner([cli, 'info', '--format', '{{json .SecurityOptions}}|{{.ServerVersion}}'])
     if code:
         raise SandboxError(err or out)
     parts = out.split('|')
-    rootless, version = (parts + ['', ''])[:2]
-    rootless = rootless.strip().lower() == 'true'
-    missing = None
-    if len(parts) >= 4:
-        cgroups = parts[2].strip().lower()
-        have = set(parts[3].strip().strip('[]').split())
-        if rootless and cgroups == 'v1':
-            missing = list(LIMIT_CONTROLLERS)   # rootless on cgroup v1 cannot limit anything
-        elif have:
-            missing = [c for c in LIMIT_CONTROLLERS if c not in have]
-    return rootless, version, missing
+    options, version = (parts + ['', ''])[:2]
+    flags = dict(zip(LIMIT_CONTROLLERS, (p.strip().lower() for p in parts[2:5]))) if len(parts) >= 5 else None
+    return 'rootless' in options, version, ([c for c, v in flags.items() if v != 'true'] if flags else None)
 
 
-def detect(prefer=None, image=IMAGE, runner=run_cli):
-    """Which runtime is usable, whether it is rootless, and whether the agent image exists."""
+def detect(prefer=None, image=IMAGE, runner=run_cli, cgroup_root='/sys/fs/cgroup'):
+    """Which runtime is usable, whether it is rootless, whether it can enforce every limit, and
+    whether the agent image exists."""
     found = {'runtime': None, 'rootless': False, 'version': '', 'image': False, 'error': '', 'limits_missing': None}
     for cli in ([prefer] if prefer else ['podman', 'docker']):
         if not shutil.which(cli) and runner is run_cli:
             continue
         try:
-            if cli == 'podman':
-                rootless, version, missing = _podman_info(cli, runner)
-            else:
-                code, out, err = runner([cli, 'info', '--format', '{{json .SecurityOptions}}|{{.ServerVersion}}|{{.CPUCfsQuota}}|{{.MemoryLimit}}|{{.PidsLimit}}'])
-                if code:
-                    raise SandboxError(err or out)
-                parts = out.split('|')
-                options, version = (parts + ['', ''])[:2]
-                rootless = 'rootless' in options
-                flags = dict(zip(LIMIT_CONTROLLERS, (p.strip().lower() for p in parts[2:5]))) if len(parts) >= 5 else None
-                missing = [c for c, v in flags.items() if v != 'true'] if flags else None
+            rootless, version, missing = _podman_info(cli, runner, cgroup_root) if cli == 'podman' else _docker_info(cli, runner)
         except SandboxError as exc:
             found['error'] = f'{cli}: {str(exc)[-300:]}'
             continue
@@ -223,11 +235,26 @@ class Sandbox:
         self._cli('network', 'disconnect', net, name)
 
     def networks(self, name):
-        code, out, _ = self.runner([self.runtime, 'inspect', '--format', '{{json .NetworkSettings.Networks}}', name], 30)
+        """The container's networks: ['none'] when it has none, [] when detached from every network,
+        else what it is attached to. Fails closed: a container whose state can't be read raises."""
+        code, out, err = self.runner([self.runtime, 'inspect', '--format', '{{.HostConfig.NetworkMode}}|{{json .NetworkSettings.Networks}}', name], 30)
+        if code:
+            raise SandboxError(f"Could not read the network of {name}: {(err or out)[-300:]}")
+        mode, _, attached = out.strip().partition('|')
+        mode = mode.strip()
         try:
-            return sorted(json.loads(out)) if code == 0 and out and out != 'null' else []
-        except json.JSONDecodeError:
-            return []
+            names = sorted(json.loads(attached)) if attached.strip() not in ('', 'null') else []
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise SandboxError(f'Unreadable network state for {name}: {out[-300:]}') from exc
+        if mode == 'none':
+            return ['none']
+        if names:
+            return names
+        # Podman's slirp4netns/pasta, the host network or another container's namespace are online
+        # without being listed as networks; a bridge or named network with nothing listed is detached.
+        if mode in ONLINE_MODES or mode.startswith(('container:', 'ns:')):
+            return [mode]
+        return []
 
     def exec_argv(self, name, argv, cwd):
         return [self.runtime, 'exec', '-w', str(cwd), name] + list(argv)

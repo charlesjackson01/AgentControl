@@ -135,6 +135,9 @@ const scenarios = {
   missionempty: {state: fx.empty, view: 'mission'},
   agent: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent="coder-2"]'},
   specialists: {state: () => withSpecialists(teamState()), view: 'mission'},
+  workspace: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="coder-2"] [data-workspace]'},
+  workspacehermes: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="hermes"] [data-workspace]'},
+  workspaceempty: {state: fx.empty, view: 'workspace'},
   researchask: {state: () => withSpecialists(teamState()), view: 'approvals'},
   findings: {state: () => withSpecialists(teamState()), view: 'runs'},
   paidrun: {state: () => { const s = fx.richActive(); s.inbox = []; s.run.status = 'paused'; s.run.pause = true; s.run.models = {orchestrator: 'router'}; s.run.spend_cap = 0.5;

@@ -7,6 +7,7 @@ const vm = require('node:vm');
 const {parseHTML} = require('linkedom');
 const root=path.resolve(__dirname,'..');
 const source=fs.readFileSync(path.join(root,'app.js'),'utf8');
+const wsSource=fs.readFileSync(path.join(root,'workspace.js'),'utf8');
 const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
 const unit=require(path.join(root,'app.js'));
 const {clone,fixture,richActive,richCompleted,transcript}=require('./fixtures.cjs');
@@ -65,7 +66,7 @@ async function harness(state=fixture(),savedTheme='mac') {
    return {status:200,ok:true,json:async()=>clone(result)};
   }});
  vm.runInContext(html.match(/<script>([\s\S]*?)<\/script>/)[1],context);
- vm.runInContext(source,context);await tick();
+ vm.runInContext(source,context);vm.runInContext(wsSource,context);await tick();
  assert.equal(document.getElementById('auth-error').textContent,'','Initial render must not throw');
  const click=async selector=>{const e=document.querySelector(selector);assert(e,selector);e.click();await tick();};
  return {document,state,calls,storage,context,click,poll:async()=>{await context.refresh();await tick()}};
@@ -153,7 +154,7 @@ test('file and budget summaries use recorded values without invented counts',()=
 });
 test('styles parse and every component color uses a defined theme token',()=>{
  const CSSOM=require('cssom');
- const tokens=fs.readFileSync(path.join(root,'themes.css'),'utf8'),styles=fs.readFileSync(path.join(root,'app.css'),'utf8');
+ const tokens=fs.readFileSync(path.join(root,'themes.css'),'utf8'),styles=fs.readFileSync(path.join(root,'app.css'),'utf8')+fs.readFileSync(path.join(root,'workspace.css'),'utf8');
  assert(CSSOM.parse(tokens).cssRules.length);assert(CSSOM.parse(styles).cssRules.length);
  assert(!/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/i.test(styles));
  const defined=new Set([...tokens.matchAll(/(--ac-[\w-]+)\s*:/g)].map(m=>m[1]));
@@ -949,4 +950,101 @@ test('projects: browse, switch, create, and history per project',async()=>{
  assert(busy.document.getElementById('project-create').disabled);
  assert(busy.document.querySelector('#projects-list [data-action="project-use"]').disabled);
 });
+// Workspaces (W1): a workspace is only a view; opening, closing and switching never reach the server.
+const posts=h=>h.calls.filter(c=>c.method==='POST').length;
+const wsTabs=h=>[...h.document.querySelectorAll('#ws-tabs [data-ws-open]')].map(b=>b.dataset.wsOpen);
+const wsSaved=h=>JSON.parse(h.storage.get('ac-workspaces')||'{}');
+function key(h,k){const e=new h.context.window.Event('keydown',{bubbles:true,cancelable:true});Object.defineProperty(e,'key',{value:k});h.document.body.dispatchEvent(e);return tick();}
+test('a Mission card opens that agent’s workspace with its terminal, task, approvals and files',async()=>{
+ const h=await harness(missionFixture());const before=posts(h);
+ await h.click('[data-agent-card="coder-2"] [data-workspace="coder-2"]');
+ assert(!h.document.getElementById('view-workspace').classList.contains('hidden'));
+ assert.deepEqual(wsTabs(h),['hermes','coder-1','coder-2'],'every agent of the run has a tab');
+ assert.equal(h.document.querySelector('#ws-tabs .ws-tab.active [data-ws-open]').dataset.wsOpen,'coder-2');
+ assert.match(h.document.getElementById('ws-head').textContent,/coder-2[\s\S]*Waiting on you/);
+ assert.match(h.document.getElementById('ws-head').textContent,/agentcontrol\/run_test\/coder-2/);
+ assert.match(h.document.getElementById('ws-term-body').textContent,/npm test/);
+ assert.match(h.document.getElementById('ws-term-body').textContent,/Checking the list markup/);
+ assert.doesNotMatch(h.document.getElementById('ws-term-body').textContent,/Preparing the tests/,'coder-1 output is not in coder-2’s terminal');
+ assert.equal(h.document.querySelectorAll('#ws-approvals [data-approval-card]').length,1);
+ assert.match(h.document.getElementById('ws-task').textContent,/t2 HTML list[\s\S]*2 tries[\s\S]*No dependencies/);
+ assert.match(h.document.getElementById('ws-notes').textContent,/Private model reasoning is not recorded/);
+ assert.equal(posts(h),before,'opening a workspace sends nothing');
+ // Approving from the workspace goes through the existing review endpoint.
+ await h.click('#ws-approvals [data-review]');
+ assert(h.document.getElementById('review-dialog').open);
+ await h.click('#ws-tabs [data-ws-open="coder-1"]');
+ assert.equal(h.document.querySelectorAll('#ws-approvals [data-approval-card]').length,0,'coder-2’s requests are not shown for coder-1');
+ assert.match(h.document.getElementById('ws-task').textContent,/After t1/);
+});
+test('closing a workspace tab only hides it, reopening works, and tabs survive a reload',async()=>{
+ const h=await harness(missionFixture());
+ await h.click('[data-workspace="coder-2"]');const before=posts(h);
+ await h.click('#ws-tabs [data-ws-close="coder-2"]');
+ assert.deepEqual(wsTabs(h),['hermes','coder-1']);
+ assert.equal(posts(h),before,'closing never stops the agent');
+ assert.deepEqual(wsSaved(h).open,['hermes','coder-1']);
+ assert.match(h.document.getElementById('ws-menu').textContent,/coder-2[\s\S]*closed/);
+ assert.match(h.document.getElementById('ws-nav-count').textContent,/1/,'the agent still waits on you');
+ await h.click('#ws-menu [data-ws-open="coder-2"]');
+ assert.deepEqual(wsTabs(h),['hermes','coder-1','coder-2']);
+ assert.equal(wsSaved(h).active,'coder-2');
+ await h.click('#ws-tabs [data-ws-close="hermes"]');
+ // A reload restores the same tabs and view.
+ const r=await harness(Object.assign(missionFixture(),{savedView:'workspace'}));
+ r.storage.set('ac-workspaces',h.storage.get('ac-workspaces'));
+ vmRun(r,'wsState = wsLoad(); renderWorkspace();');
+ assert.deepEqual(wsTabs(r),['coder-1','coder-2']);
+ assert.equal(r.document.querySelector('#ws-tabs .ws-tab.active [data-ws-open]').dataset.wsOpen,'coder-2');
+ assert.equal(posts(h),before);
+});
+test('an agent Hermes adds later appears as a new tab without taking focus',async()=>{
+ const h=await harness(missionFixture());
+ await h.click('[data-workspace="coder-1"]');
+ h.state.agents.push({name:'tester-1',type:'tester',role:'Tester',state:'working',task:'t4: tests',stats:{turns:0}});
+ await h.poll();
+ assert.deepEqual(wsTabs(h),['hermes','coder-1','coder-2','tester-1']);
+ assert.equal(wsSaved(h).active,'coder-1','the current workspace keeps focus');
+ assert.match(h.document.querySelector('#ws-tabs [data-ws-open="tester-1"]').textContent,/new/);
+ assert(!h.document.getElementById('ws-add-new').classList.contains('hidden'));
+ await h.click('#ws-tabs [data-ws-open="tester-1"]');
+ assert.doesNotMatch(h.document.querySelector('#ws-tabs [data-ws-open="tester-1"]').textContent,/new/);
+});
+test('Hermes’s workspace shows its recorded calls, labelled as not live',async()=>{
+ const s=missionFixture();
+ s.events=[{id:1,kind:'Hermes request',created:'2026-09-28T16:00:10Z',detail:'Decide the next turn for the goal.'},
+  {id:2,kind:'Hermes decision',created:'2026-09-28T16:00:20Z',detail:JSON.stringify({action:'code',title:'t2: HTML list',summary:'Build the list'})},
+  {id:3,kind:'OpenCode tool',created:'2026-09-28T16:00:30Z',detail:JSON.stringify({tool:'bash',agent:'coder-2',title:'npm test'})}];
+ const h=await harness(s);
+ await h.click('[data-workspace="hermes"]');
+ assert(h.document.getElementById('ws-term').classList.contains('hidden'),'no terminal is invented for Hermes');
+ const log=h.document.getElementById('ws-log');
+ assert(!log.classList.contains('hidden'));
+ assert.match(log.textContent,/not a live stream/);
+ assert.match(log.textContent,/decision: code · t2: HTML list · Build the list/);
+ await h.click('#ws-tabs [data-ws-open="coder-2"]');
+ assert.match(h.document.getElementById('ws-notes').textContent,/OpenCode tool/,'the tool event is attributed to coder-2');
+ await h.click('#ws-tabs [data-ws-open="coder-1"]');
+ assert.doesNotMatch(h.document.getElementById('ws-notes').textContent,/OpenCode tool/);
+});
+test('a workspace note goes to Hermes marked for that agent; number keys switch tabs',async()=>{
+ const h=await harness(missionFixture());
+ await h.click('[data-workspace="coder-2"]');
+ const form=h.document.querySelector('[data-ws-note]');form.querySelector('input').value='Keep the markup accessible';
+ form.dispatchEvent(new h.context.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/control').pop().body,{run:'run_test',action:'instruction',text:'Keep the markup accessible',agent:'coder-2'});
+ await key(h,'1');assert.equal(wsSaved(h).active,'hermes');
+ await key(h,']');assert.equal(wsSaved(h).active,'coder-1');
+ await key(h,'[');assert.equal(wsSaved(h).active,'hermes');
+ await h.click('[data-view="mission"]');await key(h,'3');
+ assert.equal(wsSaved(h).active,'hermes','number keys act only in the Workspace view');
+ assert.equal(h.calls.filter(c=>c.method==='POST').length,1,'only the note was sent');
+});
+test('the Workspace view without a run offers a new run',async()=>{
+ const {empty}=require('./fixtures.cjs');const s=empty();s.savedView='workspace';
+ const h=await harness(s);
+ assert.match(h.document.getElementById('ws-empty').textContent,/No run yet/);
+ assert(h.document.getElementById('ws-pane').classList.contains('hidden'));
+});
+function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

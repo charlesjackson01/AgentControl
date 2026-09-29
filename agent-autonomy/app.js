@@ -13,7 +13,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const ended = new Set(['completed', 'blocked', 'failed', 'stopped', 'limit_reached']);
 const KEY_NAME = 'ac-dashboard-key', LEGACY_KEY_NAME = 'trial-dashboard-key';
 
-const VIEWS = ['mission', 'runs', 'approvals', 'activity', 'new', 'project', 'skills', 'usage'];
+const VIEWS = ['mission', 'workspace', 'runs', 'approvals', 'activity', 'new', 'project', 'skills', 'usage'];
 let key = readKey(), selected = '', data = null, current = null, view = savedView();
 let agentFilter = null;
 let refreshing = false, connected = false, reviewBusy = false, reviewing = null, stopRunId = '', parentRun = null;
@@ -360,6 +360,7 @@ function render() {
   autoOpenProject();
   renderShell();
   renderMission();
+  globalThis.renderWorkspace?.();
   renderRun();
   renderProject();
   renderApprovals();
@@ -394,9 +395,10 @@ function renderShell() {
   renderIsolation();
   renderModelsPicker();
 
-  const crumbs = [project, {mission: 'Mission', new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills', usage: 'Usage'}[view]];
+  const crumbs = [project, {mission: 'Mission', workspace: 'Workspace', new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills', usage: 'Usage'}[view]];
   if (current && !['new', 'mission'].includes(view)) crumbs.push('#' + current.id.slice(0, 6));
   if (view === 'runs' && agentFilter) crumbs.push('Agent · ' + agentFilter);
+  if (view === 'workspace' && current && globalThis.workspaceActive?.()) crumbs.push(workspaceActive());
   $('breadcrumb').textContent = crumbs.join(' / ');
   $('xp-address').textContent = crumbs.join('\\');
   $('window-title').textContent = 'AgentControl' + (current ? ' — ' + runTitle(current, 100) : '');
@@ -925,6 +927,7 @@ function agentCard(a) {
       <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span></header>
     ${body}
     <footer class="agent-card__foot"><span class="small muted">${stats.map(esc).join(' · ')}</span><span class="agent-where small muted">${where}</span>
+      <button class="ac-btn compact" data-workspace="${esc(name)}" aria-label="Open ${esc(hermes ? 'Hermes' : name)}'s workspace">Workspace</button>
       ${waiting ? `<button class="ac-btn compact attention-button" data-view="approvals">${plural(waiting, 'request')} waiting</button>` : ''}
       ${teamWaiting ? '<button class="ac-btn compact attention-button" data-view="runs">Team plan needs you</button>' : ''}
       ${researchRequests(current.id).some(r => r.agent === name) ? '<button class="ac-btn compact attention-button" data-view="approvals">Approve the question</button>' : ''}</footer>
@@ -949,8 +952,9 @@ function renderMissionTasks() {
     const done = tasks.filter(t => t.status === 'done').length;
     const cols = columns.map((col, i) => `<div class="task-col" role="list" aria-label="${i ? `After step ${i}` : 'Can start now'}">${col.map(t => {
       const inner = `<span class="mono small">${esc(t.id)}</span><strong>${esc(t.title)}</strong><small>${esc(agentName(t.agent))}</small><small class="${TASK_TONE[t.status] || ''}">${esc(t.status || 'waiting')}${t.attempts > 1 ? ` · ${t.attempts} tries` : ''}</small>`;
-      return t.steps?.length ? `<button role="listitem" class="task-node ${esc(t.status || '')}" data-turn="${esc(t.steps.at(-1))}" aria-label="Task ${esc(t.id)}: ${esc(t.title)}, ${esc(t.status)}">${inner}</button>`
-        : `<div role="listitem" class="task-node ${esc(t.status || '')}">${inner}</div>`;
+      const node = t.steps?.length ? `<button class="task-node ${esc(t.status || '')}" data-turn="${esc(t.steps.at(-1))}" aria-label="Task ${esc(t.id)}: ${esc(t.title)}, ${esc(t.status)}">${inner}</button>`
+        : `<div class="task-node ${esc(t.status || '')}">${inner}</div>`;
+      return `<div role="listitem" class="task-item">${node}${t.agent ? `<button class="text-button small task-ws" data-workspace="${esc(t.agent)}" aria-label="Open ${esc(agentName(t.agent))}'s workspace">Workspace ›</button>` : ''}</div>`;
     }).join('')}</div>`).join('<span class="task-arrow" aria-hidden="true">→</span>');
     return `<section class="ac-panel"><h2 class="ac-panel__title">Tasks <span class="muted small">· ${done} of ${tasks.length} done</span></h2><div class="task-graph">${cols}</div>
       <p class="small muted">A task starts once the tasks it depends on are merged. Select a task to open its latest turn.</p></section>`;
@@ -1675,7 +1679,7 @@ function showView(next) {
   document.querySelectorAll('.view').forEach(e => e.classList.toggle('hidden', e.id !== 'view-' + next));
   document.querySelectorAll('.nav [data-view], .tabbar [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
   closeDrawer();
-  if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } }
+  if (data) { renderShell(); if (next === 'project') { renderProject(); pollPreview(); } if (next === 'workspace') globalThis.renderWorkspace?.(); }
   if (next === 'usage') loadUsage();
 }
 let preflight = null;
@@ -2054,6 +2058,7 @@ function handleShortcut(event) {
     if (modal.id === 'review-dialog' && ['a', 'd'].includes(event.key)) { event.preventDefault(); keyboardReview(event.key === 'a' ? 'approve' : 'reject'); }
     return;
   }
+  if (globalThis.workspaceKey?.(event)) { event.preventDefault(); return; }
   const actions = {a: 'key-approve', d: 'key-deny', p: 'pause', x: 'stop', '/': 'focus-steer', t: 'term-expand'};
   if (data.capabilities?.verify_now) actions.v = 'verify-now';
   if (actions[event.key]) { event.preventDefault(); act(actions[event.key]).catch(e => pageError(e.message)); }
@@ -2069,6 +2074,7 @@ async function onClick(event) {
   if (card && !String(globalThis.getSelection?.() || '')) { openAgent(card.dataset.agentCard); return; }
   if (!b || b.disabled) return;
   try {
+    if (await globalThis.workspaceClick?.(b)) return;
     if (b.dataset.theme) setTheme(b.dataset.theme);
     if (b.dataset.close) $(b.dataset.close).close();
     if (b.dataset.view) showView(b.dataset.view);

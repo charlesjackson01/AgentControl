@@ -129,9 +129,32 @@ Click the project name at the top of the sidebar, or **Change…** next to the w
 
 Select an agent card to open **that agent's view**. It is the run page, filtered to the agent's own turns, live terminal, requests, skills, usage and changed files. The switcher at the top moves between agents, and **← Mission** goes back. A note written there is still sent to Hermes, marked "Note for coder-2: …"; Hermes decides what the coder is told, so nothing bypasses planning or your approvals. **Runs** without an agent selected is the same page as before.
 
-On a phone, a **tab bar** along the bottom holds Mission, Approvals (with the waiting count), Run, Project and More (the drawer with recent runs, Activity, Skills and themes). It takes the place of the terminal theme's shortcut bar and XP's taskbar there. The dashboard remembers the last section you used in this browser.
+On a phone, a **tab bar** along the bottom holds Mission, Approvals (with the waiting count), Workspace, Project and More (the drawer with recent runs, Activity, Skills and themes). It takes the place of the terminal theme's shortcut bar and XP's taskbar there. The dashboard remembers the last section you used in this browser.
 
 One run is active at a time; mission control shows that run's agents.
+
+## Workspace: one tab per agent
+
+**Workspace** gives each agent of the selected run its own tab, next to Mission: `Mission | Hermes | coder-1 | coder-2 | +`. Each tab has a status mark: ● working, ! waiting on you, ○ idle, ‖ paused, ✓ finished. Open a workspace from the Workspace section, from the **Workspace** button on a Mission agent card, or from **Workspace ›** under a task.
+
+An agent's workspace shows:
+- **Header:** its name, role, state, model, tools, skills, where it works (branch, container or VM), and its usage.
+- **Terminal:** the agent's recorded OpenCode output for its latest turn, updated live. It follows new output, and scrolling up holds it. Earlier turns are one click away, and the terminal has Copy.
+- **Hermes and the researcher have no terminal.** Each runs as one call per decision or question, so their tab shows the recorded log of those calls, labelled as such. Nothing is simulated.
+- **Task:** its tasks, their dependencies and retries, and the latest verification. For Hermes, the plan and the goal checks.
+- **Approvals:** that agent's waiting requests, with the same cards and rules as the Approvals page.
+- **Files:** the files it changed, and each turn's diff.
+- **Notes and activity:** your notes, Hermes's summaries of its turns, and its events. Private model reasoning is never recorded or shown. A note sent from here goes to Hermes, marked for that agent.
+- **Preview:** the run's shared preview. Opening it here does not start another program.
+
+Tabs are only views:
+- Closing a tab (×) never pauses, stops or restarts the agent; reopen it from **+**.
+- When Hermes adds an agent, its tab appears, marked **new**, without taking you away from the tab you are reading.
+- Open tabs and the active tab are remembered in this browser across refreshes.
+- On XP, open workspaces also appear on the taskbar and flash while their agent waits for you.
+- In the Workspace section, `1`–`9` pick a tab, and `]` / `[` move to the next or previous one.
+
+Split and windowed layouts come in later steps.
 
 ## Controls
 
@@ -303,6 +326,7 @@ Window decorations are decorative and contain no real OS logos.
 - `v`: Verify now (runs your saved command while the run is paused or finished).
 - `t`: open the OpenCode terminal full screen.
 - `?`: show the shortcut table.
+- `1`–`9`, `]`, `[`: in Workspace, pick, next or previous agent tab.
 - `Enter` sends a steering note on devices with a keyboard; `Shift+Enter` adds a line.
 
 Shortcuts are ignored in editable fields, while a modifier key is held, and

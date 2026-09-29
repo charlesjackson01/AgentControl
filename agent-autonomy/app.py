@@ -54,7 +54,8 @@ def handler(controller, key):
             path = urllib.parse.urlsplit(self.path)
             if path.path == '/':
                 return self.reply(200, (ROOT / 'index.html').read_text(), 'text/html; charset=utf-8')
-            assets = {'/themes.css': 'text/css; charset=utf-8', '/app.css': 'text/css; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8'}
+            assets = {'/themes.css': 'text/css; charset=utf-8', '/app.css': 'text/css; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
+                      '/workspace.css': 'text/css; charset=utf-8', '/workspace.js': 'text/javascript; charset=utf-8'}
             if path.path in assets:
                 return self.reply(200, (ROOT / path.path[1:]).read_text(), assets[path.path])
             if not self.allowed():

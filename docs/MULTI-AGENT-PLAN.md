@@ -324,4 +324,12 @@ Goal: restructure `engine.py` for multi-agent work **without changing behavior**
 
 Live team run in the dashboard: worked, once the OpenCode server was running. The first attempt found none; that error now names the address and how to start it.
 
+**Workspaces:**
+- W0 is complete: a reusable terminal view, and events attributed to the agent named in them.
+- W1 is complete: a Workspace section with one tab per agent, status marks, close and reopen without touching the agent, and new agents added without stealing focus.
+  - Each workspace has its terminal, task, approvals, files, notes and preview.
+  - Hermes and the researcher show recorded call logs.
+  - Tabs persist per browser, and the themes have their own tab styles, including the XP taskbar.
+- Next: W2, lifecycle events.
+
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

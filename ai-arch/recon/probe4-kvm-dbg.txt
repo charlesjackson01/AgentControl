@@ -1,0 +1,37 @@
+=== running kernel vs modules ===
+6.8.0-107-generic
+6.8.0-106-generic
+6.8.0-107-generic
+6.8.0-60-generic
+6.8.0-65-generic
+6.8.0-83-generic
+6.8.0-85-generic
+6.8.0-87-generic
+6.8.0-90-generic
+=== modinfo kvm / kvm_amd ===
+filename:       /lib/modules/6.8.0-107-generic/kernel/arch/x86/kvm/kvm.ko
+license:        GPL
+author:         Qumranet
+srcversion:     8BC88BE85A1EFB7E556EB41
+depends:        irqbypass
+retpoline:      Y
+filename:       /lib/modules/6.8.0-107-generic/kernel/arch/x86/kvm/kvm-amd.ko
+license:        GPL
+author:         Qumranet
+srcversion:     AB91B0D722CF49AAFAB3907
+alias:          cpu:type:x86,ven*fam*mod*:feature:*00C2*
+depends:        kvm,ccp
+=== dmesg kvm-related ===
+[7932970.619845] kvm_amd: SVM not supported by CPU 23
+=== /proc/cpuinfo svm + flags sample ===
+svm
+avx2
+npt
+=== /dev/cpu_dma_latency or any other hyp hints ===
+cat: /sys/module/kvm/version: No such file or directory
+=== boot cmdline ===
+BOOT_IMAGE=/boot/vmlinuz-6.8.0-107-generic root=UUID=181b732a-c7a8-4325-9778-cb3b1a24a23e ro quiet splash vt.handoff=7
+=== dmidecode product (read-only) ===
+System Product Name
+System manufacturer
+=== done ===

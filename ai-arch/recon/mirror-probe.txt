@@ -1,0 +1,24 @@
+mirror.arizona.edu             NO-DNS
+arch.mirror.gws.fc.com         NO-DNS
+mirror.math.princeton.edu      NO-DNS
+mirror.23mz.com                NO-DNS
+arch.mirror.constant.com       NO-DNS
+mirror.misaka.one              NO-DNS
+mirror.kodcloud.com            NO-DNS
+mirror.frasr.at                NO-DNS
+mirror.netzwerk-muenchen.de    NO-DNS
+ftp.stu.edu                    NO-DNS
+mirror.27c3.org                NO-DNS
+archlinux.mirrors.uk2.net      NO-DNS
+mirror.de.leaseweb.com         NO-DNS
+mirror.ox.ac.uk                NO-DNS
+archmirror.clueless.net        NO-DNS
+mirrors.sonic.net              NO-DNS
+mirror.novage.com              NO-DNS
+arch.mirror.futur.fi           NO-DNS
+mirror.jakumo.be               NO-DNS
+mirror.pitod.gift              NO-DNS
+=== archlinux.org/iso direct, several UA/http variants ===
+archlinux.org http1.1 code=000
+archlinux.org releng code=000
+geo.mirror.pkgbuild.com code=000

@@ -1,0 +1,14 @@
+{
+    "KPackageStructure": "KWin/Decoration",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "AI-Arch Project"
+            }
+        ],
+        "Description": "AI-Arch: dark, minimal, glass — thin borders, subtle cyan accent",
+        "Id": "ai-arch",
+        "License": "MIT",
+        "Name": "AI-Arch"
+    }
+}

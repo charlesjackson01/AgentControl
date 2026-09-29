@@ -1,0 +1,132 @@
+<domain type='qemu' id='8'>
+  <name>ai-arch-dev</name>
+  <uuid>da790341-616a-4f31-ba76-bf540c237c34</uuid>
+  <title>AI-Arch Phase 0: disposable Arch Linux dev VM (TCG)</title>
+  <memory unit='KiB'>8388608</memory>
+  <currentMemory unit='KiB'>8388608</currentMemory>
+  <vcpu placement='static'>4</vcpu>
+  <resource>
+    <partition>/machine</partition>
+  </resource>
+  <os>
+    <type arch='x86_64' machine='pc-i440fx-6.2'>hvm</type>
+    <loader readonly='yes' secure='no' type='pflash'>/home/charlesjackson/ai-arch/vms/OVMF_CODE_4M.fd</loader>
+    <nvram template='/usr/share/OVMF/OVMF_VARS_4M.fd'>/home/charlesjackson/ai-arch/vms/OVMF_VARS-ai-arch-dev.fd</nvram>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='custom' match='exact' check='full'>
+    <model fallback='forbid'>EPYC</model>
+    <vendor>AMD</vendor>
+    <feature policy='require' name='acpi'/>
+    <feature policy='require' name='ss'/>
+    <feature policy='require' name='monitor'/>
+    <feature policy='require' name='hypervisor'/>
+    <feature policy='require' name='erms'/>
+    <feature policy='require' name='mpx'/>
+    <feature policy='require' name='pcommit'/>
+    <feature policy='require' name='clwb'/>
+    <feature policy='require' name='pku'/>
+    <feature policy='require' name='la57'/>
+    <feature policy='require' name='pks'/>
+    <feature policy='require' name='3dnowext'/>
+    <feature policy='require' name='3dnow'/>
+    <feature policy='require' name='npt'/>
+    <feature policy='require' name='svme-addr-chk'/>
+    <feature policy='disable' name='vme'/>
+    <feature policy='disable' name='fma'/>
+    <feature policy='disable' name='avx'/>
+    <feature policy='disable' name='f16c'/>
+    <feature policy='disable' name='avx2'/>
+    <feature policy='disable' name='rdseed'/>
+    <feature policy='disable' name='sha-ni'/>
+    <feature policy='disable' name='xsavec'/>
+    <feature policy='disable' name='fxsr_opt'/>
+    <feature policy='disable' name='misalignsse'/>
+    <feature policy='disable' name='3dnowprefetch'/>
+    <feature policy='disable' name='osvw'/>
+    <feature policy='disable' name='topoext'/>
+    <feature policy='disable' name='nrip-save'/>
+  </cpu>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <emulator>/usr/bin/qemu-system-x86_64</emulator>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/home/charlesjackson/ai-arch/vms/ai-arch-dev.qcow2' index='3'/>
+      <backingStore/>
+      <target dev='vda' bus='virtio'/>
+      <alias name='virtio-disk0'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x05' function='0x0'/>
+    </disk>
+    <controller type='usb' index='0' model='piix3-uhci'>
+      <alias name='usb'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x01' function='0x2'/>
+    </controller>
+    <controller type='pci' index='0' model='pci-root'>
+      <alias name='pci.0'/>
+    </controller>
+    <controller type='sata' index='0'>
+      <alias name='sata0'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x04' function='0x0'/>
+    </controller>
+    <interface type='network'>
+      <mac address='52:54:00:12:34:56'/>
+      <source network='default' portid='eabac02d-6d37-4f79-ac65-a9008e9b84c6' bridge='virbr0'/>
+      <target dev='vnet5'/>
+      <model type='virtio'/>
+      <alias name='net0'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x03' function='0x0'/>
+    </interface>
+    <serial type='pty'>
+      <source path='/dev/pts/5'/>
+      <target type='isa-serial' port='0'>
+        <model name='isa-serial'/>
+      </target>
+      <alias name='serial0'/>
+    </serial>
+    <console type='pty' tty='/dev/pts/5'>
+      <source path='/dev/pts/5'/>
+      <target type='serial' port='0'/>
+      <alias name='serial0'/>
+    </console>
+    <input type='tablet' bus='usb'>
+      <alias name='input0'/>
+      <address type='usb' bus='0' port='1'/>
+    </input>
+    <input type='mouse' bus='ps2'>
+      <alias name='input1'/>
+    </input>
+    <input type='keyboard' bus='ps2'>
+      <alias name='input2'/>
+    </input>
+    <graphics type='vnc' port='5900' autoport='yes' listen='127.0.0.1'>
+      <listen type='address' address='127.0.0.1'/>
+    </graphics>
+    <audio id='1' type='none'/>
+    <video>
+      <model type='virtio' vram='16384' heads='1' primary='yes'/>
+      <alias name='video0'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x02' function='0x0'/>
+    </video>
+    <memballoon model='virtio'>
+      <alias name='balloon0'/>
+      <address type='pci' domain='0x0000' bus='0x00' slot='0x06' function='0x0'/>
+    </memballoon>
+  </devices>
+  <seclabel type='dynamic' model='apparmor' relabel='yes'>
+    <label>libvirt-da790341-616a-4f31-ba76-bf540c237c34</label>
+    <imagelabel>libvirt-da790341-616a-4f31-ba76-bf540c237c34</imagelabel>
+  </seclabel>
+  <seclabel type='dynamic' model='dac' relabel='yes'>
+    <label>+64055:+109</label>
+    <imagelabel>+64055:+109</imagelabel>
+  </seclabel>
+</domain>
+

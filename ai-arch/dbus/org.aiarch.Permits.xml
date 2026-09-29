@@ -1,0 +1,47 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!-- org.aiarch.Permits — permd (docs/AI-ARCHITECTURE.md §4.3).
+     Stage E contract: not implemented in the Stage D build. -->
+<node>
+  <interface name="org.aiarch.Permits">
+    <method name="Request">
+      <arg name="tool" type="s" direction="in"/>
+      <arg name="args" type="a{sv}" direction="in"/>
+      <arg name="request_id" type="s" direction="in"/>
+      <arg name="purpose" type="s" direction="in"/>
+      <arg name="decision" type="s" direction="out"/>
+      <arg name="confirm_id" type="s" direction="out"/>
+    </method>
+    <method name="Respond">
+      <arg name="confirm_id" type="s" direction="in"/>
+      <arg name="allow" type="b" direction="in"/>
+      <arg name="remember" type="b" direction="in"/>
+    </method>
+    <method name="Grant">
+      <arg name="tool" type="s" direction="in"/>
+      <arg name="args_pattern" type="a{sv}" direction="in"/>
+      <arg name="scope" type="s" direction="in"/>
+    </method>
+    <method name="Revoke">
+      <arg name="tool" type="s" direction="in"/>
+    </method>
+    <method name="Policy">
+      <arg name="policy" type="a{sv}" direction="out"/>
+    </method>
+
+    <signal name="PermissionRequested">
+      <arg name="confirm_id" type="s"/>
+      <arg name="tool" type="s"/>
+      <arg name="args" type="a{sv}"/>
+      <arg name="purpose" type="s"/>
+      <arg name="class" type="s"/>
+    </signal>
+    <signal name="PermissionDecided">
+      <arg name="confirm_id" type="s"/>
+      <arg name="allow" type="b"/>
+    </signal>
+    <signal name="Audited">
+      <arg name="entry" type="a{sv}"/>
+    </signal>
+  </interface>
+</node>

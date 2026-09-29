@@ -1,0 +1,12 @@
+########## /LOADER/LOADER.CONF ##########
+
+########## /LOADER/ENTRIES/01_ARCHISO_LINUX.CONF ##########
+
+########## /LOADER/ENTRIES/02_ARCHISO_SPEECH_LINUX.CONF ##########
+
+########## /LOADER/ENTRIES/03_ARCHISO_MEMTEST86_X64.CONF ##########
+
+########## /ARCH/VERSION ##########
+
+########## /EFI/BOOT/BOOTX64.EFI ##########
+

@@ -1,0 +1,3 @@
+module aiarch.concept
+singleton Theme 1.0 Theme.qml
+singleton MockData 1.0 MockData.qml

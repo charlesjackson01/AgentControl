@@ -1,0 +1,9 @@
+<disk type='file' device='cdrom'>
+      <driver name='qemu' type='raw'/>
+      <source file='/home/charlesjackson/ai-arch/vms/seed-ai-arch-dev.iso' index='1'/>
+      <backingStore/>
+      <target dev='sdb' bus='sata'/>
+      <readonly/>
+      <alias name='sata0-0-1'/>
+      <address type='drive' controller='0' bus='0' target='0' unit='1'/>
+    </disk>

@@ -1,0 +1,46 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!-- org.aiarch.Agents — agentsd (docs/AI-ARCHITECTURE.md §4.5).
+     Stage E contract: not implemented in the Stage D build. -->
+<node>
+  <interface name="org.aiarch.Agents">
+    <method name="List">
+      <arg name="agents" type="a{sv}" direction="out"/>
+    </method>
+    <method name="Get">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="definition" type="a{sv}" direction="out"/>
+    </method>
+    <method name="Create">
+      <arg name="def" type="a{sv}" direction="in"/>
+    </method>
+    <method name="Update">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="def" type="a{sv}" direction="in"/>
+    </method>
+    <method name="Delete">
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <method name="Run">
+      <arg name="id" type="s" direction="in"/>
+      <arg name="input" type="a{sv}" direction="in"/>
+      <arg name="run_id" type="s" direction="out"/>
+    </method>
+    <method name="Stop">
+      <arg name="run_id" type="s" direction="in"/>
+    </method>
+    <method name="Runs">
+      <arg name="limit" type="i" direction="in"/>
+      <arg name="runs" type="a{sv}" direction="out"/>
+    </method>
+
+    <signal name="AgentUpdated">
+      <arg name="id" type="s"/>
+    </signal>
+    <signal name="RunUpdated">
+      <arg name="run_id" type="s"/>
+      <arg name="state" type="s"/>
+      <arg name="step" type="s"/>
+    </signal>
+  </interface>
+</node>

@@ -1,0 +1,148 @@
+{
+  "archinstall-language": "English",
+  "hostname": "ai-arch-dev",
+  "timezone": "UTC",
+  "ntp": true,
+  "kernels": [
+    "linux"
+  ],
+  "locale_config": {
+    "sys_lang": "en_US",
+    "sys_enc": "UTF-8",
+    "kb_layout": "us"
+  },
+  "mirror_config": {
+    "custom_servers": [
+      {
+        "url": "https://mirror.rackspace.com/archlinux/$repo/os/$arch"
+      },
+      {
+        "url": "https://mirror.arizona.edu/archlinux/$repo/os/$arch"
+      }
+    ]
+  },
+  "network_config": {
+    "type": "iso"
+  },
+  "disk_config": {
+    "config_type": "manual_partitioning",
+    "device_modifications": [
+      {
+        "device": "/dev/vda",
+        "wipe": true,
+        "partitions": [
+          {
+            "obj_id": "de2ad7c9-195b-4607-b84a-44e56b14498b",
+            "status": "create",
+            "type": "primary",
+            "start": {
+              "unit": "MiB",
+              "value": 1,
+              "sector_size": {
+                "unit": "B",
+                "value": 512
+              }
+            },
+            "size": {
+              "unit": "MiB",
+              "value": 512,
+              "sector_size": {
+                "unit": "B",
+                "value": 512
+              }
+            },
+            "fs_type": "fat32",
+            "mountpoint": "/boot",
+            "mount_options": [],
+            "flags": [
+              "boot",
+              "esp"
+            ],
+            "dev_path": null
+          },
+          {
+            "obj_id": "2ab55c26-3219-42a8-b177-4a6bd799d562",
+            "status": "create",
+            "type": "primary",
+            "start": {
+              "unit": "MiB",
+              "value": 513,
+              "sector_size": {
+                "unit": "B",
+                "value": 512
+              }
+            },
+            "size": {
+              "unit": "GiB",
+              "value": 4,
+              "sector_size": {
+                "unit": "B",
+                "value": 512
+              }
+            },
+            "fs_type": "linux-swap",
+            "mountpoint": null,
+            "mount_options": [],
+            "flags": [],
+            "dev_path": null
+          },
+          {
+            "obj_id": "f8ce2ca2-0918-46d7-b59c-0128efd1aea0",
+            "status": "create",
+            "type": "primary",
+            "start": {
+              "unit": "MiB",
+              "value": 4613,
+              "sector_size": {
+                "unit": "B",
+                "value": 512
+              }
+            },
+            "size": {
+              "unit": "GiB",
+              "value": 115,
+              "sector_size": {
+                "unit": "B",
+                "value": 512
+              }
+            },
+            "fs_type": "ext4",
+            "mountpoint": "/",
+            "mount_options": [],
+            "flags": [],
+            "dev_path": null
+          }
+        ]
+      }
+    ]
+  },
+  "bootloader_config": {
+    "bootloader": "Systemd-boot",
+    "uki": false,
+    "removable": false
+  },
+  "swap": {
+    "enabled": false
+  },
+  "services": [
+    "sshd",
+    "tailscaled"
+  ],
+  "packages": [
+    "openssh",
+    "git",
+    "curl",
+    "sudo",
+    "tailscale"
+  ],
+  "pacman_config": {
+    "parallel_downloads": 4
+  },
+  "custom_commands": [
+    "mkdir -p /root/.ssh && chmod 700 /root/.ssh && umask 077",
+    "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOZH9lCuGU+pd7BImmMYLq850b/p86QBlSST/z/mXEhj ai-arch-dev@ai-arch-phase0' > /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys",
+    "mkdir -p /home/archdev/.ssh && chmod 700 /home/archdev/.ssh && umask 077",
+    "echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOZH9lCuGU+pd7BImmMYLq850b/p86QBlSST/z/mXEhj ai-arch-dev@ai-arch-phase0' > /home/archdev/.ssh/authorized_keys && chmod 600 /home/archdev/.ssh/authorized_keys && chown archdev:archdev /home/archdev/.ssh /home/archdev/.ssh/authorized_keys",
+    "echo 'archdev ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/archdev && chmod 440 /etc/sudoers.d/archdev && chown root:root /etc/sudoers.d/archdev"
+  ]
+}

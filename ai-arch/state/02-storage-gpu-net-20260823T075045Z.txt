@@ -1,0 +1,319 @@
+===== DISK USAGE =====
+Filesystem      Size  Used Avail Use% Mounted on
+tmpfs            13G   70M   13G   1% /run
+efivarfs        128K   44K   80K  36% /sys/firmware/efi/efivars
+/dev/sdc2       3.6T  2.2T  1.3T  63% /
+tmpfs            63G   40M   63G   1% /dev/shm
+tmpfs           5.0M     0  5.0M   0% /run/lock
+tmpfs            63G     0   63G   0% /run/qemu
+/dev/sdc1       511M  6.1M  505M   2% /boot/efi
+tmpfs            13G  1.7M   13G   1% /run/user/1000
+/dev/sda2       7.3T  6.7T  649G  92% /media/charlesjackson/Extra Stora
+/dev/sdb2        22T   20T  2.3T  90% /media/charlesjackson/Media Drive 5
+/dev/sdd2        22T   20T  2.4T  90% /media/charlesjackson/Media Drive 4
+/dev/sde2       2.8T  2.5T  239G  92% /media/charlesjackson/VR GAMES
+/dev/sdf1        17T   15T  2.1T  88% /media/charlesjackson/easystore
+tmpfs            13G   84K   13G   1% /run/user/127
+
+===== BLOCK DEVICES =====
+NAME   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sda      8:0    0  7.3T  0 disk 
+├─sda1   8:1    0   16M  0 part 
+└─sda2   8:2    0  7.3T  0 part /media/charlesjackson/Extra Stora
+sdb      8:16   0 21.8T  0 disk 
+├─sdb1   8:17   0   16M  0 part 
+└─sdb2   8:18   0 21.8T  0 part /media/charlesjackson/Media Drive 5
+sdc      8:32   0  3.6T  0 disk 
+├─sdc1   8:33   0  512M  0 part /boot/efi
+└─sdc2   8:34   0  3.6T  0 part /
+sdd      8:48   0 21.8T  0 disk 
+├─sdd1   8:49   0   16M  0 part 
+└─sdd2   8:50   0 21.8T  0 part /media/charlesjackson/Media Drive 4
+sde      8:64   0  2.7T  0 disk 
+├─sde1   8:65   0  128M  0 part 
+└─sde2   8:66   0  2.7T  0 part /media/charlesjackson/VR GAMES
+sdf      8:80   0 16.4T  0 disk 
+└─sdf1   8:81   0 16.4T  0 part /media/charlesjackson/easystore
+
+===== MOUNTS (key) =====
+/                                                                                                  ext4             3.6T  2.1T
+├─/sys                                                                                             sysfs               0     0
+│ ├─/sys/firmware/efi/efivars                                                                      efivarfs         128K 43.6K
+│ ├─/sys/kernel/security                                                                           securityfs          0     0
+│ ├─/sys/fs/cgroup                                                                                 cgroup2             0     0
+│ ├─/sys/fs/pstore                                                                                 pstore              0     0
+│ ├─/sys/fs/bpf                                                                                    bpf                 0     0
+│ ├─/sys/kernel/debug                                                                              debugfs             0     0
+│ │ └─/sys/kernel/debug/tracing                                                                    tracefs               
+│ ├─/sys/kernel/tracing                                                                            tracefs             0     0
+│ ├─/sys/fs/fuse/connections                                                                       fusectl             0     0
+│ └─/sys/kernel/config                                                                             configfs            0     0
+├─/proc                                                                                            proc                0     0
+│ └─/proc/sys/fs/binfmt_misc                                                                       autofs              0     0
+│   └─/proc/sys/fs/binfmt_misc                                                                     binfmt_misc         0     0
+├─/dev                                                                                             devtmpfs        62.8G     0
+│ ├─/dev/pts                                                                                       devpts              0     0
+│ ├─/dev/shm                                                                                       tmpfs           62.8G 39.2M
+│ ├─/dev/hugepages                                                                                 hugetlbfs           0     0
+│ └─/dev/mqueue                                                                                    mqueue              0     0
+├─/run                                                                                             tmpfs           12.6G 69.1M
+│ ├─/run/lock                                                                                      tmpfs              5M     0
+│ ├─/run/qemu                                                                                      tmpfs           62.8G     0
+│ ├─/run/credentials/systemd-sysusers.service                                                      ramfs               0     0
+│ ├─/run/user/127                                                                                  tmpfs           12.6G   84K
+│ │ └─/run/user/127/gvfs                                                                           fuse.gvfsd-fuse       
+│ ├─/run/docker/netns/default                                                                      nsfs                  
+│ ├─/run/docker/netns/253c15682493                                                                 nsfs                  
+│ ├─/run/docker/netns/1d7eadabd150                                                                 nsfs                  
+│ ├─/run/docker/netns/55581373e670                                                                 nsfs                  
+
+===== AI RELEVANT STORAGE SIZES (du, may take a moment) =====
+387G	/home/charlesjackson/models
+70G	/home/charlesjackson/.cache/huggingface
+20G	/home/charlesjackson/.cache/llama.cpp
+45G	/home/charlesjackson/llama.cpp
+48K	/data
+
+===== DOCKER DISK =====
+TYPE            TOTAL     ACTIVE    SIZE      RECLAIMABLE
+Images          171       52        159.6GB   82.85GB (51%)
+Containers      67        30        3.059GB   1.669GB (54%)
+Local Volumes   31        15        197.7GB   175.4MB (0%)
+Build Cache     236       0         17.88GB   476.5MB
+
+===== /data SUBDIRS =====
+total 44
+drwxrwxrwx 10 charlesjackson charlesjackson 4096 Dec 31  2025 .
+drwxr-xr-x 23 root           root           4096 Feb 13  2026 ..
+drwx------ 19 messagebus     crontab        4096 Dec 31  2025 db
+drwxr-xr-x  2 charlesjackson charlesjackson 4096 Dec 31  2025 epgs
+-rw-------  1 root           root             87 Dec 31  2025 jwt
+drwxr-xr-x  2 charlesjackson charlesjackson 4096 Dec 31  2025 logos
+drwxr-xr-x  2 charlesjackson charlesjackson 4096 Dec 31  2025 m3us
+drwxr-xr-x  2 charlesjackson charlesjackson 4096 Dec 31  2025 models
+drwxr-xr-x  2 charlesjackson charlesjackson 4096 Dec 31  2025 plugins
+drwxr-xr-x  2 charlesjackson charlesjackson 4096 Dec 31  2025 recordings
+drwxr-xr-x  4 root           root           4096 Dec 31  2025 uploads
+
+===== PCI: DISPLAY / GPU =====
+00:00.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Root Complex
+00:00.2 IOMMU: Advanced Micro Devices, Inc. [AMD] Starship/Matisse IOMMU
+00:01.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:01.2 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse GPP Bridge
+00:02.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:03.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:03.1 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse GPP Bridge
+00:04.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:05.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:07.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:07.1 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Internal PCIe GPP Bridge 0 to bus[E:B]
+00:08.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:08.1 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Internal PCIe GPP Bridge 0 to bus[E:B]
+00:14.0 SMBus: Advanced Micro Devices, Inc. [AMD] FCH SMBus Controller (rev 61)
+00:14.3 ISA bridge: Advanced Micro Devices, Inc. [AMD] FCH LPC Bridge (rev 51)
+00:18.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 0
+00:18.1 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 1
+00:18.2 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 2
+00:18.3 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 3
+00:18.4 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 4
+00:18.5 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 5
+00:18.6 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 6
+00:18.7 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 7
+01:00.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse Switch Upstream
+02:04.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:05.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:08.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:09.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:0a.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+05:00.0 Non-Essential Instrumentation [1300]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Reserved SPP
+05:00.1 USB controller: Advanced Micro Devices, Inc. [AMD] Matisse USB 3.0 Host Controller
+05:00.3 USB controller: Advanced Micro Devices, Inc. [AMD] Matisse USB 3.0 Host Controller
+06:00.0 SATA controller: Advanced Micro Devices, Inc. [AMD] FCH SATA Controller [AHCI mode] (rev 51)
+07:00.0 SATA controller: Advanced Micro Devices, Inc. [AMD] FCH SATA Controller [AHCI mode] (rev 51)
+08:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3090] (rev a1)
+08:00.1 Audio device: NVIDIA Corporation GA102 High Definition Audio Controller (rev a1)
+09:00.0 Non-Essential Instrumentation [1300]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Function
+0a:00.0 Non-Essential Instrumentation [1300]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Reserved SPP
+0a:00.1 Encryption controller: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Cryptographic Coprocessor PSPCPP
+0a:00.3 USB controller: Advanced Micro Devices, Inc. [AMD] Matisse USB 3.0 Host Controller
+0a:00.4 Audio device: Advanced Micro Devices, Inc. [AMD] Starship/Matisse HD Audio Controller
+
+===== PCI: FULL =====
+00:00.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Root Complex
+00:00.2 IOMMU: Advanced Micro Devices, Inc. [AMD] Starship/Matisse IOMMU
+00:01.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:01.2 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse GPP Bridge
+00:02.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:03.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:03.1 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse GPP Bridge
+00:04.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:05.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:07.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:07.1 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Internal PCIe GPP Bridge 0 to bus[E:B]
+00:08.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Host Bridge
+00:08.1 PCI bridge: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Internal PCIe GPP Bridge 0 to bus[E:B]
+00:14.0 SMBus: Advanced Micro Devices, Inc. [AMD] FCH SMBus Controller (rev 61)
+00:14.3 ISA bridge: Advanced Micro Devices, Inc. [AMD] FCH LPC Bridge (rev 51)
+00:18.0 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 0
+00:18.1 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 1
+00:18.2 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 2
+00:18.3 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 3
+00:18.4 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 4
+00:18.5 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 5
+00:18.6 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 6
+00:18.7 Host bridge: Advanced Micro Devices, Inc. [AMD] Matisse/Vermeer Data Fabric: Device 18h; Function 7
+01:00.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse Switch Upstream
+02:04.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:05.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:08.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:09.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+02:0a.0 PCI bridge: Advanced Micro Devices, Inc. [AMD] Matisse PCIe GPP Bridge
+03:00.0 Network controller: Intel Corporation Wireless-AC 9260 (rev 29)
+04:00.0 Ethernet controller: Realtek Semiconductor Co., Ltd. RTL8111/8168/8411 PCI Express Gigabit Ethernet Controller (rev 26)
+05:00.0 Non-Essential Instrumentation [1300]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Reserved SPP
+05:00.1 USB controller: Advanced Micro Devices, Inc. [AMD] Matisse USB 3.0 Host Controller
+05:00.3 USB controller: Advanced Micro Devices, Inc. [AMD] Matisse USB 3.0 Host Controller
+06:00.0 SATA controller: Advanced Micro Devices, Inc. [AMD] FCH SATA Controller [AHCI mode] (rev 51)
+07:00.0 SATA controller: Advanced Micro Devices, Inc. [AMD] FCH SATA Controller [AHCI mode] (rev 51)
+08:00.0 VGA compatible controller: NVIDIA Corporation GA102 [GeForce RTX 3090] (rev a1)
+08:00.1 Audio device: NVIDIA Corporation GA102 High Definition Audio Controller (rev a1)
+09:00.0 Non-Essential Instrumentation [1300]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse PCIe Dummy Function
+0a:00.0 Non-Essential Instrumentation [1300]: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Reserved SPP
+0a:00.1 Encryption controller: Advanced Micro Devices, Inc. [AMD] Starship/Matisse Cryptographic Coprocessor PSPCPP
+0a:00.3 USB controller: Advanced Micro Devices, Inc. [AMD] Matisse USB 3.0 Host Controller
+0a:00.4 Audio device: Advanced Micro Devices, Inc. [AMD] Starship/Matisse HD Audio Controller
+
+===== GPU DEVICES =====
+crw-rw-rw- 1 root root 195,   0 May 23 08:09 /dev/nvidia0
+crw-rw-rw- 1 root root 195, 255 May 23 08:09 /dev/nvidiactl
+crw-rw-rw- 1 root root 195, 254 May 23 08:09 /dev/nvidia-modeset
+crw-rw-rw- 1 root root 236,   0 May 23 08:09 /dev/nvidia-uvm
+crw-rw-rw- 1 root root 236,   1 May 23 08:09 /dev/nvidia-uvm-tools
+
+/dev/nvidia-caps:
+total 0
+cr-------- 1 root root 239, 1 May 23 08:10 nvidia-cap1
+cr--r--r-- 1 root root 239, 2 May 23 08:10 nvidia-cap2
+total 0
+drwxr-xr-x  2 root root         80 May 23 08:09 by-path
+crw-rw----+ 1 root video  226,   1 May 23 08:09 card1
+crw-rw----+ 1 root render 226, 128 May 23 08:09 renderD128
+
+===== NVIDIA-SMI =====
+Sun Aug 23 02:50:48 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.126.09             Driver Version: 580.126.09     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA GeForce RTX 3090        Off |   00000000:08:00.0 Off |                  N/A |
+| 84%   64C    P2            133W /  350W |   21213MiB /  24576MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|    0   N/A  N/A          314142      C   ...ma.cpp/build/bin/llama-server      20838MiB |
+|    0   N/A  N/A         3196001      G   /usr/lib/xorg/Xorg                       56MiB |
+|    0   N/A  N/A         3196460      G   /usr/bin/gnome-shell                     20MiB |
+|    0   N/A  N/A         3294593      C   python                                  256MiB |
++-----------------------------------------------------------------------------------------+
+
+===== NVIDIA DRIVER =====
+NVRM version: NVIDIA UNIX x86_64 Kernel Module  580.126.09  Wed Jan  7 22:59:56 UTC 2026
+GCC version:  gcc version 12.3.0 (Ubuntu 12.3.0-1ubuntu1~22.04.3) 
+nvidia_uvm           2093056  6
+nvidia_drm            139264  4
+nvidia_modeset       1638400  6 nvidia_drm
+nvidia              104144896  152 nvidia_uvm,nvidia_modeset
+video                  77824  2 asus_wmi,nvidia_modeset
+
+===== ROCm =====
+/home/charlesjackson/ai-arch/scripts/detect/detect-hardware.sh: line 124: rocm-smi: command not found
+
+===== CUDA TOOLKIT =====
+/usr/bin/nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2021 NVIDIA Corporation
+Built on Thu_Nov_18_09:45:30_PST_2021
+Cuda compilation tools, release 11.5, V11.5.119
+Build cuda_11.5.r11.5/compiler.30672275_0
+cuda
+cuda-12
+cuda-12.4
+
+===== NETWORK ADDRESSES =====
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+enp4s0           UP             10.10.10.253/24 fe80::de12:17db:d0dd:54fb/64 
+wlp3s0           DOWN           
+virbr0           DOWN           192.168.122.1/24 
+br-0f349cd21427  UP             172.21.0.1/16 fe80::58df:fcff:fe68:4243/64 
+br-11ed4498d73b  DOWN           172.22.0.1/16 
+br-48a71ea392a9  UP             172.23.0.1/16 fe80::c869:3eff:fe08:91ce/64 
+br-6b60b3fe9e66  DOWN           172.27.0.1/16 
+br-6ced8aa03e72  UP             172.29.0.1/16 fe80::9c06:74ff:fe44:5162/64 
+br-73b599bb509d  UP             172.20.0.1/16 fe80::38d2:a4ff:fed6:8e80/64 
+br-c2849b5245c3  UP             172.25.0.1/16 fe80::54d0:6eff:fe36:d968/64 
+br-fa14a841a97f  DOWN           172.18.0.1/16 
+br-5b740f52fd61  DOWN           172.28.0.1/16 
+docker0          UP             172.17.0.1/16 fe80::d47a:99ff:fec2:ca90/64 
+br-c2686ea92e92  DOWN           172.26.0.1/16 
+br-c4c8867d15da  DOWN           172.24.0.1/16 
+br-fa893a7804b1  DOWN           172.19.0.1/16 
+vethdbb8a6e@if2  UP             fe80::48c1:eff:fe5b:5033/64 
+vethe8613e2@if2  UP             fe80::68a5:feff:fee7:112c/64 
+veth9f3a5aa@if2  UP             fe80::1052:9cff:fe01:55b6/64 
+veth895538c@if2  UP             fe80::f829:36ff:fe1b:dadb/64 
+vethe4c040c@if2  UP             fe80::b422:a7ff:fe44:f0a1/64 
+vethe99d5e8@if2  UP             fe80::8847:d9ff:fee0:b174/64 
+veth9fa56df@if2  UP             fe80::60fc:9fff:fe96:9fcb/64 
+veth3447e15@if2  UP             fe80::2083:77ff:fe3a:3e5f/64 
+veth1514e22@if2  UP             fe80::74c0:b9ff:fe0b:64c/64 
+veth5d7e62a@if2  UP             fe80::9853:d6ff:feb1:39bc/64 
+veth74563d6@if2  UP             fe80::c808:66ff:fe64:5d0c/64 
+veth3b543fc@if2  UP             fe80::1456:4eff:fef2:83be/64 
+veth8cf9a1b@if2  UP             fe80::cc55:aeff:fe87:2b29/64 
+vethd6a3017@if2  UP             fe80::344a:5bff:fed8:94d4/64 
+veth0c53990@if2  UP             fe80::30c0:d1ff:fe2a:2154/64 
+vethe69a127@if2  UP             fe80::e8f9:7cff:fea7:390b/64 
+veth7f75063@if2  UP             fe80::a876:6bff:febd:878e/64 
+vethd616b8e@if2  UP             fe80::bcd9:8cff:fefc:764b/64 
+veth1807934@if2  UP             fe80::1072:d7ff:fe53:f68b/64 
+br-8d47c16a15fb  UP             172.30.0.1/16 fe80::d0a5:4bff:feaf:45cc/64 
+vethc9a0739@if2  UP             fe80::14bf:dbff:fe76:f33e/64 
+veth1fc24ce@if2  UP             fe80::704a:f4ff:fefa:981f/64 
+veth6ed2c58@if2  UP             fe80::d49c:97ff:febd:b585/64 
+vetha07abf4@if2  UP             fe80::54a3:22ff:fe87:9396/64 
+vetha57baac@if2  UP             fe80::9c40:ff:fea5:1a1e/64 
+veth8af5f04@if2  UP             fe80::7834:1ff:fef9:39c2/64 
+veth9cebc69@if2  UP             fe80::bc4b:60ff:fe71:6cf6/64 
+tailscale0       UNKNOWN        100.79.242.24/32 fd7a:115c:a1e0::4c01:f21f/128 fe80::8d52:af68:11bb:606d/64 
+br-1e2bec7ee3d1  UP             172.31.0.1/16 fe80::ec04:5dff:fee3:308b/64 
+veth7e520ff@if2  UP             fe80::d02d:89ff:fe80:2c74/64 
+vethf1ebac7@if2  UP             fe80::a0ee:13ff:fe85:3ef7/64 
+
+===== NETWORK ROUTES =====
+default via 10.10.10.1 dev enp4s0 proto dhcp metric 100 
+10.10.10.0/24 dev enp4s0 proto kernel scope link src 10.10.10.253 metric 100 
+169.254.0.0/16 dev virbr0 scope link metric 1000 linkdown 
+172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1 
+172.18.0.0/16 dev br-fa14a841a97f proto kernel scope link src 172.18.0.1 linkdown 
+172.19.0.0/16 dev br-fa893a7804b1 proto kernel scope link src 172.19.0.1 linkdown 
+172.20.0.0/16 dev br-73b599bb509d proto kernel scope link src 172.20.0.1 
+172.21.0.0/16 dev br-0f349cd21427 proto kernel scope link src 172.21.0.1 
+172.22.0.0/16 dev br-11ed4498d73b proto kernel scope link src 172.22.0.1 linkdown 
+172.23.0.0/16 dev br-48a71ea392a9 proto kernel scope link src 172.23.0.1 
+172.24.0.0/16 dev br-c4c8867d15da proto kernel scope link src 172.24.0.1 linkdown 
+172.25.0.0/16 dev br-c2849b5245c3 proto kernel scope link src 172.25.0.1 
+172.26.0.0/16 dev br-c2686ea92e92 proto kernel scope link src 172.26.0.1 linkdown 
+172.27.0.0/16 dev br-6b60b3fe9e66 proto kernel scope link src 172.27.0.1 linkdown 
+172.28.0.0/16 dev br-5b740f52fd61 proto kernel scope link src 172.28.0.1 linkdown 
+172.29.0.0/16 dev br-6ced8aa03e72 proto kernel scope link src 172.29.0.1 
+172.30.0.0/16 dev br-8d47c16a15fb proto kernel scope link src 172.30.0.1 
+172.31.0.0/16 dev br-1e2bec7ee3d1 proto kernel scope link src 172.31.0.1 
+192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1 linkdown 

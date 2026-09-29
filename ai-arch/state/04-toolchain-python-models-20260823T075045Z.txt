@@ -1,0 +1,188 @@
+===== PACKAGE MANAGERS =====
+apt: apt 2.4.14 (amd64)
+dpkg: Debian 'dpkg' package management program version 1.21.1 (amd64).
+zypper: ABSENT
+dnf: ABSENT
+pacman: ABSENT
+
+===== DEVELOPMENT TOOLS =====
+git: git version 2.34.1
+git-lfs: git-lfs/3.0.2 (GitHub; linux amd64; go 1.18.1)
+python3: Python 3.11.15
+pip: pip 26.2.1 from /home/charlesjackson/.hermes/hermes-agent/venv/lib/python3.11/site-packages/pip (python 3.11)
+uv: uv 0.11.2 (x86_64-unknown-linux-gnu)
+uvx: uvx 0.11.2 (x86_64-unknown-linux-gnu)
+pipx: ABSENT
+gcc: gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+g++: g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0
+clang: ABSENT
+cmake: cmake version 3.22.1
+make: GNU Make 4.3
+ninja: ABSENT
+rustc: rustc 1.75.0 (82e1608df 2023-12-21) (built from a source tarball)
+cargo: cargo 1.75.0
+docker: Docker version 29.3.1, build c2be9cc
+podman: ABSENT
+buildah: ABSENT
+jupyter: ABSENT
+ollama: ABSENT
+llama-server: ABSENT
+llama-cli: ABSENT
+llama-bench: ABSENT
+vllm: ABSENT
+tmux: usage: tmux [-2CDlNuvV] [-c shell-command] [-f file] [-L socket-name]
+htop: ABSENT
+curl: curl 7.81.0 (x86_64-pc-linux-gnu) libcurl/7.81.0 OpenSSL/3.0.2 zlib/1.2.11 brotli/1.0.9 zstd/1.4.8 libidn2/2.3.2 libpsl/0.21.0 (+libidn2/2.3.2) libssh/0.9.6/openssl/zlib nghttp2/1.43.0 librtmp/2.3 OpenLDAP/2.5.20
+wget: GNU Wget 1.21.2 built on linux-gnu.
+ssh: unknown option -- -
+
+===== PYTHON ENVS =====
+Python 3.10.12
+PATH python: /home/charlesjackson/.hermes/hermes-agent/venv/bin/python3 (Python 3.11.15)
+/home/charlesjackson/.hermes/hermes-agent/venv/bin/python
+/home/charlesjackson/.hermes/hermes-agent/venv/bin/python3
+/home/charlesjackson/.hermes/hermes-agent/venv/bin/python3.11
+
+===== PYTHON AI PACKAGES (system) =====
+fastapi                                  0.115.0
+grpcio                                   1.80.0
+httpx                                    0.28.1
+numpy                                    2.2.6
+onnxruntime                              1.23.2
+openai                                   2.29.0
+pandas                                   2.3.3
+safetensors                              0.7.0
+scikit-learn                             1.7.2
+scipy                                    1.15.3
+streamlit                                1.55.0
+torch                                    2.11.0
+transformers                             5.4.0
+uvicorn                                  0.30.6
+
+===== PYTHON AI PACKAGES (hermes venv) =====
+fastapi                   0.133.1
+httpx                     0.28.1
+httpx-sse                 0.4.3
+httpx2                    2.7.0
+numpy                     2.4.6
+openai                    2.24.0
+pandas                    3.0.5
+streamlit                 1.60.0
+streamlit-mermaid         0.3.0
+uvicorn                   0.41.0
+
+===== TORCH CUDA CHECK (system python) =====
+/home/charlesjackson/.local/lib/python3.10/site-packages/torch/cuda/__init__.py:61: FutureWarning: The pynvml package is deprecated. Please install nvidia-ml-py instead. If you did not install pynvml directly, please report this to the maintainers of the package that installed pynvml for you.
+  import pynvml  # type: ignore[import]
+torch 2.11.0+cu130 cuda_available: True device_count: 1
+
+===== JUPYTER =====
+
+===== MODEL STORE: ~/models =====
+total 51G
+drwxrwxr-x  20 charlesjackson charlesjackson 4.0K Jul 31 15:04 .
+drwxr-x--- 100 charlesjackson charlesjackson  16K Aug 23 02:50 ..
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Apr  2 23:58 .cache
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K May 23 12:57 deepseek-r1-32b
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K May 22 12:37 gemma4-26b
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul 17 22:05 gemma4-26b-awq
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul  1 10:22 gemma-4-26b-rotorquant
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul 17 22:31 gemma4-26b-ud
+-rw-rw-r--   1 charlesjackson charlesjackson 567M Jul 31 15:43 .giosaveIGJawl
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul  1 10:15 glm-4.7-flash-claude-opus
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K May 22 12:49 llama4-scout
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K May 22 12:56 mistral-small-3.2
+drwxrwxr-x   4 charlesjackson charlesjackson 4.0K Jul 16 13:18 prism-ml
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jun 24 14:33 qwen3.5-27b-clause-opus
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Apr 18 11:11 qwen3.6
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Apr 22 11:16 qwen3.6-27b
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jun 29 15:08 qwen3.6-27b-fable-5-distill
+-rw-r--r--   1 root           root            17G Jul 22 13:28 Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-IQ4_NL.gguf
+-rw-rw-r--   1 charlesjackson charlesjackson  19G May 13 23:16 Qwen3.6-27B-UD-Q5_K_XL.gguf
+drwxrwxr-x   2 charlesjackson charlesjackson 4.0K Apr 21 09:17 qwen3-coder-30b-a3b-1m
+-rw-r--r--   1 root           root            14G Jul 22 15:11 Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf.tmp
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul  1 10:30 qwen3-vl-30b
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul 17 22:27 qwythos-9b-claudemythos-gguf
+drwxrwxr-x   3 charlesjackson charlesjackson 4.0K Jul 13 12:07 tess-4-27b
+-rw-rw-r--   1 charlesjackson charlesjackson    0 Jul 31 15:04 Unconfirmed 30226.crdownload
+
+===== MODEL STORE OWNERSHIP ANOMALIES =====
+ 37356683 17337020 -rw-r--r--   1 root     root     17753103840 Jul 22 13:28 /home/charlesjackson/models/Qwen3.6-27B-Fable-Fus-711-UnHeretic-NM-DAU-NEO-MAX-NEO-MTP-IQ4_NL.gguf
+ 37356701 14655492 -rw-r--r--   1 root     root     15007219712 Jul 22 15:11 /home/charlesjackson/models/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf.tmp
+
+===== LLAMA.CPP CACHE =====
+total 18G
+drwxr-xr-x  3 charlesjackson charlesjackson 4.0K Aug 21 10:52 .
+drwx------ 53 charlesjackson charlesjackson 4.0K Aug 19 15:19 ..
+drwxrwxr-x  3 charlesjackson charlesjackson 4.0K Aug 14 10:19 .cache
+-rw-rw-r--  1 charlesjackson charlesjackson 889M Aug 21 10:53 mmproj-Qwen3.8-27B-BF16.gguf
+-rw-rw-r--  1 charlesjackson charlesjackson  17G Aug 14 10:35 Qwen3.8-27B-UD-Q4_K_XL.gguf
+
+===== LLAMA.CPP BUILD =====
+total 820M
+drwxrwxr-x  2 charlesjackson charlesjackson 4.0K Aug 10 09:52 .
+drwxrwxr-x 13 charlesjackson charlesjackson 4.0K Aug 10 09:48 ..
+lrwxrwxrwx  1 charlesjackson charlesjackson   17 May 13 23:58 libggml-base.so -> libggml-base.so.0
+lrwxrwxrwx  1 charlesjackson charlesjackson   22 May 13 23:58 libggml-base.so.0 -> libggml-base.so.0.11.1
+-rwxrwxr-x  1 charlesjackson charlesjackson 835K Apr 26 12:21 libggml-base.so.0.10.0
+-rwxrwxr-x  1 charlesjackson charlesjackson 835K May 13 23:58 libggml-base.so.0.11.1
+lrwxrwxrwx  1 charlesjackson charlesjackson   16 May 13 23:58 libggml-cpu.so -> libggml-cpu.so.0
+lrwxrwxrwx  1 charlesjackson charlesjackson   21 May 13 23:58 libggml-cpu.so.0 -> libggml-cpu.so.0.11.1
+-rwxrwxr-x  1 charlesjackson charlesjackson 1.1M Apr 26 12:22 libggml-cpu.so.0.10.0
+-rwxrwxr-x  1 charlesjackson charlesjackson 1.1M May 13 23:58 libggml-cpu.so.0.11.1
+lrwxrwxrwx  1 charlesjackson charlesjackson   17 May 14 00:00 libggml-cuda.so -> libggml-cuda.so.0
+lrwxrwxrwx  1 charlesjackson charlesjackson   22 May 14 00:00 libggml-cuda.so.0 -> libggml-cuda.so.0.11.1
+-rwxrwxr-x  1 charlesjackson charlesjackson 194M Apr 26 12:23 libggml-cuda.so.0.10.0
+-rwxrwxr-x  1 charlesjackson charlesjackson 198M May 14 00:00 libggml-cuda.so.0.11.1
+
+===== HF HUB CACHE (top-level) =====
+23G	/home/charlesjackson/.cache/huggingface/hub/models--cyankiwi--Qwen3.6-35B-A3B-AWQ-4bit
+20G	/home/charlesjackson/.cache/huggingface/hub/models--cyankiwi--Qwen3.6-27B-AWQ-INT4
+17G	/home/charlesjackson/.cache/huggingface/hub/models--cyankiwi--Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit
+11G	/home/charlesjackson/.cache/huggingface/hub/models--Jackrong--Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
+88M	/home/charlesjackson/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
+620K	/home/charlesjackson/.cache/huggingface/hub/models--mistralai--Mistral-7B-Instruct-v0.3
+12K	/home/charlesjackson/.cache/huggingface/hub/models--yl4579--StyleTTS2-LJSpeech
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3-VL-30B-A3B-Instruct-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3-Coder-30B-A3B-Instruct-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3.8-27B-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3.6-35B-A3B-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3.6-27B-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3.5-35B-A3B-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Qwen3-14B-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Mistral-Small-3.2-24B-Instruct-2506-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--Llama-4-Scout-17B-16E-Instruct-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--gemma-4-26B-A4B-it-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--unsloth--DeepSeek-R1-Distill-Qwen-32B-GGUF
+12K	/home/charlesjackson/.cache/huggingface/hub/models--prism-ml--Ternary-Bonsai-27B-gguf
+12K	/home/charlesjackson/.cache/huggingface/hub/models--MiniMaxAI--MiniMax-H3
+
+===== /data/jwt (PRESENCE ONLY — CONTENT NEVER READ) =====
+  File: /data/jwt
+  Size: 87        	Blocks: 8          IO Block: 4096   regular file
+Device: 822h/2082d	Inode: 179044354   Links: 1
+Access: (0600/-rw-------)  Uid: (    0/    root)   Gid: (    0/    root)
+Access: 2026-02-04 20:27:18.092773487 -0600
+Modify: 2025-12-31 14:36:12.001820049 -0600
+Change: 2025-12-31 14:36:12.005820091 -0600
+ Birth: 2025-12-31 14:36:11.986819893 -0600
+
+===== SSH DIR (filenames only) =====
+total 56
+drwx------   2 charlesjackson charlesjackson  4096 Aug  8 17:28 .
+drwxr-x--- 100 charlesjackson charlesjackson 16384 Aug 23 02:50 ..
+-rw-------   1 charlesjackson charlesjackson   112 Mar 19 23:21 authorized_keys
+-rw-------   1 charlesjackson charlesjackson   399 May  8 22:54 id_ed25519
+-rw-------   1 charlesjackson charlesjackson   399 Jul 10 10:39 id_ed25519_mac
+-rw-r--r--   1 charlesjackson charlesjackson    94 Jul 10 10:39 id_ed25519_mac.pub
+-rw-r--r--   1 charlesjackson charlesjackson    94 May  8 22:54 id_ed25519.pub
+-rw-------   1 charlesjackson charlesjackson  6720 Aug  8 19:12 known_hosts
+-rw-------   1 charlesjackson charlesjackson  5742 Aug  8 17:25 known_hosts.old
+
+===== SUDO PRIVILEGES =====
+Matching Defaults entries for charlesjackson on charles-zorin-server:
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin, use_pty, pwfeedback
+
+User charlesjackson may run the following commands on charles-zorin-server:
+    (ALL : ALL) ALL
+    (ALL) NOPASSWD: ALL

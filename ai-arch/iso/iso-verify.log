@@ -1,0 +1,27 @@
+=== [2026-08-23T09:06:01Z] expected sha256 (official) ===
+4e82dced1c4fd3e498b22a853f8db2a4d262d32b97e7e07d97390d9e425ffe5e  archlinux-2026.08.01-x86_64.iso
+=== [2026-08-23T09:06:01Z] fetch .sig ===
+curl: (22) The requested URL returned error: 404
+curl: (6) Could not resolve host: mirror.arizona.edu
+ls: cannot access 'archlinux-2026.08.01-x86_64.iso.sig': No such file or directory
+=== [2026-08-23T09:06:01Z] fetch release signing key (fingerprint 0x54449A5C short) ===
+gpg: key 76A5EF9054449A5C: public key "Pierre Schmitz <pierre@archlinux.org>" imported
+gpg: Total number processed: 1
+gpg:               imported: 1
+--- key details ---
+/tmp/tmp.Weq7poh1yp/pubring.kbx
+-------------------------------
+pub   ed25519 2022-10-31 [SC] [expires: 2037-10-27]
+      3E80 CA1A 8B89 F69C BA57  D98A 76A5 EF90 5444 9A5C
+uid           [ unknown] Pierre Schmitz <pierre@archlinux.org>
+uid           [ unknown] Pierre Schmitz <pierre@archlinux.de>
+sub   ed25519 2022-10-31 [A] [expires: 2037-10-27]
+sub   cv25519 2022-10-31 [E] [expires: 2037-10-27]
+
+=== [2026-08-23T09:06:03Z] download ISO (official archlinux.org/iso/) ===
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0  0   146    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+curl: (22) The requested URL returned error: 403
+download rc=22 size=
+DOWNLOAD FAILED

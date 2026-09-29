@@ -1,0 +1,107 @@
+=== OS ===
+PRETTY_NAME="Zorin OS 17.3"
+NAME="Zorin OS"
+VERSION_ID="17"
+VERSION="17.3"
+x86_64
+=== VIRT ===
+virt: none
+container: none
+ls: cannot access '/dev/kvm': No such file or directory
+vmx:0 svm:32
+kvm                  1413120  0
+irqbypass              12288  1 kvm
+=== RESOURCES ===
+               total        used        free      shared  buff/cache   available
+Mem:           125Gi        26Gi       1.6Gi       1.3Gi        97Gi        96Gi
+Swap:          2.0Gi       1.8Gi       211Mi
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdc2       3.6T  2.2T  1.3T  63% /
+/dev/sdc2       3.6T  2.2T  1.3T  63% /
+32
+=== VIRT TOOLS ===
+qemu-system-x86_64: /usr/bin/qemu-system-x86_64
+qemu-img: /usr/bin/qemu-img
+virt-install: /usr/bin/virt-install
+virsh: /usr/bin/virsh
+vboxmanage: MISSING
+vmrun: MISSING
+podman: MISSING
+docker: /usr/bin/docker
+=== LIBVIRT ===
+total 0
+drwxr-xr-x 12 root root     380 May 23 08:09 .
+drwxr-xr-x 48 root root    1400 Aug 23 01:06 ..
+drwx------  2 root root      60 May 23 08:09 common
+drwxr-xr-x  2 root root      40 May 23 08:09 hostdevmgr
+=== NETWORK ===
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+enp4s0           UP             10.10.10.253/24 fe80::de12:17db:d0dd:54fb/64 
+wlp3s0           DOWN           
+virbr0           DOWN           192.168.122.1/24 
+br-0f349cd21427  UP             172.21.0.1/16 fe80::58df:fcff:fe68:4243/64 
+br-11ed4498d73b  DOWN           172.22.0.1/16 
+br-48a71ea392a9  UP             172.23.0.1/16 fe80::c869:3eff:fe08:91ce/64 
+br-6b60b3fe9e66  DOWN           172.27.0.1/16 
+br-6ced8aa03e72  UP             172.29.0.1/16 fe80::9c06:74ff:fe44:5162/64 
+br-73b599bb509d  UP             172.20.0.1/16 fe80::38d2:a4ff:fed6:8e80/64 
+br-c2849b5245c3  UP             172.25.0.1/16 fe80::54d0:6eff:fe36:d968/64 
+br-fa14a841a97f  DOWN           172.18.0.1/16 
+br-5b740f52fd61  DOWN           172.28.0.1/16 
+docker0          UP             172.17.0.1/16 fe80::d47a:99ff:fec2:ca90/64 
+br-c2686ea92e92  DOWN           172.26.0.1/16 
+br-c4c8867d15da  DOWN           172.24.0.1/16 
+br-fa893a7804b1  DOWN           172.19.0.1/16 
+vethdbb8a6e@if2  UP             fe80::48c1:eff:fe5b:5033/64 
+vethe8613e2@if2  UP             fe80::68a5:feff:fee7:112c/64 
+veth9f3a5aa@if2  UP             fe80::1052:9cff:fe01:55b6/64 
+veth895538c@if2  UP             fe80::f829:36ff:fe1b:dadb/64 
+vethe4c040c@if2  UP             fe80::b422:a7ff:fe44:f0a1/64 
+vethe99d5e8@if2  UP             fe80::8847:d9ff:fee0:b174/64 
+veth3447e15@if2  UP             fe80::2083:77ff:fe3a:3e5f/64 
+veth1514e22@if2  UP             fe80::74c0:b9ff:fe0b:64c/64 
+veth5d7e62a@if2  UP             fe80::9853:d6ff:feb1:39bc/64 
+veth74563d6@if2  UP             fe80::c808:66ff:fe64:5d0c/64 
+veth3b543fc@if2  UP             fe80::1456:4eff:fef2:83be/64 
+veth8cf9a1b@if2  UP             fe80::cc55:aeff:fe87:2b29/64 
+vethd6a3017@if2  UP             fe80::344a:5bff:fed8:94d4/64 
+veth0c53990@if2  UP             fe80::30c0:d1ff:fe2a:2154/64 
+vethe69a127@if2  UP             fe80::e8f9:7cff:fea7:390b/64 
+veth7f75063@if2  UP             fe80::a876:6bff:febd:878e/64 
+veth1807934@if2  UP             fe80::1072:d7ff:fe53:f68b/64 
+vethe881b78@if2  UP             fe80::68d9:8bff:febe:393b/64 
+br-8d47c16a15fb  UP             172.30.0.1/16 fe80::d0a5:4bff:feaf:45cc/64 
+vethc9a0739@if2  UP             fe80::14bf:dbff:fe76:f33e/64 
+veth1fc24ce@if2  UP             fe80::704a:f4ff:fefa:981f/64 
+veth6ed2c58@if2  UP             fe80::d49c:97ff:febd:b585/64 
+veth07b243c@if2  UP             fe80::5ce0:ecff:fe81:990c/64 
+vetha07abf4@if2  UP             fe80::54a3:22ff:fe87:9396/64 
+vetha57baac@if2  UP             fe80::9c40:ff:fea5:1a1e/64 
+veth8af5f04@if2  UP             fe80::7834:1ff:fef9:39c2/64 
+veth9cebc69@if2  UP             fe80::bc4b:60ff:fe71:6cf6/64 
+tailscale0       UNKNOWN        100.79.242.24/32 fd7a:115c:a1e0::4c01:f21f/128 fe80::8d52:af68:11bb:606d/64 
+br-1e2bec7ee3d1  UP             172.31.0.1/16 fe80::ec04:5dff:fee3:308b/64 
+veth7e520ff@if2  UP             fe80::d02d:89ff:fe80:2c74/64 
+vethf1ebac7@if2  UP             fe80::a0ee:13ff:fe85:3ef7/64 
+=== DOCKER ===
+open-webui 100.79.242.24:3004->8080/tcp
+jellyseerr 0.0.0.0:5055->5055/tcp, [::]:5055->5055/tcp
+comfyui 0.0.0.0:8188->8188/tcp, [::]:8188->8188/tcp
+buzz-prod-relay-1 8080/tcp, 0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp, 9102/tcp
+buzz-prod-minio-1 9000/tcp
+buzz-prod-postgres-1 5432/tcp
+buzz-prod-redis-1 6379/tcp
+nzbget 0.0.0.0:6789->6789/tcp, [::]:6789->6789/tcp
+kalshi-dashboard 0.0.0.0:8501->8501/tcp, [::]:8501->8501/tcp
+kalshi-timescaledb 0.0.0.0:5432->5432/tcp, [::]:5432->5432/tcp
+jellyfin 0.0.0.0:7359->7359/tcp, [::]:7359->7359/tcp, 0.0.0.0:1901->1900/tcp, [::]:1901->1900/tcp, 0.0.0.0:8097->8096/tcp, [::]:8097->8096/tcp, 0.0.0.0:8921->8920/tcp, [::]:8921->8920/tcp
+searxng 0.0.0.0:8888->8080/tcp, [::]:8888->8080/tcp
+jellystat 0.0.0.0:3030->3000/tcp, [::]:3030->3000/tcp
+jellystat-db 5432/tcp
+ollama 0.0.0.0:11434->11434/tcp, [::]:11434->11434/tcp
+sonarr 0.0.0.0:8989->8989/tcp, [::]:8989->8989/tcp
+prowlarr 0.0.0.0:9696->9696/tcp, [::]:9696->9696/tcp
+big-bear-portainer 0.0.0.0:9000->9000/tcp, [::]:9000->9000/tcp, 0.0.0.0:9443->9443/tcp, [::]:9443->9443/tcp, 0.0.0.0:8001->8000/tcp, [::]:8001->8000/tcp
+cloudflared 
+immich-server 0.0.0.0:2283->2283/tcp, [::]:2283->2283/tcp
+=== END ===

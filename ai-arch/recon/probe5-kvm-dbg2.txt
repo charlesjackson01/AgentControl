@@ -1,0 +1,37 @@
+=== uptime ===
+ 03:51:48 up 91 days, 19:42,  5 users,  load average: 12.12, 14.82, 17.93
+=== per-CPU svm check (expect nothing printed if all OK) ===
+(per-cpu check done)
+=== cpu 23 flags sample ===
+flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid ...
+=== dmesg full kvm context ===
+[7932970.550451] veth07b243c (unregistering): left allmulticast mode
+[7932970.550455] veth07b243c (unregistering): left promiscuous mode
+[7932970.550458] br-0f349cd21427: port 2(veth07b243c) entered disabled state
+[7932970.619845] kvm_amd: SVM not supported by CPU 23
+[7932970.741937] br-0f349cd21427: port 2(veth017e5ad) entered blocking state
+[7932970.741943] br-0f349cd21427: port 2(veth017e5ad) entered disabled state
+[7932970.741956] veth017e5ad: entered allmulticast mode
+[7932970.742012] veth017e5ad: entered promiscuous mode
+[7932970.760834] eth0: renamed from veth2e9ab82
+[7932970.777886] br-0f349cd21427: port 2(veth017e5ad) entered blocking state
+[7932970.777890] br-0f349cd21427: port 2(veth017e5ad) entered forwarding state
+[7932974.098193] net_ratelimit: 3797 callbacks suppressed
+[7932974.098207] neighbour: arp_cache: neighbor table overflow!
+[7932974.462013] neighbour: arp_cache: neighbor table overflow!
+=== lsmod kvm/ccp/irqbypass ===
+kvm                  1413120  0
+irqbypass              12288  1 kvm
+ccp                   143360  0
+=== try modprobe kvm alone ===
+rc=0
+=== lsmod after ===
+kvm                  1413120  0
+=== try kvm_amd again ===
+modprobe: ERROR: could not insert 'kvm_amd': Operation not supported
+insmod /lib/modules/6.8.0-107-generic/kernel/arch/x86/kvm/kvm-amd.ko 
+rc=1
+ls: cannot access '/dev/kvm': No such file or directory
+=== secure boot ===
+SecureBoot disabled
+=== done ===

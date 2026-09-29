@@ -1,0 +1,11 @@
+#cloud-config
+disable_root: false
+preserve_hostname: false
+hostname: ai-arch-dev
+users:
+  - name: root
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOZH9lCuGU+pd7BImmMYLq850b/p86QBlSST/z/mXEhj ai-arch-dev@ai-arch-phase0
+runcmd:
+  - [ bash, -c, 'echo ai-arch-dev cloud-init runcmd $(date -u +%FT%TZ) > /run/ai-arch-cloudinit-ran' ]

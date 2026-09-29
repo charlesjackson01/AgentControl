@@ -1,0 +1,39 @@
+=== PRECISE svm flag check (standalone word only) ===
+EXACT 'svm' token: ABSENT (only svm_lock etc.)
+svm_lock
+
+=== systemd-detect-virt (expect: none) ===
+none
+
+=== installed hypervisor / VM tooling ===
+qemu-system-x86_64     /usr/bin/qemu-system-x86_64
+virt-install           /usr/bin/virt-install
+virsh                  /usr/bin/virsh
+vboxmanage             NOT INSTALLED
+vmrun                  NOT INSTALLED
+VBoxManage             NOT INSTALLED
+virt-manager           /usr/bin/virt-manager
+cloud-localds          NOT INSTALLED
+
+=== qemu version ===
+QEMU emulator version 6.2.0 (Debian 1:6.2+dfsg-2ubuntu6.30)
+
+=== PCI virtualization vendor devices (QEMU 1af4 / VMware 15ad / RedHat 1b36) ===
+(none — consistent with bare metal)
+
+=== /sys/hypervisor ===
+cat: /sys/hypervisor/type: No such file or directory
+(no /sys/hypervisor)
+
+=== IOMMU (for later GPU passthrough) ===
+
+=== free resources for sizing ===
+               total        used        free      shared  buff/cache   available
+Mem:           125Gi        23Gi       3.4Gi       1.3Gi        98Gi        99Gi
+disk:
+/dev/sdc2       3.6T  2.2T  1.3T  63% /
+
+=== tailscale on host (remote access path) ===
+100.79.242.24
+
+=== done ===

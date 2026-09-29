@@ -1,0 +1,119 @@
+=== host LAN IPs ===
+lo               UNKNOWN        127.0.0.1/8 
+enp4s0           UP             10.10.10.253/24 
+virbr0           DOWN           192.168.122.1/24 
+br-0f349cd21427  UP             172.21.0.1/16 
+br-11ed4498d73b  DOWN           172.22.0.1/16 
+br-48a71ea392a9  UP             172.23.0.1/16 
+br-6b60b3fe9e66  DOWN           172.27.0.1/16 
+br-6ced8aa03e72  UP             172.29.0.1/16 
+br-73b599bb509d  UP             172.20.0.1/16 
+br-c2849b5245c3  UP             172.25.0.1/16 
+br-fa14a841a97f  DOWN           172.18.0.1/16 
+br-5b740f52fd61  DOWN           172.28.0.1/16 
+docker0          UP             172.17.0.1/16 
+br-c2686ea92e92  DOWN           172.26.0.1/16 
+br-c4c8867d15da  DOWN           172.24.0.1/16 
+br-fa893a7804b1  DOWN           172.19.0.1/16 
+br-8d47c16a15fb  UP             172.30.0.1/16 
+tailscale0       UNKNOWN        100.79.242.24/32 
+br-1e2bec7ee3d1  UP             172.31.0.1/16 
+
+=== tailscale status (host) ===
+100.79.242.24    charles-zorin-server               cjackson0520@  linux    -                                                            
+100.107.133.31   charlesjackson-thinkpad-l380-yoga  cjackson0520@  linux    offline, last seen 7h ago                                    
+100.123.212.119  cjhostwinds                        cjackson0520@  linux    idle; offers exit node                                       
+100.94.164.20    coles-computer                     cjackson0520@  windows  offline, last seen 196d ago                                  
+100.105.89.121   coles-ipad                         cjackson0520@  iOS      offline, last seen 344d ago                                  
+100.71.218.81    coles-laptop                       cjackson0520@  windows  offline, last seen 110d ago                                  
+100.120.70.117   desktop-5f9ii0f                    cjackson0520@  windows  offline, last seen 160d ago                                  
+100.88.241.51    desktop-r5s3ug6                    cjackson0520@  windows  active; direct 68.201.93.250:28129, tx 2938404 rx 3287700    
+100.105.232.17   exit-node-01                       cjackson0520@  linux    idle; offers exit node                                       
+100.116.34.109   ipad148                            cjackson0520@  iOS      -                                                            
+100.80.196.55    iphone173                          cjackson0520@  iOS      offline, last seen 79d ago                                   
+100.106.112.8    iphone181                          cjackson0520@  iOS      active; direct 192.168.87.133:41641, tx 30933832 rx 4770488  
+100.85.18.122    living-room-tv                     cjackson0520@  android  -                                                            
+100.102.190.55   mac-mini                           cjackson0520@  macOS    active; direct 192.168.87.138:41641, tx 1990984 rx 2090304   
+100.102.160.83   raspi5                             cjackson0520@  linux    offline, last seen 10d ago                                   
+100.110.232.85   rogxboxallyx                       cjackson0520@  windows  offline, last seen 1h ago                                    
+
+# Funnel on:
+#     - https://charles-zorin-server.tail0d3cc2.ts.net
+
+
+=== host firewall ===
+Status: inactive
+--- nftables summary ---
+table ip filter {
+	chain LIBVIRT_INP {
+		iifname "virbr0" meta l4proto udp udp dport 53 counter packets 0 bytes 0 accept
+		iifname "virbr0" meta l4proto tcp tcp dport 53 counter packets 0 bytes 0 accept
+		iifname "virbr0" meta l4proto udp udp dport 67 counter packets 0 bytes 0 accept
+		iifname "virbr0" meta l4proto tcp tcp dport 67 counter packets 0 bytes 0 accept
+	}
+
+	chain INPUT {
+		type filter hook input priority filter; policy accept;
+		counter packets 248418894 bytes 511226792585 jump ts-input
+		counter packets 1043565422 bytes 2606930119408 jump LIBVIRT_INP
+	}
+
+	chain LIBVIRT_OUT {
+		oifname "virbr0" meta l4proto udp udp dport 53 counter packets 0 bytes 0 accept
+		oifname "virbr0" meta l4proto tcp tcp dport 53 counter packets 0 bytes 0 accept
+		oifname "virbr0" meta l4proto udp udp dport 68 counter packets 0 bytes 0 accept
+		oifname "virbr0" meta l4proto tcp tcp dport 68 counter packets 0 bytes 0 accept
+	}
+
+	chain OUTPUT {
+		type filter hook output priority filter; policy accept;
+		counter packets 1564943277 bytes 2229235193219 jump LIBVIRT_OUT
+	}
+
+	chain LIBVIRT_FWO {
+		iifname "virbr0" ip saddr 192.168.122.0/24 counter packets 0 bytes 0 accept
+		iifname "virbr0" counter packets 0 bytes 0 reject
+	}
+
+	chain FORWARD {
+		type filter hook forward priority filter; policy accept;
+		counter packets 859343408 bytes 1515662581960 jump ts-forward
+		counter packets 1104631756 bytes 1863520413343 jump DOCKER-USER
+		counter packets 1104631756 bytes 1863520413343 jump DOCKER-FORWARD
+		counter packets 0 bytes 0 jump LIBVIRT_FWX
+		counter packets 0 bytes 0 jump LIBVIRT_FWI
+		counter packets 0 bytes 0 jump LIBVIRT_FWO
+	}
+
+=== listening TCP ports (host, relevant) ===
+LISTEN 0      512                        0.0.0.0:8080       0.0.0.0:*    users:(("llama-server",pid=314142,fd=33))
+LISTEN 0      128                        0.0.0.0:22         0.0.0.0:*                                             
+LISTEN 0      128                           [::]:22            [::]:*                                             
+
+=== libvirt default network detail ===
+<network>
+  <name>default</name>
+  <uuid>0d729e34-309c-4453-8cfa-8ce8dbd56f09</uuid>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='virbr0' stp='on' delay='0'/>
+  <mac address='52:54:00:4d:43:1a'/>
+  <ip address='192.168.122.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.122.2' end='192.168.122.254'/>
+    </dhcp>
+  </ip>
+</network>
+
+
+=== host sshd config (allow password? root?) ===
+(no explicit settings — defaults)
+
+=== host user ===
+charlesjackson
+uid=1000(charlesjackson) gid=1000(charlesjackson) groups=1000(charlesjackson),4(adm),24(cdrom),27(sudo),30(dip),46(plugdev),125(lpadmin),137(sambashare),143(libvirt),999(docker)
+
+=== done ===

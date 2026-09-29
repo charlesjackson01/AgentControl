@@ -1,0 +1,45 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!-- org.aiarch.Context — contextd (docs/AI-ARCHITECTURE.md §4.4).
+     Stage E contract: not implemented in the Stage D build. -->
+<node>
+  <interface name="org.aiarch.Context">
+    <property name="Available" type="a{sv}" access="read" emit="true"/>
+    <property name="Exposed" type="a{sv}" access="read" emit="true"/>
+    <property name="Pinned" type="a{sv}" access="read" emit="true"/>
+    <property name="Exclusions" type="as" access="read" emit="true"/>
+
+    <method name="SetExposed">
+      <arg name="key" type="s" direction="in"/>
+      <arg name="exposed" type="b" direction="in"/>
+    </method>
+    <method name="Pin">
+      <arg name="item" type="a{sv}" direction="in"/>
+    </method>
+    <method name="Unpin">
+      <arg name="item_id" type="s" direction="in"/>
+    </method>
+    <method name="AttachFile">
+      <arg name="path" type="s" direction="in"/>
+    </method>
+    <method name="AttachDataset">
+      <arg name="id" type="s" direction="in"/>
+    </method>
+    <method name="Resolve">
+      <arg name="scope" type="s" direction="in"/>
+      <arg name="request_id" type="s" direction="in"/>
+      <arg name="context" type="a{sv}" direction="out"/>
+    </method>
+
+    <signal name="AvailableChanged"/>
+    <signal name="ExposedChanged"/>
+    <signal name="PinnedChanged"/>
+  </interface>
+
+  <!-- Cooperating apps implement this on their own connection (docs §4.4). -->
+  <interface name="org.aiarch.ContextProvider">
+    <method name="ProvideContext">
+      <arg name="context" type="a{sv}" direction="out"/>
+    </method>
+  </interface>
+</node>

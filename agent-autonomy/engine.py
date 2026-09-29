@@ -15,11 +15,13 @@ from proc import process
 from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
 from events import EventBus
 import agents as agent_registry
+import permissions
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
 
 TERMINAL = {'completed', 'blocked', 'failed', 'stopped', 'limit_reached'}
+HUMAN = 'You, via dashboard'
 PENDING = {'prepared', 'dispatching', 'running', 'waiting'}
 
 
@@ -60,8 +62,11 @@ def review_packet(request, messages=()):
                     context = {'tool': part.get('tool'), 'input': state.get('input', {})}
                     break
     signed = json.dumps({'request': native, 'context': context}, sort_keys=True, ensure_ascii=False)
-    return {**native, 'request_id': ident, 'context': context,
-            'fingerprint': hashlib.sha256(signed.encode()).hexdigest()}
+    packet = {**native, 'request_id': ident, 'context': context,
+              'fingerprint': hashlib.sha256(signed.encode()).hexdigest()}
+    # Risk comes from AgentControl's registry, not the model, and is not part of the fingerprint.
+    packet['risk'] = permissions.classify(packet)
+    return packet
 
 
 def validate_answers(request, answers):
@@ -279,6 +284,15 @@ class Controller:
                 items = run['instructions'] + [{'time': now(), 'text': text.strip()}]
                 self.store.update('runs', ident, instructions=items)
                 self.store.event(ident, 'user instruction', text.strip())
+            elif action == 'revoke_rule':
+                grants = run.get('grants', [])
+                target = next((g for g in grants if g['id'] == text and not g.get('revoked')), None)
+                if target is None:
+                    raise ValueError('No active rule with that id')
+                target.update(revoked=True, revoked_at=now())
+                self.store.update('runs', ident, grants=grants)
+                self.store.audit_append(ident, {'action': 'rule revoked', 'actor': HUMAN, 'rule': target['id'],
+                                                'permission': target['permission'], 'target': target['match'][:500]})
             elif action == 'goal_check':
                 if not isinstance(text, str) or not 1 <= len(text.strip()) <= 1000:
                     raise ValueError('Enter a goal check of 1–1,000 characters')
@@ -302,8 +316,11 @@ class Controller:
                 self.store.save_review(previous)
                 self.store.event(ident, 'approval resolved', {'request_id': previous['request_id'], 'action': previous['action'], 'state': previous['state']})
 
-    def review(self, ident, kind, request_id, fingerprint, action, answers=None, redirect=None):
-        """Human-only decision path. Revalidate the exact request before sending."""
+    def review(self, ident, kind, request_id, fingerprint, action, answers=None, redirect=None,
+               confirm=None, remember=False, actor=HUMAN, rule=None):
+        """Decision path for one OpenCode request. Revalidates the exact request before sending.
+        People decide through the dashboard; the only automatic path is a rule the person created,
+        which can only approve an identical low or sensitive request (see permissions.py)."""
         if kind not in ('permission', 'question'):
             raise ValueError('Unknown review type')
         if action not in ({'approve', 'reject'} if kind == 'permission' else {'answer', 'reject'}):
@@ -329,13 +346,25 @@ class Controller:
             packet = review_packet(candidate, messages)
             if not hmac.compare_digest(packet['fingerprint'], fingerprint):
                 raise ReviewConflict('The requested action changed. Close this window and review the updated request.')
+            risk = packet['risk']
+            if actor != HUMAN and (rule is None or permissions.matching_rule(packet, run.get('grants')) is None):
+                raise ReviewConflict('Automatic approval needs a matching rule that you created.')
+            if kind == 'permission' and action == 'approve' and risk['decision'] == 'confirm' \
+                    and str(confirm or '').strip().lower() != permissions.CONFIRM_WORD:
+                self.store.audit_append(ident, {'action': 'blocked', 'reason': 'critical request approved without typed confirmation',
+                                                'request_id': request_id, 'risk': risk['level'], 'permission': risk['permission'], 'actor': actor})
+                raise ValueError(f'This is a critical request ({"; ".join(risk["reasons"]) or risk["impact"]}). '
+                                 f'Type {permissions.CONFIRM_WORD} to confirm.')
+            if remember and not (kind == 'permission' and action == 'approve' and risk['remember_allowed']):
+                raise ValueError('Only low or sensitive approvals can be remembered. Critical requests are always asked.')
             if kind == 'question' and action == 'answer':
                 answers = validate_answers(candidate, answers)
             elif answers is not None:
                 raise ValueError('This decision does not accept answers')
             record = {'run': ident, 'kind': kind, 'request_id': request_id, 'fingerprint': fingerprint,
                       'created': now(), 'updated': now(), 'action': action, 'answers': answers,
-                      'state': 'dispatching', 'request': packet, 'actor': 'You, via dashboard'}
+                      'state': 'dispatching', 'request': packet, 'actor': actor, 'risk': risk,
+                      'remember': bool(remember), 'rule': rule}
             if redirect is not None:
                 record['redirect'] = redirect
                 instruction_id = f'review:{kind}:{request_id}'
@@ -347,7 +376,13 @@ class Controller:
                     self.store.event(ident, 'user instruction', instruction['text'])
                 record['redirect_saved'] = True
             self.store.save_review(record)
-            self.store.event(ident, 'approval decision', {'request_id': request_id, 'kind': kind, 'action': action, 'answers': answers, 'redirect': redirect, 'actor': record['actor']})
+            self.store.audit_append(ident, {'action': 'auto-approved by rule' if rule else f'{kind} {action}', 'actor': actor,
+                                            'request_id': request_id, 'risk': risk['level'], 'permission': risk['permission'],
+                                            'target': permissions.rule_for(packet)['match'][:500], 'reasons': risk['reasons'],
+                                            'confirmed': risk['decision'] == 'confirm' and action == 'approve', 'remember': bool(remember),
+                                            'rule': rule})
+            self.store.event(ident, 'approval decision', {'request_id': request_id, 'kind': kind, 'action': action, 'answers': answers, 'redirect': redirect, 'actor': record['actor'],
+                                                          'risk': risk['level']})
             try:
                 response = self.api.respond(run['session'], candidate, action, answers)
                 if response is False:
@@ -367,6 +402,13 @@ class Controller:
                 return record
             record.update(state='sent', updated=now())
             self.store.save_review(record)
+            if remember:
+                grant = {**permissions.rule_for(packet), 'id': uuid.uuid4().hex[:12], 'class': risk['class'], 'level': risk['level'],
+                         'created': now(), 'request_id': request_id, 'revoked': False}
+                current = self.store.get('runs', ident)
+                self.store.update('runs', ident, grants=current.get('grants', []) + [grant])
+                self.store.audit_append(ident, {'action': 'rule added', 'actor': actor, 'rule': grant['id'], 'permission': grant['permission'],
+                                                'target': grant['match'][:500], 'risk': grant['level']})
             # A 200 response alone is insufficient: old OpenCode versions could
             # acknowledge replies to the wrong directory without resolving them.
             try:
@@ -376,6 +418,30 @@ class Controller:
             except Exception as exc:
                 self.store.event(ident, 'approval confirmation pending', str(exc))
             return self.store.review(ident, kind, request_id)
+
+    def _gate(self, ident, pending, audited):
+        """Record each new request in the audit log once, and let a rule the person created approve
+        an identical low or sensitive request. Everything else stays pending for the person."""
+        grants = self.store.get('runs', ident).get('grants', [])
+        waiting = []
+        for packet in pending:
+            key = (packet['kind'], packet['request_id'], packet['fingerprint'])
+            if key not in audited:
+                audited.add(key)
+                risk = packet['risk']
+                self.store.audit_append(ident, {'action': 'requested', 'actor': 'coder-1', 'request_id': packet['request_id'],
+                                                'kind': packet['kind'], 'risk': risk['level'], 'permission': risk['permission'],
+                                                'target': permissions.rule_for(packet)['match'][:500], 'reasons': risk['reasons']})
+            rule = permissions.matching_rule(packet, grants)
+            if rule and not self.store.review(ident, packet['kind'], packet['request_id']):
+                try:
+                    self.review(ident, 'permission', packet['request_id'], packet['fingerprint'], 'approve',
+                                actor=f"AgentControl, by your rule {rule['id'][:6]}", rule=rule['id'])
+                    continue
+                except (ReviewConflict, ValueError, OpenCodeHTTPError) as exc:
+                    self.store.event(ident, 'rule not applied', f'{rule["id"][:6]}: {exc}')
+            waiting.append(packet)
+        return waiting
 
     def _cancelled(self, ident):
         return self.shutdown.is_set() or self.store.get('runs', ident)['stop']
@@ -655,6 +721,7 @@ class Controller:
         if step['status'] == 'prepared':
             return
         seen = set(step.get('seen', []))
+        audited = set()
         activity = step.get('activity', [])
         failures = 0
         pending_previous = None
@@ -678,6 +745,7 @@ class Controller:
                     raise Attention('OpenCode connection lost. Restore the server and Resume; the submitted prompt will not be resent.')
                 time.sleep(self.s.poll)
                 continue
+            pending = self._gate(ident, pending, audited)
             matching = [m for m in messages if m.get('info', {}).get('role') == 'assistant' and m.get('info', {}).get('parentID') == step['message_id']]
             accepted = any(m.get('info', {}).get('id') == step['message_id'] for m in messages)
             if accepted and step['status'] == 'dispatching':
@@ -780,6 +848,10 @@ class Controller:
                     'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id'])} for r in runs[:30]],
                 'preview': self.preview.status(),
                 'agent_types': agent_registry.types(),
+                'permissions': {'policy': permissions.POLICY, 'levels': permissions.LEVELS, 'labels': permissions.LABELS,
+                                'confirm_word': permissions.CONFIRM_WORD},
+                'audit': self.store.audit(ident, limit=60) if run else [],
+                'audit_chain': dict(zip(('intact', 'broken_at'), self.store.audit_verify())),
                 'agents': self.agents(run, steps, inbox) if run else [],
                 'run': run, 'steps': steps, 'events': self.store.events(ident) if run else [],
                 'inbox': inbox, 'reviews': self.store.reviews(ident) if run else []}

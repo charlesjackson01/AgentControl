@@ -311,4 +311,4 @@ Goal: restructure `engine.py` for multi-agent work **without changing behavior**
 3. ~~Enable SVM / confirm KVM~~ Done and confirmed (2026-09-29).
 4. For container isolation: are rootless Docker (or podman) acceptable? The alternative is limiting agents to process isolation.
 
-**Status:** M0 complete (see `docs/M0-SPIKE-REPORT.md`). M1 complete (modules split, directory-aware OpenCode adapter, Hermes JSON repair, journal ordering fix). M2 complete (live updates over SSE with polling fallback). M3 complete (agent identities: registry, journal v2 agents table, derived live state, /api/agents).
+**Status:** M0 complete (see `docs/M0-SPIKE-REPORT.md`). M1 complete (modules split, directory-aware OpenCode adapter, Hermes JSON repair, journal ordering fix). M2 complete (live updates over SSE with polling fallback). M3 complete (agent identities: registry, journal v2 agents table, derived live state, /api/agents). M4 complete (permissions gate: R0–R3 registry and classifier, typed confirmation for critical requests, run-scoped exact-match rules with revoke, hash-chained audit log, dashboard risk badges and audit view).

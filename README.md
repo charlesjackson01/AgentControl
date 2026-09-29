@@ -38,7 +38,9 @@ Hermes CLI and the OpenCode API without starting a model.
   calls, and command output while it works. It follows new output until you
   scroll up. Press `t` for full screen.
 - **Approvals.** Requests appear as a banner above the board and in the terminal
-  with a Review button. Approve once, or deny and redirect Hermes.
+  with a Review button. Approve once, or deny and redirect Hermes. Each request
+  carries a risk class (R0–R3). Critical ones need you to type `approve`, and
+  every request and decision goes into a hash-chained audit log.
 - **Project tab (live preview).** When a run completes, AgentControl starts the
   preview you saved and shows the project running. It can be a web app in a
   frame, a static page, a command-line program you can type into, or a desktop

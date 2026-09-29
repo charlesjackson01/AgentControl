@@ -59,6 +59,10 @@ def handler(controller, key):
                 return self.reply(401, {'error': 'Enter the dashboard key printed in your server terminal.'})
             if path.path == '/api/events':
                 return self.stream_events()
+            if path.path == '/api/audit':
+                ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
+                intact, broken_at = controller.store.audit_verify()
+                return self.reply(200, {'entries': controller.store.audit(ident), 'chain_intact': intact, 'broken_at': broken_at})
             if path.path == '/api/agents':
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0]
                 try:
@@ -148,8 +152,10 @@ def handler(controller, key):
                 if self.path == '/api/control':
                     return self.reply(200, controller.control(body['run'], body['action'], body.get('text', '')))
                 if self.path == '/api/review':
+                    # The API always acts as the person; automatic rule approvals only happen inside the engine.
                     result = controller.review(body['run'], body['kind'], body['request_id'],
-                                               body['fingerprint'], body['action'], body.get('answers'), body.get('redirect'))
+                                               body['fingerprint'], body['action'], body.get('answers'), body.get('redirect'),
+                                               confirm=body.get('confirm'), remember=body.get('remember') is True)
                     return self.reply(200 if result['state'] == 'confirmed' else 202, result)
                 return self.reply(404, {'error': 'Not found'})
             except ReviewConflict as exc:

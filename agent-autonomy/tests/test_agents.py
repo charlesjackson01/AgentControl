@@ -171,7 +171,7 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(len(store.agents('old')), 1)
             self.assertEqual(store.get('runs', 'old')['created'], 'x')
             with sqlite3.connect(path) as c:
-                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 2)
+                self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], len(MIGRATIONS))
 
 
 if __name__ == '__main__':

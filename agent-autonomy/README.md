@@ -92,7 +92,7 @@ managed run. Use the inline card beside the run, or the **Approvals** page. **In
 
 - Permission requests show the command or file scope, any proposed diff or file
   content supplied by OpenCode, and the full request. **Approve once** allows the
-  specific request; **Deny and redirect** saves your note for Hermes and sends a refusal. Permanent approvals are not offered.
+  specific request; **Deny and redirect** saves your note for Hermes and sends a refusal. Permanent approvals are not offered; see *Permission risk and audit* below for run-scoped rules.
 - Questions show OpenCode's choices and, when supported, a custom answer box.
   Complete every question and click **Send answers**, or reject the request.
 - The server reloads the request and checks its session and exact displayed
@@ -243,6 +243,23 @@ Window decorations are decorative and contain no real OS logos.
 
 Shortcuts are ignored in editable fields, while a modifier key is held, and
 inside unrelated dialogs. Reduced-motion preferences disable the terminal cursor.
+
+## Permission risk and audit
+
+Every OpenCode request gets a risk class from AgentControl's own registry (`permissions.py`, adapted from ai-arch `docs/SECURITY.md`). The class and the impact text never come from the model.
+
+| Class | Examples | What you do |
+|---|---|---|
+| **R0 Read only** | read, list, grep | Approve once |
+| **R1 Low** | OpenCode's task list, questions | Approve once |
+| **R2 Sensitive** | edit, write, shell commands, web access | Approve once |
+| **R3 Critical** | recursive delete, `sudo`, `curl … \| sh`, force push, `git reset --hard`, privileged Docker, writes to system folders, anything touching `.ssh`/`.env`/keys, files outside the project, and **any request type AgentControl does not recognise** | Type `approve` to confirm |
+
+- Nothing is approved automatically by default.
+- For an R1 or R2 request you can tick **Approve identical requests for the rest of this run**. That creates a rule that matches only the same permission with the same command or paths, only in this run. Rules are listed under **Approvals → Remembered approvals**, where **Revoke** turns them off.
+- Critical requests can never be remembered, and the class is re-checked every time a rule is matched.
+- The API always records decisions as *You, via dashboard*. Only AgentControl's own rule check can approve automatically, and only with a rule you created.
+- **Audit log:** every request, decision, block, rule added and rule revoked is appended to an audit table in the journal. Each entry stores the hash of the one before it, so an edited or deleted entry breaks the chain. The dashboard shows whether the chain is intact. `GET /api/audit?run=<id>` returns `{entries, chain_intact, broken_at}`.
 
 ## Agents
 

@@ -734,14 +734,47 @@ function approvalCard(p) {
     : `<button class="ac-btn" data-review="${id}" data-intent="reject" aria-keyshortcuts="d">Deny and redirect</button><button class="ac-btn primary" data-review="${id}" data-intent="approve" aria-keyshortcuts="a">Approve once</button>`;
   return `<article class="approval-card" tabindex="-1" data-approval-card="${id}">
     <div class="approval-titlebar">${question ? 'Question from OpenCode' : 'Approval needed'}</div>
-    <div class="approval-icon">${icon('shield')}</div>
+    <div class="row between"><div class="approval-icon">${icon('shield')}</div>${riskBadge(p.risk)}</div>
     <h2>${esc(requestTitle(p))}</h2><pre class="command">${esc(requestText(p))}</pre>
     <p class="approval-note muted">${receipt ? esc(receiptLabel(receipt)) : 'Hermes has not provided a recommendation for this request.'}</p>
     ${receipt?.redirect_saved ? '<p class="small muted">Your redirection is saved for the next Hermes prompt.</p>' : ''}
     <div class="approval-actions">${actions}</div>
     <button class="text-button" data-review="${id}">Inspect full request</button>
-    <p class="policy-note">Run #${esc(p.run.slice(0, 6))} · ${question ? 'Clarification' : 'Permission: ' + esc(p.permission || 'unspecified')}<br>Applied policy details are not supplied by OpenCode.</p>
+    <p class="policy-note">Run #${esc(p.run.slice(0, 6))} · ${question ? 'Clarification' : 'Permission: ' + esc(p.permission || 'unspecified')}<br>${riskNote(p.risk)}</p>
   </article>`;
+}
+// Risk comes from AgentControl's own registry (permissions.py), never from the model.
+function riskBadge(risk) {
+  if (!risk) return '';
+  return `<span class="risk-badge risk-${esc(risk.class)}" title="${esc(risk.impact)}">${esc(risk.level)} · ${esc(risk.label)}</span>`;
+}
+function riskNote(risk) {
+  if (!risk) return 'Risk class not recorded for this request.';
+  return esc(risk.impact) + (risk.reasons?.length ? ` <strong class="error">Critical: ${esc(risk.reasons.join('; '))}.</strong>` : '');
+}
+function riskHTML(p) {
+  const risk = p.risk;
+  if (!risk) return '';
+  const done = p.receipt && p.receipt.state !== 'failed', word = data.permissions?.confirm_word || 'approve';
+  let html = `<section class="request-section risk-section risk-${esc(risk.class)}"><h3>Risk ${riskBadge(risk)}</h3><p class="small">${esc(risk.impact)}</p>`;
+  if (risk.reasons?.length) html += `<ul class="small risk-reasons">${risk.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>`;
+  if (p.kind === 'permission' && !done && risk.decision === 'confirm')
+    html += `<label for="confirm-word">Type <strong>${esc(word)}</strong> to approve this critical request</label><input id="confirm-word" autocomplete="off" spellcheck="false" data-confirm-word="${esc(word)}">`;
+  if (p.kind === 'permission' && !done && risk.remember_allowed)
+    html += `<label class="choice"><input type="checkbox" id="remember-rule"><span><strong>Approve identical requests for the rest of this run</strong><small>Only this exact ${esc(risk.permission)} request. You can revoke it under Approvals. Critical requests are always asked.</small></span></label>`;
+  return html + '</section>';
+}
+function rulesHTML() {
+  const rules = (current?.grants || []).filter(g => !g.revoked);
+  if (!rules.length) return '<p class="small muted">No remembered approvals. Every request is asked.</p>';
+  return rules.map(g => `<div class="rule-row">${riskBadge({class: g.class, level: g.level, label: data.permissions?.labels?.[g.class] || g.class, impact: ''})}<span><strong>${esc(g.permission)}</strong><small class="mono">${esc(g.match || '(no command or path)')}</small></span><button class="ac-btn compact" data-action="revoke-rule" data-rule="${esc(g.id)}">Revoke</button></div>`).join('');
+}
+function auditHTML() {
+  const entries = data.audit || [], chain = data.audit_chain;
+  const status = chain ? (chain.intact ? '<p class="small success-text">Audit chain intact. Each entry carries the hash of the one before it.</p>'
+    : `<p class="small error">Audit chain broken at entry ${esc(String(chain.broken_at))}. An entry was edited or removed outside AgentControl.</p>`) : '';
+  const rows = entries.slice().reverse().map(e => `<div class="audit-row"><span class="mono small">${esc(e.risk || '')}</span><span><strong>${esc(e.action)}</strong> · ${esc(e.permission || e.kind || '')}<small>${esc(e.actor || '')}${e.target ? ' · ' + esc(e.target.slice(0, 160)) : ''}${e.reason ? ' · ' + esc(e.reason) : ''}</small></span>${when(e.created)}</div>`).join('');
+  return status + (rows || '<p class="small muted">Permission requests and decisions for the selected run are recorded here.</p>');
 }
 function recentDecisionHTML() {
   const r = data.reviews.find(r => ['confirmed', 'sent', 'uncertain', 'resolved'].includes(r.state) && !dismissedReceipts.has(requestKey(r)));
@@ -752,6 +785,8 @@ function recentDecisionHTML() {
 }
 function renderApprovals() {
   setHTML($('approval-list'), data.inbox.length ? data.inbox.map(approvalCard).join('') : '<section class="ac-panel"><h2>Nothing waiting on you.</h2><p class="muted small">New permission requests and questions will appear here.</p></section>');
+  setHTML($('rule-list'), rulesHTML());
+  setHTML($('audit-list'), auditHTML());
   setHTML($('decision-history'), data.reviews.length ? data.reviews.map(r => {
     const tone = r.state === 'confirmed' ? (r.action === 'reject' ? 'error' : 'success-text') : 'warning-text';
     const mark = r.state === 'confirmed' ? (r.action === 'reject' ? '×' : '✓') : '◌';
@@ -996,10 +1031,10 @@ function openReview(id, intent) {
   reviewing = JSON.parse(JSON.stringify(found));
   reviewBusy = false;
   const p = reviewing, permission = p.kind === 'permission';
-  const raw = pretty(Object.fromEntries(Object.entries(p).filter(([k]) => !['run', 'goal', 'receipt', 'fingerprint'].includes(k))));
+  const raw = pretty(Object.fromEntries(Object.entries(p).filter(([k]) => !['run', 'goal', 'receipt', 'fingerprint', 'risk'].includes(k))));
   $('review-body').innerHTML = `<span class="ac-status attention">OpenCode · #${esc(p.run.slice(0, 6))}</span><h2>${esc(requestTitle(p))}</h2><p class="small muted">${esc(p.goal)}</p>
-    ${permission ? permissionHTML(p) : questionsHTML(p)}${details('Full OpenCode request', raw, 'raw-request')}<div id="review-feedback" role="status"></div>`;
-  $('review-footer').innerHTML = `<small>${permission ? 'Approval applies to this request only.' : 'Answers go to this OpenCode session.'}</small>
+    ${riskHTML(p)}${permission ? permissionHTML(p) : questionsHTML(p)}${details('Full OpenCode request', raw, 'raw-request')}<div id="review-feedback" role="status"></div>`;
+  $('review-footer').innerHTML = `<small>${permission ? (p.risk?.decision === 'confirm' ? 'Critical: type the confirmation word first.' : 'Approval applies to this request only unless you tick the box above.') : 'Answers go to this OpenCode session.'}</small>
     <button class="ac-btn danger-button" id="deny-review" aria-keyshortcuts="d">${permission ? 'Deny and redirect' : 'Reject question'}</button>
     <button class="ac-btn primary" id="approve-review" aria-keyshortcuts="a">${permission ? 'Approve once' : 'Send answers'}</button>`;
   $('deny-review').onclick = () => submitReview('reject');
@@ -1038,7 +1073,15 @@ function refreshReview() {
 async function submitReview(action) {
   if (reviewBusy || !reviewing || !connected) return;
   const p = reviewing;
-  let answers, redirect;
+  let answers, redirect, confirm, remember = false;
+  if (action === 'approve') {
+    const box = $('confirm-word');
+    if (box) {
+      confirm = box.value.trim();
+      if (confirm.toLowerCase() !== box.dataset.confirmWord) { reviewFeedback(`Type ${box.dataset.confirmWord} to approve this critical request.`, 'danger'); box.focus(); return; }
+    }
+    remember = !!$('remember-rule')?.checked;
+  }
   if (action === 'answer') {
     answers = (p.questions || []).map((q, i) => [...$('review-body').querySelectorAll(`input[name="question-${i}"]:checked`)].map(el => el.hasAttribute('data-custom-choice') ? $('custom-' + i).value.trim() : el.value));
     if (answers.some(list => !list.length || list.some(x => !x))) { reviewFeedback('Answer each question before sending.', 'danger'); return; }
@@ -1052,7 +1095,7 @@ async function submitReview(action) {
   $('deny-review').disabled = true;
   reviewFeedback('Sending your decision…');
   try {
-    const receipt = await api('/api/review', 'POST', {run: p.run, kind: p.kind, request_id: p.request_id, fingerprint: p.fingerprint, action, ...(answers ? {answers} : {}), ...(redirect ? {redirect} : {})});
+    const receipt = await api('/api/review', 'POST', {run: p.run, kind: p.kind, request_id: p.request_id, fingerprint: p.fingerprint, action, ...(answers ? {answers} : {}), ...(redirect ? {redirect} : {}), ...(confirm ? {confirm} : {}), ...(remember ? {remember: true} : {})});
     p.receipt = receipt;
     toast(receiptLabel(receipt));
     await refresh();
@@ -1181,6 +1224,7 @@ const ACTIONS = {
   pause: togglePause,
   'add-check': () => { if (!current || ended.has(current.status)) return; $('check-error').textContent = ''; $('check-dialog').showModal(); $('criterion').focus(); },
   'ask-status': () => { focusSteer(); $('steering').value = 'At your next planning turn, summarize what is complete, what remains, and any blockers.'; $('steering').focus(); },
+  'revoke-rule': async button => { await control('revoke_rule', button.dataset.rule); toast('Rule revoked. Matching requests will be asked again.'); },
   'verify-now': async () => {
     if (!canVerifyNow()) { toast(current?.verifier?.length ? 'Pause the run first; Verify now cannot overlap a coding turn.' : 'This run has no verification command.'); return; }
     await control('verify');

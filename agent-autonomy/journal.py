@@ -1,6 +1,7 @@
 """Durable run journal: SQLite with WAL, JSON documents, and versioned migrations."""
 import contextlib
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -25,8 +26,19 @@ def _v2(c):
     c.execute('CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, run TEXT NOT NULL, value TEXT NOT NULL)')
 
 
+def _v3(c):
+    """Append-only, hash-chained audit log of permission decisions (M4)."""
+    c.execute('''CREATE TABLE IF NOT EXISTS audit (seq INTEGER PRIMARY KEY AUTOINCREMENT, run TEXT, created TEXT NOT NULL,
+                 entry TEXT NOT NULL, prev_hash TEXT NOT NULL, hash TEXT NOT NULL)''')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1, _v2]
+MIGRATIONS = [_v1, _v2, _v3]
+GENESIS = '0' * 64
+
+
+def audit_hash(prev_hash, run, created, entry_json):
+    return hashlib.sha256('\n'.join((prev_hash, run or '', created, entry_json)).encode()).hexdigest()
 
 
 def migrate(c):
@@ -144,6 +156,36 @@ class Store:
                       (key, item['run'], json.dumps(item)))
         self._changed('review', item['run'])
         return item
+
+    def audit_append(self, run, entry):
+        """Append one audit entry. Each entry's hash covers the previous hash, so an edited,
+        removed, or reordered entry breaks the chain (see audit_verify). There is no update or delete."""
+        entry_json = json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+        created = now()
+        with self.connection() as c:
+            last = c.execute('SELECT hash FROM audit ORDER BY seq DESC LIMIT 1').fetchone()
+            prev = last[0] if last else GENESIS
+            digest = audit_hash(prev, run, created, entry_json)
+            seq = c.execute('INSERT INTO audit(run,created,entry,prev_hash,hash) VALUES(?,?,?,?,?)',
+                            (run, created, entry_json, prev, digest)).lastrowid
+        self._changed('audit', run)
+        return {'seq': seq, 'run': run, 'created': created, **entry}
+
+    def audit(self, run=None, limit=500):
+        with self.connection() as c:
+            query = 'SELECT seq,run,created,entry FROM audit' + (' WHERE run=?' if run else '') + ' ORDER BY seq DESC LIMIT ?'
+            rows = c.execute(query, ((run,) if run else ()) + (limit,)).fetchall()
+        return [{'seq': s, 'run': r, 'created': t, **json.loads(e)} for s, r, t, e in reversed(rows)]
+
+    def audit_verify(self):
+        """(True, None) if the whole chain is intact, else (False, first bad seq)."""
+        prev = GENESIS
+        with self.connection() as c:
+            for seq, run, created, entry, prev_hash, digest in c.execute('SELECT seq,run,created,entry,prev_hash,hash FROM audit ORDER BY seq'):
+                if prev_hash != prev or audit_hash(prev, run, created, entry) != digest:
+                    return False, seq
+                prev = digest
+        return True, None
 
     def put_agent(self, agent):
         with self.connection() as c:

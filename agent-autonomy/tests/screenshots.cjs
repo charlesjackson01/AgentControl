@@ -29,7 +29,26 @@ const scenarios = {
   activity: {state: fx.richActive, click: '[data-view="activity"]'},
   review: {state: fx.richActive, click: '#inline-approvals [data-intent="approve"]'},
   newrun: {state: fx.empty, click: '#empty-state [data-action="new"]'},
+  critical: {state: () => withRisk(fx.richActive()), click: '#inline-approvals [data-intent="approve"]'},
+  rules: {state: () => withRisk(fx.richActive()), click: '[data-view="approvals"]'},
 };
+
+// Permission risk (M4): a critical request, one remembered rule, and a short audit trail.
+function withRisk(s) {
+  s.permissions = {confirm_word: 'approve', labels: {low: 'Low', sensitive: 'Sensitive', critical: 'Critical'}};
+  s.inbox[0].risk = {class: 'critical', level: 'R3', label: 'Critical', permission: 'bash', decision: 'confirm', remember_allowed: false,
+    impact: 'Runs a shell command in the project folder. It can change files, install software, or reach the network.', reasons: ['recursive delete']};
+  s.inbox[0].patterns = ['rm -rf demo_app/build'];
+  s.inbox[0].context = {input: {command: 'rm -rf demo_app/build'}};
+  s.run.grants = [{id: 'a1b2c3d4e5f6', permission: 'bash', match: 'python3 -m unittest discover -s demo_app', class: 'sensitive', level: 'R2', revoked: false}];
+  s.audit = [
+    {seq: 11, created: s.run.created, action: 'requested', actor: 'coder-1', risk: 'R2', permission: 'bash', target: 'python3 -m unittest discover -s demo_app'},
+    {seq: 12, created: s.run.created, action: 'permission approve', actor: 'You, via dashboard', risk: 'R2', permission: 'bash', target: 'python3 -m unittest discover -s demo_app'},
+    {seq: 13, created: s.run.created, action: 'rule added', actor: 'You, via dashboard', risk: 'R2', permission: 'bash', target: 'python3 -m unittest discover -s demo_app'},
+    {seq: 14, created: s.run.created, action: 'requested', actor: 'coder-1', risk: 'R3', permission: 'bash', target: 'rm -rf demo_app/build'}];
+  s.audit_chain = {intact: true, broken_at: null};
+  return s;
+}
 
 async function open(browser, theme, [width, height], scenario) {
   const context = await browser.newContext({viewport: {width, height}, deviceScaleFactor: 1, reducedMotion: 'reduce', colorScheme: process.env.COLOR_SCHEME || 'light'});

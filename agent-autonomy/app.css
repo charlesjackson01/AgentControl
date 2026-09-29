@@ -4353,3 +4353,74 @@ kbd {
     padding:0;
   }
 }
+
+/* Permission risk (M4): class badges, confirmation, remembered rules, audit log */
+.risk-badge {
+  display:inline-block;
+  padding:2px 8px;
+  border-radius:var(--ac-radius);
+  border:1px solid var(--ac-border);
+  font-size:var(--ac-text-xs);
+  font-weight:600;
+  white-space:nowrap;
+  color:var(--ac-text-muted);
+}
+
+.risk-badge.risk-low {
+  color:var(--ac-success-text);
+  border-color:var(--ac-success);
+}
+
+.risk-badge.risk-sensitive {
+  color:var(--ac-warning-text);
+  border-color:var(--ac-warning);
+}
+
+.risk-badge.risk-critical {
+  color:var(--ac-danger-text);
+  border-color:var(--ac-danger);
+}
+
+.risk-section h3 {
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+
+.risk-section.risk-critical {
+  border-left:3px solid var(--ac-danger);
+  padding-left:12px;
+}
+
+.risk-reasons {
+  color:var(--ac-danger-text);
+  margin:6px 0;
+}
+
+#confirm-word {
+  display:block;
+  width:100%;
+  margin:6px 0 12px;
+}
+
+.rule-row,
+.audit-row {
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto;
+  gap:10px;
+  align-items:center;
+  padding:8px 0;
+  border-bottom:1px solid var(--ac-border);
+}
+
+.rule-row small,
+.audit-row small {
+  display:block;
+  color:var(--ac-text-muted);
+  overflow-wrap:anywhere;
+}
+
+.audit-list {
+  max-height:360px;
+  overflow:auto;
+}

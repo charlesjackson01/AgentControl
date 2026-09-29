@@ -316,4 +316,52 @@ test('a notice during a refresh is not lost',async()=>{
  await first;for(let i=0;i<6;i++)await tick();
  assert.equal(count()-before,2,'one follow-up refresh covers every notice that arrived meanwhile');
 });
+const risk=(cls,level,extra={})=>({class:cls,level,label:{low:'Low',sensitive:'Sensitive',critical:'Critical'}[cls],permission:'bash',impact:'Runs a shell command in the project folder.',reasons:[],decision:cls==='critical'?'confirm':'ask',remember_allowed:cls!=='critical',...extra});
+function riskFixture(cls){const s=fixture();s.permissions={confirm_word:'approve',labels:{low:'Low',sensitive:'Sensitive',critical:'Critical'}};
+ s.inbox[0].risk=cls==='critical'?risk('critical','R3',{reasons:['runs with administrator rights']}):risk('sensitive','R2');return s}
+test('critical requests show their reasons and need the typed word before sending',async()=>{
+ const h=await harness(riskFixture('critical'));
+ assert.match(h.document.getElementById('inline-approvals').textContent,/R3 · Critical/);
+ assert.match(h.document.getElementById('inline-approvals').textContent,/administrator rights/);
+ await h.click('#inline-approvals [data-intent="approve"]');
+ assert(!h.document.getElementById('remember-rule'),'critical approvals cannot be remembered');
+ await h.click('#approve-review');
+ assert.equal(h.calls.filter(c=>c.url==='/api/review').length,0);
+ assert.match(h.document.getElementById('review-feedback').textContent,/Type approve/);
+ h.document.getElementById('confirm-word').value='approve';
+ await h.click('#approve-review');
+ const body=h.calls.find(c=>c.url==='/api/review').body;
+ assert.equal(body.confirm,'approve');assert.equal(body.remember,undefined);
+});
+test('sensitive approvals can be remembered for identical requests',async()=>{
+ const h=await harness(riskFixture('sensitive'));
+ await h.click('#inline-approvals [data-intent="approve"]');
+ assert.match(h.document.getElementById('review-body').textContent,/R2 · Sensitive/);
+ assert(!h.document.getElementById('confirm-word'));
+ h.document.getElementById('remember-rule').checked=true;
+ await h.click('#approve-review');
+ assert.equal(h.calls.find(c=>c.url==='/api/review').body.remember,true);
+});
+test('requests without a recorded risk still render and approve',async()=>{
+ const h=await harness();
+ assert.match(h.document.getElementById('inline-approvals').textContent,/Risk class not recorded/);
+ await h.click('#inline-approvals [data-intent="approve"]');await h.click('#approve-review');
+ const body=h.calls.find(c=>c.url==='/api/review').body;assert.equal(body.confirm,undefined);assert.equal(body.remember,undefined);
+});
+test('approvals view lists remembered rules with revoke and the audit chain',async()=>{
+ const s=riskFixture('sensitive');
+ s.run.grants=[{id:'g1',permission:'bash',match:'npm test',class:'sensitive',level:'R2',revoked:false},{id:'g0',permission:'bash',match:'old',class:'low',level:'R1',revoked:true}];
+ s.audit=[{seq:1,run:'run_test',created:'2026-09-28T16:00:30Z',action:'requested',actor:'coder-1',risk:'R2',permission:'bash',target:'npm test'}];
+ s.audit_chain={intact:true,broken_at:null};
+ const h=await harness(s);await h.click('[data-view="approvals"]');
+ const rules=h.document.getElementById('rule-list');
+ assert.match(rules.textContent,/npm test/);assert(!rules.textContent.includes('old'));
+ assert.match(h.document.getElementById('audit-list').textContent,/Audit chain intact/);
+ assert.match(h.document.getElementById('audit-list').textContent,/requested/);
+ await h.click('[data-action="revoke-rule"]');
+ const call=h.calls.find(c=>c.url==='/api/control');
+ assert.deepEqual([call.body.action,call.body.text],['revoke_rule','g1']);
+ h.state.audit_chain={intact:false,broken_at:7};await h.poll();
+ assert.match(h.document.getElementById('audit-list').textContent,/broken at entry 7/);
+});
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

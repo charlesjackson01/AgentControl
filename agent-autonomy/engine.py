@@ -72,7 +72,7 @@ class Settings:
     vm_baseline: Path = None                # ai-arch baseline qcow2 cloned for VM runs (M13); None = VMs off
     vm_template: str = 'ai-arch-dev'        # libvirt domain whose definition the clones start from
     vm_uri: str = 'qemu:///system'
-    vm_ssh_key: Path = Path('~/.ssh/id_ed25519')   # authorized for the baseline's admin user
+    vm_ssh_key: Path = None                 # authorized for the baseline's admin user; default: vmenv.default_key()
     vm_user: str = 'archdev'
     vm_opencode: Path = None                # OpenCode binary copied into VMs; default: the one on PATH
     vm_storage: Path = None                 # clone disks; QEMU must reach it. Default: <baseline folder>/agentcontrol-runs
@@ -2305,7 +2305,7 @@ class Controller:
     def vm_info(self, refresh=False):
         cached = self._vm_cache
         if refresh or not cached or time.monotonic() - cached[0] > 30:
-            info = (self.vm_detect or vmenv.detect)(self.s.vm_uri, self.s.vm_baseline, self.s.vm_template, self.s.vm_ssh_key)
+            info = (self.vm_detect or vmenv.detect)(self.s.vm_uri, self.s.vm_baseline, self.s.vm_template, self._vm_key())
             self._vm_cache = cached = (time.monotonic(), info)
         return cached[1]
 
@@ -2334,6 +2334,9 @@ class Controller:
                 'base': str(self.s.data / 'vms' / ident), 'sockets': str(sandbox.sockets_dir(self.s.data, ident)),
                 'storage': str(self._vm_storage() / ident)}
 
+    def _vm_key(self):
+        return Path(self.s.vm_ssh_key).expanduser() if self.s.vm_ssh_key else vmenv.default_key()
+
     def _vm_storage(self):
         if self.s.vm_storage:
             return Path(self.s.vm_storage).expanduser()
@@ -2352,7 +2355,7 @@ class Controller:
         machine = self.vms.get(run['id'])
         if machine is None:
             machine = (self.vm_factory(run) if self.vm_factory else
-                       vmenv.VirtualMachine(v['uri'], v['name'], v['base'], self.s.vm_ssh_key, self.s.vm_user,
+                       vmenv.VirtualMachine(v['uri'], v['name'], v['base'], self._vm_key(), self.s.vm_user,
                                             storage=v.get('storage')))
             self.vms[run['id']] = machine
         return machine

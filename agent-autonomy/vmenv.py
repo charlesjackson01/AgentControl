@@ -45,8 +45,19 @@ DISPLAY = ':90'
 MAX_TREE = 512 * 1024 * 1024          # a snapshot larger than this is refused rather than copied
 
 
+KEY_CANDIDATES = ('~/.ssh/ai-arch-dev_ed25519', '~/.ssh/id_ed25519')   # ai-arch's owner key first (ai-arch/docs/ACCESS.md)
+
+
 class VMError(RuntimeError):
     pass
+
+
+def default_key():
+    """The first SSH key that exists: ai-arch's owner key, else your usual one."""
+    for candidate in KEY_CANDIDATES:
+        if Path(candidate).expanduser().is_file():
+            return Path(candidate).expanduser()
+    return Path(KEY_CANDIDATES[0]).expanduser()
 
 
 def run_cli(argv, timeout=120, input=None):
@@ -476,17 +487,28 @@ class VirtualMachine:
 
     def wait_address(self, timeout=180, prefix=None):
         until = time.monotonic() + timeout
+        ip, error = None, ''
         while time.monotonic() < until:
             ip = self.lease(prefix)
-            if ip and self._ssh_ok(ip):
-                self.address = ip
-                return ip
+            if ip:
+                ok, error = self._ssh_ok(ip)
+                if ok:
+                    self.address = ip
+                    return ip
             time.sleep(1)
-        raise VMError(f'The VM did not answer on SSH within {timeout} s.')
+        if not ip:
+            raise VMError(f'The VM got no address from libvirt\'s DHCP within {timeout} s'
+                          f"{f' (expected {prefix}*)' if prefix else ''}. Look at its screen: "
+                          f'virsh -c {self.uri} screenshot {self.name} /tmp/{self.name}.ppm')
+        if 'Permission denied' in error or 'publickey' in error:
+            raise VMError(f'The VM is at {ip}, but it refused the SSH key {self.key} for {self.admin}: {error} '
+                          '-- start AgentControl with --vm-ssh-key set to the key authorized in the baseline '
+                          '(ai-arch uses ~/.ssh/ai-arch-dev_ed25519), and --vm-user if the admin user is not archdev.')
+        raise VMError(f'The VM is at {ip}, but SSH as {self.admin} did not work within {timeout} s: {error or "no answer"}')
 
     def _ssh_ok(self, ip):
-        code, _, _ = self.cli(self.ssh_argv(self.admin, ip) + ['true'], 20)
-        return code == 0
+        code, _, err = self.cli(self.ssh_argv(self.admin, ip) + ['true'], 20)
+        return code == 0, _text(err).strip()[-300:]
 
     def switch_network(self, network, prefix):
         """Move the VM to another libvirt network. Live first (link down, new network, link up, new

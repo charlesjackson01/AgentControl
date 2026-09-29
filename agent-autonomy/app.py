@@ -304,7 +304,8 @@ def main():
     p.add_argument('--vm-baseline', type=Path, default=None, help='ai-arch baseline qcow2 that VM runs clone (read-only); unset = no VM runs')
     p.add_argument('--vm-template', default='ai-arch-dev', help='libvirt domain whose definition VM runs start from (never modified)')
     p.add_argument('--vm-uri', default='qemu:///system')
-    p.add_argument('--vm-ssh-key', type=Path, default=Path('~/.ssh/id_ed25519'), help="Private key authorized for the baseline's admin user")
+    p.add_argument('--vm-ssh-key', type=Path, default=None,
+                   help="Private key authorized for the baseline's admin user (default: ~/.ssh/ai-arch-dev_ed25519, else ~/.ssh/id_ed25519)")
     p.add_argument('--vm-user', default='archdev', help="The baseline's admin user (sudo) used only to provision each clone")
     p.add_argument('--vm-opencode', type=Path, default=None, help='OpenCode binary copied into VMs (default: the one on PATH)')
     p.add_argument('--vm-storage', type=Path, default=None,
@@ -339,7 +340,7 @@ def main():
                  research_toolsets=tuple(t.strip() for t in a.research_toolsets.split(',') if t.strip()),
                  max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider,
                  vm_baseline=a.vm_baseline.expanduser() if a.vm_baseline else None, vm_template=a.vm_template, vm_uri=a.vm_uri,
-                 vm_ssh_key=a.vm_ssh_key.expanduser(), vm_user=a.vm_user, vm_opencode=a.vm_opencode,
+                 vm_ssh_key=a.vm_ssh_key.expanduser() if a.vm_ssh_key else None, vm_user=a.vm_user, vm_opencode=a.vm_opencode,
                  vm_storage=a.vm_storage.expanduser() if a.vm_storage else None)
     if a.build_agent_image:
         return build_agent_image(a)

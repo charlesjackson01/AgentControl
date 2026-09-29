@@ -5,7 +5,7 @@ in the VM, the run's model gateway, the network cut, and the console. Scripted: 
 Opt-in (it boots a VM):
     AGENTCONTROL_VM_TESTS=1 AGENTCONTROL_VM_BASELINE=~/ai-arch/vms/ai-arch-baseline-with-tailscale.qcow2 \\
         python3 -m unittest tests.test_vm_e2e           # from agent-autonomy/
-Optional: AGENTCONTROL_VM_TEMPLATE (default ai-arch-dev), AGENTCONTROL_VM_SSH_KEY (default ~/.ssh/id_ed25519),
+Optional: AGENTCONTROL_VM_TEMPLATE (default ai-arch-dev), AGENTCONTROL_VM_SSH_KEY (default ~/.ssh/ai-arch-dev_ed25519, else ~/.ssh/id_ed25519),
 OPENCODE_BIN (default: opencode on PATH). The first run installs packages in the clone, so it needs internet.
 """
 import json
@@ -29,7 +29,7 @@ from test_workspaces import make_repo
 ENABLED = os.environ.get('AGENTCONTROL_VM_TESTS') == '1'
 BASELINE = Path(os.environ.get('AGENTCONTROL_VM_BASELINE', '')).expanduser() if os.environ.get('AGENTCONTROL_VM_BASELINE') else None
 TEMPLATE = os.environ.get('AGENTCONTROL_VM_TEMPLATE', 'ai-arch-dev')
-KEY = Path(os.environ.get('AGENTCONTROL_VM_SSH_KEY', '~/.ssh/id_ed25519')).expanduser()
+KEY = Path(os.environ['AGENTCONTROL_VM_SSH_KEY']).expanduser() if os.environ.get('AGENTCONTROL_VM_SSH_KEY') else vmenv.default_key()
 OPENCODE = os.environ.get('OPENCODE_BIN') or shutil.which('opencode')
 INFO = vmenv.detect('qemu:///system', BASELINE, TEMPLATE, KEY) if ENABLED else {'reason': 'disabled'}
 

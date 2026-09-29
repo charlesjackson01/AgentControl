@@ -3,6 +3,7 @@ snapshots over SSH (the VM side runs here for real on a local folder), and libvi
 checked against a scripted virsh."""
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 import zlib
 
@@ -241,6 +243,27 @@ class MachineTests(unittest.TestCase):
         with self.assertRaisesRegex(vmenv.VMError, '--vm-storage') as caught:
             vm.start()
         self.assertIn('setfacl -m u:libvirt-qemu:x', str(caught.exception))
+
+    def test_waiting_for_ssh_says_what_went_wrong(self):
+        no_lease = Recorder({'domifaddr': (0, b'', b'')})
+        vm = vmenv.VirtualMachine('qemu:///system', 'vm1', self.base, '/keys/id', cli=no_lease)
+        with self.assertRaisesRegex(vmenv.VMError, 'no address from libvirt'):
+            vm.wait_address(timeout=.5)
+        refused = Recorder({'domifaddr': (0, b' vnet0 52:54:00:aa:bb:cc ipv4 192.168.122.77/24\n', b''),
+                            'ssh': (255, b'', b'archdev@192.168.122.77: Permission denied (publickey).')})
+        vm = vmenv.VirtualMachine('qemu:///system', 'vm1', self.base, '/keys/id', cli=refused)
+        with self.assertRaisesRegex(vmenv.VMError, 'refused the SSH key /keys/id') as caught:
+            vm.wait_address(timeout=.5)
+        self.assertIn('--vm-ssh-key', str(caught.exception))
+
+    def test_the_ai_arch_owner_key_is_preferred(self):
+        home = Path(self.temp.name) / 'home'
+        (home / '.ssh').mkdir(parents=True)
+        with mock.patch.dict(os.environ, {'HOME': str(home)}):
+            (home / '.ssh' / 'id_ed25519').write_text('k')
+            self.assertEqual(vmenv.default_key(), home / '.ssh' / 'id_ed25519')
+            (home / '.ssh' / 'ai-arch-dev_ed25519').write_text('k')
+            self.assertEqual(vmenv.default_key(), home / '.ssh' / 'ai-arch-dev_ed25519')
 
     def test_network_switch_falls_back_to_a_reboot(self):
         states = iter(['running', 'stopped', 'stopped', 'running'])

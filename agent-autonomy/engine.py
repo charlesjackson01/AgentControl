@@ -1,6 +1,5 @@
 """Bounded Hermes -> OpenCode controller. Python 3.10+, standard library only."""
 import base64
-import contextlib
 import difflib
 import hashlib
 import hmac
@@ -10,7 +9,6 @@ from pathlib import Path
 import re
 import shlex
 import signal
-import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -19,17 +17,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from journal import Store, now
 from preview import PreviewManager, desktop_missing, validate_spec
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 TERMINAL = {'completed', 'blocked', 'failed', 'stopped', 'limit_reached'}
 PENDING = {'prepared', 'dispatching', 'running', 'waiting'}
-
-
-def now():
-    return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
 
 class Stopped(Exception):
@@ -67,98 +61,6 @@ class Settings:
     username: str = 'opencode'
     notifications: bool = True
     preview_idle: float = 1800
-
-
-class Store:
-    def __init__(self, path):
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock = threading.RLock()
-        with self.connection() as c:
-            c.executescript('''PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS steps (id TEXT PRIMARY KEY, run TEXT NOT NULL, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, run TEXT NOT NULL, value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, run TEXT, created TEXT, kind TEXT, detail TEXT);''')
-
-    @contextlib.contextmanager
-    def connection(self):
-        with self.lock:
-            c = sqlite3.connect(self.path, timeout=10)
-            try:
-                yield c
-                c.commit()
-            finally:
-                c.close()
-
-    def put(self, table, value):
-        assert table in ('runs', 'steps')
-        with self.connection() as c:
-            if table == 'runs':
-                c.execute('INSERT OR REPLACE INTO runs VALUES (?,?)', (value['id'], json.dumps(value)))
-            else:
-                c.execute('INSERT OR REPLACE INTO steps VALUES (?,?,?)', (value['id'], value['run'], json.dumps(value)))
-        return value
-
-    def get(self, table, ident):
-        assert table in ('runs', 'steps')
-        with self.connection() as c:
-            row = c.execute(f'SELECT value FROM {table} WHERE id=?', (ident,)).fetchone()
-        if not row:
-            raise KeyError(ident)
-        return json.loads(row[0])
-
-    def update(self, table, ident, **changes):
-        with self.lock:
-            item = self.get(table, ident)
-            item.update(changes)
-            return self.put(table, item)
-
-    def discard_prepared_step(self, ident):
-        with self.connection() as c:
-            item = json.loads(c.execute('SELECT value FROM steps WHERE id=?', (ident,)).fetchone()[0])
-            if item['status'] != 'prepared':
-                raise ValueError('Only an unsubmitted draft may be discarded')
-            c.execute('DELETE FROM steps WHERE id=?', (ident,))
-
-    def runs(self):
-        with self.connection() as c:
-            return [json.loads(row[0]) for row in c.execute('SELECT value FROM runs ORDER BY rowid DESC')]
-
-    def steps(self, run):
-        with self.connection() as c:
-            return [json.loads(row[0]) for row in c.execute('SELECT value FROM steps WHERE run=? ORDER BY rowid', (run,))]
-
-    def step_count(self, run):
-        with self.connection() as c:
-            return c.execute('SELECT COUNT(*) FROM steps WHERE run=?', (run,)).fetchone()[0]
-
-    def event(self, run, kind, detail):
-        if not isinstance(detail, str):
-            detail = json.dumps(detail, ensure_ascii=False)
-        with self.connection() as c:
-            c.execute('INSERT INTO events(run,created,kind,detail) VALUES(?,?,?,?)', (run, now(), kind, detail))
-
-    def events(self, run, limit=100):
-        with self.connection() as c:
-            rows = c.execute('SELECT id,created,kind,detail FROM events WHERE run=? ORDER BY id DESC LIMIT ?', (run, limit)).fetchall()
-        return [dict(zip(('id', 'created', 'kind', 'detail'), r)) for r in reversed(rows)]
-
-    def review(self, run, kind, request):
-        key = f'{run}:{kind}:{request}'
-        with self.connection() as c:
-            row = c.execute('SELECT value FROM reviews WHERE id=?', (key,)).fetchone()
-        return json.loads(row[0]) if row else None
-
-    def save_review(self, item):
-        key = f"{item['run']}:{item['kind']}:{item['request_id']}"
-        with self.connection() as c:
-            c.execute('INSERT OR REPLACE INTO reviews VALUES (?,?,?)', (key, item['run'], json.dumps(item)))
-        return item
-
-    def reviews(self, run):
-        with self.connection() as c:
-            return [json.loads(r[0]) for r in c.execute('SELECT value FROM reviews WHERE run=? ORDER BY rowid DESC', (run,))]
 
 
 class OpenCode:

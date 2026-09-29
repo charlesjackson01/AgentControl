@@ -322,4 +322,6 @@ Goal: restructure `engine.py` for multi-agent work **without changing behavior**
 | Container (M10) | `tests.test_container_e2e` on rootless Podman 3.4.4 | limits need systemd cgroup delegation, detected from the user service; network state fails closed; the desktop preview uses the container's own tools |
 | Researcher (M12) | probe, plus one real research call with `web` | Hermes 0.21's `browser` toolset is a password vault, so credential toolsets are refused; setting: `--research-toolsets web` |
 
-Still to check there: a live team run watched in the dashboard.
+Live team run in the dashboard: worked, once the OpenCode server was running. The first attempt found none; that error now names the address and how to start it.
+
+Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

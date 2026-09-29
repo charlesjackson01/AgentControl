@@ -39,6 +39,8 @@ python3 agent-autonomy/app.py \
 Run history and the dashboard key live in `agent-autonomy/state/`, which is not
 tracked by git, so updating the code preserves them.
 
+For everyday use, let the server start OpenCode and the dashboard for you: see **Daily use** below.
+
 1. With Tailscale connected, open **http://100.79.242.24:8766** on your phone.
 2. Enter the **Dashboard key** printed in the server terminal. Tick
    **Remember on this device** to keep it in that browser; otherwise it lasts
@@ -57,6 +59,33 @@ exact prompt next to OpenCode's live terminal.
 If a run was active when you stopped the dashboard, it will appear as
 **Interrupted**. Press **Resume** to reconnect to the same OpenCode session;
 this does not resend its coding prompt.
+
+## Daily use: OpenCode and the dashboard as services
+
+With this set up once, you don't keep terminals open. OpenCode and the dashboard run as systemd **user** services: they start by themselves and restart if they stop. Stop any dashboard or `opencode serve` you started in a terminal, then run from the repository root:
+```
+agent-autonomy/deploy/install-user-services.sh --project ~/your-project
+sudo loginctl enable-linger $USER     # once: start at boot, even before you log in
+```
+The installer never runs sudo itself; `--dry-run` shows every step without doing it.
+- **What it does:** it writes two services to `~/.config/systemd/user/`: `agentcontrol-opencode` runs `opencode serve` on 127.0.0.1:45381, and `agentcontrol` runs the dashboard. It checks the connections with `--doctor`, then starts both.
+- **Your settings** live in `~/.config/agentcontrol/agentcontrol.env`, created on the first install and never overwritten:
+  - the dashboard flags, in one line: `--host` (your Tailscale address), `--project`, `--research-toolsets web`, and `--vm-baseline` if your ai-arch baseline is found
+  - the `PATH` the services use to find `hermes`, `opencode`, `podman` and `virsh`
+  - an optional OpenCode password
+
+  After changing it: `systemctl --user restart agentcontrol`.
+
+| To… | Run |
+|---|---|
+| See the dashboard key | `cat agent-autonomy/state/dashboard.key` |
+| Check both services | `systemctl --user status agentcontrol agentcontrol-opencode` |
+| Follow the log | `journalctl --user -u agentcontrol -f` |
+| Update AgentControl | `git pull`, then `systemctl --user restart agentcontrol` (re-run the installer if the service files changed) |
+| Stop until the next boot | `systemctl --user stop agentcontrol agentcontrol-opencode` |
+| Remove the services | `agent-autonomy/deploy/install-user-services.sh --uninstall` (keeps your settings and run history) |
+
+If the dashboard is started while the Tailscale address isn't up yet, it retries every 10 seconds. A running run shows as Interrupted after a restart; Resume reconnects without resending its prompt.
 
 ## Model and profile behavior
 

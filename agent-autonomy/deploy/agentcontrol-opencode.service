@@ -1,0 +1,16 @@
+# OpenCode server for AgentControl (systemd user service).
+# Rendered by install-user-services.sh; edit ~/.config/agentcontrol/agentcontrol.env instead of this file.
+[Unit]
+Description=OpenCode server for AgentControl
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT@
+EnvironmentFile=-%h/.config/agentcontrol/agentcontrol.env
+ExecStart=@OPENCODE@ serve --hostname 127.0.0.1 --port @OC_PORT@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

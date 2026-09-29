@@ -2667,7 +2667,7 @@ class Controller:
             self._reload_skills(ident, step.get('agent', 'coder-1'))
             self.store.update('steps', step['id'], status='dispatching', started=time.time())
             self.store.update('runs', ident, status='coding', phase='code', summary=step['title'])
-            self.store.event(ident, 'OpenCode prompt', {'step': step['number'], 'message_id': step['message_id'], 'text': step['prompt']})
+            self.store.event(ident, 'OpenCode prompt', {'step': step['number'], 'message_id': step['message_id'], 'text': step['prompt'], 'agent': step.get('agent', 'coder-1')})
             payload = {'messageID': step['message_id'], 'parts': [{'type': 'text', 'text': step['prompt']}]}
             endpoint = self._route_for(run, step.get('role') or agent_registry.role_of(step.get('agent')))
             if endpoint:

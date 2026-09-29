@@ -55,6 +55,12 @@ class LiveStateTests(unittest.TestCase):
         self.assertEqual(agents.agent_for_event('Hermes decision'), 'hermes')
         self.assertEqual(agents.agent_for_event('OpenCode tool'), 'coder-1')
         self.assertEqual(agents.agent_for_event('verification'), 'agentcontrol')
+        # Team runs: the event names its agent (tool calls, prompts, approvals, sessions).
+        self.assertEqual(agents.agent_for_event('OpenCode tool', '{"tool": "bash", "agent": "coder-2"}'), 'coder-2')
+        self.assertEqual(agents.agent_for_event('OpenCode prompt', {'step': 3, 'agent': 'tester-1'}), 'tester-1')
+        self.assertEqual(agents.agent_for_event('OpenCode needs input', [{'id': 'p1', 'agent': 'coder-3'}]), 'coder-3')
+        self.assertEqual(agents.agent_for_event('session', 'coder-2: ses_abc'), 'coder-2')
+        self.assertEqual(agents.agent_for_event('OpenCode tool', 'not json {'), 'coder-1')
 
 
 class ControllerAgentTests(unittest.TestCase):

@@ -23,7 +23,6 @@ let selectedTurn = null, shownStage = '';
 let runScope = 'current', projectBrowse = null;   // run history: this project or all; the Projects dialog's folder
 const seenRequests = new Set();
 const dismissedReceipts = new Set();
-const term = {turn: null, count: 0, omitted: 0, last: '', follow: true};
 
 function savedView() { const v = readItem('local', 'ac-view'); return VIEWS.includes(v) && v !== 'new' ? v : 'mission'; }
 function storage(kind) { try { return kind === 'local' ? localStorage : sessionStorage; } catch { return null; } }
@@ -690,59 +689,71 @@ function termEntryHTML(entry, running) {
   const output = entry.output ? `<details class="term-output" data-open-key="${esc(entry.id || '')}" ${running && entry.status === 'running' ? 'open' : ''}><summary>output · ${plural(lines, 'line')}</summary><pre>${esc(entry.output)}</pre></details>` : '';
   return `<div class="term-line term-tool ${esc(entry.status || '')}"><span class="term-prompt">${esc(symbol)}</span><span class="term-cmd">${esc(label)}</span>${status}</div>${output}`;
 }
-function termReset(turn) {
-  term.turn = turn; term.count = 0; term.omitted = 0; term.last = '';
-  $('term-body').innerHTML = '';
+/* A live terminal view over one agent's recorded turns (OpenCode text and tool parts only).
+   The Runs page has one; every workspace pane makes its own, so each keeps its own scroll and follow state. */
+function makeTerm(els, label = () => 'opencode') {
+  const t = {turn: null, count: 0, omitted: 0, last: '', follow: true, els};
+  t.reset = turn => { t.turn = turn; t.count = 0; t.omitted = 0; t.last = ''; const e = els(); if (e.body) e.body.innerHTML = ''; };
+  t.setFollow = on => {
+    t.follow = on;
+    const e = els();
+    e.follow?.setAttribute('aria-pressed', String(on));
+    if (on && e.body) { e.body.scrollTop = e.body.scrollHeight; e.jump?.classList.add('hidden'); }
+  };
+  t.onScroll = () => {
+    const e = els(), atBottom = e.body.scrollHeight - e.body.scrollTop - e.body.clientHeight < 24;
+    if (atBottom !== t.follow) { t.follow = atBottom; e.follow?.setAttribute('aria-pressed', String(atBottom)); }
+    if (atBottom) e.jump?.classList.add('hidden');
+  };
+  t.render = (step, state, pending, isLast) => {
+    const e = els();
+    if (!e.body) return;
+    const running = ['active', 'waiting'].includes(state);
+    const entries = transcriptOf(step);
+    const omitted = step?.transcript_omitted || 0;
+    if (t.turn !== (step?.id || 'next') || entries.length < t.count || omitted !== t.omitted) t.reset(step?.id || 'next');
+    t.omitted = omitted;
+    const body = e.body, atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+    let changed = false;
+    entries.forEach((entry, i) => {
+      const html = termEntryHTML(entry, running);
+      if (i < t.count - 1) return;
+      if (i === t.count - 1) {
+        if (html === t.last) return;
+        // Replace the last entry in place; it is the one that grows while OpenCode works.
+        const wasOpen = body.lastElementChild?.querySelector?.('details')?.open || body.lastElementChild?.open;
+        body.querySelectorAll(`[data-entry="${i}"]`).forEach(x => x.remove());
+        body.insertAdjacentHTML('beforeend', `<div class="term-entry" data-entry="${i}">${html}</div>`);
+        if (wasOpen) body.lastElementChild.querySelector('details')?.setAttribute('open', '');
+      } else body.insertAdjacentHTML('beforeend', `<div class="term-entry" data-entry="${i}">${html}</div>`);
+      t.last = html; changed = true;
+    });
+    t.count = entries.length;
+    const held = isLast && running ? pending.map(p => `<div class="term-line term-held"><span class="term-prompt">!</span><span class="term-cmd">${esc(requestText(p))}</span><button class="term-review" data-review="${esc(requestKey(p))}">Review</button></div>`).join('') : '';
+    setHTML(e.held, held);
+    const empty = !entries.length && !held;
+    e.empty.textContent = !step ? 'OpenCode output appears here once Hermes sends the next prompt.' : ['prepared', 'dispatching'].includes(step.status) ? 'Sending the prompt to OpenCode…' : 'No OpenCode output was recorded for this turn.';
+    e.empty.classList.toggle('hidden', !empty);
+    e.box.classList.toggle('running', running);
+    e.box.dataset.state = state;
+    const tools = entries.filter(x => x.type === 'tool').length;
+    const end = step?.ended ? Date.parse(step.ended) : Date.now();
+    const elapsed = step ? duration((end - Date.parse(step.created)) / 1000) : '—';
+    e.title.textContent = step ? `${label()} — turn ${step.number}` : `${label()} — waiting`;
+    e.meta.textContent = `${state === 'waiting' ? 'waiting on you' : running ? 'running' : state === 'failed' ? 'failed' : step ? 'idle' : 'queued'} · ${elapsed} · ${plural(tools, 'tool call')}${omitted ? ` · ${omitted} earlier hidden` : ''}`;
+    if (changed || held) {
+      if (t.follow || atBottom) body.scrollTop = body.scrollHeight;
+      else e.jump?.classList.remove('hidden');
+    }
+  };
+  t.text = steps => transcriptOf((steps || []).find(x => x.id === t.turn)).map(x => x.type === 'text' ? x.text : `${TOOL_SYMBOL[x.tool] || '•'} ${x.tool === 'bash' ? '' : x.tool + ' '}${x.summary || ''}${x.output ? '\n' + x.output : ''}`).join('\n');
+  return t;
 }
-function renderTerminal(step, state, pending, isLast) {
-  const running = ['active', 'waiting'].includes(state);
-  const entries = transcriptOf(step);
-  const omitted = step?.transcript_omitted || 0;
-  if (term.turn !== (step?.id || 'next') || entries.length < term.count || omitted !== term.omitted) termReset(step?.id || 'next');
-  term.omitted = omitted;
-  const body = $('term-body'), atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
-  let changed = false;
-  entries.forEach((entry, i) => {
-    const html = termEntryHTML(entry, running);
-    if (i < term.count - 1) return;
-    if (i === term.count - 1) {
-      if (html === term.last) return;
-      // Replace the last entry in place; it is the one that grows while OpenCode works.
-      const wasOpen = body.lastElementChild?.querySelector?.('details')?.open || body.lastElementChild?.open;
-      body.querySelectorAll(`[data-entry="${i}"]`).forEach(e => e.remove());
-      body.insertAdjacentHTML('beforeend', `<div class="term-entry" data-entry="${i}">${html}</div>`);
-      if (wasOpen) body.lastElementChild.querySelector('details')?.setAttribute('open', '');
-    } else body.insertAdjacentHTML('beforeend', `<div class="term-entry" data-entry="${i}">${html}</div>`);
-    term.last = html; changed = true;
-  });
-  term.count = entries.length;
-  const held = isLast && running ? pending.map(p => `<div class="term-line term-held"><span class="term-prompt">!</span><span class="term-cmd">${esc(requestText(p))}</span><button class="term-review" data-review="${esc(requestKey(p))}">Review</button></div>`).join('') : '';
-  setHTML($('term-held'), held);
-  const empty = !entries.length && !held;
-  $('term-empty').textContent = !step ? 'OpenCode output appears here once Hermes sends the next prompt.' : ['prepared', 'dispatching'].includes(step.status) ? 'Sending the prompt to OpenCode…' : 'No OpenCode output was recorded for this turn.';
-  $('term-empty').classList.toggle('hidden', !empty);
-  const box = $('term');
-  box.classList.toggle('running', running);
-  box.dataset.state = state;
-  const tools = entries.filter(e => e.type === 'tool').length;
-  const end = step?.ended ? Date.parse(step.ended) : Date.now();
-  const elapsed = step ? duration((end - Date.parse(step.created)) / 1000) : '—';
-  $('term-title').textContent = step ? `opencode — turn ${step.number}` : 'opencode — waiting';
-  $('term-meta').textContent = `${state === 'waiting' ? 'waiting on you' : running ? 'running' : state === 'failed' ? 'failed' : step ? 'idle' : 'queued'} · ${elapsed} · ${plural(tools, 'tool call')}${omitted ? ` · ${omitted} earlier hidden` : ''}`;
-  if (changed || held) {
-    if (term.follow || atBottom) body.scrollTop = body.scrollHeight;
-    else $('term-jump').classList.remove('hidden');
-  }
-}
-function terminalText() {
-  const step = data?.steps?.find(s => s.id === term.turn);
-  return transcriptOf(step).map(e => e.type === 'text' ? e.text : `${TOOL_SYMBOL[e.tool] || '•'} ${e.tool === 'bash' ? '' : e.tool + ' '}${e.summary || ''}${e.output ? '\n' + e.output : ''}`).join('\n');
-}
-function setFollow(on) {
-  term.follow = on;
-  $('term-follow').setAttribute('aria-pressed', String(on));
-  if (on) { const body = $('term-body'); body.scrollTop = body.scrollHeight; $('term-jump').classList.add('hidden'); }
-}
+const term = makeTerm(() => ({box: $('term'), body: $('term-body'), held: $('term-held'), empty: $('term-empty'), title: $('term-title'), meta: $('term-meta'), jump: $('term-jump'), follow: $('term-follow')}));
+function termReset(turn) { term.reset(turn); }
+function renderTerminal(step, state, pending, isLast) { term.render(step, state, pending, isLast); }
+function terminalText() { return term.text(data?.steps); }
+function setFollow(on) { term.setFollow(on); }
 function expandTerminal(open) {
   const box = $('term');
   if (open) { $('terminal-dialog-body').append(box); $('terminal-dialog').showModal(); }
@@ -2242,11 +2253,7 @@ function init() {
     $('vm-type').value = '';
   };
   $('preview-screen').addEventListener('contextmenu', event => { event.preventDefault(); screenClick(event); });
-  $('term-body').addEventListener('scroll', () => {
-    const body = $('term-body'), atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
-    if (atBottom !== term.follow) { term.follow = atBottom; $('term-follow').setAttribute('aria-pressed', String(atBottom)); }
-    if (atBottom) $('term-jump').classList.add('hidden');
-  });
+  $('term-body').addEventListener('scroll', term.onScroll);
   $('terminal-dialog').addEventListener('close', () => expandTerminal(false));
   $('stage-track').addEventListener('scroll', () => {
     const track = $('stage-track');

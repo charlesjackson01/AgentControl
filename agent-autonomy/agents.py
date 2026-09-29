@@ -7,6 +7,7 @@ before agents existed are shown the same way without rewriting history.
 Standard library only.
 """
 from dataclasses import asdict, dataclass, field
+import json
 
 TERMINAL = {'completed', 'blocked', 'failed', 'stopped', 'limit_reached'}
 
@@ -90,7 +91,20 @@ def default_agents(run, profile=''):
     ]
 
 
-def agent_for_event(kind):
+def agent_for_event(kind, detail=None):
+    """Which agent an activity entry belongs to: the agent the event names (tool calls, prompts,
+    approvals and sessions of team runs name theirs), else the default for that kind of event."""
+    if isinstance(detail, str) and detail[:1] in '[{':
+        try:
+            detail = json.loads(detail)
+        except ValueError:
+            pass
+    if isinstance(detail, dict) and detail.get('agent'):
+        return str(detail['agent'])
+    if isinstance(detail, list) and detail and isinstance(detail[0], dict) and detail[0].get('agent'):
+        return str(detail[0]['agent'])
+    if kind == 'session' and isinstance(detail, str) and ': ' in detail:
+        return detail.split(': ', 1)[0]   # "coder-2: ses_…"
     return EVENT_AGENT.get(kind, 'agentcontrol')
 
 
@@ -128,7 +142,7 @@ def describe(agents, run, steps, pending, events=()):
     """Agents for the API: identity + type info + derived state + simple counters."""
     counts = {}
     for event in events:
-        name = agent_for_event(event.get('kind', ''))
+        name = agent_for_event(event.get('kind', ''), event.get('detail'))
         counts[name] = counts.get(name, 0) + 1
     result = []
     for agent in agents:

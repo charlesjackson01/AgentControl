@@ -38,6 +38,11 @@ class OpenCode:
         except urllib.error.HTTPError as exc:
             message = exc.read(4000).decode(errors='replace')
             raise OpenCodeHTTPError(method, path, exc.code, message) from exc
+        except urllib.error.URLError as exc:
+            port = urllib.parse.urlsplit(self.s.opencode_url).port or 4096
+            raise RuntimeError(f'OpenCode is not reachable at {self.s.opencode_url} ({exc.reason}). Start your OpenCode server '
+                               f'there (for example: opencode serve --port {port}), or start AgentControl with --opencode '
+                               'set to where it runs.') from exc
 
     def _unix(self, target, method, data, headers, path):
         body = None if data is None else json.dumps(data).encode()

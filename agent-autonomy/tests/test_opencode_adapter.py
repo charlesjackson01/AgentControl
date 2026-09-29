@@ -82,5 +82,21 @@ class DirectoryScopingTests(unittest.TestCase):
         self.assertEqual([p['id'] for p in found if p['kind'] == 'permission'], ['p1'])
 
 
+class UnreachableServerTests(unittest.TestCase):
+    def test_a_stopped_server_is_named_with_how_to_start_it(self):
+        import socket
+        with socket.socket() as probe:   # a port nothing listens on
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        with tempfile.TemporaryDirectory() as temp:
+            api = OpenCode(Settings(Path(temp), Path(temp) / 'state', opencode_url=f'http://127.0.0.1:{port}'))
+            with self.assertRaises(RuntimeError) as caught:
+                api.health()
+        message = str(caught.exception)
+        self.assertIn(f'OpenCode is not reachable at http://127.0.0.1:{port}', message)
+        self.assertIn(f'opencode serve --port {port}', message)
+        self.assertNotIn('urlopen error', message)
+
+
 if __name__ == '__main__':
     unittest.main()

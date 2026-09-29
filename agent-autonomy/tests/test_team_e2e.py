@@ -19,6 +19,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -192,6 +193,31 @@ class RealOpenCodeTeamTest(unittest.TestCase):
                          ['coder-1 (AgentControl)', 'coder-2 (AgentControl)', 'coder-1 (AgentControl)'])
         self.assertFalse((self.repo / 'api.py').exists(), 'your checkout is untouched until Apply')
 
+
+    def test_installed_skill_reaches_the_agent_on_its_next_turn(self):
+        from test_capabilities import write_skill
+        library = Path(self.temp.name) / 'library'
+        write_skill(library / 'pdf')
+        self.settings.skills_library = library
+        code = lambda name: {'action': 'code', 'title': name, 'summary': 's', 'prompt': f'CREATE {name}'}
+        c = self.controller(FakeTeamManager([], [code('one.txt'), code('two.txt'), complete()]))
+        run = c.new('Build it')
+        self.wait(lambda: c.store.steps(run['id']) and c.store.steps(run['id'])[-1]['status'] == 'running')
+        item = c.propose_capability(run['id'], 'coder-1', {'type': 'library', 'name': 'pdf-tools'})
+        c.decide_capability(item['id'], 'approve')
+        self.wait(lambda: c.store.get('runs', run['id'])['status'] in ('completed', 'failed', 'attention', 'blocked'), 240)
+        result = c.store.get('runs', run['id'])
+        self.assertEqual(result['status'], 'completed', result['summary'])
+        agent_dir = result['workspace']['agents']['coder-1']['dir']
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        names = lambda folder: {s.get('name') for s in json.load(opener.open(f'{self.url}/skill?directory={urllib.parse.quote(str(folder))}'))}
+        # Reloaded before the second turn, so OpenCode now offers the skill in that agent's directory only.
+        self.assertIn('skills reloaded', [e['kind'] for e in c.store.events(run['id'])])
+        self.assertIn('pdf-tools', names(agent_dir))
+        self.assertNotIn('pdf-tools', names(self.repo), 'your checkout does not get the skill')
+        # The session survived the reload: both turns finished in the same OpenCode session.
+        self.assertEqual(sorted(self.model.creates), ['one.txt', 'two.txt'])
+        self.assertEqual(len({s['status'] for s in c.store.steps(run['id'])}), 1)
 
 if __name__ == '__main__':
     unittest.main()

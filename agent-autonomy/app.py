@@ -70,6 +70,15 @@ def handler(controller, key):
                 return self.reply(200, {k: info[k] for k in ('is_repo', 'usable', 'reason', 'branch', 'subdir')} |
                                   {'changes': info['changes'][:50], 'untracked': info['untracked'][:50],
                                    'dirty_count': len(info['changes']) + len(info['untracked'])})
+            if path.path == '/api/skills':
+                ident = urllib.parse.parse_qs(path.query).get('run', [''])[0]
+                run = None
+                if ident:
+                    try:
+                        run = controller.store.get('runs', ident)
+                    except KeyError:
+                        return self.reply(404, {'error': 'Unknown run'})
+                return self.reply(200, controller.skills_status(run))
             if path.path == '/api/models':
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
                 if urllib.parse.parse_qs(path.query).get('check'):
@@ -165,6 +174,15 @@ def handler(controller, key):
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})
                 if self.path == '/api/preview':
                     return self.reply(200, controller.preview_action(body['run'], body['action'], body))
+                if self.path == '/api/skills/propose':
+                    # Always your request: an API caller cannot claim to be Hermes.
+                    return self.reply(200, controller.propose_capability(body['run'], body.get('agent', 'coder-1'), body.get('source'), 'you'))
+                if self.path == '/api/skills/decide':
+                    return self.reply(200, controller.decide_capability(body['id'], body.get('action')))
+                if self.path == '/api/skills/remove':
+                    return self.reply(200, controller.remove_capability(body['id']))
+                if self.path == '/api/skills/fetch':
+                    return self.reply(200, controller.fetch_capability(body['id']))
                 if self.path == '/api/mode/preview':
                     steps = body.get('max_steps', 8)
                     checks = [c for c in (body.get('goal_checks') or []) if isinstance(c, str)][:20]
@@ -232,6 +250,8 @@ def main():
     p.add_argument('--doctor', action='store_true', help='Check connections and CLI flags; do not run a model')
     p.add_argument('--preview-port', type=int, default=None, help='Port for live previews (default: dashboard port + 1)')
     p.add_argument('--no-preview', action='store_true', help='Disable the live preview listener')
+    p.add_argument('--skills-library', type=Path, default=Path(os.environ.get('AGENTCONTROL_SKILLS', '~/agentcontrol/skills')),
+                   help='Folder of skills you curate (each a folder with SKILL.md)')
     p.add_argument('--models', type=Path, default=None, help='Model registry JSON (default: state/models.json; an ai-arch.json also works)')
     p.add_argument('--gateway-port', type=int, default=int(os.environ.get('AGENTCONTROL_GATEWAY_PORT', '0')),
                    help='Serve the local model gateway on this loopback port (0 = off)')
@@ -251,7 +271,8 @@ def main():
     s = Settings(project=project, data=data, opencode_url=a.opencode, hermes=a.hermes,
                  profile=a.profile, push_target=a.target, notifications=not a.no_notifications,
                  password=os.environ.get('OPENCODE_SERVER_PASSWORD', ''), username=os.environ.get('OPENCODE_SERVER_USERNAME', 'opencode'),
-                 preview_idle=max(0, a.preview_idle_minutes) * 60, models=a.models)
+                 preview_idle=max(0, a.preview_idle_minutes) * 60, models=a.models,
+                 skills_library=a.skills_library)
     controller = Controller(s)
     if a.doctor:
         status = controller.check()

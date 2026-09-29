@@ -34,6 +34,7 @@ REGISTRY = {
     'todowrite': ('low', "Updates OpenCode's own task list. Project files are not changed."),
     'todoread': ('readonly', "Reads OpenCode's own task list."),
     'task': ('low', 'Starts an OpenCode sub-agent with the same permissions as this one.'),
+    'skill': ('low', "Loads a skill's instructions into the agent's context. The skill's text is not checked by OpenCode."),
     'edit': ('sensitive', 'Changes file contents in the project. Undo with git or a backup.'),
     'write': ('sensitive', 'Creates or overwrites a file in the project. Existing content is replaced.'),
     'patch': ('sensitive', 'Applies a patch that changes project files.'),
@@ -107,12 +108,15 @@ def rule_for(packet):
 
 
 def matching_rule(packet, rules):
-    """A remembered rule that covers this request, or None. Critical requests never match."""
+    """A remembered rule that covers this request, or None. Critical requests never match.
+    A rule that names an agent (skills you installed for one agent) covers only that agent."""
     risk = classify(packet)
     if packet.get('kind') != 'permission' or not risk['remember_allowed']:
         return None
     wanted = rule_for(packet)
     for rule in rules or []:
+        if rule.get('agent') and rule['agent'] != packet.get('agent', 'coder-1'):
+            continue
         if not rule.get('revoked') and rule.get('permission') == wanted['permission'] and rule.get('match') == wanted['match']:
             return rule
     return None

@@ -310,6 +310,32 @@ Every prompt and retry counts toward the run's prompt limit. The run page shows 
 
 Your model server answers one request at a time (M0: `-np 1`), so a team saves time mostly when agents spend time running tools and tests rather than generating text.
 
+## Skills for agents
+
+Agents can be given **OpenCode skills**: folders with a `SKILL.md` (a name and a
+description) plus helper files, which OpenCode loads when the agent needs them.
+Nothing is installed without you.
+
+- **Your library.** Put skill folders in `~/agentcontrol/skills/` (or start with `--skills-library DIR`). The **Skills** tab lists them, including invalid ones and the reason, and shows whether you have reviewed each exact version.
+- **Git.** On a run page you can also give a repository URL (https, ssh, or a local path), a branch, tag or commit, and an optional folder. AgentControl clones it into quarantine and pins the exact commit. Clones run without hooks, submodules or LFS.
+- **Checks before you see anything:**
+  - `SKILL.md` exists, and its name is lowercase letters, digits and dashes
+  - at most 50 files, 256 KB per file and 512 KB in total
+  - no symbolic links, and no paths outside the folder
+
+  A skill with only text is **R1 Low**. One containing scripts or programs is **R2 Sensitive**; an agent running them still needs your `bash` approval.
+- **Review and approval.** Each install proposal in **Approvals** shows:
+  - who asked, and why
+  - the source and commit
+  - the file list and the `SKILL.md` text, shown as text; it is never treated as instructions
+
+  Approving installs that exact version. If the content changed after it was shown to you, the install is refused and the new version is shown instead. Once you have approved a version from your library, adding the same version again installs straight away. A changed version is reviewed again.
+- **Hermes can ask** for a library skill in a decision, or per agent in a team plan. It can also name a git repository. Every such request is a proposal for you, even for content you trusted before. For git, nothing is downloaded until you press **Fetch for review**. Hermes gets at most 3 requests per decision and 10 per run. Library descriptions reach Hermes marked as untrusted data.
+- **Per agent.** A skill is copied into one agent's worktree only (`.opencode/skills/<name>/`). When that agent asks OpenCode to load it, AgentControl approves the load automatically, as your install approval. The same request from another agent, or for another skill, still comes to you. OpenCode reads skills once per folder, so AgentControl has it reload them just before that agent's next prompt: a skill you add mid-turn is available from the next turn.
+- **Never on your branch.** Installed skills are left out of every turn commit, so Apply never brings them into your project.
+- **Rollback.** **Remove** on the run page deletes the folder and stops the automatic approvals. Applying or discarding the branch removes all of the run's skills. Every request, fetch, install, rejection and removal is in the audit log and in the Skills tab's history.
+- Skills work in runs on their own branch (git projects). MCP tool servers, packages, and Hermes's own skills come in later milestones.
+
 ## Auto mode
 
 Choose **Auto** in New run to let AgentControl pick between one agent and a team.

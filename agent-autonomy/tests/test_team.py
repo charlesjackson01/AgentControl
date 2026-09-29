@@ -66,6 +66,9 @@ class FakeTeamAPI:
             self.sessions[sid] = {'directory': str(directory), 'title': data['title'], 'messages': [], 'busy': False}
             return {'id': sid}
         parts = path.split('/')
+        if path == '/instance/dispose':
+            self.reloads = getattr(self, 'reloads', []) + [str(directory)]
+            return True
         if path == '/session/status':
             return {sid: {'type': 'busy'} for sid, s in self.sessions.items() if s['busy']}
         sid = parts[2]

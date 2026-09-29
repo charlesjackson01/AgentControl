@@ -18,7 +18,7 @@ if the work is sequential. Each agent works in its own git worktree; finished ta
 Tasks that touch the same files must depend on each other, or be given to the same agent.
 Do not call tools. Return ONE JSON object only, no markdown:
 {"mode":"single|multi","reason":"why this team size",
- "agents":[{"id":"short-id","role":"coder","responsibility":"one sentence"}],
+ "agents":[{"id":"short-id","role":"coder","responsibility":"one sentence","skills":["optional library skill names"]}],
  "tasks":[{"id":"t1","title":"short title","agent":"agent id","depends_on":["task ids"],
            "files":["project-relative paths it will touch"],"prompt":"exact instructions for the coding agent, with acceptance criteria"}]}
 Limits: at most {max_agents} agents and at most {max_tasks} tasks. role must be "coder".
@@ -127,8 +127,11 @@ def validate(proposal, max_agents=MAX_AGENTS, max_tasks=8):
             if shared and not ordered:
                 warnings.append(f"{a['id']} ({a['agent']}) and {b['id']} ({b['agent']}) both touch "
                                 f"{', '.join(sorted(shared)[:4])} and may conflict")
-    team = {name: {'label': str(hermes_id)[:40], 'responsibility': str(next(x for x in agents if isinstance(x, dict) and x.get('id') == hermes_id).get('responsibility', ''))[:300]}
-            for hermes_id, name in names.items()}
+    team = {}
+    for hermes_id, name in names.items():
+        spec = next(x for x in agents if isinstance(x, dict) and x.get('id') == hermes_id)
+        skills = [str(k)[:64] for k in (spec.get('skills') or []) if isinstance(k, str)][:5] if isinstance(spec.get('skills'), list) else []
+        team[name] = {'label': str(hermes_id)[:40], 'responsibility': str(spec.get('responsibility', ''))[:300], 'skills': skills}
     return {'mode': mode, 'reason': str(proposal.get('reason', ''))[:1000], 'agents': team, 'tasks': normalized}, [], warnings
 
 

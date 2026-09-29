@@ -4522,3 +4522,25 @@ kbd {
   padding:0;
   margin:12px 0 0;
 }
+
+/* Skills (M9) */
+.skill-agent {
+  margin:8px 0 12px;
+}
+
+.skill-add .row {
+  gap:8px;
+  margin:4px 0 8px;
+}
+
+.skill-git {
+  display:grid;
+  gap:4px;
+  margin:8px 0;
+}
+
+.skill-card details pre {
+  max-height:240px;
+  overflow:auto;
+  white-space:pre-wrap;
+}

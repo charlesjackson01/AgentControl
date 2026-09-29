@@ -41,8 +41,16 @@ def _v4(c):
     c.execute('CREATE INDEX IF NOT EXISTS usage_run ON usage(run)')
 
 
+def _v5(c):
+    """Capabilities (M9): skill install proposals and installs, and the exact versions you trusted."""
+    c.executescript('''
+        CREATE TABLE IF NOT EXISTS capabilities (id TEXT PRIMARY KEY, run TEXT, created TEXT NOT NULL, value TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS capabilities_run ON capabilities(run);
+        CREATE TABLE IF NOT EXISTS trusted_skills (hash TEXT PRIMARY KEY, name TEXT NOT NULL, source TEXT, approved TEXT NOT NULL);''')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1, _v2, _v3, _v4]
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5]
 USAGE_FIELDS = ('run', 'agent', 'source', 'endpoint', 'model', 'tokens_in', 'tokens_out', 'duration_ms', 'queued_ms', 'status', 'cost', 'ref')
 GENESIS = '0' * 64
 
@@ -222,6 +230,33 @@ class Store:
         total = {k: sum(a[k] for a in by_agent.values()) for k in keys}
         total['cost'] = round(total['cost'], 6)
         return {'total': total, 'by_agent': by_agent}
+
+    def put_capability(self, item):
+        with self.connection() as c:
+            c.execute('INSERT INTO capabilities VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value',
+                      (item['id'], item.get('run'), item['created'], json.dumps(item)))
+        self._changed('capability', item.get('run'))
+        return item
+
+    def capability(self, ident):
+        with self.connection() as c:
+            row = c.execute('SELECT value FROM capabilities WHERE id=?', (ident,)).fetchone()
+        if not row:
+            raise KeyError(ident)
+        return json.loads(row[0])
+
+    def capabilities(self, run=None, limit=200):
+        with self.connection() as c:
+            query = 'SELECT value FROM capabilities' + (' WHERE run=?' if run else '') + ' ORDER BY created DESC, rowid DESC LIMIT ?'
+            return [json.loads(r[0]) for r in c.execute(query, ((run,) if run else ()) + (limit,))]
+
+    def trust(self, digest, name, source):
+        with self.connection() as c:
+            c.execute('INSERT OR IGNORE INTO trusted_skills VALUES (?,?,?,?)', (digest, name, source, now()))
+
+    def trusted(self, digest):
+        with self.connection() as c:
+            return c.execute('SELECT 1 FROM trusted_skills WHERE hash=?', (digest,)).fetchone() is not None
 
     def put_agent(self, agent):
         with self.connection() as c:

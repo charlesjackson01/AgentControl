@@ -53,6 +53,9 @@ Hermes CLI and the OpenCode API without starting a model.
   work is merged and verified. Every agent's approvals still come to you.
 - **Auto mode.** Let AgentControl choose between one agent and a team from
   your brief; it explains its choice, and a team still needs your approval.
+- **Skills.** Give agents OpenCode skills from your own library or a pinned git
+  commit. Every install is reviewed and approved by you, installed per agent,
+  logged, and removable.
 - **Model server.** Optionally describe your model server (for example
   llama-server) in `state/models.json`. AgentControl checks that it answers
   before sending work, records token usage per agent, and can run a local

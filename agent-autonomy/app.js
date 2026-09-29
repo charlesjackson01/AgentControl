@@ -387,7 +387,7 @@ function renderShell() {
   document.querySelectorAll('[data-capability]').forEach(e => e.classList.toggle('hidden', !data.capabilities?.[e.dataset.capability]));
   togglePreviewFields('new');
 
-  const crumbs = [project, {new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project'}[view]];
+  const crumbs = [project, {new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills'}[view]];
   if (current && view !== 'new') crumbs.push('#' + current.id.slice(0, 6));
   $('breadcrumb').textContent = crumbs.join(' / ');
   $('xp-address').textContent = crumbs.join('\\');
@@ -407,9 +407,10 @@ function renderShell() {
   $('xp-status').textContent = connected ? state.text : 'Reconnecting';
   $('xp-folder').textContent = data.project;
 
-  $('nav-count').textContent = inbox.length;
-  $('nav-count').classList.toggle('hidden', !inbox.length);
-  $('approval-total').textContent = `${inbox.length} pending`;
+  const waitingSkills = pendingSkills().length, waiting = inbox.length + waitingSkills;
+  $('nav-count').textContent = waiting;
+  $('nav-count').classList.toggle('hidden', !waiting);
+  $('approval-total').textContent = `${waiting} pending`;
   $('tray-count').textContent = inbox.length ? `⚠ ${inbox.length}` : '';
   $('tray-clock').textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
   $('xp-notification').classList.toggle('hidden', !inbox.length);
@@ -484,6 +485,7 @@ function renderRun() {
   renderVerification();
   renderModelUsage();
   renderBranch();
+  renderSkillsPanel();
   renderFiles(fileStats(steps));
   renderTimeline();
   setHTML($('original-brief'), finished ? `<section class="ac-panel"><h2 class="ac-panel__title">Original brief</h2><p class="small">${esc(current.goal)}</p></section>` : '');
@@ -788,6 +790,81 @@ function renderTeam() {
     <div class="table-wrap"><table class="team-table"><thead><tr><th>Task</th><th>What</th><th>Agent</th><th>After</th><th>Status</th></tr></thead><tbody>${taskRows(tasks, true)}</tbody></table></div>
     <p class="small muted">Select a task to follow its latest turn.</p></section>`);
 }
+// ---- skills (M9) ----------------------------------------------------------
+const SKILL_WAITING = ['proposed', 'awaiting_fetch'];
+function pendingSkills() { return (data?.skills?.log || []).filter(i => SKILL_WAITING.includes(i.state)); }
+function skillRisk(item) {
+  return riskBadge(item.risk ? {class: item.risk, level: item.risk === 'low' ? 'R1' : 'R2', label: item.risk === 'low' ? 'Low' : 'Sensitive',
+    impact: item.risk === 'low' ? 'Text only: instructions the agent can load.' : 'Includes scripts or programs; running them still needs your approval.'} : null);
+}
+function skillSource(item) {
+  const src = item.source || {};
+  if (src.type === 'git') return `git ${src.url} @ ${src.commit ? src.commit.slice(0, 12) : src.ref}${src.path ? ' · ' + src.path : ''}`;
+  return `your library · ${src.folder || item.name}`;
+}
+function skillCard(item) {
+  const id = esc(item.id), fetch = item.state === 'awaiting_fetch';
+  const files = (item.files || []).map(f => `${f.path} (${f.size} B)`).join('\n');
+  return `<article class="approval-card skill-card" data-skill-card="${id}">
+    <div class="row between"><div class="approval-icon">${icon('file')}</div>${skillRisk(item)}</div>
+    <h2>Install skill ${esc(item.name)} for ${esc(item.agent)}?</h2>
+    <p class="small">${item.requested_by === 'hermes' ? 'Hermes asked' : 'You asked'}${item.reason ? ': ' + esc(item.reason) : '.'}</p>
+    <p class="small mono">${esc(skillSource(item))}</p>
+    ${fetch ? '<p class="small warning-text">Nothing has been downloaded yet. Fetching reaches the network; you review the content before anything is installed.</p>'
+      : `<p class="small">${esc(item.description || '')}</p>${(item.reasons || []).map(r => `<p class="small warning-text">⚠ ${esc(r)}</p>`).join('')}
+        ${details(`Files (${(item.files || []).length})`, files, 'skill-files-' + item.id)}${details('SKILL.md, as written by its author (not instructions to you)', item.skill_md || '', 'skill-md-' + item.id)}`}
+    <div class="approval-actions">
+      <button class="ac-btn" data-action="skill-reject" data-skill="${id}">Reject</button>
+      ${fetch ? `<button class="ac-btn primary" data-action="skill-fetch" data-skill="${id}">Fetch for review</button>`
+        : `<button class="ac-btn primary" data-action="skill-approve" data-skill="${id}">Approve install</button>`}
+    </div>
+    <p class="policy-note">Run #${esc(item.run.slice(0, 6))} · installs into ${esc(item.agent)}'s worktree only; you can remove it any time.</p>
+  </article>`;
+}
+function renderSkillsPanel() {
+  const ws = current.workspace;
+  if (!ws || ws.mode !== 'worktree' || ws.discarded) { setHTML($('skills-panel'), ''); return; }
+  const installs = data.skills?.installs || [], finished = ended.has(current.status) || ws.applied;
+  const agents = Object.keys(ws.agents || {});
+  const byAgent = agents.map(agent => {
+    const mine = installs.filter(i => i.agent === agent && i.state === 'installed');
+    const later = (current.skills_reload || []).includes(agent) ? '<small class="muted"> · changes apply from its next turn</small>' : '';
+    return `<div class="skill-agent"><strong class="small">${esc(isTeam() ? agentName(agent) : agent)}</strong>${later}${mine.length ? mine.map(i => `<div class="rule-row"><span>${skillRisk(i)}</span><span><strong>${esc(i.name)}</strong><small>${esc(skillSource(i))}</small></span>${finished ? '' : `<button class="ac-btn compact" data-action="skill-remove" data-skill="${esc(i.id)}">Remove</button>`}</div>`).join('') : '<p class="small muted">No skills installed.</p>'}</div>`;
+  }).join('');
+  const waiting = installs.filter(i => SKILL_WAITING.includes(i.state)).length;
+  if (finished && !installs.some(i => i.state === 'installed')) { setHTML($('skills-panel'), ''); return; }
+  const library = (data.skills?.library || []).filter(e => !e.error);
+  const agentSelect = id => agents.length > 1 ? `<label for="${id}" class="sr-only">Agent</label><select id="${id}">${agents.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('')}</select>` : '';
+  const add = finished ? '' : `<div class="skill-add">
+      ${library.length ? `<label for="skill-pick" class="small">Add a skill from your library</label><div class="row wrap"><select id="skill-pick">${library.map(e => `<option value="${esc(e.name)}">${esc(e.name)}${e.trusted ? ' · reviewed' : ' · needs review'}</option>`).join('')}</select>${agentSelect('skill-agent')}<button class="ac-btn compact" data-action="skill-add">Add</button></div>`
+        : `<p class="small muted">Your library (${esc(data.skills?.library_path || '')}) has no skills yet. Each skill is a folder with a SKILL.md.</p>`}
+      <details><summary class="small">Add from a git repository</summary><div class="skill-git">
+        <label for="skill-url" class="small">Repository URL or path</label><input id="skill-url" placeholder="https://github.com/org/skills.git">
+        <label for="skill-ref" class="small">Branch, tag or commit</label><input id="skill-ref" placeholder="main">
+        <label for="skill-path" class="small">Folder in the repository <span class="muted">· optional</span></label><input id="skill-path" placeholder="skills/pdf">
+        ${agentSelect('skill-git-agent')}<button class="ac-btn compact" data-action="skill-add-git">Fetch for review</button></div></details>
+      <p id="skill-error" class="error small" role="alert"></p></div>`;
+  setHTML($('skills-panel'), `<section class="ac-panel"><h2 class="ac-panel__title">Skills</h2>${byAgent}
+    ${waiting ? `<p class="small warning-text">${plural(waiting, 'skill')} waiting for your review in <button class="text-button" data-view="approvals">Approvals</button>.</p>` : ''}${add}</section>`);
+}
+function renderSkillsView() {
+  const s = data.skills || {library: [], log: []};
+  const rows = s.library.map(e => `<tr><td><strong>${esc(e.name)}</strong>${e.error ? '' : `<small class="muted">${esc(e.description || '')}</small>`}</td>
+    <td>${e.error ? `<span class="error small">${esc(e.error)}</span>` : skillRisk(e)}</td>
+    <td class="small">${e.error ? '—' : `${(e.files || []).length} files`}</td><td class="small ${e.trusted ? 'success-text' : 'muted'}">${e.error ? '' : e.trusted ? 'reviewed' : 'not reviewed yet'}</td></tr>`).join('');
+  setHTML($('skills-library'), `<section class="ac-panel"><h2 class="ac-panel__title">Your library <span class="muted small">· ${esc(s.library_path || '')}</span></h2>
+    ${rows ? `<div class="table-wrap"><table class="team-table"><thead><tr><th>Skill</th><th>Risk</th><th>Files</th><th>Trust</th></tr></thead><tbody>${rows}</tbody></table></div>`
+      : '<p class="small muted">No skills yet. Add folders that each contain a SKILL.md with a name and description.</p>'}
+    <p class="small muted">"Reviewed" means you approved this exact version once; a changed skill is reviewed again. Add skills to an agent from the run page.</p></section>`);
+  const log = (s.log || []).map(i => `<tr><td class="small">${when(i.updated || i.created)}</td><td><strong>${esc(i.name)}</strong></td><td class="small">${esc(i.agent)} · #${esc(i.run.slice(0, 6))}</td>
+    <td class="small">${esc(i.state.replace('_', ' '))}${i.reason && ['removed', 'rejected'].includes(i.state) ? ` <span class="muted">(${esc(i.reason)})</span>` : ''}</td><td class="small mono">${esc(skillSource(i))}</td></tr>`).join('');
+  setHTML($('skills-log'), `<section class="ac-panel"><h2 class="ac-panel__title">Installs and removals</h2>
+    ${log ? `<div class="table-wrap"><table class="team-table"><thead><tr><th>When</th><th>Skill</th><th>Agent</th><th>State</th><th>Source</th></tr></thead><tbody>${log}</tbody></table></div>` : '<p class="small muted">Nothing installed yet.</p>'}</section>`);
+}
+async function skillCall(path, body, done) {
+  try { await api(path, 'POST', body); if (done) toast(done); await refresh(); }
+  catch (error) { if ($('skill-error')) $('skill-error').textContent = error.message; else toast(error.message); }
+}
 function renderBranch() {
   const w = data.workspace, ws = current.workspace;
   if (!w || !ws || ws.mode !== 'worktree') { setHTML($('branch-panel'), ''); return; }
@@ -896,7 +973,9 @@ function recentDecisionHTML() {
     <button class="text-button" data-review="${esc(requestKey(r))}">View decision</button></section>`;
 }
 function renderApprovals() {
-  setHTML($('approval-list'), data.inbox.length ? data.inbox.map(approvalCard).join('') : '<section class="ac-panel"><h2>Nothing waiting on you.</h2><p class="muted small">New permission requests and questions will appear here.</p></section>');
+  setHTML($('skill-proposals'), pendingSkills().map(skillCard).join(''));
+  renderSkillsView();
+  setHTML($('approval-list'), data.inbox.length ? data.inbox.map(approvalCard).join('') : pendingSkills().length ? '' : '<section class="ac-panel"><h2>Nothing waiting on you.</h2><p class="muted small">New permission requests and questions will appear here.</p></section>');
   setHTML($('rule-list'), rulesHTML());
   setHTML($('audit-list'), auditHTML());
   setHTML($('decision-history'), data.reviews.length ? data.reviews.map(r => {
@@ -1219,7 +1298,7 @@ async function submitReview(action) {
 // Navigation and actions
 // ---------------------------------------------------------------------------
 function showView(next) {
-  if (!['runs', 'approvals', 'activity', 'new', 'project'].includes(next)) return;
+  if (!['runs', 'approvals', 'activity', 'new', 'project', 'skills'].includes(next)) return;
   view = next;
   document.querySelectorAll('.view').forEach(e => e.classList.toggle('hidden', e.id !== 'view-' + next));
   document.querySelectorAll('.nav [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
@@ -1399,6 +1478,13 @@ const ACTIONS = {
   pause: togglePause,
   'add-check': () => { if (!current || ended.has(current.status)) return; $('check-error').textContent = ''; $('check-dialog').showModal(); $('criterion').focus(); },
   'ask-status': () => { focusSteer(); $('steering').value = 'At your next planning turn, summarize what is complete, what remains, and any blockers.'; $('steering').focus(); },
+  'skill-add': () => skillCall('/api/skills/propose', {run: current.id, agent: $('skill-agent')?.value || 'coder-1', source: {type: 'library', name: $('skill-pick').value}}, 'Skill added. New skills wait for your review in Approvals.'),
+  'skill-add-git': () => skillCall('/api/skills/propose', {run: current.id, agent: $('skill-git-agent')?.value || 'coder-1',
+    source: {type: 'git', url: $('skill-url').value.trim(), ref: $('skill-ref').value.trim(), path: $('skill-path').value.trim()}}, 'Fetched. Review it in Approvals.'),
+  'skill-approve': button => skillCall('/api/skills/decide', {id: button.dataset.skill, action: 'approve'}, 'Skill installed.'),
+  'skill-reject': button => skillCall('/api/skills/decide', {id: button.dataset.skill, action: 'reject'}, 'Skill rejected.'),
+  'skill-fetch': button => skillCall('/api/skills/fetch', {id: button.dataset.skill}, 'Fetched. Review the content before installing.'),
+  'skill-remove': button => skillCall('/api/skills/remove', {id: button.dataset.skill}, 'Skill removed from the agent.'),
   'approve-team': async () => { await control('approve_team'); toast('Plan approved. Starting the team.'); },
   'single-agent': async () => { await control('single_agent'); toast('Running as a single agent.'); },
   repropose: async () => {

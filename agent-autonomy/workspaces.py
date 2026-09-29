@@ -156,9 +156,11 @@ def _merging(path):
     return bool(git(path, 'rev-parse', '-q', '--verify', 'MERGE_HEAD', check=False).stdout.strip())
 
 
-def commit_turn(path, message, author='coder-1'):
-    """Commit everything the agent changed. Returns {'status': committed|unchanged|unresolved, 'commit', 'files'}."""
-    git(path, 'add', '-A')
+def commit_turn(path, message, author='coder-1', exclude=()):
+    """Commit everything the agent changed, except `exclude` (paths AgentControl put there itself,
+    such as installed skills, which must never reach your branch).
+    Returns {'status': committed|unchanged|unresolved, 'commit', 'files'}."""
+    git(path, 'add', '-A', '--', '.', *[f':(exclude){p}' for p in exclude])
     merging = _merging(path)
     if merging:
         # A conflict handed to the agent: refuse to commit files that still hold markers.

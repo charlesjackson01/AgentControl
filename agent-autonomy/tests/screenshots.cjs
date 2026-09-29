@@ -52,6 +52,9 @@ const scenarios = {
     s.steps[0].agent = 'coder-1'; s.steps[1].agent = 'coder-2'; s.steps[1].title = 't2: Static HTML task list';
     s.agents = [{name: 'hermes', state: 'idle'}, {name: 'coder-1', state: 'working', task: 't3: CLI commands'}, {name: 'coder-2', state: 'working', task: 't2: Static HTML task list'}];
     return s; }},
+  skills: {state: () => withSkills(fx.richActive()), click: '[data-view="approvals"]'},
+  skillsrun: {state: () => withSkills(fx.richActive())},
+  skillstab: {state: () => withSkills(fx.richActive()), click: '[data-view="skills"]'},
   dirty: {state: fx.empty, click: '#empty-state [data-action="new"]',
     preflight: {is_repo: true, usable: true, reason: '', branch: 'main', subdir: '', changes: ['demo_app/todo.py'], untracked: ['notes.txt'], dirty_count: 2}},
   rules: {state: () => withRisk(fx.richActive()), click: '[data-view="approvals"]'},
@@ -78,6 +81,26 @@ function withRisk(s) {
     {seq: 13, created: s.run.created, action: 'rule added', actor: 'You, via dashboard', risk: 'R2', permission: 'bash', target: 'python3 -m unittest discover -s demo_app'},
     {seq: 14, created: s.run.created, action: 'requested', actor: 'coder-1', risk: 'R3', permission: 'bash', target: 'rm -rf demo_app/build'}];
   s.audit_chain = {intact: true, broken_at: null};
+  return s;
+}
+
+// Skills (M9): one installed, one Hermes proposal with a script, one waiting to be fetched.
+function withSkills(s) {
+  s.inbox = [];
+  s.run.workspace = {mode: 'worktree', base_branch: 'main', base: 'abc', integration: {branch: `agentcontrol/${s.run.id}/integration`}, agents: {'coder-1': {branch: 'b'}}};
+  s.workspace = {state: 'open', exists: true, commits: 1, shortstat: '2 files changed, 105 insertions(+)', apply_blocked: '', last_integration: {status: 'merged', files: []}};
+  const installed = {id: 'cap1', run: s.run.id, agent: 'coder-1', name: 'python-testing', state: 'installed', risk: 'low', source: {type: 'library', folder: 'python-testing'}, files: [{path: 'SKILL.md', size: 812}], created: s.run.created};
+  const proposed = {id: 'cap2', run: s.run.id, agent: 'coder-1', name: 'json-schema', state: 'proposed', risk: 'sensitive', requested_by: 'hermes', created: s.run.created,
+    reason: 'Validate the saved task file against a schema.', description: 'Write and check JSON Schemas for data files.',
+    reasons: ['contains a script or program: scripts/validate.py'], source: {type: 'git', url: 'https://github.com/example/agent-skills.git', commit: '9f2c1e7ab04d5e6f7a8b9c0d', path: 'json-schema'},
+    files: [{path: 'SKILL.md', size: 1480}, {path: 'scripts/validate.py', size: 610}, {path: 'reference.md', size: 2210}],
+    skill_md: '---\nname: json-schema\ndescription: Write and check JSON Schemas for data files.\n---\n\n# JSON Schema\n\n1. Draft the schema next to the data file.\n2. Run scripts/validate.py to check it.\n'};
+  const fetchable = {id: 'cap3', run: s.run.id, agent: 'coder-1', name: 'readme-style', state: 'awaiting_fetch', requested_by: 'hermes', created: s.run.created,
+    reason: 'Match the README conventions.', source: {type: 'git', url: 'https://github.com/example/docs-skills.git', ref: 'main', path: 'readme'}};
+  s.skills = {library_path: '/home/you/agentcontrol/skills', installs: [installed, proposed, fetchable], log: [proposed, fetchable, installed],
+    library: [{name: 'python-testing', folder: 'python-testing', description: 'unittest patterns and running tests quickly.', files: [{path: 'SKILL.md'}], risk: 'low', trusted: true, error: ''},
+      {name: 'cli-design', folder: 'cli-design', description: 'argparse layouts, help text and exit codes.', files: [{path: 'SKILL.md'}, {path: 'examples.md'}], risk: 'low', trusted: false, error: ''},
+      {name: 'old-notes', folder: 'old-notes', error: 'old-notes: SKILL.md is missing'}]};
   return s;
 }
 

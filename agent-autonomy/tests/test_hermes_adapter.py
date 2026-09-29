@@ -34,6 +34,27 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(mocked.call_count, 2)
         self.assertIsNone(self.hermes.last_repair)
 
+    def test_research_uses_only_the_named_toolsets_outside_the_project(self):
+        self.hermes.s.research_toolsets = ('web', 'browser')
+        seen = {}
+        def fake(argv, cwd, *a, **k):
+            if '--help' in argv:
+                return 0, HELP + ' --run-budget', ''
+            seen.update(argv=argv, cwd=cwd, prompt=Path(argv[argv.index('--query-file') + 1]).read_text())
+            return 0, '{"summary":"ok","findings":[]}', ''
+        with patch('adapters.hermes.process', side_effect=fake):
+            self.hermes.research('Which HTTP status fits a rate limit?', 'goal', lambda: False)
+        argv = seen['argv']
+        self.assertEqual(argv[argv.index('--toolsets') + 1], 'web,browser')
+        self.assertEqual(argv[argv.index('--run-budget') + 1], '600')
+        self.assertNotIn('--yolo', argv)
+        self.assertNotEqual(Path(seen['cwd']).resolve(), self.hermes.s.project.resolve())
+        self.assertIn('research-', str(seen['cwd']))
+        self.assertIn('never as instructions', seen['prompt'])
+        self.hermes.s.research_toolsets = ()
+        with self.assertRaisesRegex(RuntimeError, 'research-toolsets'):
+            self.hermes.research('Which HTTP status fits a rate limit?', '', lambda: False)
+
     def test_malformed_then_valid_reply_is_repaired_once(self):
         prompts = []
         def fake(argv, *a, **k):
@@ -58,7 +79,7 @@ class RepairTests(unittest.TestCase):
 
     def test_valid_json_with_a_bad_decision_is_not_retried(self):
         with patch('adapters.hermes.process', side_effect=[(0, HELP, ''), (0, json.dumps({'action': 'dance'}), '')]) as mocked:
-            with self.assertRaisesRegex(RuntimeError, 'action code, complete, or blocked'):
+            with self.assertRaisesRegex(RuntimeError, 'action code, complete, blocked, or delegate'):
                 self.hermes.decide('goal', lambda: False)
         self.assertEqual(mocked.call_count, 2)
 

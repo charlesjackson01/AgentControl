@@ -119,7 +119,7 @@ class ControllerAgentTests(unittest.TestCase):
         self.wait(lambda: self.c.store.get('runs', run['id'])['status'] == 'completed')
         snapshot = self.c.state(run['id'])
         self.assertEqual([a['name'] for a in snapshot['agents']], ['hermes', 'coder-1'])
-        self.assertEqual({t['id'] for t in snapshot['agent_types']}, {'orchestrator', 'coder'})
+        self.assertEqual({t['id'] for t in snapshot['agent_types']}, {'orchestrator', 'coder', 'tester', 'reviewer', 'researcher'})
         server = ThreadingHTTPServer(('127.0.0.1', 0), app.handler(self.c, 'k'))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         base = f'http://127.0.0.1:{server.server_port}/api/agents?run='

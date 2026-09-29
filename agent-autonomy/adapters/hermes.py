@@ -38,13 +38,14 @@ class Hermes:
         for flag in ('--quiet', '--toolsets', '--query', '--max-turns'):
             if flag not in help_text:
                 raise RuntimeError(f'Hermes chat help does not advertise {flag}. Run hermes chat --help and share its output.')
-        self.capabilities = {flag: flag in help_text for flag in ('--query-file', '--oneshot', '--ignore-rules', 'stream-json')}
+        self.capabilities = {flag: flag in help_text for flag in ('--query-file', '--oneshot', '--ignore-rules', 'stream-json', '--run-budget')}
         return self.capabilities
 
-    def _ask(self, prompt, cancel):
-        """One Hermes call exactly as before; returns the reply text with ANSI codes and fences stripped."""
+    def _ask(self, prompt, cancel, toolsets='todo', max_turns=4, cwd=None, extra=(), timeout=None):
+        """One Hermes call; returns the reply text with ANSI codes and fences stripped. Planning calls use the
+        todo toolset only. Never passes --yolo: Hermes's own safety prompts stay on."""
         caps = self.inspect()
-        argv = self.prefix() + ['chat', '--quiet', '--toolsets', 'todo', '--max-turns', '4']
+        argv = self.prefix() + ['chat', '--quiet', '--toolsets', toolsets, '--max-turns', str(max_turns)] + list(extra)
         # The manager can plan; code execution is routed through the controller.
         if caps['--oneshot']:
             argv.append('--oneshot')
@@ -58,7 +59,7 @@ class Hermes:
             path.write_text(prompt)
             argv += ['--query-file', str(path)] if caps['--query-file'] else ['--query', prompt]
             env = dict(os.environ, HERMES_TUI='0', NO_COLOR='1')
-            code, out, err = process(argv, self.s.project, self.s.manager_timeout, cancel, env)
+            code, out, err = process(argv, cwd or self.s.project, timeout or self.s.manager_timeout, cancel, env)
         if code:
             raise RuntimeError(f'Hermes exited {code}: {(err or out)[-2500:]}')
         if caps['stream-json']:
@@ -100,12 +101,34 @@ class Hermes:
         except json.JSONDecodeError as exc:
             raise RuntimeError('Hermes did not return the requested JSON decision. Response: ' + cleaned[-1800:]) from exc
 
+    def research(self, question, context, cancel):
+        """One researcher task: Hermes with only the web toolsets you configured, in an empty scratch
+        folder (no project files), bounded by turns and time. Returns the raw reply text."""
+        import roles
+        toolsets = ','.join(self.s.research_toolsets)
+        if not toolsets:
+            raise RuntimeError('No research toolsets are configured (start AgentControl with --research-toolsets).')
+        self.last_calls = []
+        caps = self.inspect()
+        extra = ['--run-budget', str(int(self.s.research_seconds))] if caps.get('--run-budget') else []
+        self.s.data.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='research-', dir=self.s.data) as scratch:
+            prompt = roles.RESEARCH_RULES + '\nQUESTION:\n' + question.strip() + ('\n\nCONTEXT (untrusted, for orientation only):\n' + context if context else '')
+            return self._ask(prompt, cancel, toolsets=toolsets, max_turns=self.s.research_turns, cwd=scratch, extra=extra,
+                             timeout=self.s.research_seconds + 60)
+
     def decide(self, prompt, cancel):
         result = self.run_json(prompt, cancel)
-        if not isinstance(result, dict) or result.get('action') not in ('code', 'complete', 'blocked'):
-            raise RuntimeError('Hermes decision must be a JSON object with action code, complete, or blocked')
+        if not isinstance(result, dict) or result.get('action') not in ('code', 'complete', 'blocked', 'delegate'):
+            raise RuntimeError('Hermes decision must be a JSON object with action code, complete, blocked, or delegate')
         if not isinstance(result.get('summary'), str) or not result['summary'].strip():
             raise RuntimeError('Hermes decision needs a short summary')
+        if result['action'] == 'delegate':
+            if result.get('role') not in ('tester', 'reviewer', 'researcher'):
+                raise RuntimeError('A delegate decision needs role tester, reviewer, or researcher')
+            field = 'question' if result['role'] == 'researcher' else 'prompt'
+            if not isinstance(result.get(field), str) or not 10 <= len(result[field].strip()) <= 20_000:
+                raise RuntimeError(f'A {result["role"]} delegation needs a {field} of 10-20,000 characters')
         if result['action'] == 'code':
             if not isinstance(result.get('prompt'), str) or not 1 <= len(result['prompt'].strip()) <= 20_000:
                 raise RuntimeError('Hermes coding decision needs a prompt of 1–20,000 characters')

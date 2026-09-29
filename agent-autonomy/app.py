@@ -195,6 +195,9 @@ def handler(controller, key):
                     verifier = str(body.get('verifier') or '')[:2000]
                     return self.reply(200, controller.auto_decision(str(body.get('goal', ''))[:12000], checks, verifier.split(),
                                                                     steps if type(steps) is int else 8))
+                if self.path == '/api/research/decide':
+                    return self.reply(200, controller.decide_research(body['run'], body['step'], body.get('action'),
+                                                                      body.get('fingerprint', ''), body.get('confirm', '')))
                 if self.path == '/api/control':
                     return self.reply(200, controller.control(body['run'], body['action'], body.get('text', ''), body.get('agent')))
                 if self.path == '/api/review':
@@ -279,6 +282,8 @@ def main():
     p.add_argument('--no-preview', action='store_true', help='Disable the live preview listener')
     p.add_argument('--skills-library', type=Path, default=Path(os.environ.get('AGENTCONTROL_SKILLS', '~/agentcontrol/skills')),
                    help='Folder of skills you curate (each a folder with SKILL.md)')
+    p.add_argument('--research-toolsets', default='', help='Hermes toolsets the researcher may use, comma-separated (see spikes/hermes_research_probe.py). Empty: no researcher')
+    p.add_argument('--max-parallel-agents', type=int, default=None, help='Agents that may work at once (default: model slots + 1)')
     p.add_argument('--container-runtime', choices=('podman', 'docker'), default=None, help='Container runtime for isolated runs (default: whichever is found)')
     p.add_argument('--allow-rootful-containers', action='store_true',
                    help='Allow agent containers on a root-owned Docker daemon (not recommended; use rootless Docker or Podman)')
@@ -305,7 +310,9 @@ def main():
                  password=os.environ.get('OPENCODE_SERVER_PASSWORD', ''), username=os.environ.get('OPENCODE_SERVER_USERNAME', 'opencode'),
                  preview_idle=max(0, a.preview_idle_minutes) * 60, models=a.models,
                  skills_library=a.skills_library, container_runtime=a.container_runtime,
-                 allow_rootful_containers=a.allow_rootful_containers)
+                 allow_rootful_containers=a.allow_rootful_containers,
+                 research_toolsets=tuple(t.strip() for t in a.research_toolsets.split(',') if t.strip()),
+                 max_parallel_agents=a.max_parallel_agents)
     if a.build_agent_image:
         return build_agent_image(a)
     controller = Controller(s)

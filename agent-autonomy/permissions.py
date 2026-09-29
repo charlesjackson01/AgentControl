@@ -35,6 +35,8 @@ REGISTRY = {
     'todoread': ('readonly', "Reads OpenCode's own task list."),
     'task': ('low', 'Starts an OpenCode sub-agent with the same permissions as this one.'),
     'skill': ('low', "Loads a skill's instructions into the agent's context. The skill's text is not checked by OpenCode."),
+    'research': ('critical', 'Hermes browses the internet from your machine to answer one question, and reads what it finds. '
+                             'Your question may reach search engines and websites.'),
     'edit': ('sensitive', 'Changes file contents in the project. Undo with git or a backup.'),
     'write': ('sensitive', 'Creates or overwrites a file in the project. Existing content is replaced.'),
     'patch': ('sensitive', 'Applies a patch that changes project files.'),

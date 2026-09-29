@@ -13,20 +13,64 @@ TERMINAL = {'completed', 'blocked', 'failed', 'stopped', 'limit_reached'}
 
 @dataclass(frozen=True)
 class AgentType:
+    """One role. Adding a specialist later means adding one entry here (and its prompt in roles.py).
+
+    workspace  own-branch       its own worktree; turns are merged into integration
+               test-branch      its own worktree; a turn merges only if it changed test files (roles.py)
+               review-snapshot  its own worktree brought up to the merged result; never merged
+               scratch          a folder with no project files (state/research/...)
+    edits      allowed | tests-only | none
+    weight     how much of the model/GPU budget it takes while working (scheduler capacity)
+    """
     id: str
     role: str
     runtime: str
     description: str
     tools: tuple = field(default_factory=tuple)
+    workspace: str = 'own-branch'
+    edits: str = 'allowed'
+    priority: str = 'coder'
+    weight: int = 1
+    max_concurrent: int = 3
+    approval_per_task: bool = False
+    needs_git: bool = False
 
 
-# Built-in agent types. New roles (tester, researcher, ui, ...) are added here in later milestones.
+# OpenCode tools a read-only agent must not be offered (M12 spike: per-prompt "tools" withholds them;
+# OpenCode's own "plan" agent does not, when your config allows edits).
+CHANGE_TOOLS = ('write', 'edit', 'patch', 'multiedit', 'apply_patch', 'bash', 'todowrite', 'task', 'webfetch')
+
 TYPES = {
     'orchestrator': AgentType('orchestrator', 'Orchestrator', 'hermes-cli',
-                              'Plans each turn, writes the prompt, and reviews the evidence.', ('todo',)),
+                              'Plans each turn, writes the prompt, and reviews the evidence.', ('todo',),
+                              workspace='scratch', edits='none', priority='orchestrator'),
     'coder': AgentType('coder', 'Coder', 'opencode',
                        'Writes and edits code in the project through an OpenCode session.'),
+    'tester': AgentType('tester', 'Tester', 'opencode',
+                        'Writes and runs tests on its own branch; only test files are merged.',
+                        workspace='test-branch', edits='tests-only', max_concurrent=1, needs_git=True),
+    'reviewer': AgentType('reviewer', 'Reviewer', 'opencode',
+                          'Reads the merged changes and reports findings. Cannot edit files or run commands.',
+                          ('read', 'grep', 'glob', 'list'), workspace='review-snapshot', edits='none', max_concurrent=1, needs_git=True),
+    'researcher': AgentType('researcher', 'Researcher', 'hermes-cli',
+                            'Looks things up on the web with Hermes and returns a cited report. Each task needs your approval.',
+                            ('web',), workspace='scratch', edits='none', priority='background', max_concurrent=1,
+                            approval_per_task=True),
 }
+SPECIALISTS = ('tester', 'reviewer', 'researcher')
+
+
+def role_of(name):
+    """The role behind an agent name: coder-2 -> coder, reviewer-1 -> reviewer, hermes -> orchestrator."""
+    if name == 'hermes':
+        return 'orchestrator'
+    base = str(name or 'coder-1').rsplit('-', 1)[0]
+    return base if base in TYPES else 'coder'
+
+
+def type_of(name):
+    return TYPES[role_of(name)]
+
 
 # Which agent produced an activity entry, by event kind. Unlisted kinds belong to AgentControl itself.
 EVENT_AGENT = {
@@ -69,6 +113,8 @@ def live_state(agent, run, steps, pending):
         return 'idle', ''
     # Each coder follows its own latest turn; several can be working at once in a team run.
     mine = next((s for s in reversed(steps) if s.get('agent', 'coder-1') == agent['name']), None)
+    if mine and mine.get('status') == 'awaiting_approval':
+        return 'waiting_on_you', 'Waiting for your approval: ' + mine.get('title', '')
     if mine and mine.get('status') in ('prepared', 'dispatching', 'running', 'waiting'):
         if any(p.get('agent', 'coder-1') == agent['name'] for p in pending):
             return 'waiting_on_you', mine.get('title', '')
@@ -88,12 +134,12 @@ def describe(agents, run, steps, pending, events=()):
     for agent in agents:
         kind = TYPES.get(agent['type'])
         state, task = live_state(agent, run, steps, [p for p in pending if p.get('run') == run['id']])
-        own = [s for s in steps if s.get('agent', 'coder-1') == agent['name']] if agent['type'] == 'coder' else []
+        own = [s for s in steps if s.get('agent', 'coder-1') == agent['name']] if agent['type'] != 'orchestrator' else []
         tools = sum(1 for s in own for part in (s.get('transcript') or []) if part.get('type') == 'tool')
         result.append({**agent, 'role': kind.role if kind else agent['type'], 'runtime': kind.runtime if kind else 'unknown',
                        'description': kind.description if kind else '', 'tools': list(kind.tools) if kind else [],
                        'state': state, 'task': task,
-                       'stats': {'turns': len(own) if agent['type'] == 'coder' else run.get('decision_count', 0),
+                       'stats': {'turns': len(own) if agent['type'] != 'orchestrator' else run.get('decision_count', 0),
                                  'tool_calls': tools, 'activity': counts.get(agent['name'], 0)}})
     return result
 

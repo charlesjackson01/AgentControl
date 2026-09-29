@@ -87,6 +87,16 @@ The installer never runs sudo itself; `--dry-run` shows every step without doing
 
 If the dashboard is started while the Tailscale address isn't up yet, it retries every 10 seconds. A running run shows as Interrupted after a restart; Resume reconnects without resending its prompt.
 
+## Projects: browse, create and switch from the dashboard
+
+Click the project name at the top of the sidebar, or **Change…** next to the working folder in New run. The **Projects** dialog opens.
+- **Browse:** lists the folders in your home folder. Hidden folders, and links that lead outside your home, are left out; git projects are marked. **Use** makes a folder the project for new runs, without a restart.
+- **New project:** give a name (letters, digits, dots, dashes, underscores). AgentControl creates `~/<name>` with a git repository and an empty first commit, so branch runs, team runs, containers and VMs work on it right away, and switches to it. It refuses a name that already exists.
+- **Switching is refused while a run is active.** Finish or stop that run first. A running preview is stopped when you switch.
+- **Your choice is remembered** in `agent-autonomy/state/project.json` and used after a restart, instead of `--project`. `--projects-root DIR` lets the dashboard browse and create somewhere other than your home.
+- **Recent runs** show the current project's runs. Tick **All projects** to see every run, each labelled with its project. A follow-up run has to be started from its own project, because its branch lives there.
+- **OpenCode:** a single `opencode serve` handles every project, because AgentControl names the folder on each request.
+
 ## Model and profile behavior
 
 - Planning uses `hermes --profile ai-arch-dev chat`. It uses the model already

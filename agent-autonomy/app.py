@@ -101,8 +101,13 @@ def handler(controller, key):
                     return self.reply(404, {'error': 'Unknown run'})
                 return self.reply(200, {'run': ident, 'agents': controller.agents(run), 'types': agent_registry.types()})
             if path.path == '/api/state':
-                selected = urllib.parse.parse_qs(path.query).get('run', [''])[0]
-                return self.reply(200, controller.state(selected))
+                query = urllib.parse.parse_qs(path.query)
+                return self.reply(200, controller.state(query.get('run', [''])[0], (query.get('scope') or ['current'])[0]))
+            if path.path == '/api/projects/browse':
+                try:
+                    return self.reply(200, controller.browse_projects((urllib.parse.parse_qs(path.query).get('path') or [''])[0]))
+                except ValueError as exc:
+                    return self.reply(400, {'error': str(exc)})
             if path.path == '/api/preview/output':
                 since = urllib.parse.parse_qs(path.query).get('since', ['0'])[0]
                 return self.reply(200, controller.preview.output(int(since) if since.isdigit() else 0))
@@ -214,6 +219,10 @@ def handler(controller, key):
                 if self.path == '/api/research/decide':
                     return self.reply(200, controller.decide_research(body['run'], body['step'], body.get('action'),
                                                                       body.get('fingerprint', ''), body.get('confirm', '')))
+                if self.path == '/api/projects/select':
+                    return self.reply(200, controller.select_project(str(body.get('path', ''))))
+                if self.path == '/api/projects/create':
+                    return self.reply(201, controller.create_project(str(body.get('name', ''))))
                 if self.path == '/api/control':
                     return self.reply(200, controller.control(body['run'], body['action'], body.get('text', ''), body.get('agent')))
                 if self.path == '/api/review':
@@ -319,6 +328,8 @@ def main():
     p.add_argument('--gateway-port', type=int, default=int(os.environ.get('AGENTCONTROL_GATEWAY_PORT', '0')),
                    help='Serve the local model gateway on this loopback port (0 = off)')
     p.add_argument('--preview-idle-minutes', type=float, default=30, help='Stop an unused preview after this many minutes')
+    p.add_argument('--projects-root', type=Path, default=None,
+                   help='Folder the dashboard may browse and create projects in (default: your home folder)')
     a = p.parse_args()
     project = a.project.expanduser().resolve()
     if not project.is_dir():
@@ -341,7 +352,8 @@ def main():
                  max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider,
                  vm_baseline=a.vm_baseline.expanduser() if a.vm_baseline else None, vm_template=a.vm_template, vm_uri=a.vm_uri,
                  vm_ssh_key=a.vm_ssh_key.expanduser() if a.vm_ssh_key else None, vm_user=a.vm_user, vm_opencode=a.vm_opencode,
-                 vm_storage=a.vm_storage.expanduser() if a.vm_storage else None)
+                 vm_storage=a.vm_storage.expanduser() if a.vm_storage else None,
+                 projects_root=a.projects_root.expanduser() if a.projects_root else None)
     if a.build_agent_image:
         return build_agent_image(a)
     controller = Controller(s)
@@ -379,7 +391,7 @@ def main():
         except OSError as exc:
             print(f'Model gateway disabled: cannot bind 127.0.0.1:{a.gateway_port}: {exc}.')
     print(f'Model gateway: {controller.gateway_info["url"] if gateway_server else "off"}', flush=True)
-    print(f'AgentControl: http://{a.host}:{server.server_port}\nProject: {project}\nOpenCode: {a.opencode}\nHermes profile: {a.profile or "current"}\nLive preview port: {controller.preview.listen_port or "off"}\nDashboard key: {key}', flush=True)
+    print(f'AgentControl: http://{a.host}:{server.server_port}\nProject: {controller.s.project}\nOpenCode: {a.opencode}\nHermes profile: {a.profile or "current"}\nLive preview port: {controller.preview.listen_port or "off"}\nDashboard key: {key}', flush=True)
     threading.Thread(target=controller.check, daemon=True).start()
     # Treat `kill` like Ctrl+C so previews and their child processes are cleaned up.
     signal.signal(signal.SIGTERM, _interrupt)

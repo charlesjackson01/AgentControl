@@ -5131,3 +5131,125 @@ button.task-node {
   height:auto;
   cursor:crosshair;
 }
+
+/* Projects: switcher, history scope, folder browser (dashboard-created projects) */
+.project-switch {
+  font:inherit;
+  color:inherit;
+  background:none;
+  border:0;
+  padding:0;
+  cursor:pointer;
+  text-align:left;
+  text-transform:inherit;
+  letter-spacing:inherit;
+}
+
+.project-switch::after {
+  content:" ▾";
+  color:var(--ac-text-muted);
+}
+
+.project-switch:hover,
+.project-switch:focus-visible {
+  color:var(--ac-link);
+  text-decoration:underline;
+}
+
+.scope-toggle {
+  display:flex;
+  gap:6px;
+  align-items:center;
+  margin:0 0 8px;
+  color:var(--ac-text-muted);
+}
+
+.folder-row {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+
+.folder-row input {
+  flex:1 1 12rem;
+  min-width:0;
+}
+
+.projects-crumbs {
+  margin:0 0 8px;
+  overflow-wrap:anywhere;
+}
+
+.projects-crumbs button {
+  font:inherit;
+  color:var(--ac-link);
+  background:none;
+  border:0;
+  padding:0;
+  cursor:pointer;
+}
+
+.projects-list {
+  max-height:min(50vh, 22rem);
+  overflow:auto;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+}
+
+.project-row {
+  display:flex;
+  gap:8px;
+  align-items:center;
+  padding:4px 8px;
+  border-bottom:1px solid var(--ac-border);
+}
+
+.project-row:last-child {
+  border-bottom:0;
+}
+
+.project-folder {
+  flex:1;
+  min-width:0;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  font:inherit;
+  color:var(--ac-text);
+  background:none;
+  border:0;
+  padding:6px 0;
+  cursor:pointer;
+  text-align:left;
+}
+
+.project-folder span:first-of-type {
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.project-folder:hover span:first-of-type {
+  color:var(--ac-link);
+  text-decoration:underline;
+}
+
+.project-folder .chip {
+  font-size:var(--ac-text-xs);
+  color:var(--ac-text-muted);
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  padding:0 6px;
+}
+
+.project-row .small-btn {
+  min-height:28px;
+  padding:2px 10px;
+}
+
+#projects-dialog .dialog-actions {
+  display:flex;
+  justify-content:flex-end;
+  margin-top:10px;
+}

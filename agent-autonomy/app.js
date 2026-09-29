@@ -20,6 +20,7 @@ let refreshing = false, connected = false, reviewBusy = false, reviewing = null,
 let refreshAgain = false;
 let toastTimer, errorTimer, pollTimer, failures = 0, announcedRequests = '', diffText = '', lastStateTime = null;
 let selectedTurn = null, shownStage = '';
+let runScope = 'current', projectBrowse = null;   // run history: this project or all; the Projects dialog's folder
 const seenRequests = new Set();
 const dismissedReceipts = new Set();
 const term = {turn: null, count: 0, omitted: 0, last: '', follow: true};
@@ -276,7 +277,8 @@ async function refresh() {
   refreshing = true;
   const requestedRun = selected;
   try {
-    const result = await api('/api/state' + (selected ? '?run=' + encodeURIComponent(selected) : ''));
+    const query = [selected && 'run=' + encodeURIComponent(selected), runScope === 'all' && 'scope=all'].filter(Boolean).join('&');
+    const result = await api('/api/state' + (query ? '?' + query : ''));
     if (requestedRun !== selected) return;
     data = result; current = data.run; connected = true; failures = 0; lastStateTime = Date.now();
     $('auth').classList.add('hidden');
@@ -439,6 +441,41 @@ function renderShell() {
   renderAgents(project);
   renderConnections();
 }
+function projectLabel(path) { return path ? path.split('/').filter(Boolean).pop() : 'project not recorded'; }
+function activeRun() { return (data?.runs || []).find(r => !ended.has(r.status)); }
+async function loadProjectFolder(path = '') {
+  $('projects-error').textContent = '';
+  try { projectBrowse = await api('/api/projects/browse' + (path ? '?path=' + encodeURIComponent(path) : '')); renderProjects(); }
+  catch (error) { $('projects-error').textContent = error.message; }
+}
+function renderProjects() {
+  if (!projectBrowse || !data) return;
+  const busy = activeRun(), root = projectBrowse.root;
+  $('projects-current').textContent = data.project;
+  $('projects-root-prefix').textContent = root.replace(/\/$/, '') + '/';
+  $('projects-blocked').classList.toggle('hidden', !busy);
+  $('projects-blocked').textContent = busy ? `Finish or stop “${runTitle(busy, 60)}” before switching or creating a project.` : '';
+  ['project-create', 'project-use-browsed'].forEach(id => { $(id).disabled = !!busy; });
+  const atRoot = projectBrowse.path === root;
+  $('project-use-browsed').classList.toggle('hidden', atRoot);   // your whole home folder is never meant as a project
+  $('project-use-browsed').dataset.path = projectBrowse.path;
+  $('project-use-browsed').textContent = projectBrowse.path === data.project ? 'Current project' : `Use ${projectLabel(projectBrowse.path)}`;
+  if (projectBrowse.path === data.project) $('project-use-browsed').disabled = true;
+  const rel = projectBrowse.path.slice(root.length).split('/').filter(Boolean);
+  const crumbs = [[root, '~']].concat(rel.map((part, i) => [root + '/' + rel.slice(0, i + 1).join('/'), part]));
+  setHTML($('projects-crumbs'), crumbs.map(([path, name]) => `<button class="link-button" data-action="project-open" data-path="${esc(path)}">${esc(name)}</button>`).join(' / '));
+  const rows = projectBrowse.entries.map(e => `<div class="project-row"><button class="project-folder" data-action="project-open" data-path="${esc(e.path)}">
+      <svg class="icon" aria-hidden="true"><use href="#icon-folder"/></svg><span>${esc(e.name)}</span>${e.git ? '<span class="chip">git</span>' : ''}${e.path === data.project ? '<span class="chip">current</span>' : ''}</button>
+      <button class="ac-btn small-btn" data-action="project-use" data-path="${esc(e.path)}" ${busy || e.path === data.project ? 'disabled' : ''}>Use</button></div>`);
+  if (projectBrowse.parent) rows.unshift(`<div class="project-row"><button class="project-folder" data-action="project-open" data-path="${esc(projectBrowse.parent)}"><span>..</span><span class="muted small">up</span></button></div>`);
+  setHTML($('projects-list'), rows.join('') || '<p class="small muted">No folders here.</p>');
+}
+async function useProject(result, message) {
+  $('projects-dialog').close();
+  selected = ''; selectedTurn = null; agentFilter = null; termReset(null);
+  toast(message + (result.git ? '' : ' It has no git repository: runs change the folder directly and team runs are off.'));
+  await refresh();
+}
 function renderRecentRuns(inbox) {
   const query = $('run-filter').value.trim().toLowerCase();
   $('run-filter-row').classList.toggle('hidden', data.runs.length < 5);
@@ -448,9 +485,9 @@ function renderRecentRuns(inbox) {
     const tone = s.tone === 'attention' ? 'warning-text' : s.tone === 'failed' ? 'error' : s.tone === 'completed' ? 'success-text' : '';
     return `<button class="recent-run ${r.id === current?.id ? 'active' : ''}" data-run="${esc(r.id)}" ${r.id === current?.id ? 'aria-current="true"' : ''}>
       <span class="dot ${tone}"></span>
-      <span><span class="run-name">${esc(runTitle(r, 90))}</span><small>${esc(s.text)} · ${r.prompt_count ?? '—'} prompt${r.prompt_count === 1 ? '' : 's'} · ${esc(relTime(r.created))}</small></span>
+      <span><span class="run-name">${esc(runTitle(r, 90))}</span><small>${runScope === 'all' ? esc(projectLabel(r.project)) + ' · ' : ''}${esc(s.text)} · ${r.prompt_count ?? '—'} prompt${r.prompt_count === 1 ? '' : 's'} · ${esc(relTime(r.created))}</small></span>
     </button>`;
-  }).join('') || `<p class="small muted">${query ? 'No runs match this filter.' : 'Your runs will appear here.'}</p>`);
+  }).join('') || `<p class="small muted">${query ? 'No runs match this filter.' : runScope === 'all' ? 'Your runs will appear here.' : 'No runs in this project yet.'}</p>`);
 }
 function renderAgents(project) {
   const agents = data.health.agents || {};
@@ -1892,6 +1929,18 @@ async function togglePause() {
   toast(resume ? 'Resuming the workflow' : 'Pause requested at the next boundary');
 }
 const ACTIONS = {
+  projects: async () => {
+    $('project-new-name').value = ''; $('projects-error').textContent = '';
+    $('projects-dialog').showModal();
+    const inside = data && data.projects_root && (data.project + '/').startsWith(data.projects_root.replace(/\/$/, '') + '/');
+    await loadProjectFolder(inside ? data.project.split('/').slice(0, -1).join('/') || data.projects_root : '');
+  },
+  'project-open': button => loadProjectFolder(button.dataset.path),
+  'project-use': async button => {
+    $('projects-error').textContent = '';
+    try { const result = await api('/api/projects/select', 'POST', {path: button.dataset.path}); await useProject(result, `Switched to ${projectLabel(result.project)}.`); }
+    catch (error) { $('projects-error').textContent = error.message; }
+  },
   new: () => openNew(),
   followup: () => openNew(true),
   connections: () => $('connection-dialog').showModal(),
@@ -2158,6 +2207,15 @@ function init() {
   $('event-filter').onchange = renderActivity;
   $('event-search').addEventListener('input', () => data && renderActivity());
   $('run-filter').addEventListener('input', () => data && renderRecentRuns(data.inbox || []));
+  $('runs-all').addEventListener('change', async event => { runScope = event.target.checked ? 'all' : 'current'; selected = ''; await refresh(); });
+  $('project-create-form').onsubmit = async event => {
+    event.preventDefault();
+    $('projects-error').textContent = '';
+    $('project-create').disabled = true;
+    try { const result = await api('/api/projects/create', 'POST', {name: $('project-new-name').value.trim()}); await useProject(result, `Created and switched to ${projectLabel(result.project)}.`); }
+    catch (error) { $('projects-error').textContent = error.message; }
+    finally { $('project-create').disabled = !!activeRun(); }
+  };
   $('example').onclick = fillExample;
   document.querySelectorAll('[data-preview-mode]').forEach(select => select.addEventListener('change', () => togglePreviewFields(select.id.split('-')[0])));
   togglePreviewFields('new');

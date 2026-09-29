@@ -26,6 +26,7 @@ import workspaces
 import planner
 import modes
 import capabilities
+import projects
 import sandbox
 import vmenv
 import gateway
@@ -76,6 +77,7 @@ class Settings:
     vm_user: str = 'archdev'
     vm_opencode: Path = None                # OpenCode binary copied into VMs; default: the one on PATH
     vm_storage: Path = None                 # clone disks; QEMU must reach it. Default: <baseline folder>/agentcontrol-runs
+    projects_root: Path = None              # where the dashboard may browse and create projects; default: your home
 
 
 def review_packet(request, messages=()):
@@ -150,6 +152,9 @@ class Controller:
         self.s = settings
         self.s.project = self.s.project.resolve()
         self.s.data = self.s.data.resolve()
+        chosen = projects.load_choice(self.s.data)
+        if chosen:
+            self.s.project = chosen.resolve()   # the project you last picked in the dashboard wins over --project
         self.events = EventBus()
         self.store = Store(self.s.data / 'autonomy.sqlite3')
         self.store.listener = self.events.publish
@@ -268,6 +273,8 @@ class Controller:
             if not isinstance(parent_run, str):
                 raise ValueError('Parent run ID must be text')
             parent = self.store.get('runs', parent_run)
+            if self.run_project(parent) not in (None, str(self.s.project)):
+                raise ValueError(f"That run belongs to {self.run_project(parent)}. Switch to that project to follow it up.")
         with self.lock:
             active = [r for r in self.store.runs() if r['status'] not in TERMINAL]
             if active:
@@ -292,7 +299,7 @@ class Controller:
                    'max_steps': max_steps, 'corrections': 0, 'plan': [], 'instructions': [], 'decision_count': 0,
                    'verifier': argv, 'deadline': time.time() + duration, 'time_limit_seconds': duration, 'pending': [],
                    'goal_checks': [{'criterion': c.strip(), 'status': 'pending', 'evidence': None} for c in checks],
-                   'parent_run': parent_run or None, 'title': title, 'preview': preview,
+                   'parent_run': parent_run or None, 'title': title, 'preview': preview, 'project': str(self.s.project),
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
                    'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto, 'isolation': isolation,
                    'models': model_choice, 'spend_cap': cap,
@@ -2818,10 +2825,57 @@ class Controller:
         recorded = self.store.agents(run['id']) or agent_registry.default_agents(run, self.s.profile)
         return agent_registry.describe(recorded, run, steps, inbox, self.store.events(run['id'], limit=1000))
 
-    def state(self, selected=''):
-        runs = self.store.runs()
+    # ---- projects ---------------------------------------------------------------
+    @staticmethod
+    def run_project(run):
+        """The project a run worked on: recorded since projects can be switched, else read from
+        its branch workspace; None for older runs that recorded neither."""
+        if run.get('project'):
+            return run['project']
+        ws = run.get('workspace') or {}
+        if ws.get('toplevel'):
+            return str(Path(ws['toplevel']) / (ws.get('subdir') or ''))
+        return None
+
+    def projects_root(self):
+        return Path(self.s.projects_root or Path.home()).expanduser().resolve()
+
+    def browse_projects(self, path=''):
+        return {**projects.browse(self.projects_root(), path), 'current': str(self.s.project)}
+
+    def _no_active_run(self, doing):
+        active = [r for r in self.store.runs() if r['status'] not in TERMINAL]
+        if active:
+            raise ValueError(f"Finish or stop the active run ({active[0].get('title') or active[0]['goal'][:60]}) before {doing}.")
+
+    def select_project(self, path):
+        """Make a folder under the projects root the project for new runs, without a restart."""
+        folder = projects.resolve(self.projects_root(), path)
+        with self.lock:
+            self._no_active_run('switching projects')
+            if self.preview.state in ('starting', 'running'):
+                self.preview.stop()
+            self.s.project = folder
+            self.preview.project = self.preview.cwd = folder
+            projects.save_choice(self.s.data, folder)
+        self.health = {**self.health, 'ready': False, 'message': 'Checking connections for the new project…'}
+        threading.Thread(target=self.check, daemon=True).start()
+        self.events.publish('project')
+        return {'project': str(folder), 'git': projects.is_git(folder)}
+
+    def create_project(self, name):
+        """A new folder in the projects root with git and a first commit, made the current project."""
+        with self.lock:
+            self._no_active_run('creating a project')
+            folder = projects.create(self.projects_root(), name)
+        return self.select_project(folder)
+
+    def state(self, selected='', scope='current'):
+        everything = self.store.runs()
+        here = str(self.s.project)
+        runs = everything if scope == 'all' else [r for r in everything if self.run_project(r) == here or r['status'] not in TERMINAL]
         ident = selected or (runs[0]['id'] if runs else '')
-        run = next((r for r in runs if r['id'] == ident), None)
+        run = next((r for r in everything if r['id'] == ident), None)   # a run picked from another project still opens
         steps = self.store.steps(ident) if run else []
         for step in steps:
             step.pop('before', None)
@@ -2844,7 +2898,9 @@ class Controller:
                                  'preview_modes': ['web', 'static', 'cli'] + ([] if desktop_missing() else ['desktop']),
                                  'preview_missing': desktop_missing(), 'goal_check_input': True, 'redirect': True},
                 'opencode_url': self.s.opencode_url, 'runs': [{'id': r['id'], 'goal': r['goal'][:120], 'title': r.get('title', ''), 'status': r['status'],
-                    'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id'])} for r in runs[:30]],
+                    'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id']),
+                    'project': self.run_project(r)} for r in runs[:30]],
+                'runs_scope': 'all' if scope == 'all' else 'current', 'projects_root': str(self.projects_root()),
                 'preview': self.preview.status(),
                 'agent_types': agent_registry.types(),
                 'roles': self.role_status(),

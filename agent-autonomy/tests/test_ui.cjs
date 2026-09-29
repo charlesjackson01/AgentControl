@@ -33,7 +33,11 @@ async function harness(state=fixture(),savedTheme='mac') {
    if(url.startsWith('/api/usage'))return {status:200,ok:true,json:async()=>clone(state.usageReport||{rows:[],total:{calls:0,tokens_in:0,tokens_out:0,cost:0}})};
    if(url==='/api/research/decide'&&state.failResearch)return {status:400,ok:false,json:async()=>({error:state.failResearch})};
    if(url==='/api/workspace/preflight')return {status:200,ok:true,json:async()=>clone(state.preflight||{is_repo:false,usable:false,reason:'',changes:[],untracked:[],dirty_count:0})};
-   if(url.startsWith('/api/state'))result=clone(state);
+   if(url.startsWith('/api/projects/browse')){const at=decodeURIComponent((url.split('path=')[1]||''))||'/home/me';result={root:'/home/me',path:at,parent:at==='/home/me'?null:'/home/me',git:false,current:state.project,
+    entries:at==='/home/me'?[{name:'ac-demo',path:'/home/me/ac-demo',git:true},{name:'notes',path:'/home/me/notes',git:false}]:[]};}
+   else if(url==='/api/projects/select'){state.project=body.path;result={project:body.path,git:true};}
+   else if(url==='/api/projects/create'){state.project='/home/me/'+body.name;result={project:state.project,git:true};}
+   else if(url.startsWith('/api/state'))result=clone(state);
    else if(url==='/api/review'){
     const p=state.inbox.find(p=>p.request_id===body.request_id);
     assert(p);assert.equal(body.fingerprint,p.fingerprint);
@@ -913,5 +917,36 @@ test('the Project tab shows the VM screen and sends clicks, text and keys',async
  assert.deepEqual(h.calls.filter(c=>c.url==='/api/vm/input').pop().body,{run:'run_test',action:'key',key:'Return'});
  const stopped=await harness(vmFixture({live:'stopped'}));await stopped.click('.nav [data-view="project"]');
  assert(stopped.document.getElementById('vm-console').classList.contains('hidden'));
+});
+test('projects: browse, switch, create, and history per project',async()=>{
+ const idle=fixture();idle.run.status='completed';idle.runs=[{...idle.run,prompt_count:1,project:'/tmp/project'}];idle.projects_root='/home/me';
+ const h=await harness(idle);
+ assert.equal(h.document.getElementById('project-name').textContent,'project');
+ await h.click('#project-name');
+ assert(h.document.getElementById('projects-dialog').open,'the sidebar project name opens Projects');
+ assert.equal(h.calls.filter(c=>c.url.startsWith('/api/projects/browse')).length,1);
+ const list=h.document.getElementById('projects-list').textContent;
+ assert.match(list,/ac-demo/);assert.match(list,/git/);assert.match(list,/notes/);
+ assert.equal(h.document.getElementById('projects-root-prefix').textContent,'/home/me/');
+ await h.click('#projects-list [data-action="project-use"][data-path="/home/me/ac-demo"]');
+ assert.deepEqual(h.calls.find(c=>c.url==='/api/projects/select').body,{path:'/home/me/ac-demo'});
+ assert(!h.document.getElementById('projects-dialog').open,'switching closes the dialog');
+ assert.equal(h.document.getElementById('working-folder').value,'/home/me/ac-demo','New run shows the new project');
+ await h.click('#view-new [data-action="projects"]');
+ h.document.getElementById('project-new-name').value='  my-app ';
+ await h.document.getElementById('project-create-form').onsubmit({preventDefault(){}});await tick();
+ assert.deepEqual(h.calls.find(c=>c.url==='/api/projects/create').body,{name:'my-app'});
+ assert.equal(h.document.getElementById('project-name').textContent,'my-app');
+ // History: this project by default, all projects on request, each labelled with its project.
+ const toggle=h.document.getElementById('runs-all');toggle.checked=true;toggle.dispatchEvent(new h.context.window.Event('change'));await tick();
+ assert.match(h.calls.filter(c=>c.url.startsWith('/api/state')).pop().url,/scope=all/);
+ assert.match(h.document.getElementById('recent-runs').textContent,/project ·/);
+ // While a run is active, switching and creating are refused with the reason.
+ const busy=await harness();busy.state.projects_root='/home/me';await busy.poll();
+ await busy.click('#project-name');
+ assert(!busy.document.getElementById('projects-blocked').classList.contains('hidden'));
+ assert.match(busy.document.getElementById('projects-blocked').textContent,/Finish or stop/);
+ assert(busy.document.getElementById('project-create').disabled);
+ assert(busy.document.querySelector('#projects-list [data-action="project-use"]').disabled);
 });
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

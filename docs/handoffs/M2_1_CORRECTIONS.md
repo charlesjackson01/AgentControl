@@ -7,8 +7,8 @@
 1. the "Architecture review" section at the end of `docs/handoffs/M2_THREAD_READ_MODEL.md`
 2. `docs/REDESIGN_ARCHITECTURE.md` §3 and §6
 
-Fix exactly the findings below. **Part A** is required. **Part B** applies only if `CURRENT_STATE.md` records
-decision **D6 as approved**; if it is not approved, skip Part B and say so in your report.
+Fix exactly the findings below. **Part A and Part B are both required.** The owner approved **D6** on 2026-09-30,
+so Part B (the events index) is in scope.
 The API shape (`/api/channels`, `/api/thread`, message fields) **does not change**. Do not refactor anything else.
 
 ---
@@ -102,7 +102,7 @@ architecture change log, as §4 below says.
   of about 4 KB each, report `/api/channels` and the first `/api/thread` page before and after. The review measured
   2,408 ms and 2,361 ms at `f314462`.
 
-## Part B: only if D6 is approved (see `CURRENT_STATE.md`)
+## Part B: required (D6 approved by the owner, 2026-09-30)
 
 **D6:** add an index on `events(run, id)`. The `events` table has no index on `run`, so every `WHERE run=?` scans the
 whole table. That also slows classic `/api/state` and `Lifecycle`.
@@ -114,6 +114,10 @@ whole table. That also slows classic `/api/state` and `Lifecycle`.
       c.execute('CREATE INDEX IF NOT EXISTS events_run_id ON events(run, id)')
   ```
   It adds no table, no column and no data change.
+- **Scope of the approval:** exactly this one index, in exactly this one migration. D6 is a narrow exception to
+  architecture invariant 1. It does **not** authorise any other migration, index, table, column, trigger or
+  data change. If you believe another schema change is needed, stop and record it as an open question for Opus
+  and the owner.
 - **Tests:**
   - A v6 journal (built with `MIGRATIONS[:6]`) migrates to `PRAGMA user_version = 7` with the index present, and its
     rows are unchanged.
@@ -138,7 +142,7 @@ whole table. That also slows classic `/api/state` and `Lifecycle`.
 3. The diff touches only:
    - `agent-autonomy/conversation.py`
    - `agent-autonomy/tests/test_conversation.py` and `agent-autonomy/tests/test_thread_api.py`
-   - with Part B only: `agent-autonomy/journal.py` (the `_v7` migration) and journal tests
+   - `agent-autonomy/journal.py`: **only** the appended `_v7` function and its `MIGRATIONS` entry, plus journal migration tests
    - optionally `agent-autonomy/app.py`, for the `KeyError` narrowing
    - `docs/REDESIGN_ARCHITECTURE.md` (the change log), `CURRENT_STATE.md` and this file
 4. The response shapes are unchanged, and a trimmed sample response for a team run shows `coder-2` on a decided request.
@@ -149,6 +153,6 @@ whole table. That also slows classic `/api/state` and `Lifecycle`.
    - "M2.1: decided requests are attributed via the recorded session id"
    - "the actionable outcome is the channel's newest terminal session, independent of page and view"
    - "planner-shaped Hermes decisions use recorded `reason`/`title` or are folded"
-   - the D6 index, if Part B was done
+   - "D6: `events_run_id` index added as migration `_v7`"
 2. Append a completion report to this file: the changes, test commands and counts (with skipped tests named), the benchmark numbers, and any deviation.
 3. Set M2.1 to done in `CURRENT_STATE.md`, then push. No PR and no merge unless the owner asks.

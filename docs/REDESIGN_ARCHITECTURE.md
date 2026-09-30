@@ -40,13 +40,15 @@ The priorities, in order:
 | D3 | The new UI is an **isolated frontend** with its own entry and files. It reuses the backend APIs and execution state, and shares **no JavaScript or CSS** with the classic UI. Routes: `/chat` during development, and `/` after parity (M9). The classic UI stays at `/classic`, and at `/` until M9. |
 | D4 | **No theme system** in the new UI: Mac, Terminal and XP are not ported. There is one design language (§9), built on design tokens so theming *could* return later. |
 | D5 | A read-only `/api/thread` (and `/api/channels`) presentation layer over the journal is approved. It changes no orchestration. |
-| D6 | **Pending owner decision (recommended: approve).** Add an index on `events(run, id)`: an additive `journal.py` migration (`_v7`) with no table, column or data change. Every read of events by run currently scans the whole table. Approving it amends invariant 1's "no schema migration" for this one index. See `M2_1_CORRECTIONS.md` Part B. |
+| D6 | **Approved by the owner, 2026-09-30.** One index, `events_run_id ON events(run, id)`, added by one append-only `journal.py` migration (`_v7`) in M2.1 (`M2_1_CORRECTIONS.md` Part B). It adds no table, no column and no data change. This is a **narrow exception** to invariant 1's no-migration rule, not a precedent: any other schema change, including other indexes, needs its own owner decision. |
 
 ## 3. Invariants (never weakened)
 
 1. **The journal is the single source of truth.** The SQLite journal (`agent-autonomy/journal.py`) holds it. Thread,
    channel and presence data are *derived* per request. There is no new table and no cached copy of state, and
    no schema migration is needed for the redesign.
+   - **The single exception is D6:** the `events(run, id)` index (`_v7`), approved by the owner on 2026-09-30.
+   - It does not permit further migrations. Any other schema change needs a new owner decision recorded in §2.
 2. **No orchestration change.** `engine.py` run logic, the adapters (`adapters/`), `permissions.py`, `planner.py`,
    `roles.py`, `sandbox.py`, `vmenv.py`, the gateway and the lifecycle are not modified by redesign milestones.
    A bug found there is reported, not fixed in passing.
@@ -369,3 +371,6 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   - D6 (the events index) was raised for the owner.
   - M3 consumes `/api/channels` and `/api/thread` for all room and timeline content; `/api/state` only for members,
     Connections, the rail session list and the context panel.
+- 2026-09-30 (owner decision):
+  - **D6 approved:** the `events(run, id)` index, as the single `_v7` migration in M2.1 Part B.
+  - It is a narrow exception to invariant 1, and no other schema change is authorised.

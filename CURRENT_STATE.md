@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Opus (M1.1 + M2 architecture review; M2.1 and M3 handoffs).
+**Last updated:** 2026-09-30, by Opus (recorded owner decision D6; M1.1 + M2 review; M2.1 and M3 handoffs).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -21,12 +21,12 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Milestone | Status | Owner | Notes |
 |---|---|---|---|
 | Planning: decisions D1–D5 | ✅ done | Opus | recorded in the architecture doc §2 |
-| **D6 events index** | ⚠ **owner decision needed** (recommended: approve) | owner | an additive `events(run, id)` index migration; see architecture §2 and `M2_1_CORRECTIONS.md` Part B. Record the decision here: **D6: pending** |
+| **D6 events index** | ✅ **approved by the owner 2026-09-30** | owner | exactly one `events(run, id)` index via migration `_v7`, implemented in M2.1 Part B; a narrow exception to the no-migration rule, not permission for other schema changes (architecture §2 and §3) |
 | D1 backend merge | ✅ done | Opus | `af4da89`; tree = `967aa85` + redesign docs |
 | **M1 App shell** | ✅ accepted (review 2026-09-30) | Codex | read-only `/chat`, `/classic` alias; completion report and Opus review in `docs/handoffs/M1_APP_SHELL.md` |
 | **M1.1 Shell corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
 | **M2 Thread read model** | ✅ accepted, with corrections (review 2026-09-30) | Codex | `conversation.py`, `/api/channels`, `/api/thread`, `Store.events_page`; review in `docs/handoffs/M2_THREAD_READ_MODEL.md` |
-| **M2.1 Read-model corrections** | ⏭ ready; **must land before M3** | Codex | `docs/handoffs/M2_1_CORRECTIONS.md`: decided-request attribution, page-independent outcome actions, no empty planner decisions, cheaper channels/gather (+ the D6 index if approved) |
+| **M2.1 Read-model corrections** | ⏭ ready; **must land before M3** | Codex | `docs/handoffs/M2_1_CORRECTIONS.md`: decided-request attribution, page-independent outcome actions, no empty planner decisions, cheaper channels/gather, and the approved D6 index |
 | **M3 Room timeline** | ⏭ handoff ready; starts after M2.1 | Codex | `docs/handoffs/M3_ROOM_TIMELINE.md`: renders `/api/thread` in the project room; read-only; decisions still link to classic |
 | M4–M9 | not started | | see architecture §12 |
 
@@ -94,15 +94,14 @@ Six skipped means none of those are available. Codex's three skips mean the Open
   - Rule: rerun and record such failures; never modify protected code or these tests within a redesign milestone.
     A backend test-robustness fix is the owner's call, outside the redesign.
 - **Performance:** every read of events by run scans the whole `events` table (there is no index on `run`). On a
-  461 MB journal, `/api/thread` and `/api/channels` take about 2.4 s each. M2.1 reduces the scans; D6 (the index)
-  brings the first thread page to about 0.3 s.
+  461 MB journal, `/api/thread` and `/api/channels` take about 2.4 s each. M2.1 reduces the scans, and the approved D6
+  index (added in M2.1) brings the first thread page to about 0.3 s.
 - The M1 review lists optional polish items (401 key handling, autocomplete, `/classic/`, live region, pluralisation,
   tab keys, stream backoff reset). None is required, and they can be folded into later UI milestones.
 - `/api/state` caps runs at 30. The rail's session list still inherits that in M3; the timeline itself pages the full history through `/api/thread`.
 
 ## Next step
 
-1. **The owner decides D6** (the events index). Record it in the progress table above.
-2. Codex executes **`docs/handoffs/M2_1_CORRECTIONS.md`**, including Part B only if D6 is approved.
-3. Opus reviews M2.1. Codex then executes **`docs/handoffs/M3_ROOM_TIMELINE.md`**.
-4. M4–M9 remain unstarted; the architecture contract stays binding.
+1. Codex executes **`docs/handoffs/M2_1_CORRECTIONS.md`**: Part A and Part B (the D6 index; approved, and limited to that one index).
+2. Opus reviews M2.1. Codex then executes **`docs/handoffs/M3_ROOM_TIMELINE.md`**.
+3. M4–M9 remain unstarted; the architecture contract stays binding.

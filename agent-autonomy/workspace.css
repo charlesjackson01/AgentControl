@@ -73,6 +73,12 @@ button.ws-tab {
   line-height:1;
 }
 
+/* In split view, the tab whose agent is in the other (unfocused) pane. */
+.ws-tab.shown {
+  color:var(--ac-text);
+  box-shadow:inset 0 -2px 0 var(--ac-border-strong);
+}
+
 .ws-close:hover,
 .ws-close:focus-visible {
   color:var(--ac-danger);
@@ -414,6 +420,122 @@ button.ws-tab {
   justify-self:end;
 }
 
+/* ---------------------------------------------------------------------------
+   Layout switch and split view (W4)
+   --------------------------------------------------------------------------- */
+.ws-modes {
+  display:inline-flex;
+  flex:0 0 auto;
+  align-self:center;
+  margin:0 4px 4px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  overflow:hidden;
+}
+
+.ws-modes button {
+  border:0;
+  background:var(--ac-surface);
+  color:var(--ac-text-muted);
+  font:inherit;
+  font-size:var(--ac-text-xs);
+  padding:4px 10px;
+  cursor:pointer;
+}
+
+.ws-modes button[aria-pressed=true] {
+  background:var(--ac-accent);
+  color:var(--ac-on-accent);
+}
+
+.ws-panes.split {
+  display:grid;
+  grid-template-columns:minmax(0, var(--ws-left, 1fr)) 10px minmax(0, var(--ws-right, 1fr));
+  align-items:start;
+}
+
+.ws-pane {
+  min-width:0;
+}
+
+.ws-pane-bar {
+  display:none;
+}
+
+.ws-panes.split .ws-pane-bar {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  width:100%;
+  margin-bottom:8px;
+  padding:4px 10px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface-2);
+  color:var(--ac-text-muted);
+  font:inherit;
+  font-size:var(--ac-text-sm);
+  text-align:left;
+  cursor:pointer;
+}
+
+.ws-panes.split .ws-pane.focused .ws-pane-bar {
+  border-color:var(--ac-accent);
+  color:var(--ac-text);
+  font-weight:600;
+}
+
+/* Two panes are narrow: stack each pane's output and side column, and drop the facts grid. */
+.ws-panes.split .ws-grid {
+  grid-template-columns:minmax(0, 1fr);
+}
+
+.ws-panes.split .ws-head {
+  flex-direction:column;
+}
+
+.ws-divider {
+  align-self:stretch;
+  cursor:col-resize;
+  touch-action:none;
+  position:relative;
+  min-height:120px;
+}
+
+.ws-divider::before {
+  content:"";
+  position:absolute;
+  top:0;
+  bottom:0;
+  left:4px;
+  width:2px;
+  background:var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+}
+
+.ws-divider:hover::before,
+.ws-divider:focus-visible::before,
+.ws-divider.dragging::before {
+  background:var(--ac-accent);
+}
+
+.ws-narrow {
+  margin:0 0 8px;
+}
+
+@media (max-width:999px) {
+  .ws-modes button[data-ws-mode=split] {
+    opacity:.6;
+  }
+}
+
+@media (max-width:699px) {
+  .ws-modes {
+    display:none;
+  }
+}
+
 /* The XP taskbar buttons for open workspaces flash while their agent waits for you. */
 .xp-flash {
   animation:ws-flash 1.2s steps(2, jump-none) infinite;
@@ -502,6 +624,28 @@ button.ws-tab {
   padding:7px 12px;
 }
 
+:root[data-theme=mac] .ws-modes {
+  border:0;
+  padding:2px;
+  background:var(--ac-surface-2);
+  border-radius:var(--ac-radius);
+}
+
+:root[data-theme=mac] .ws-modes button {
+  background:none;
+  border-radius:var(--ac-radius-sm);
+}
+
+:root[data-theme=mac] .ws-modes button[aria-pressed=true] {
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  box-shadow:var(--ac-shadow-card);
+}
+
+:root[data-theme=mac] .ws-panes.split .ws-pane.focused .ws-pane-bar {
+  box-shadow:0 0 0 1px var(--ac-accent);
+}
+
 :root[data-theme=mac] .ws-add {
   border:0;
   border-radius:var(--ac-radius-circle);
@@ -554,6 +698,15 @@ button.ws-tab {
   content:"*";
 }
 
+/* tmux marks the last window with "-"; here, the agent in the other pane. */
+:root[data-theme=terminal] .ws-tab.shown > button:first-child::after {
+  content:"-";
+}
+
+:root[data-theme=terminal] .ws-tab.shown {
+  box-shadow:none;
+}
+
 :root[data-theme=terminal] .ws-tab.active .ws-mark,
 :root[data-theme=terminal] .ws-tab.active .ws-close {
   color:inherit;
@@ -578,6 +731,46 @@ button.ws-tab {
   background:none;
   height:100%;
   font-family:var(--ac-font-mono);
+}
+
+/* tmux: panes are separated by a line; the active pane's border is green. */
+:root[data-theme=terminal] .ws-modes {
+  border-radius:0;
+  border-color:var(--ac-term-border);
+  font-family:var(--ac-font-mono);
+}
+
+:root[data-theme=terminal] .ws-modes button {
+  background:none;
+}
+
+:root[data-theme=terminal] .ws-modes button[aria-pressed=true] {
+  background:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-panes.split .ws-pane-bar {
+  border-radius:0;
+  border-color:var(--ac-term-border);
+  font-family:var(--ac-font-mono);
+  background:none;
+}
+
+:root[data-theme=terminal] .ws-panes.split .ws-pane.focused .ws-pane-bar {
+  border-color:var(--ac-accent);
+  color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-divider::before {
+  border-radius:0;
+  width:1px;
+  left:5px;
+  background:var(--ac-term-border);
+}
+
+:root[data-theme=terminal] .ws-divider:hover::before,
+:root[data-theme=terminal] .ws-divider:focus-visible::before,
+:root[data-theme=terminal] .ws-divider.dragging::before {
+  background:var(--ac-accent);
 }
 
 /* tmux marks a window with activity with "#". */
@@ -667,6 +860,44 @@ button.ws-tab {
 :root[data-theme=xp] .ws-menu button:focus-visible {
   background:var(--ac-selection-bg);
   color:var(--ac-selection-text);
+}
+
+:root[data-theme=xp] .ws-modes {
+  border-color:var(--ac-xp-button-border);
+}
+
+:root[data-theme=xp] .ws-modes button {
+  background:var(--ac-xp-button);
+  color:var(--ac-text);
+}
+
+:root[data-theme=xp] .ws-modes button[aria-pressed=true] {
+  background:var(--ac-surface-2);
+  box-shadow:inset 1px 1px 2px var(--ac-border-strong);
+}
+
+/* Each pane gets a window title bar: bright blue while focused, faded otherwise. */
+:root[data-theme=xp] .ws-panes.split .ws-pane-bar {
+  border:1px solid var(--ac-xp-frame);
+  border-radius:var(--ac-radius-sm) var(--ac-radius-sm) 0 0;
+  background:var(--ac-xp-titlebar);
+  color:var(--ac-chrome-text);
+  font-weight:700;
+  opacity:.6;
+}
+
+:root[data-theme=xp] .ws-panes.split .ws-pane.focused .ws-pane-bar {
+  opacity:1;
+  color:var(--ac-chrome-text);
+}
+
+:root[data-theme=xp] .ws-divider::before {
+  left:2px;
+  width:6px;
+  border-radius:0;
+  background:var(--ac-surface-2);
+  border-left:1px solid var(--ac-surface);
+  border-right:1px solid var(--ac-border-strong);
 }
 
 :root[data-theme=xp] .xp-ws-task {

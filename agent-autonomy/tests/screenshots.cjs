@@ -149,6 +149,10 @@ const scenarios = {
   workspace: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="coder-2"] [data-workspace]'},
   workspacehermes: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="hermes"] [data-workspace]'},
   workspaceempty: {state: fx.empty, view: 'workspace'},
+  // W4: split view, coder-1 on the left and coder-2 (waiting on you) focused on the right. Phones fall back to one pane.
+  workspacesplit: {state: () => withMission(teamState()), view: 'workspace',
+    storage: {'ac-workspaces': JSON.stringify({run: 'run_test', open: ['hermes', 'coder-1', 'coder-2'], active: 'coder-1', second: 'coder-2', focus: 1, mode: 'split', ratio: .5,
+      known: ['hermes', 'coder-1', 'coder-2'], fresh: [], changed: [], states: {hermes: 'idle', 'coder-1': 'working', 'coder-2': 'waiting_on_you'}})}},
   // W2: coder-1 finished while you were reading coder-2, so its tab carries the changed mark; the state history is recorded.
   workspacechanged: {state: () => withLifecycle(withMission(teamState())), view: 'workspace',
     storage: {'ac-workspaces': JSON.stringify({run: 'run_test', open: ['hermes', 'coder-1', 'coder-2'], active: 'coder-2', known: ['hermes', 'coder-1', 'coder-2'],

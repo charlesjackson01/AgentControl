@@ -338,6 +338,10 @@ Live team run in the dashboard: worked, once the OpenCode server was running. Th
   - Drawing took 2–3 ms, so no terminal DOM cap was needed.
   - Turns now carry a revision (the checksum of the stored row), and unchanged turns come back as stubs. Large replies are gzipped.
   - The same refresh now sends about 6 KB, with no new infrastructure.
-- Next: W4, split mode.
+- W4 is complete: split view.
+  - Two panes are drawn by one pane renderer, each with its own terminal. The focused pane receives tab choices.
+  - The divider resizes with the mouse or keyboard, and the layout persists.
+  - Below 1,000 px, only the focused pane is shown.
+- Next: W5, windowed mode and pop-outs.
 
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

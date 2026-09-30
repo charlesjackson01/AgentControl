@@ -1,4 +1,4 @@
-/* AgentControl Workspaces (W1: tabbed mode).
+/* AgentControl Workspaces: tabbed (W1) and split (W4) layouts.
 
    A workspace is a view of one agent in the current run, built only from /api/state that the
    dashboard already fetches. Opening, closing or switching workspaces never sends anything to
@@ -7,21 +7,64 @@
    redirect, a note to Hermes about this agent).
 
    Theme-specific looks live in workspace.css under :root[data-theme=…]; nothing here depends on
-   the theme. */
+   the theme.
+
+   Split view shows two panes side by side. Pane 0 shows wsState.active and pane 1 wsState.second;
+   a tab opens its agent in the focused pane. Both panes are drawn by the same code: pane 0 keeps
+   the element ids ws-<part>, pane 1 uses ws-<part>-1. */
 
 const WS_KEY = 'ac-workspaces';
-let wsState = wsLoad();          // {run, open, active, known, fresh, changed: [names], states: {name: state}}
+let wsState = wsLoad();          // {run, open, active, known, fresh, changed, states, mode, second, focus, ratio}
 const wsTurn = {};               // agent -> the turn chosen in its pane (null = follow the latest)
-const wsTerm = makeTerm(() => ({box: $('ws-term'), body: $('ws-term-body'), held: $('ws-term-held'), empty: $('ws-term-empty'),
-  title: $('ws-term-title'), meta: $('ws-term-meta'), jump: $('ws-term-jump'), follow: $('ws-term-follow')}), () => wsState.active || 'opencode');
-let wsShown = '';                 // which agent the pane currently shows
+
+/* One pane: its elements (by part name), its own terminal, and the agent it currently shows. */
+function wsPane(i) {
+  const suffix = i ? '-' + i : '';
+  const pane = {i, suffix, shown: '', part: name => $('ws-' + name + suffix)};
+  pane.term = makeTerm(() => ({box: pane.part('term'), body: pane.part('term-body'), held: pane.part('term-held'), empty: pane.part('term-empty'),
+    title: pane.part('term-title'), meta: pane.part('term-meta'), jump: pane.part('term-jump'), follow: pane.part('term-follow')}), () => pane.shown || 'opencode');
+  return pane;
+}
+function wsPaneHTML(i) {
+  const x = i ? '-' + i : '';
+  return `${i !== undefined ? `<button class="ws-pane-bar" data-ws-focus="${i}" aria-label="Focus this pane"><span id="ws-pane-name${x}" class="ws-pane-name"></span><span class="ws-pane-hint small">${i ? 'right' : 'left'} pane</span></button>` : ''}
+    <header id="ws-head${x}" class="ws-head"></header>
+    <div class="ws-grid">
+      <section class="ws-main" aria-label="Output">
+        <div id="ws-turns${x}" class="ws-turns"></div>
+        <div id="ws-term${x}" class="term" data-state="pending">
+          <div class="term-bar"><span class="term-lights" aria-hidden="true"><i></i><i></i><i></i></span><strong id="ws-term-title${x}" class="term-title">opencode</strong><span id="ws-term-meta${x}" class="term-meta"></span>
+            <span class="term-actions"><button id="ws-term-follow${x}" class="term-button" data-action="ws-term-follow" aria-pressed="true" title="Keep the newest output in view">Follow</button><button class="term-button" data-action="ws-term-copy" title="Copy this turn's output">Copy</button></span></div>
+          <div id="ws-term-body${x}" class="term-body" role="log" aria-label="Agent output" tabindex="0"></div>
+          <div id="ws-term-held${x}"></div><p id="ws-term-empty${x}" class="term-empty hidden"></p>
+          <button id="ws-term-jump${x}" class="term-jump hidden" data-action="ws-term-jump">↓ New output</button>
+        </div>
+        <div id="ws-log${x}" class="ws-log hidden" role="log" aria-label="Recorded calls"></div>
+      </section>
+      <aside class="ws-side"><div id="ws-approvals${x}"></div><div id="ws-task${x}"></div><div id="ws-files${x}"></div></aside>
+    </div>
+    <section id="ws-notes${x}" class="ws-notes"></section>
+    <details id="ws-preview-box${x}" class="ws-preview ac-panel"><summary>Preview</summary><div id="ws-preview${x}"></div></details>`;
+}
+[0, 1].forEach(i => { const root = $(i ? 'ws-pane-1' : 'ws-pane'); if (root) root.innerHTML = wsPaneHTML(i); });
+const wsPanes = [wsPane(0), wsPane(1)];
+const wsTerm = wsPanes[0].term;   // the first pane's terminal (kept for callers of W1)
+
+function wsSplitFits() { try { return !window.matchMedia || window.matchMedia('(min-width: 1000px)').matches; } catch { return true; } }
+function wsSplit() { return wsState.mode === 'split' && !!wsState.second && wsState.second !== wsState.active; }
+function wsPaneAgent(i) { return i ? (wsSplit() ? wsState.second : '') : wsState.active; }
+/* The pane a tab click or key loads into; in tabbed mode, or when split does not fit, the only pane. */
+function wsFocusIndex() { return wsSplit() && wsState.focus ? 1 : 0; }
+function wsFocused() { return wsPaneAgent(wsFocusIndex()); }
+function wsVisible() { return wsSplit() && wsSplitFits() ? [wsState.active, wsState.second] : [wsFocused() || wsState.active]; }
 
 function wsLoad() {
   try {
     const saved = JSON.parse(readItem('local', WS_KEY) || '{}');
     return {run: saved.run || '', open: saved.open || [], active: saved.active || '', known: saved.known || [], fresh: saved.fresh || [],
-      changed: saved.changed || [], states: saved.states || {}};
-  } catch { return {run: '', open: [], active: '', known: [], fresh: [], changed: [], states: {}}; }
+      changed: saved.changed || [], states: saved.states || {}, mode: saved.mode === 'split' ? 'split' : 'tabs',
+      second: saved.second || '', focus: saved.focus ? 1 : 0, ratio: Math.min(.8, Math.max(.2, Number(saved.ratio) || .5))};
+  } catch { return {run: '', open: [], active: '', known: [], fresh: [], changed: [], states: {}, mode: 'tabs', second: '', focus: 0, ratio: .5}; }
 }
 function wsSave() { try { localStorage.setItem(WS_KEY, JSON.stringify(wsState)); } catch {} }
 
@@ -32,8 +75,10 @@ function wsSync() {
   const agents = missionAgents(), names = agents.map(a => a.name);
   if (wsState.run !== current.id) {
     const first = agents.find(a => a.state === 'waiting_on_you') || agents.find(a => a.state === 'working' && a.name !== 'hermes') || agents.find(a => a.name !== 'hermes') || agents[0];
+    // A new run keeps your layout choice (tabs or split, pane widths); the panes start over.
     wsState = {run: current.id, open: [...names], active: first?.name || '', known: [...names], fresh: [], changed: [],
-      states: Object.fromEntries(agents.map(a => [a.name, a.state]))};
+      states: Object.fromEntries(agents.map(a => [a.name, a.state])), mode: wsState.mode, focus: 0, ratio: wsState.ratio,
+      second: wsPickSecond(first?.name, names, agents)};
     wsSave();
     return agents;
   }
@@ -42,7 +87,7 @@ function wsSync() {
   let moved = false;
   for (const a of agents) {
     if (wsState.states[a.name] === a.state) continue;
-    const watching = view === 'workspace' && wsState.active === a.name;
+    const watching = view === 'workspace' && wsVisible().includes(a.name);
     if (wsState.states[a.name] && WS_NOTICE.has(a.state) && !watching && !wsState.changed.includes(a.name)) wsState.changed.push(a.name);
     wsState.states[a.name] = a.state;
     moved = true;
@@ -56,15 +101,32 @@ function wsSync() {
     wsSave();
   }
   wsState.open = wsState.open.filter(n => names.includes(n));
-  if (!wsState.open.includes(wsState.active)) wsState.active = wsState.open[0] || '';
+  if (!wsState.open.includes(wsState.active)) wsState.active = wsState.second && wsState.open.includes(wsState.second) ? wsState.second : wsState.open[0] || '';
+  if (!wsState.open.includes(wsState.second) || wsState.second === wsState.active) wsState.second = wsPickSecond(wsState.active, wsState.open, agents);
   return agents;
+}
+/* The agent for the second pane: one waiting on you, else working, else the next open tab. */
+function wsPickSecond(first, names, agents) {
+  const others = (agents || []).filter(a => a.name !== first && names.includes(a.name));
+  return (others.find(a => a.state === 'waiting_on_you') || others.find(a => a.state === 'working') || others[0])?.name || names.find(n => n !== first) || '';
 }
 
 function openWorkspace(name) {
   if (!current) return;
   wsSync();
   if (!wsState.open.includes(name)) wsState.open.push(name);
-  wsState.active = name;
+  if (wsSplit() && wsSplitFits()) {
+    // Already on screen: focus its pane. Otherwise it replaces the focused pane's agent.
+    if (name === wsState.active) wsState.focus = 0;
+    else if (name === wsState.second) wsState.focus = 1;
+    else if (wsState.focus) wsState.second = name;
+    else wsState.active = name;
+  } else {
+    // The workspace you were just reading becomes the second pane's agent (like alt-tab).
+    if (name !== wsState.active && wsState.active) wsState.second = wsState.active;
+    wsState.active = name;
+    wsState.focus = 0;
+  }
   wsState.fresh = wsState.fresh.filter(n => n !== name);
   wsState.changed = wsState.changed.filter(n => n !== name);
   wsSave();
@@ -76,13 +138,45 @@ function closeWorkspace(name) {
   // Closing a tab only hides the view; the agent keeps working. Reopen it from +.
   wsState.open = wsState.open.filter(n => n !== name);
   wsState.fresh = wsState.fresh.filter(n => n !== name);
-  if (wsState.active === name) wsState.active = wsState.open[0] || '';
+  if (wsState.active === name) { wsState.active = wsState.second && wsState.open.includes(wsState.second) ? wsState.second : wsState.open[0] || ''; wsState.focus = 0; }
+  if (wsState.second === name || wsState.second === wsState.active) wsState.second = wsPickSecond(wsState.active, wsState.open, missionAgents());
   wsSave();
   renderWorkspace();
 }
 function stepWorkspace(delta) {
-  const open = wsState.open, i = open.indexOf(wsState.active);
+  const open = wsState.open, i = open.indexOf(wsFocused());
   if (open.length) openWorkspace(open[(i + delta + open.length) % open.length]);
+}
+/* Layout changes are browser-only too: nothing is sent, no agent is touched. */
+function setWorkspaceMode(mode) {
+  if (mode === 'split') {
+    wsSync();
+    if (!wsState.second) wsState.second = wsPickSecond(wsState.active, wsState.open, missionAgents());
+    if (!wsState.second) { toast('Open a second agent to split the view.'); return; }
+    if (!wsSplitFits()) toast('Split view needs a wider window; it applies when there is room.');
+  }
+  wsState.mode = mode === 'split' ? 'split' : 'tabs';
+  wsState.focus = 0;
+  wsSave();
+  renderWorkspace();
+}
+function focusPane(i) {
+  if (!wsSplit() || !wsSplitFits() || (wsState.focus ? 1 : 0) === i) return;
+  wsState.focus = i;
+  wsSave();
+  // Only the focus marks change; the panes are not redrawn, so a click inside one still lands.
+  [0, 1].forEach(n => $(n ? 'ws-pane-1' : 'ws-pane').classList.toggle('focused', n === i));
+  const agents = missionAgents();
+  renderWsTabs(agents);
+  renderXpTasks(agents);
+}
+function setPaneRatio(ratio, save = true) {
+  wsState.ratio = Math.min(.8, Math.max(.2, Math.round(ratio * 100) / 100));
+  const panes = $('ws-panes');
+  panes?.style.setProperty('--ws-left', wsState.ratio + 'fr');
+  panes?.style.setProperty('--ws-right', (1 - wsState.ratio).toFixed(2) + 'fr');
+  $('ws-divider')?.setAttribute('aria-valuenow', String(Math.round(wsState.ratio * 100)));
+  if (save) wsSave();
 }
 function closeWsMenu() { $('ws-menu')?.classList.add('hidden'); $('ws-add')?.setAttribute('aria-expanded', 'false'); }
 
@@ -95,7 +189,7 @@ function wsSince(value) {
   return seconds < 45 ? 'just now' : seconds < 3600 ? `for ${Math.round(seconds / 60)} min` : `since ${timeLabel(value)}`;
 }
 const WS_MARK = {working: '●', waiting_on_you: '!', needs_attention: '!', paused: '‖', idle: '○', finished: '✓', failed: '×', stopped: '■', blocked: '!', limit_reached: '!'};
-function workspaceActive() { return wsState.active ? wsAgentLabel(wsState.active) : ''; }
+function workspaceActive() { const name = wsFocused(); return name ? wsAgentLabel(name) : ''; }
 function wsAgentLabel(name) { return name === 'hermes' ? 'Hermes' : name; }
 function wsTone(a) { return (AGENT_STATE[a?.state] || ['', ''])[1]; }
 
@@ -103,8 +197,8 @@ function renderWsTabs(agents) {
   const byName = Object.fromEntries(agents.map(a => [a.name, a]));
   const tabs = wsState.open.map((name, i) => {
     const a = byName[name] || {name, state: 'idle'}, [label] = AGENT_STATE[a.state] || [a.state || 'idle'];
-    const active = name === wsState.active, fresh = wsState.fresh.includes(name), changed = wsState.changed.includes(name), since = wsSince(a.since);
-    return `<span class="ws-tab ${active ? 'active' : ''} ${esc(wsTone(a))}" data-index="${i + 1}">
+    const active = name === wsFocused(), shown = !active && wsVisible().includes(name), fresh = wsState.fresh.includes(name), changed = wsState.changed.includes(name), since = wsSince(a.since);
+    return `<span class="ws-tab ${active ? 'active' : ''} ${shown ? 'shown' : ''} ${esc(wsTone(a))}" data-index="${i + 1}">
       <button role="tab" aria-selected="${active}" data-ws-open="${esc(name)}" title="${esc(wsAgentLabel(name))} · ${esc(label)}${since ? ' ' + esc(since) : ''}${changed ? ' · changed while you were away' : ''}${i < 9 ? ` · key ${i + 1}` : ''}">
         <span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span class="ws-tab-name">${esc(wsAgentLabel(name))}</span>${fresh ? '<span class="ws-new">new</span>' : ''}${changed ? '<span class="ws-changed" aria-hidden="true"></span>' : ''}<span class="sr-only">, ${esc(label)}${changed ? ', changed while you were away' : ''}</span></button>
       <button class="ws-close" data-ws-close="${esc(name)}" aria-label="Close ${esc(wsAgentLabel(name))}'s workspace (the agent keeps working)" title="Close tab · the agent keeps working">×</button></span>`;
@@ -127,9 +221,13 @@ function renderWsTabs(agents) {
 
 function renderWorkspace() {
   if (!data || !$('view-workspace')) return;
+  const split = wsSplit(), fits = wsSplitFits(), both = split && fits;
+  document.querySelectorAll('[data-ws-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.wsMode === (split ? 'split' : 'tabs'))));
   if (!current) {
     setHTML($('ws-tabs'), '<button class="ws-tab ws-home" data-view="mission">Mission</button>');
-    $('ws-pane').classList.add('hidden');
+    wsPanes.forEach(p => $(p.i ? 'ws-pane-1' : 'ws-pane').classList.add('hidden'));
+    $('ws-divider').classList.add('hidden');
+    $('ws-narrow').classList.add('hidden');
     $('ws-empty').classList.remove('hidden');
     setHTML($('ws-empty'), '<section class="ac-panel"><h1>No run yet</h1><p class="muted">Each agent of a run gets a workspace here: its live terminal, task, approvals, files and notes.</p><button class="ac-btn primary" data-action="new">Start a new run</button></section>');
     renderXpTasks([]);
@@ -138,38 +236,56 @@ function renderWorkspace() {
   const agents = wsSync();
   renderWsTabs(agents);
   renderXpTasks(agents);
-  const a = agents.find(x => x.name === wsState.active);
-  $('ws-empty').classList.toggle('hidden', !!a);
-  $('ws-pane').classList.toggle('hidden', !a);
-  if (!a) {
+  const byName = Object.fromEntries(agents.map(a => [a.name, a]));
+  // When split does not fit (phones, narrow windows) the focused pane is shown alone.
+  const first = both ? byName[wsState.active] : byName[wsFocused()] || byName[wsState.active];
+  const second = both ? byName[wsState.second] : null;
+  $('ws-empty').classList.toggle('hidden', !!first);
+  $('ws-pane').classList.toggle('hidden', !first);
+  $('ws-pane-1').classList.toggle('hidden', !second);
+  $('ws-divider').classList.toggle('hidden', !second);
+  $('ws-panes').classList.toggle('split', !!second);
+  $('ws-narrow').classList.toggle('hidden', !(split && !fits && view === 'workspace'));
+  setPaneRatio(wsState.ratio, false);
+  if (!first) {
     setHTML($('ws-empty'), '<section class="ac-panel"><p>All workspace tabs are closed. The agents keep working; open one again with <strong>+</strong>.</p></section>');
     return;
   }
   if (view !== 'workspace') return;   // hidden panes are not redrawn
-  if (wsShown !== a.name) { wsShown = a.name; wsTerm.reset(null); wsTerm.setFollow(true); $('ws-term-body').scrollTop = 0; }
-  const steps = (data.steps || []).filter(s => (s.agent || 'coder-1') === a.name);
-  const hermes = a.type === 'orchestrator', researcher = roleOf(a.name) === 'researcher';
-  renderWsHead(a, steps);
-  renderWsTask(a, steps);
-  renderWsApprovals(a);
-  renderWsFiles(a, steps);
-  renderWsNotes(a);
-  renderWsPreview();
-  const recordedOnly = hermes || researcher;
-  $('ws-term').classList.toggle('hidden', recordedOnly);
-  $('ws-log').classList.toggle('hidden', !recordedOnly);
-  if (recordedOnly) { setHTML($('ws-turns'), ''); renderWsLog(a, steps); return; }
-  const chosen = wsTurn[a.name] && steps.find(s => s.id === wsTurn[a.name]);
-  const step = chosen || steps.at(-1);
-  setHTML($('ws-turns'), steps.length > 1 ? `<div class="ws-turn-chips" role="group" aria-label="${esc(a.name)}'s turns">${steps.map(s =>
-    `<button class="ws-chip ${s.id === step?.id ? 'active' : ''}" data-ws-turn="${esc(s.id)}" aria-pressed="${s.id === step?.id}" title="${esc(s.title)}">#${s.number}</button>`).join('')}
-    <button class="ws-chip ${!chosen ? 'active' : ''}" data-ws-turn="" aria-pressed="${!chosen}">Latest</button></div>` : '');
-  const live = step && !ended.has(current.status) && ['running', 'dispatching', 'waiting'].includes(step.status);
-  const pending = agentRequests(a.name);
-  wsTerm.render(step, live ? (pending.length ? 'waiting' : 'active') : step?.status === 'failed' ? 'failed' : 'done', pending, !chosen);
+  [first, second].forEach((a, i) => {
+    const root = $(i ? 'ws-pane-1' : 'ws-pane');
+    root.classList.toggle('focused', !!second && wsFocusIndex() === i);
+    if (a) renderWsPane(wsPanes[i], a, !!second);
+  });
 }
 
-function renderWsHead(a, steps) {
+function renderWsPane(p, a, split) {
+  if (p.shown !== a.name) { p.shown = a.name; p.term.reset(null); p.term.setFollow(true); p.part('term-body').scrollTop = 0; }
+  const name = p.part('pane-name');
+  if (name) name.textContent = split ? `${wsAgentLabel(a.name)} · ${(AGENT_STATE[a.state] || [a.state])[0]}` : '';
+  const steps = (data.steps || []).filter(s => (s.agent || 'coder-1') === a.name);
+  const hermes = a.type === 'orchestrator', researcher = roleOf(a.name) === 'researcher';
+  renderWsHead(p, a, steps);
+  renderWsTask(p, a, steps);
+  renderWsApprovals(p, a);
+  renderWsFiles(p, a, steps);
+  renderWsNotes(p, a);
+  renderWsPreview(p);
+  const recordedOnly = hermes || researcher;
+  p.part('term').classList.toggle('hidden', recordedOnly);
+  p.part('log').classList.toggle('hidden', !recordedOnly);
+  if (recordedOnly) { setHTML(p.part('turns'), ''); renderWsLog(p, a, steps); return; }
+  const chosen = wsTurn[a.name] && steps.find(s => s.id === wsTurn[a.name]);
+  const step = chosen || steps.at(-1);
+  setHTML(p.part('turns'), steps.length > 1 ? `<div class="ws-turn-chips" role="group" aria-label="${esc(a.name)}'s turns">${steps.map(s =>
+    `<button class="ws-chip ${s.id === step?.id ? 'active' : ''}" data-ws-turn="${esc(s.id)}" data-ws-agent="${esc(a.name)}" aria-pressed="${s.id === step?.id}" title="${esc(s.title)}">#${s.number}</button>`).join('')}
+    <button class="ws-chip ${!chosen ? 'active' : ''}" data-ws-turn="" data-ws-agent="${esc(a.name)}" aria-pressed="${!chosen}">Latest</button></div>` : '');
+  const live = step && !ended.has(current.status) && ['running', 'dispatching', 'waiting'].includes(step.status);
+  const pending = agentRequests(a.name);
+  p.term.render(step, live ? (pending.length ? 'waiting' : 'active') : step?.status === 'failed' ? 'failed' : 'done', pending, !chosen);
+}
+
+function renderWsHead(p, a, steps) {
   const [label, tone] = AGENT_STATE[a.state] || [String(a.state || 'idle').replaceAll('_', ' '), ''];
   const hermes = a.type === 'orchestrator', role = roleOf(a.name), u = agentUsage(a.name);
   const ws = current.workspace?.agents?.[a.name], title = current.team?.agents?.[a.name]?.label;
@@ -184,14 +300,14 @@ function renderWsHead(a, steps) {
     ['Skills', skills.length ? skills.join(', ') : 'none installed'],
     ['Works in', where],
     ['Usage', `${hermes ? plural(current.decision_count || 0, 'decision') : `${plural(steps.length, 'turn')} · ${plural(a.stats?.tool_calls || 0, 'tool call')}`}${u ? ` · ${tokens(u.tokens_in)} in / ${tokens(u.tokens_out)} out${u.cost ? ' · ' + money(u.cost, 4) : ''}` : ' · no model calls yet'}`]];
-  setHTML($('ws-head'), `<div class="ws-id"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(role)}">${esc(roleMark(a.name))}</span>
-      <div><h1 id="ws-title">${esc(wsAgentLabel(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span>${a.since ? `<span class="small muted ws-since" title="${esc(new Date(a.since).toLocaleString())}">${esc(wsSince(a.since))}</span>` : ''}</h1>
+  setHTML(p.part('head'), `<div class="ws-id"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(role)}">${esc(roleMark(a.name))}</span>
+      <div><h1 id="ws-title${p.suffix}">${esc(wsAgentLabel(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span>${a.since ? `<span class="small muted ws-since" title="${esc(new Date(a.since).toLocaleString())}">${esc(wsSince(a.since))}</span>` : ''}</h1>
       <p class="small muted">${esc(title || a.role || '')}${a.runtime ? ' · ' + esc(a.runtime) : ''} · run “${esc(runTitle(current, 60))}”</p>
       ${a.task ? `<p class="small ws-now">${esc(a.task)}</p>` : ''}</div></div>
     <dl class="ws-facts small">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`);
 }
 
-function renderWsTask(a, steps) {
+function renderWsTask(p, a, steps) {
   const tasks = (current.team?.tasks || []).filter(t => t.agent === a.name);
   const latest = steps.at(-1);
   let body;
@@ -208,22 +324,22 @@ function renderWsTask(a, steps) {
     body = latest ? `<p class="small"><strong>Turn ${latest.number}:</strong> ${esc(latest.title)}</p>` : '<p class="small muted">No turn yet.</p>';
   }
   const verify = latest && a.type !== 'orchestrator' ? `<p class="small">Verification: ${esc(verificationLabel(latest))}</p>` : '';
-  setHTML($('ws-task'), `<section class="ac-panel"><h2 class="ac-panel__title">${a.type === 'orchestrator' ? 'Plan' : 'Task'}</h2>${body}${verify}</section>`);
+  setHTML(p.part('task'), `<section class="ac-panel"><h2 class="ac-panel__title">${a.type === 'orchestrator' ? 'Plan' : 'Task'}</h2>${body}${verify}</section>`);
 }
 
-function renderWsApprovals(a) {
+function renderWsApprovals(p, a) {
   const cards = agentRequests(a.name).map(approvalCard).concat(researchRequests(current.id).filter(r => r.agent === a.name).map(r => researchCard(r, 'ws')));
   const teamPlan = a.type === 'orchestrator' && current.status === 'awaiting_approval'
     ? '<section class="ac-panel"><h2 class="ac-panel__title">Team plan</h2><p class="small">Hermes proposed a team and waits for your decision.</p><button class="ac-btn primary" data-view="runs">Review the team plan</button></section>' : '';
-  setHTML($('ws-approvals'), cards.length || teamPlan ? `<div class="ws-approvals">${teamPlan}${cards.join('')}</div>` : '');
+  setHTML(p.part('approvals'), cards.length || teamPlan ? `<div class="ws-approvals">${teamPlan}${cards.join('')}</div>` : '');
 }
 
-function renderWsFiles(a, steps) {
+function renderWsFiles(p, a, steps) {
   const withEvidence = steps.filter(s => s.evidence);
   const files = fileStats(withEvidence);
   const rows = files.slice(0, 40).map(f => `<div class="file-row">${icon('file')}<span class="file-path">${esc(f.path)}</span><span class="file-change">${esc(f.change)}</span>${f.added !== null ? `<span class="file-counts"><span class="added">+${f.added}</span><span class="removed">−${f.removed}${f.partial ? '*' : ''}</span></span>` : ''}</div>`).join('');
   const diffs = withEvidence.slice(-4).reverse().map(s => `<button class="text-button small" data-ws-diff="${esc(s.id)}">Turn ${s.number} diff</button>`).join(' ');
-  setHTML($('ws-files'), a.type === 'orchestrator' ? '' : `<section class="ac-panel"><h2 class="ac-panel__title">Files <span class="muted small">· ${files.length}</span></h2>
+  setHTML(p.part('files'), a.type === 'orchestrator' ? '' : `<section class="ac-panel"><h2 class="ac-panel__title">Files <span class="muted small">· ${files.length}</span></h2>
     ${rows || '<p class="small muted">Files this agent changed appear after each of its turns.</p>'}${diffs ? `<p>${diffs}</p>` : ''}</section>`);
 }
 
@@ -237,7 +353,7 @@ function wsEventAgent(e) {
     'OpenCode result': 'coder-1', 'OpenCode needs input': 'coder-1', 'submission uncertain': 'coder-1', 'session': 'coder-1'}[e.kind] || 'agentcontrol';
 }
 
-function renderWsNotes(a) {
+function renderWsNotes(p, a) {
   const notes = (current.instructions || []).filter(n => a.type === 'orchestrator' ? !n.agent : n.agent === a.name)
     .map(n => `<li><span class="muted small">${when(n.created)}</span> <strong class="small">Your note${n.agent ? ' for ' + esc(n.agent) : ''}</strong> <span class="small">${esc(n.text)}</span></li>`);
   const lifecycle = (data.events || []).filter(e => e.kind === 'agent state' && wsEventAgent(e) === a.name).slice(-12).reverse().map(e => {
@@ -251,20 +367,20 @@ function renderWsNotes(a) {
   const decisions = a.type === 'orchestrator' ? [] : (data.steps || []).filter(s => (s.agent || 'coder-1') === a.name && (s.summary || s.decision?.summary)).slice(-5).reverse()
     .map(s => `<li><strong class="small">Hermes, turn ${s.number}</strong> <span class="small">${esc(s.summary || s.decision.summary)}</span></li>`);
   const finished = ended.has(current.status);
-  setHTML($('ws-notes'), `<section class="ac-panel"><h2 class="ac-panel__title">Notes &amp; activity</h2>
+  setHTML(p.part('notes'), `<section class="ac-panel"><h2 class="ac-panel__title">Notes &amp; activity</h2>
     <p class="small muted">Recorded instructions, Hermes’s summaries and this agent’s events. Private model reasoning is not recorded and is never shown.</p>
     ${lifecycle.length ? `<h3 class="ws-subhead small">State changes</h3><ul class="ws-list ws-lifecycle">${lifecycle.join('')}</ul>` : ''}
     ${[...notes, ...decisions].length ? `<ul class="ws-list">${[...notes, ...decisions].join('')}</ul>` : ''}
     ${mine.length ? `<ul class="ws-list">${mine.join('')}</ul>` : '<p class="small muted">No events recorded for this agent yet.</p>'}
-    ${finished ? '' : `<form class="ws-note" data-ws-note="${esc(a.name)}"><label class="sr-only" for="ws-note-text">Note</label><input id="ws-note-text" maxlength="5000" placeholder="${a.type === 'orchestrator' ? 'Tell Hermes something' : 'Note for Hermes about ' + esc(a.name)}" autocomplete="off"><button class="ac-btn">Send</button></form>
+    ${finished ? '' : `<form class="ws-note" data-ws-note="${esc(a.name)}"><label class="sr-only" for="ws-note-text${p.suffix}">Note</label><input id="ws-note-text${p.suffix}" maxlength="5000" placeholder="${a.type === 'orchestrator' ? 'Tell Hermes something' : 'Note for Hermes about ' + esc(a.name)}" autocomplete="off"><button class="ac-btn">Send</button></form>
       <p class="small muted">${a.type === 'orchestrator' ? 'Goes into Hermes’s next decision.' : `Goes to Hermes, marked for ${esc(a.name)}; Hermes decides what ${esc(a.name)} is told.`}</p>`}</section>`);
 }
 
-function renderWsLog(a, steps) {
+function renderWsLog(p, a, steps) {
   if (roleOf(a.name) === 'researcher') {
     const items = steps.map(s => `<div class="ws-log-item"><div class="term-line"><span class="term-prompt">?</span><span class="term-cmd">${esc(s.question || s.title)}</span><span class="term-status">${esc(s.status || '')}</span></div>
       ${s.report ? `<p class="small">${esc(s.report.summary || '')}</p>${(s.report.sources || []).length ? `<ul class="small">${s.report.sources.slice(0, 8).map(u => `<li class="mono">${esc(u)}</li>`).join('')}</ul>` : ''}` : ''}</div>`).join('');
-    setHTML($('ws-log'), `<p class="small muted ws-log-note">The researcher runs Hermes once per approved question; its report is recorded when that call ends. There is no live stream.</p>${items || '<p class="small muted">No questions yet.</p>'}`);
+    setHTML(p.part('log'), `<p class="small muted ws-log-note">The researcher runs Hermes once per approved question; its report is recorded when that call ends. There is no live stream.</p>${items || '<p class="small muted">No questions yet.</p>'}`);
     return;
   }
   const calls = (data.events || []).filter(e => ['Hermes request', 'Hermes decision', 'Hermes JSON repaired'].includes(e.kind)).slice(-40);
@@ -272,15 +388,15 @@ function renderWsLog(a, steps) {
     let parsed; try { parsed = JSON.parse(e.detail); } catch {}
     const request = e.kind === 'Hermes request';
     const text = request ? String(e.detail || '') : parsed ? [parsed.action, parsed.title, parsed.summary].filter(Boolean).join(' · ') : String(e.detail || '');
-    return `<details class="ws-log-item" data-key="ws-${esc(String(e.id))}"><summary><span class="term-prompt">${request ? '→' : '←'}</span> <span class="muted small">${when(e.created)}</span> ${esc(request ? `request to Hermes · ${plural(text.length, 'character')}` : e.kind === 'Hermes JSON repaired' ? 'reply repaired' : 'decision: ' + text.slice(0, 160))}</summary><pre>${esc(text.slice(-6000))}</pre></details>`;
+    return `<details class="ws-log-item" data-key="ws${p.suffix}-${esc(String(e.id))}"><summary><span class="term-prompt">${request ? '→' : '←'}</span> <span class="muted small">${when(e.created)}</span> ${esc(request ? `request to Hermes · ${plural(text.length, 'character')}` : e.kind === 'Hermes JSON repaired' ? 'reply repaired' : 'decision: ' + text.slice(0, 160))}</summary><pre>${esc(text.slice(-6000))}</pre></details>`;
   }).join('');
-  setHTML($('ws-log'), `<p class="small muted ws-log-note">Hermes runs as one call per decision, so this is the recorded log of those calls (what AgentControl sent and what came back), not a live stream.</p>${items || '<p class="small muted">No Hermes calls recorded yet.</p>'}`);
+  setHTML(p.part('log'), `<p class="small muted ws-log-note">Hermes runs as one call per decision, so this is the recorded log of those calls (what AgentControl sent and what came back), not a live stream.</p>${items || '<p class="small muted">No Hermes calls recorded yet.</p>'}`);
 }
 
-function renderWsPreview() {
-  const p = previewStatus(), mine = p.run === current.id && previewLive(p);
+function renderWsPreview(p) {
+  const status = previewStatus(), mine = status.run === current.id && previewLive(status);
   const vm = current.isolation === 'vm';
-  setHTML($('ws-preview'), `<p class="small">${mine ? `Live preview: <strong>${esc(p.mode)}</strong> · ${esc(p.state)}` : current.preview ? `Preview set up (${esc(current.preview.mode)}), not running.` : 'No preview is set up for this run.'}</p>
+  setHTML(p.part('preview'), `<p class="small">${mine ? `Live preview: <strong>${esc(p.mode)}</strong> · ${esc(p.state)}` : current.preview ? `Preview set up (${esc(current.preview.mode)}), not running.` : 'No preview is set up for this run.'}</p>
     <p class="row wrap"><button class="ac-btn compact" data-view="project">${mine ? 'Open the live preview' : 'Open Project'}</button>${vm ? '<button class="ac-btn compact" data-view="project">Open the VM screen</button>' : ''}</p>
     <p class="small muted">The preview is shared by every view. Opening it here does not start another program.</p>`);
 }
@@ -293,7 +409,7 @@ function renderXpTasks(agents) {
   const tray = $('xp-tray'), byName = Object.fromEntries(agents.map(a => [a.name, a]));
   wsState.open.filter(n => byName[n]).forEach(name => {
     const a = byName[name], button = document.createElement('button');
-    button.className = `xp-task xp-ws-task ${a.state === 'waiting_on_you' ? 'xp-flash' : ''} ${view === 'workspace' && wsState.active === name ? 'active' : ''}`;
+    button.className = `xp-task xp-ws-task ${a.state === 'waiting_on_you' ? 'xp-flash' : ''} ${view === 'workspace' && wsVisible().includes(name) ? 'active' : ''}`;
     button.dataset.wsOpen = name;
     button.textContent = `${WS_MARK[a.state] || '○'} ${wsAgentLabel(name)}`;
     bar.insertBefore(button, tray);
@@ -305,7 +421,12 @@ async function workspaceClick(b) {
   if (b.dataset.wsOpen !== undefined) { openWorkspace(b.dataset.wsOpen); return true; }
   if (b.dataset.wsClose !== undefined) { closeWorkspace(b.dataset.wsClose); return true; }
   if (b.dataset.workspace !== undefined) { openWorkspace(b.dataset.workspace); return true; }
-  if (b.dataset.wsTurn !== undefined) { wsTurn[wsState.active] = b.dataset.wsTurn || null; wsTerm.reset(null); renderWorkspace(); return true; }
+  if (b.dataset.wsTurn !== undefined) {
+    const pane = wsPanes[Number(b.closest('[data-pane]')?.dataset.pane) || 0];
+    wsTurn[b.dataset.wsAgent || pane.shown] = b.dataset.wsTurn || null; pane.term.reset(null); renderWorkspace(); return true;
+  }
+  if (b.dataset.wsMode !== undefined) { setWorkspaceMode(b.dataset.wsMode); return true; }
+  if (b.dataset.wsFocus !== undefined) { focusPane(Number(b.dataset.wsFocus)); return true; }
   if (b.dataset.wsDiff !== undefined) { openDiff(b.dataset.wsDiff); return true; }
   return false;
 }
@@ -314,6 +435,8 @@ function workspaceKey(event) {
   if (/^[1-9]$/.test(event.key)) { const name = wsState.open[Number(event.key) - 1]; if (name) openWorkspace(name); return true; }
   if (event.key === ']') { stepWorkspace(1); return true; }
   if (event.key === '[') { stepWorkspace(-1); return true; }
+  if (event.key === '\\') { setWorkspaceMode(wsSplit() ? 'tabs' : 'split'); return true; }
+  if (event.key === 'o' && wsSplit() && wsSplitFits()) { focusPane(wsState.focus ? 0 : 1); return true; }
   return false;
 }
 
@@ -322,10 +445,11 @@ Object.assign(ACTIONS, {
     const menu = $('ws-menu'), open = menu.classList.toggle('hidden') === false;
     $('ws-add').setAttribute('aria-expanded', String(open));
   },
-  'ws-term-follow': () => wsTerm.setFollow(!wsTerm.follow),
-  'ws-term-jump': () => wsTerm.setFollow(true),
-  'ws-term-copy': async () => { try { await navigator.clipboard.writeText(wsTerm.text(data?.steps)); toast('Terminal output copied.'); } catch { toast('Copy is unavailable in this browser.'); } },
+  'ws-term-follow': b => { const t = wsPaneOf(b).term; t.setFollow(!t.follow); },
+  'ws-term-jump': b => wsPaneOf(b).term.setFollow(true),
+  'ws-term-copy': async b => { try { await navigator.clipboard.writeText(wsPaneOf(b).term.text(data?.steps)); toast('Terminal output copied.'); } catch { toast('Copy is unavailable in this browser.'); } },
 });
+function wsPaneOf(el) { return wsPanes[Number(el?.closest?.('[data-pane]')?.dataset.pane) || 0]; }
 
 document.addEventListener('submit', async event => {
   const form = event.target.closest?.('[data-ws-note]');
@@ -336,4 +460,35 @@ document.addEventListener('submit', async event => {
   try { await control('instruction', text, current.id, agent === 'hermes' ? null : agent); input.value = ''; toast('Note saved for Hermes’s next decision.'); }
   catch (error) { pageError(error.message); }
 });
-$('ws-term-body')?.addEventListener('scroll', wsTerm.onScroll);
+wsPanes.forEach(p => p.part('term-body')?.addEventListener('scroll', p.term.onScroll));
+// Clicking anywhere in a pane focuses it, so the next tab opens there.
+[0, 1].forEach(i => $(i ? 'ws-pane-1' : 'ws-pane')?.addEventListener('pointerdown', () => focusPane(i)));
+
+/* The divider: drag it, use the arrow keys on it, or double-click it to share the width evenly. */
+(function wsDivider() {
+  const divider = $('ws-divider'), panes = $('ws-panes');
+  if (!divider || !panes) return;
+  let dragging = false;
+  const move = event => {
+    if (!dragging) return;
+    const box = panes.getBoundingClientRect();
+    if (box.width) setPaneRatio((event.clientX - box.left) / box.width, false);
+  };
+  divider.addEventListener('pointerdown', event => { dragging = true; divider.setPointerCapture?.(event.pointerId); divider.classList.add('dragging'); event.preventDefault(); });
+  divider.addEventListener('pointermove', move);
+  const stop = () => { if (!dragging) return; dragging = false; divider.classList.remove('dragging'); wsSave(); };
+  divider.addEventListener('pointerup', stop);
+  divider.addEventListener('pointercancel', stop);
+  divider.addEventListener('dblclick', () => setPaneRatio(.5));
+  divider.addEventListener('keydown', event => {
+    const step = {ArrowLeft: -.05, ArrowRight: .05}[event.key];
+    if (step) { event.preventDefault(); event.stopPropagation(); setPaneRatio(wsState.ratio + step); }
+    if (event.key === 'Home' || event.key === 'End') { event.preventDefault(); setPaneRatio(event.key === 'Home' ? .2 : .8); }
+    if (event.key === 'Enter') { event.preventDefault(); setPaneRatio(.5); }
+  });
+})();
+let wsResize = 0;
+window.addEventListener?.('resize', () => {
+  globalThis.cancelAnimationFrame?.(wsResize);
+  wsResize = globalThis.requestAnimationFrame?.(() => renderWorkspace()) || 0;
+});

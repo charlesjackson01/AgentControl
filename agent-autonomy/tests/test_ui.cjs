@@ -1100,5 +1100,66 @@ test('W3: unchanged turns come back as stubs and the page keeps what it holds; a
  assert.equal(vmRun(h,'data.steps[1].rev'),999);
  assert.match(text(),/python3 -m unittest discover/);
 });
+test('W4 split: two agents side by side, tabs load into the focused pane, the divider resizes, nothing is sent',async()=>{
+ const h=await harness(missionFixture());const before=posts(h);
+ await h.click('[data-workspace="coder-1"]');
+ await h.click('[data-ws-mode="split"]');
+ const d=h.document,shown=id=>!d.getElementById(id).classList.contains('hidden');
+ assert(shown('ws-pane-1')&&shown('ws-divider'),'the second pane and the divider appear');
+ assert.match(d.getElementById('ws-head').textContent,/coder-1/);
+ assert.match(d.getElementById('ws-head-1').textContent,/coder-2[\s\S]*Waiting on you/,'the agent waiting on you fills the second pane');
+ assert.match(d.getElementById('ws-term-body-1').textContent,/npm test/);
+ assert.doesNotMatch(d.getElementById('ws-term-body').textContent,/Checking the list markup/,'each pane has its own terminal');
+ assert.equal(d.querySelectorAll('#ws-approvals-1 [data-approval-card]').length,1);
+ assert.equal(d.querySelector('[data-ws-mode="split"]').getAttribute('aria-pressed'),'true');
+ assert.match(d.querySelector('#ws-tabs [data-ws-open="coder-2"]').parentNode.className,/shown/);
+ // A tab loads into the focused (left) pane; focus the right pane and the next tab goes there.
+ await h.click('#ws-tabs [data-ws-open="hermes"]');
+ assert.match(d.getElementById('ws-head').textContent,/Hermes/);assert.match(d.getElementById('ws-head-1').textContent,/coder-2/);
+ assert(!d.getElementById('ws-log').classList.contains('hidden'),'Hermes still shows its recorded log');
+ await h.click('[data-ws-focus="1"]');
+ assert.match(d.getElementById('ws-pane-1').className,/focused/);
+ await h.click('#ws-tabs [data-ws-open="coder-1"]');
+ assert.match(d.getElementById('ws-head-1').textContent,/coder-1/);assert.match(d.getElementById('ws-head').textContent,/Hermes/);
+ // A tab already on screen just moves the focus to its pane.
+ await h.click('#ws-tabs [data-ws-open="hermes"]');
+ assert.match(d.getElementById('ws-pane').className,/focused/);assert.match(d.getElementById('ws-head-1').textContent,/coder-1/);
+ await key(h,'o');assert.equal(wsSaved(h).focus,1);
+ // Divider: keyboard resize, saved; Enter shares evenly.
+ const divider=d.getElementById('ws-divider');
+ const press=k=>{const e=new h.context.window.Event('keydown',{bubbles:true,cancelable:true});Object.defineProperty(e,'key',{value:k});divider.dispatchEvent(e);};
+ press('ArrowRight');press('ArrowRight');
+ assert.equal(wsSaved(h).ratio,.6);assert.equal(divider.getAttribute('aria-valuenow'),'60');
+ assert.match(d.getElementById('ws-panes').getAttribute('style'),/--ws-left:\s*0\.6fr/);
+ press('Enter');assert.equal(wsSaved(h).ratio,.5);
+ // Notes from the right pane still name that pane's agent.
+ const form=d.querySelector('#ws-notes-1 [data-ws-note]');form.querySelector('input').value='Mind the storage format';
+ form.dispatchEvent(new h.context.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+ assert.equal(h.calls.filter(c=>c.url==='/api/control').pop().body.agent,'coder-1');
+ assert.equal(posts(h),before+1,'only the note was sent');
+ // The layout survives a reload; \ goes back to tabs.
+ const r=await harness(Object.assign(missionFixture(),{savedView:'workspace'}));
+ r.storage.set('ac-workspaces',h.storage.get('ac-workspaces'));vmRun(r,'wsState = wsLoad(); renderWorkspace();');
+ assert(!r.document.getElementById('ws-pane-1').classList.contains('hidden'));
+ await key(h,'\\');
+ assert(d.getElementById('ws-pane-1').classList.contains('hidden'));assert.equal(wsSaved(h).mode,'tabs');
+ assert.equal(posts(h),before+1);
+});
+test('W4 split falls back to one pane when the window is too narrow',async()=>{
+ const h=await harness(missionFixture());
+ await h.click('[data-workspace="coder-1"]');await h.click('[data-ws-mode="split"]');
+ h.context.window.matchMedia=()=>({matches:false});vmRun(h,'renderWorkspace()');
+ const d=h.document;
+ assert(d.getElementById('ws-pane-1').classList.contains('hidden'));
+ assert(!d.getElementById('ws-narrow').classList.contains('hidden'));
+ assert.match(d.getElementById('ws-head').textContent,/coder-1/,'the focused (left) pane is the one shown');
+ vmRun(h,'wsState.focus = 1; renderWorkspace()');
+ assert.match(d.getElementById('ws-head').textContent,/coder-2/,'with the right pane focused, its agent is shown');
+ assert.match(d.getElementById('ws-term-title').textContent,/^coder-2 — turn 2/,'the terminal is labelled with the agent it shows');
+ await h.click('#ws-tabs [data-ws-open="hermes"]');
+ assert.match(d.getElementById('ws-head').textContent,/Hermes/,'tabs still switch the one visible pane');
+ h.context.window.matchMedia=()=>({matches:true});vmRun(h,'renderWorkspace()');
+ assert(!d.getElementById('ws-pane-1').classList.contains('hidden'),'back to two panes when there is room');
+});
 function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

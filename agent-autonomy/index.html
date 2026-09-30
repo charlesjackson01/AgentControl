@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <link rel="icon" id="favicon" href="data:,">
   <script>try{const t=localStorage.getItem('ac-theme');if(['mac','terminal','xp'].includes(t))document.documentElement.dataset.theme=t}catch{}try{if(localStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('trial-dashboard-key'))document.documentElement.classList.add('has-key')}catch{}</script>
-  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5"><link rel="stylesheet" href="/workspace.css?v=5">
+  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5"><link rel="stylesheet" href="/workspace.css?v=6">
   <script src="/app.js?v=5" defer></script>
-  <script src="/workspace.js?v=5" defer></script>
+  <script src="/workspace.js?v=6" defer></script>
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true"><defs>
@@ -87,27 +87,14 @@
         <div id="connection-banner" class="notice hidden" role="status"></div><div id="page-error" class="notice danger hidden row between" role="alert"><span id="page-error-text"></span><button class="icon-button" data-action="dismiss-error" aria-label="Dismiss error">×</button></div>
         <section id="view-workspace" class="view hidden" aria-label="Agent workspaces">
           <div class="ws-bar"><nav id="ws-tabs" class="ws-tabs" role="tablist" aria-label="Agent workspaces"></nav>
-            <div class="ws-add-wrap"><button id="ws-add" class="ws-add" data-action="ws-menu" aria-haspopup="true" aria-expanded="false" title="Open an agent workspace">+<span id="ws-add-new" class="ws-new-dot hidden" aria-label="new agent"></span></button><div id="ws-menu" class="ws-menu hidden" role="menu"></div></div></div>
+            <div class="ws-modes" role="group" aria-label="Layout"><button data-ws-mode="tabs" aria-pressed="true" title="One workspace at a time">Tabs</button><button data-ws-mode="split" aria-pressed="false" title="Two workspaces side by side (key \)">Split</button></div><div class="ws-add-wrap"><button id="ws-add" class="ws-add" data-action="ws-menu" aria-haspopup="true" aria-expanded="false" title="Open an agent workspace">+<span id="ws-add-new" class="ws-new-dot hidden" aria-label="new agent"></span></button><div id="ws-menu" class="ws-menu hidden" role="menu"></div></div></div>
           <div id="ws-empty" class="ws-empty hidden"></div>
-          <article id="ws-pane" class="ws-pane hidden" role="tabpanel" aria-labelledby="ws-title">
-            <header id="ws-head" class="ws-head"></header>
-            <div class="ws-grid">
-              <section class="ws-main" aria-label="Output">
-                <div id="ws-turns" class="ws-turns"></div>
-                <div id="ws-term" class="term" data-state="pending">
-                  <div class="term-bar"><span class="term-lights" aria-hidden="true"><i></i><i></i><i></i></span><strong id="ws-term-title" class="term-title">opencode</strong><span id="ws-term-meta" class="term-meta"></span>
-                    <span class="term-actions"><button id="ws-term-follow" class="term-button" data-action="ws-term-follow" aria-pressed="true" title="Keep the newest output in view">Follow</button><button class="term-button" data-action="ws-term-copy" title="Copy this turn's output">Copy</button></span></div>
-                  <div id="ws-term-body" class="term-body" role="log" aria-label="Agent output" tabindex="0"></div>
-                  <div id="ws-term-held"></div><p id="ws-term-empty" class="term-empty hidden"></p>
-                  <button id="ws-term-jump" class="term-jump hidden" data-action="ws-term-jump">↓ New output</button>
-                </div>
-                <div id="ws-log" class="ws-log hidden" role="log" aria-label="Recorded calls"></div>
-              </section>
-              <aside class="ws-side"><div id="ws-approvals"></div><div id="ws-task"></div><div id="ws-files"></div></aside>
-            </div>
-            <section id="ws-notes" class="ws-notes"></section>
-            <details id="ws-preview-box" class="ws-preview ac-panel"><summary>Preview</summary><div id="ws-preview"></div></details>
-          </article>
+          <p id="ws-narrow" class="ws-narrow small muted hidden">Split view needs a wider window; showing the focused pane.</p>
+          <div id="ws-panes" class="ws-panes">
+            <article id="ws-pane" class="ws-pane hidden" data-pane="0" role="tabpanel" aria-labelledby="ws-title"></article>
+            <div id="ws-divider" class="ws-divider hidden" role="separator" aria-orientation="vertical" aria-label="Resize the two panes (arrow keys; double-click resets)" aria-controls="ws-pane ws-pane-1" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50" tabindex="0"></div>
+            <article id="ws-pane-1" class="ws-pane hidden" data-pane="1" role="region" aria-labelledby="ws-title-1"></article>
+          </div>
         </section>
         <section id="view-mission" class="view" aria-labelledby="mission-title">
           <div id="mission-head"></div>
@@ -283,6 +270,7 @@
   <tr><td><kbd>d</kbd></td><td>Deny and redirect</td></tr>
   <tr><td><kbd>p</kbd></td><td>Pause or resume the run</td></tr>
   <tr><td><kbd>1</kbd>–<kbd>9</kbd> <kbd>[</kbd> <kbd>]</kbd></td><td>In Workspace: pick an agent tab, or the previous or next one</td></tr>
+  <tr><td><kbd>\</kbd> <kbd>o</kbd></td><td>In Workspace: switch between tabs and split view; focus the other pane</td></tr>
   <tr><td><kbd>x</kbd></td><td>Stop the run (asks for confirmation)</td></tr>
   <tr><td><kbd>/</kbd></td><td>Write a steering note for Hermes</td></tr>
   <tr><td><kbd>t</kbd></td><td>Open the OpenCode terminal full screen</td></tr>

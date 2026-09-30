@@ -162,7 +162,14 @@ Tabs are only views:
 - States are sampled at most twice a second, so a state that lasts less than about half a second may not get its own entry.
 - Older runs are never given a history after the fact.
 
-Split and windowed layouts come in later steps.
+**Split view.** **Tabs | Split** in the tab bar (or `\`) shows two agents side by side.
+- The second pane starts with the agent you were reading before, or with one that is waiting on you.
+- Click a pane, or press `o`, to focus it. The next tab you choose opens in the focused pane, and a tab that is already on screen just moves the focus to its pane.
+- Drag the divider to resize, or focus it and use ←/→. Enter or a double-click shares the width evenly. The layout is remembered in this browser.
+- Below about 1,000 px wide (phones, narrow windows), only the focused pane is shown, with a note.
+- Each pane has its own terminal, approvals, files and notes. As with tabs, nothing about the layout is sent to the server or affects an agent.
+
+A windowed layout comes in a later step.
 
 ## Controls
 
@@ -335,6 +342,7 @@ Window decorations are decorative and contain no real OS logos.
 - `t`: open the OpenCode terminal full screen.
 - `?`: show the shortcut table.
 - `1`–`9`, `]`, `[`: in Workspace, pick, next or previous agent tab.
+- `\` and `o`: in Workspace, switch between tabs and split view; focus the other pane.
 - `Enter` sends a steering note on devices with a keyboard; `Shift+Enter` adds a line.
 
 Shortcuts are ignored in editable fields, while a modifier key is held, and

@@ -4,8 +4,9 @@
 **Branch:** `feature/chat-first-redesign`. Commit and push only there; **never merge into `main`**.
 **Status:** **Parts A and B are both required before M5.** The owner approved **D7** on 2026-09-30, limited exactly
 to Part B as written in §4.
-**Independent of** `M4_1_CORRECTIONS.md`. The only shared file is `chat/thread.js`: one research/skill label here,
-one empty-state line there. Either order works.
+**Starting point:** M4 and M4.1 are **accepted** (review 2026-09-30, commit `581b382`). M4.1's `thread.js` empty-state
+change has already landed, so M5.0 changes only the research and skill label in `thread.js` (§3). The backend facts
+in §1 were re-checked against `581b382`: `conversation.py`, `engine.py` and `app.py` are unchanged since M2.1.
 **Read first:**
 1. `CURRENT_STATE.md`
 2. `docs/REDESIGN_ARCHITECTURE.md` §3 and §6
@@ -67,6 +68,10 @@ inside D5's scope. It changes no engine state, journal row, endpoint shape, or a
   pending packets and team state. The result is identical to today's number in every case where today's number was correct.
 - **Frontend label** (the one `thread.js` change): when `detail.expired` is true, research and skill lines show a muted
   "Not decided before the session ended" in place of their waiting status. No other UI change.
+  - In `body()`, the `research` case renders `statusText(d.status)` (for example "Awaiting approval"). Replace that
+    part only, and keep "research · ‹title›" and the Details.
+  - The `skill` case renders `[message.text, d.agent, d.state]`. Replace `d.state` with the label, and keep the name, agent and Details.
+  - `action` is already `null` for these items, so no waiting line or classic link renders. Do not add any.
 - **Contract:** add to architecture §6.4 and the change log: "Actionable = the session accepts decisions (not finished,
   not stopping), except outcomes (M2.1 rule). `channels.waiting` counts exactly the actionable non-outcome items of the
   active session. Items waiting by state in a session that no longer accepts decisions carry `detail.expired`."
@@ -143,6 +148,8 @@ M5 will add real controls, so the server should refuse these dead decisions itse
 ## 6. Acceptance
 
 1. `python3 -m unittest discover -s agent-autonomy/tests` passes, with the new tests. Report skipped tests by name.
+   - Baseline at `581b382`: Python **398 tests, OK** (6 skipped in the review environment, 3 with OpenCode); classic DOM
+     **82/82**; chat DOM **77/77**; browser **108 combinations + 4 regressions**.
    An unchanged timing-sensitive backend test that fails intermittently is rerun and recorded, never modified.
 2. `test_ui.cjs` passes 82/82. `test_chat_ui.cjs` and `chat_screenshots.cjs` pass.
 3. The diff touches only:

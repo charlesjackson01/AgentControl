@@ -197,3 +197,60 @@ visual-viewport check still pass. Native phone OS keyboard verification remains 
 No deviation or unresolved required M4.1 issue. The optional network-error wording and session-menu closure
 from §5 remain unchanged. M3 accessibility deferrals and the documented research/skill actionability mismatch
 remain unchanged; this task did not implement M5.0, use D7 or begin M5. M4.1 is ready for review.
+
+
+## Architecture and correctness review — 2026-09-30 (Opus)
+
+**Verdict: M4.1 accepted, and with it M4.** Nothing is blocking, and nothing needs fixing before M5.0.
+
+Reviewed: `7ee8528..581b382` (the single commit `581b382`), with the suites re-run, the new tests run against the
+pre-M4.1 frontend, the screenshot matrix and footer measurements regenerated, and the pure helpers probed.
+
+### Re-run in the review environment (at `581b382`)
+
+| Suite | Result |
+|---|---|
+| Python | **398 tests, OK (skipped=6)**: the same six environment gates; 3 in Codex's environment |
+| Classic DOM | **82/82** |
+| Chat DOM | **77/77** |
+| Browser | **108 combinations + 4 regressions**, 158 screenshots |
+| Phone footer (390 × 844) | **57 px** idle (limit ≤ 72), **105 px** with the waiting row (limit ≤ 120), conversation **≥ 75.3%** (minimum 65%) |
+
+No backend, API, schema, classic, `core.js` or `shell.js` change.
+
+### Verified
+
+- **Only permitted preferences persist.**
+  - `acx-settings` holds exactly verifier, turn limit, time limit, mode, team size, isolation, network (never
+    `internet`), CPUs, memory, setup and preview. Legacy keys (title, goal checks, forbidden fields) are dropped and
+    rewritten on load.
+  - Title, goal checks and `allow_dirty` are per-session. They clear after a successful start (in the same page and
+    after reload), and are kept after a failed start until a successful retry.
+- **Follow-ups cannot contaminate new sessions.** Parent defaults live in a follow-up overlay. Cancel (✕ or Escape) and
+  automatic cancellation discard it and the per-session fields. A successful follow-up promotes only the keys you edited.
+- **Mentions.** Probes of the shipped `noteBody`:
+  - "Pin @types/node to v20", "Use the @pytest.fixture decorator", "Ask @coder-2 to sync with @coder-1 on the schema"
+    and "@nobody hello" are sent **byte-for-byte** to Hermes, with no `agent`.
+  - "@coder-2 keep it simple" sends `{text:'keep it simple', agent:'coder-2'}`, removing only the token and one whitespace character.
+  - Suggestions open only for a draft that is just `@…`, and choosing one replaces the leading token.
+  - The chip uses the same parser, so the target is always visible before sending.
+- **The empty room** reads "Write a goal below to start the first session." with no classic start link (checked on the phone render).
+- **No regressions:**
+  - server-only appearance, the draft and error handling, single-flight, and controls disabled while a request is in flight are unchanged (the M4 tests pass)
+  - the Settings disclosure and the forbidden-field guards are unchanged
+  - the M3 and M3.1 timeline, receipt, revalidation and rail-note tests all pass
+  - the footer budgets hold
+- **The regression tests reproduce the M4 defects.** Against the pre-M4.1 frontend (`7ee8528`), **13 tests fail**: the 10
+  new M4.1 tests plus the 3 corrected M4 assertions. They fail on the real defects (remembered title and checks,
+  follow-up leakage, mention stripping and blocking, the classic start link), not on implementation details.
+
+### Findings
+
+**Blocking:** none. **Should fix before M5.0:** none.
+
+**Optional polish:**
+1. A draft that begins with whitespace before `@agent` ("  @coder-2 …"), or with punctuation right after the name
+   ("@coder-2, …"), goes to Hermes as literal text. That follows the spec, and the chip shows "Note → Hermes", so it is
+   visible. Accepting `@name,` or `@name:` could be a later nicety.
+2. A draft of just "@coder-2" sends empty text, and the server rejects it inline. A local hint would be friendlier.
+3. Unchanged by design, and not M4.1 failures: the optional network-error wording, and closing the session menu when the Stop dialog opens.

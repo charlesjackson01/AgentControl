@@ -405,3 +405,5 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   other effect). No broader engine, lifecycle, approval, skill, research, API or schema change is authorised.
 - 2026-09-30: M4.1: only a leading @agent targets a note; other @words are literal. Title,
   goal checks and allow_dirty are per-session and never remembered.
+- 2026-09-30 (M4.1 review): M4 and M4.1 accepted. `M5_0_ACTIONABILITY.md` was re-checked against `581b382` and remains
+  accurate; it gained only execution details (starting point, exact label placement, test baselines). D7 is unchanged.

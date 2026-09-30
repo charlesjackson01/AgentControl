@@ -139,7 +139,9 @@
   function start() { if (key) { refresh(); connectEvents(); } else emit(); }
   function connect(value, remember) { stop(); key = value.trim(); authError = ''; write('localStorage',storageKey,remember ? key : null); write('sessionStorage',storageKey,remember ? null : key); emit(); start(); }
   function focus(id) { if (id !== focused) { focused = id; single = null; scheduleRefresh(); } }
-  const core = {api,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
+  function post(path,body) { return api(path,'POST',body); }
+  function refreshNow() { clearTimeout(scheduled);scheduled=null;return refresh(); }
+  const core = {api,post,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
   root.AC = root.AC || {}; root.AC.core = core;
   if (typeof module !== 'undefined' && module.exports) module.exports = core;
 })(typeof window !== 'undefined' ? window : globalThis);

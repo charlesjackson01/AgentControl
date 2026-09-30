@@ -168,3 +168,20 @@ function threadReceipts() {
   return threadResponse(receipts.map((receipt,i)=>threadMessage('receipt:'+i,'request','Recorded request '+i,{receipt},{actor:'coder-2'})),[threadSession()]);
 }
 Object.assign(module.exports,{threadReceipts});
+
+// M4 room/controller states and read-only Settings integrations.
+function composerFixture(kind='new') {
+  const state=kind==='new'?empty():richActive();
+  state.capabilities.preview_modes=['web','static','cli','desktop'];
+  state.sandbox={unavailable:'No container runtime installed',models_configured:false};
+  state.vm_env={unavailable:'KVM unavailable on this server',models_configured:false};
+  let thread=kind==='new'?threadResponse([],[]):threadActive();
+  if(kind==='paused' || kind==='interrupted'){state.run.status=kind;state.runs[0].status=kind;state.run.pause=kind==='paused';thread.live.status=kind;thread.sessions[0].status=kind;}
+  if(kind==='finished'){state.run.status='completed';state.runs[0].status='completed';state.run.mode='single';state.run.title='Finished parent';state.run.project=state.project;thread=threadSingle();}
+  if(kind==='other'){state.runs[0].project='/tmp/another-project';thread=threadResponse([],[]);}
+  state.agents=[{name:'hermes',type:'orchestrator'},{name:'coder-1',type:'coder'},{name:'coder-2',type:'coder'},{name:'reviewer-1',type:'reviewer'}];
+  return {state,thread,channels:threadChannels(thread,kind==='new'||kind==='finished'||kind==='other'?0:1)};
+}
+const composerPreflight={is_repo:true,usable:true,dirty_count:0,changes:[],untracked:[],reason:'',branch:'main'};
+const composerErrors={validation:{error:'Supply a valid goal check'},unauthorized:{error:'Connect again with the dashboard key'}};
+Object.assign(module.exports,{composerFixture,composerPreflight,composerErrors});

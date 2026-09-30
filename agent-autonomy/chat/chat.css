@@ -125,3 +125,58 @@ time { font-size: var(--type-xs); color: var(--muted); }
 .line > .message-detail { flex-basis: 100%; }
 .quiet.message .message-meta { display: inline-flex; margin: 0 var(--s2) 0 0; }
 .quiet.message > p { display: inline; }
+/* M4: the room keeps one compact composer and reveals Settings on demand. */
+body:has(#app:not([hidden])) { overflow: hidden; }
+#composer:placeholder-shown { white-space: pre; }
+.visually-hidden { position: absolute; width: var(--line); height: var(--line); padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+#room-footer { padding: var(--s2) var(--s6); flex-shrink: 0; }
+#composer-host, #waiting { max-width: var(--room-width); width: 100%; margin: 0 auto; }
+#composer-host { position: relative; }
+.composer-row { display: flex; align-items: center; gap: var(--s1); min-width: 0; }
+#composer { flex: 1; min-width: 0; width: 0; height: var(--target); min-height: var(--target); max-height: 40dvh; margin: 0; padding: var(--s2); font-size: var(--type-body); overflow-y: auto; }
+.target-chip { background: var(--accent-soft); color: var(--accent); border-radius: var(--r1); padding: var(--s1) var(--s2); font-size: var(--type-xs); max-width: 25%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.target-chip[data-kind="note"] { max-width: 40%; }
+.composer-row button { padding: var(--s2); font-size: var(--type-sm); flex-shrink: 0; }
+#send-message { background: var(--accent); color: var(--bg); }
+button:disabled { opacity: .6; cursor: default; }
+#composer-status, #composer-blocked { font-size: var(--type-xs); margin: var(--s1) 0 0; overflow-wrap: anywhere; }
+#composer-classic { font-size: var(--type-xs); }
+#waiting .waiting-strip { padding: 0 var(--s2); min-height: var(--target); margin-bottom: var(--s2); display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--s1); white-space: nowrap; }
+#waiting .waiting-strip button, #waiting .waiting-strip a { display: inline-flex; align-items: center; min-height: var(--target); line-height: var(--line-height); padding: 0; font-size: var(--type-xs); }
+#waiting .waiting-strip span { font-size: var(--type-xs); }
+#composer-options { position: absolute; bottom: 100%; left: 0; right: 0; z-index: 1; max-height: var(--sheet-height); overflow-y: auto; background: var(--surface); border: var(--line) solid var(--border); border-radius: var(--r1); box-shadow: var(--shadow); padding: var(--s1); }
+#composer-options button { display: block; text-align: left; width: 100%; border: 0; }
+#composer-options [aria-selected="true"] { background: var(--accent-soft); }
+#session-menu { position: relative; }
+#session-menu > summary { list-style: none; text-align: center; min-width: var(--target); }
+#session-menu > div { position: absolute; top: 100%; right: 0; z-index: 1; min-width: calc(var(--context-width) / 2); background: var(--surface); border: var(--line) solid var(--border); border-radius: var(--r1); padding: var(--s2); box-shadow: var(--shadow); }
+#session-menu button, #session-menu a { display: flex; width: 100%; padding: var(--s2); min-height: var(--target); border: 0; }
+#control-error { color: var(--danger); font-size: var(--type-xs); overflow-wrap: anywhere; }
+#settings-scrim { position: absolute; inset: 0; border: 0; border-radius: 0; background: var(--scrim); z-index: 6; }
+#settings-sheet { position: absolute; top: 0; bottom: 0; right: 0; width: var(--context-width); padding: var(--s4); background: var(--bg); overflow-y: auto; z-index: 7; box-shadow: var(--shadow); }
+#settings-sheet label { display: block; margin-bottom: var(--s3); font-size: var(--type-sm); }
+#settings-sheet input:not([type="radio"]):not([type="checkbox"]), #settings-sheet select { display: block; width: 100%; }
+select { font: inherit; color: var(--text); background: var(--bg); border: var(--line) solid var(--border); border-radius: var(--r1); padding: var(--s2); min-height: var(--target); }
+#settings-sheet fieldset { border: var(--line) solid var(--border); border-radius: var(--r1); margin: 0 0 var(--s3); min-width: 0; padding: var(--s2); }
+#settings-sheet p { font-size: var(--type-xs); overflow-wrap: anywhere; }
+#settings-sheet header { margin-bottom: var(--s4); }
+#settings-sheet h2 { margin: 0; }
+.isolation-choice { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; }
+.isolation-choice label { margin-bottom: 0; }
+.isolation-choice details { flex: 1; padding-left: var(--s2); }
+.check-row { display: flex; align-items: center; gap: var(--s1); margin-bottom: var(--s1); }
+#stop-dialog { color: var(--text); background: var(--bg); border: var(--line) solid var(--border); border-radius: var(--r2); padding: var(--s6); max-width: min(var(--signin-width),calc(100% - var(--s6))); box-shadow: var(--shadow); }
+#stop-dialog::backdrop { background: var(--scrim); }
+#stop-dialog > div { display: flex; justify-content: flex-end; gap: var(--s2); }
+#confirm-stop { color: var(--danger); }
+.reply-session { font-size: var(--type-xs); display: inline-flex; align-items: center; min-height: var(--target); }
+@media (max-width: 767px) {
+  #room-footer { padding: var(--s2); }
+  #room-header { grid-template-columns: var(--target) minmax(0,1fr) var(--target); padding: var(--s2) var(--s3); gap: var(--s1) var(--s2); }
+  #session-menu { grid-column: 3; grid-row: 1; align-self: start; }
+  #open-context { padding: var(--s1) var(--s2); }
+  .settings-label { display: none; }
+  #settings-sheet { top: auto; left: 0; width: 100%; height: var(--sheet-height); border-radius: var(--r3) var(--r3) 0 0; }
+  #settings-sheet label { margin-bottom: var(--s2); }
+  #resume-session { padding: var(--s1); font-size: var(--type-xs); }
+}

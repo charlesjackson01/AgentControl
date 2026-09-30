@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Opus (M3.1 review: M3 and M3.1 accepted; M4 handoff written).
+**Last updated:** 2026-09-30, by Codex (M4 implemented and verified; awaiting architecture/UX review).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Next:** `M4_COMPOSER.md` (ready) |
+| Handoffs | `docs/handoffs/`. **Next:** review the completion report in `M4_COMPOSER.md` |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -29,31 +29,34 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M2.1 Read-model corrections** | ✅ accepted (review 2026-09-30) | Codex | Parts A + B: recorded-session request attribution, stable outcome actions/revisions, non-empty planner decisions, cheaper reads, and exactly the D6 `_v7` index; 15 new regressions |
 | **M3 Room timeline** | ✅ accepted (with M3.1, review 2026-09-30) | Codex | `thread.js`: read-only project room, keyed updates, paging, session disclosure, deep links and waiting pointers; completion report in `docs/handoffs/M3_ROOM_TIMELINE.md` |
 | **M3.1 Timeline corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M3_1_CORRECTIONS.md`: classic receipt labels, server revalidation capped at ten pages with history reset, separate waiting lines, exact strip wording, real rail cap note; eight new regressions |
-| **M4 Composer** | ⏭ **ready to start** | Codex | `docs/handoffs/M4_COMPOSER.md`: new session, follow-up, notes with `@agent`, pause/resume/stop, `/check` and `/title`, Settings sheet, compact phone footer; decisions stay in classic until M5 |
+| **M4 Composer** | ✅ implemented, awaiting review | Codex | `docs/handoffs/M4_COMPOSER.md`: new session, follow-up, notes with `@agent`, pause/resume/confirmed stop, `/check` and `/title`, Basic/Advanced Settings; server-authoritative messages, compact phone footer; decisions stay in classic until M5 |
 | M5–M9 | not started | | see architecture §12 |
 
-The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `shell.js`.
+The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `composer.js`, `shell.js`.
 `/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
-Messaging and actions remain in classic; `/` and `/classic` serve the unchanged classic UI.
+The room composer starts sessions and follow-ups, sends notes and offers the M4 controls through existing endpoints.
+Decision actions remain in classic; `/` and `/classic` serve the unchanged classic UI.
 The new read-only endpoints project the journal with bounded messages, stable ids/revisions and cursor paging.
-The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` still supplies members, Connections, the rail session list and context. The client retains only a page-lifetime read cache, with no writable message store.
+The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` still supplies members, Connections, the rail session list and context. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
 Backend read-model tests: `tests/test_conversation.py` (34) and `tests/test_thread_api.py` (11); journal tests (7) include v6-to-v7 preservation and index query plans.
 
-## Tests (at `71c08d4`; re-verified in the Opus review environment 2026-09-30)
+## Tests (M4 working tree on `137a5b8`; verified by Codex 2026-09-30)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=6)** here (all six gates below); 3 in Codex's environment, where the OpenCode tests ran |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)**; OpenCode tests ran; no timing failure in this M4 run |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
-| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **42/42 passed** (34 existing + 8 M3.1 regressions) |
-| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m31` | **42 combinations + 4 regressions passed**, 90 temporary screenshots; no joined “youOpen” text or overflow at 390 px, including expanded 300-character result tokens |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **67/67 passed** (42 carried forward + 25 M4 regressions) |
+| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m4` | **84 combinations + 4 regressions passed**, 134 temporary screenshots; idle phone footer 57 px, with waiting 105 px, waiting row 40 px; timeline ≥75.3%; waiting text aligned, no overflow or page errors |
 
 DOM test dependencies (test-only, installed outside the repo):
 `npm install --prefix /tmp/ac-tests --no-save linkedom cssom playwright-core`.
 Chromium was found under `~/.cache/ms-playwright` in this environment; the screenshot script discovers it or accepts `CHROMIUM_PATH`.
-The socket-based backend tests and Chromium ran outside the sandbox. The first full backend run hit the documented
-lifecycle sampling failure below; the full rerun passed. M3.1 completion details and reviewed screenshots are in its handoff.
-The review environment has Chromium at `/opt/pw-browsers/chromium`.
+The socket-based backend tests and Chromium ran outside the sandbox. All required M4 suites passed;
+the earlier lifecycle sampling failure remains documented below. Desktop and phone screenshots were inspected.
+The M4 report records the fake-backed real HTTP/browser start, note, targeting, rename, check,
+pause/resume/stop and follow-up checks. Keyboard viewport shrinkage to 480 px passed in Chromium;
+an actual phone OS keyboard was unavailable. The prior review environment used `/opt/pw-browsers/chromium`.
 
 **Skipped tests are environment-gated. Report them by name, not only by count:**
 
@@ -67,8 +70,9 @@ The review environment has Chromium at `/opt/pw-browsers/chromium`.
 The three skipped tests were `ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
 `DesktopTests.test_desktop_preview_shows_frames_and_accepts_input` and
 `VMRunE2E.test_agent_works_in_a_kvm_clone`. The OpenCode trio ran and passed.
-The real `app.py` HTTP test journal also passed history, live SSE update, three older pages to the beginning,
-classic decision links and zero frontend writes (673 cached records).
+The M3.1 real `app.py` HTTP test journal passed history, live SSE update, three older pages to the beginning,
+classic decision links and zero frontend writes (673 cached records). M4 preserves the room's read model,
+ordering, paging, disclosure state, receipt labels and bounded stale-action revalidation.
 
 ## The app today (classic UI)
 
@@ -111,10 +115,12 @@ classic decision links and zero frontend writes (673 cached records).
 - For M5: `/api/thread` can mark research and skill items actionable on finished sessions, while `/api/channels.waiting`
   counts only the active session. **An explicit M5 prerequisite:** reconcile it server-side before M5 offers real
   controls (see the M3 review). M3.1 and M4 deliberately do not work around it.
+- Still deferred from the accepted M3/M3.1 reviews: focus after Load earlier, partial-session divider counts,
+  and live refresh of the single-session fallback view. M4 only adds the outcome Reply link in `thread.js`.
 
 ## Next step
 
-1. Codex executes **`docs/handoffs/M4_COMPOSER.md`**.
-2. Opus reviews M4, then writes the M5 handoff (decision controls). **M5 prerequisite:** reconcile the research/skill
+1. Opus reviews **M4** and its completion report in `docs/handoffs/M4_COMPOSER.md`.
+2. After acceptance, Opus writes the M5 handoff (decision controls). **M5 prerequisite:** reconcile the research/skill
    action versus `waiting` mismatch server-side first (see Known issues).
 3. M5–M9 remain unstarted; the architecture contract stays binding.

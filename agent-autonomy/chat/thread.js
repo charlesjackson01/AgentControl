@@ -87,7 +87,7 @@
         case 'outcome':type='outcome';summary=text(statusText(d.status))+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '');detail=text(message.text);break;
         default:type='quiet';summary=text(message.text);
       }
-      return `<div class="message ${type}"><div class="message-meta">${actor(message.actor)} ${time(message.at)}</div>${summary}${detail ? `<details class="message-detail"><summary>${['goal','note','outcome'].includes(message.kind) ? 'Show more' : 'Details'}</summary><div>${detail}</div></details>` : ''}${decisionLink}</div>`;
+      return `<div class="message ${type}"><div class="message-meta">${actor(message.actor)} ${time(message.at)}</div>${summary}${detail ? `<details class="message-detail"><summary>${['goal','note','outcome'].includes(message.kind) ? 'Show more' : 'Details'}</summary><div>${detail}</div></details>` : ''}${decisionLink}${message.kind==='outcome' && ['completed','blocked','failed','stopped','limit_reached'].includes(d.status) ? `<a class="reply-session" href="#/" data-reply="${e(message.session)}">Reply in session</a>` : ''}</div>`;
     }
     function statusText(value) {if(value==='finished')return '✓ Finished';return m.sessionsFromState({runs:[{status:value}]})[0].symbol+' '+m.sessionsFromState({runs:[{status:value}]})[0].statusLabel;}
     function anchor() {

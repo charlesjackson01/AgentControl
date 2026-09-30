@@ -12,6 +12,12 @@ const tick = ()=>new Promise(resolve=>setImmediate(resolve));
 async function harness(state = fixture(), options = {}) {
   const {window,document} = parseHTML(fs.readFileSync(path.join(root,'index.html'),'utf8'));
   const local = new Map(options.key === false ? [] : [['ac-dashboard-key','test-key']]), session = new Map();
+  for(const [k,v] of Object.entries(options.local || {}))local.set(k,v);
+  for(const [k,v] of Object.entries(options.session || {}))session.set(k,v);
+  window.matchMedia=()=>({matches:!!options.coarse});
+  // linkedom's select.value has no setter; mirror the browser for dynamic Settings forms.
+  Object.defineProperty(window.HTMLSelectElement.prototype,'value',{configurable:true,get(){return (this.querySelector('option[selected]') || this.querySelector('option'))?.value || '';},set(value){for(const option of this.querySelectorAll('option')){if(option.value===String(value))option.setAttribute('selected','');else option.removeAttribute('selected');}}});
+  let activeElement=null;Object.defineProperty(document,'activeElement',{get:()=>activeElement,configurable:true});window.HTMLElement.prototype.focus=function(){activeElement=this;};
   const storage = map=>({getItem:k=>map.get(k),setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)});
   Object.defineProperty(window,'localStorage',{value:storage(local),writable:true,configurable:true}); Object.defineProperty(window,'sessionStorage',{value:storage(session),writable:true,configurable:true});
   if(options.storageDenied) for(const name of ['localStorage','sessionStorage']) Object.defineProperty(window,name,{configurable:true,get(){throw Error('Storage denied');}});
@@ -25,6 +31,10 @@ async function harness(state = fixture(), options = {}) {
     setTimeout:(fn,delay)=>{const id=++next;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),
     fetch:async(url,request)=>{
       calls.push({url,request}); assert.equal(request.headers.Authorization,'Bearer test-key');
+      if(request.method==='POST' && options.post){const result=await options.post(url,JSON.parse(request.body));if(result?.throws)throw Error(result.throws);return {ok:!result?.error,status:result?.status || (result?.error?400:200),json:async()=>clone(result || {ok:true})};}
+      if(url==='/api/workspace/preflight')return {ok:true,status:200,json:async()=>clone(options.preflight || fx.composerPreflight)};
+      if(url==='/api/sandbox')return {ok:true,status:200,json:async()=>clone(state.sandbox || {unavailable:'No runtime',models_configured:false})};
+      if(url==='/api/mode/preview')return {ok:true,status:200,json:async()=>({mode:'single',reasons:['Small goal']})};
       if (url === '/api/events') {
         if (options.streamUnauthorized) return {ok:false,status:401,json:async()=>({error:'Stream key rejected'})};
         if (!options.stream) return {ok:false,status:503};
@@ -32,16 +42,16 @@ async function harness(state = fixture(), options = {}) {
       }
       if (options.unauthorized || options.unauthorizedPath && url.startsWith(options.unauthorizedPath)) return {ok:false,status:401,json:async()=>({error:'Key rejected by server'})};
       if (options.fail) return {ok:false,status:500,json:async()=>({error:'Backend unavailable'})};
-      if(options.respond) {const result=await options.respond(url);if(result!==undefined)return {ok:!result.error,status:result.error?404:200,json:async()=>clone(result)};}
+      if(options.respond) {const result=await options.respond(url,request);if(result!==undefined)return {ok:!result.error,status:result.error?404:200,json:async()=>clone(result)};}
       if(url.startsWith('/api/channels'))return {ok:true,status:200,json:async()=>clone(options.channels || fx.threadChannels(publicThread,options.thread ? publicThread.messages.filter(m=>m.action && m.kind!=='outcome').length : state.inbox?.length || 0))};
       if(url.startsWith('/api/thread')) {const query=new URL(url,'http://test').searchParams;if(query.get('session')==='bogus')return {ok:false,status:404,json:async()=>({error:'Unknown session'})};return {ok:true,status:200,json:async()=>clone(publicThread)};}
       if (options.hold && url.startsWith('/api/state')) await new Promise(resolve=>{options.release=resolve;});
       return {ok:true,status:200,json:async()=>{const result=clone(state);if(url.endsWith('run=bogus')) result.run=null;return result;}};
     }});
-  for (const file of ['core.js','model.js','thread.js','shell.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
+  for (const file of ['core.js','model.js','thread.js','composer.js','shell.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   await tick();await tick();
   async function runTimers(delay) {const pending=[...timers].filter(([,t])=>t.delay===delay);for(const [id,t] of pending){timers.delete(id);t.fn();}await tick();}
-  return {window,document,core:window.AC.core,shell:window.AC.shell,local,session,timers,calls,runTimers,options,publicThread,timeline:document.querySelector('#timeline'),emit:async text=>{streamWake({done:false,value:new TextEncoder().encode(text)});await tick();},drop:async()=>{streamWake({done:true});await tick();}};
+  return {window,document,composer:window.AC.shell.composer,core:window.AC.core,shell:window.AC.shell,local,session,timers,calls,runTimers,options,publicThread,timeline:document.querySelector('#timeline'),emit:async text=>{streamWake({done:false,value:new TextEncoder().encode(text)});await tick();},drop:async()=>{streamWake({done:true});await tick();}};
 }
 const tests = [];
 const test = (name,fn)=>tests.push([name,fn]);
@@ -94,9 +104,9 @@ test('every presence state has a symbol and label, Hermes first',async()=>{
   const h=await harness(state);const members=model.membersFromState(state);assert.equal(members[0].name,'hermes');for(const member of members){assert(member.symbol);assert.match(h.document.querySelector('#rail').textContent,new RegExp(member.stateLabel));}
   h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);h.document.querySelector('#members-tab').click();assert.match(h.document.querySelector('#context').textContent,/Task 9/);
 });
-test('waiting pointer and disabled composer, no decision controls',async()=>{
+test('waiting pointer and room composer, no decision controls',async()=>{
   const h=await harness();assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 1 waiting for you');assert.equal(h.document.querySelector('#waiting a').getAttribute('href'),'/classic');
-  assert(h.document.querySelector('#composer').hasAttribute('disabled'));assert.match(h.document.querySelector('#composer').getAttribute('placeholder'),/Messaging from this view is coming soon/);
+  assert(!h.document.querySelector('#composer').hasAttribute('disabled'));assert.match(h.document.querySelector('#composer').getAttribute('placeholder'),/Message Hermes/);
   assert.equal(h.document.querySelectorAll('[id*="approve"], [id*="deny"]').length,0);
   const done=await harness(richCompleted());assert.equal(done.document.querySelector('#waiting').textContent,'');
 });
@@ -344,6 +354,164 @@ test('M3.1 unchanged waiting never walks for an actionable finished-session rese
   const p=revalidationPages('research'),channels=fx.threadChannels(p.initial,0),h=await harness(fixture(),{thread:p.initial,channels});
   let reads=0;h.options.respond=url=>{if(!url.startsWith('/api/thread'))return;if(url.includes('&before=')){reads++;return p.retired;}return p.newest;};
   for(let i=0;i<3;i++)await h.core.refresh();assert.equal(reads,0);assert(h.core.getState().thread.messages.stale.action);
+});
+
+const composerHelpers=require(path.join(root,'composer.js'));
+async function composerHarness(kind='new',options={}) {const f=fx.composerFixture(kind);return harness(f.state,{thread:f.thread,channels:f.channels,...options});}
+const posts=h=>h.calls.filter(c=>c.request.method==='POST').map(c=>({url:c.url,body:JSON.parse(c.request.body)}));
+function type(h,text){const input=h.document.querySelector('#composer');input.value=text;input.dispatchEvent(new h.window.Event('input',{bubbles:true}));}
+function key(h,name,extra={},target=h.document.querySelector('#composer')){const event=new h.window.Event('keydown',{bubbles:true,cancelable:true});Object.assign(event,{key:name,...extra});target.dispatchEvent(event);return event;}
+function setting(h,name,value,event='input'){const node=h.document.querySelector('#setting-'+name);node.value=String(value);node.dispatchEvent(new h.window.Event(event,{bubbles:true}));}
+test('M4 states, chips, pauses and project/connection blockers preserve drafts',async()=>{
+  for(const [kind,chip,disabled] of [['new','New session',false],['finished','New session',false],['paused','Note → Hermes',false],['interrupted','Note → Hermes',false],['other','New session',true]]){
+    const h=await composerHarness(kind);type(h,'Unsent text');assert.equal(h.document.querySelector('#composer-target').textContent,chip);assert.equal(h.document.querySelector('#composer').disabled,disabled);assert.equal(h.document.querySelector('#send-message').disabled,disabled);
+    if(kind==='paused'||kind==='interrupted')assert(!h.document.querySelector('#resume-session').hidden);
+    if(kind==='other'){assert.match(h.document.querySelector('#composer-blocked').textContent,/another-project/);await h.composer.submit();assert.equal(posts(h).length,0);}
+  }
+  const f=fx.composerFixture('new'),h=await harness(f.state,{thread:f.thread,channels:f.channels});type(h,'Keep this draft');
+  const active=fx.composerFixture('paused');Object.assign(f.state,active.state);Object.assign(f.thread,active.thread);Object.assign(f.channels,active.channels);await h.core.refresh();assert.equal(h.document.querySelector('#composer-target').textContent,'Note → Hermes');assert.equal(h.document.querySelector('#composer').value,'Keep this draft');
+  f.thread.live.session=null;f.channels.channels[0].active_session=null;f.state.run.status='completed';f.state.runs[0].status='completed';await h.core.refresh();assert.equal(h.document.querySelector('#composer-target').textContent,'New session');assert.equal(h.document.querySelector('#composer').value,'Keep this draft');
+});
+test('M4 pure helpers whitelist bodies and round-trip parent settings',()=>{
+  assert.deepEqual(composerHelpers.runBody('Goal'),{goal:'Goal'});
+  assert.deepEqual(composerHelpers.noteBody('r','Keep it simple',[]),{run:'r',action:'instruction',text:'Keep it simple'});
+  assert.deepEqual(composerHelpers.runBody('Goal',{models:{},spend_cap:8,confirm:'approve',watch:true,max_steps:5,network:'none',cpus:2},{id:'bad'}).models,undefined);
+  assert.throws(()=>composerHelpers.runBody('Goal',{isolation:'vm',network:'internet'}),/classic/);
+  assert.deepEqual(composerHelpers.followUpDefaults({verifier:['python','folder with space',"a'b"],max_steps:4,mode:'team'}),{verifier:"python 'folder with space' 'a'\\''b'",max_steps:4,mode:'team'});
+  for(const command of ['verify','apply','discard','team'])assert.match(composerHelpers.parseSlash('/'+command).error,/not available here/);
+});
+test('M4 new session sends only goal and remembered/changed settings',async()=>{
+  const h=await composerHarness('new');type(h,'Build a local tool');await h.composer.submit();assert.deepEqual(posts(h),[{url:'/api/runs',body:{goal:'Build a local tool'}}]);assert.equal(h.document.querySelector('#composer').value,'');assert.equal(h.document.querySelector('#composer-status').textContent,'Sent · it will appear in the room');assert.equal(h.timeline.querySelectorAll('[data-message]').length,0);
+  const configured=await composerHarness('new',{local:{'acx-settings':JSON.stringify({verifier:'python3 -m unittest',max_steps:5,mode:'single'}),'goal':'Never prefill me'}});
+  assert.equal(configured.document.querySelector('#composer').value,'');await configured.composer.openSettings();setting(configured,'title','A tool');setting(configured,'run_minutes',15);type(configured,'Goal');await configured.composer.submit();
+  assert.deepEqual(posts(configured).at(-1),{url:'/api/runs',body:{goal:'Goal',verifier:'python3 -m unittest',max_steps:5,mode:'single',title:'A tool',run_minutes:15}});assert.equal(JSON.parse(configured.local.get('acx-settings')).title,'A tool');
+});
+test('M4 all finished outcomes offer follow-up and inherit exact parent fields',async()=>{
+  for(const status of ['completed','blocked','failed','stopped','limit_reached']){const f=fx.composerFixture('finished');f.thread.messages.find(m=>m.kind==='outcome').detail.status=status;f.thread.sessions[0].status=status;const finished=await harness(f.state,{thread:f.thread,channels:f.channels});assert.equal(finished.timeline.querySelectorAll('[data-reply]').length,1,status+' must offer Reply');}
+  const h=await composerHarness('finished');const links=h.timeline.querySelectorAll('[data-reply]');assert.equal(links.length,1);
+  links[0].click();await tick();assert.match(h.document.querySelector('#composer-target').textContent,/Follow-up · Finished parent/);assert.match(h.document.querySelector('#composer').placeholder,/Reply in Finished parent/);
+  await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-max_steps').value,'6');assert.equal(h.document.querySelector('#setting-verifier').value,'python3 -m unittest discover -s demo_app');
+  type(h,'Add search');await h.composer.submit();assert.deepEqual(posts(h).at(-1),{url:'/api/runs',body:{goal:'Add search',parent_run:'run_test',verifier:'python3 -m unittest discover -s demo_app',max_steps:6,mode:'single'}});assert(!h.timeline.textContent.includes('Add search'));
+  await h.composer.reply('run_test');type(h,'Keep my text');key(h,'Escape');assert.equal(h.document.querySelector('#composer-target').textContent,'New session');assert.equal(h.document.querySelector('#composer').value,'Keep my text');
+  const active=await composerHarness('paused');await active.composer.reply('run_test');assert.equal(active.document.querySelector('#composer-target').textContent,'Note → Hermes');assert.equal(posts(active).length,0);
+});
+test('M4 Hermes and last @agent routing use exact bodies with no tokens',async()=>{
+  const h=await composerHarness('paused');type(h,'Read the README');await h.composer.submit();assert.deepEqual(posts(h).at(-1),{url:'/api/control',body:{run:'run_test',action:'instruction',text:'Read the README'}});
+  type(h,'@coder-1 @coder-2 Check the CLI');assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');await h.composer.submit();assert.deepEqual(posts(h).at(-1),{url:'/api/control',body:{run:'run_test',action:'instruction',agent:'coder-2',text:'Check the CLI'}});
+  type(h,'@unknown Check this');const n=posts(h).length;await h.composer.submit();assert.equal(posts(h).length,n);assert.equal(h.document.querySelector('#composer-status').textContent,'This session has no agent named unknown');assert.equal(h.document.querySelector('#composer').value,'@unknown Check this');
+});
+test('M4 mentions use active-session agents even when the focused session is older',async()=>{
+  const f=fx.composerFixture('paused'),h=await harness(f.state,{thread:f.thread,channels:f.channels});
+  const old={...f.state.run,id:'old',status:'completed'};f.state.run=old;f.state.agents=[{name:'old-agent',type:'coder'}];
+  h.options.respond=url=>{if(url==='/api/state?scope=current&run=run_test')return {...f.state,run:{...old,id:'run_test',status:'paused'},agents:[{name:'coder-2',type:'coder'}]};};
+  await h.core.refresh();await tick();type(h,'@coder-2 Check');await h.composer.submit();assert.equal(posts(h).at(-1).body.agent,'coder-2');assert(!posts(h).at(-1).body.text.includes('@'));
+});
+test('M4 server-only appearance, one refresh, stable status and follow to bottom',async()=>{
+  let release;const h=await composerHarness('paused',{post:()=>({ok:true})}),before=h.timeline.innerHTML,node=h.document.querySelector('#composer-status');
+  const data=clone(h.publicThread);data.messages.push(fx.threadMessage('server:note','note','A server recorded note',{to:'coder-2'},{actor:'you'}));
+  h.options.respond=async url=>{if(url.startsWith('/api/thread')){await new Promise(resolve=>{release=resolve;});return data;}};
+  const geo=geometry(h);geo.setScroll(100);const n=h.calls.length;type(h,'A server recorded note');await h.composer.submit();
+  assert.equal(h.timeline.innerHTML,before);assert.equal(h.document.querySelector('#composer').value,'');assert.equal(h.document.querySelector('#composer-status'),node);assert.equal(node.textContent,'Sent · it will appear in the room');
+  assert.equal(h.calls.slice(n).filter(c=>c.request.method==='GET').length,3);assert.equal(geo? h.timeline.scrollTop:0,1000);release();await tick();await tick();assert(h.timeline.querySelector('[data-message="server:note"]'));assert.equal(h.timeline.querySelectorAll('[data-message="server:note"]').length,1);assert(h.timeline.textContent.includes('Hermes reads this before the next turn'));await h.runTimers(3000);assert(node.hidden);assert.equal(h.document.querySelector('#composer-status'),node);
+});
+test('M4 server and network errors preserve the draft, and POST 401 signs out',async()=>{
+  for(const result of [{error:'Supply a valid goal check'},{throws:'Network lost'}]){
+    const h=await composerHarness('paused',{post:()=>result});type(h,'Retain this text');const before=h.timeline.innerHTML;await h.composer.submit();assert.equal(h.document.querySelector('#composer').value,'Retain this text');assert.equal(h.timeline.innerHTML,before);assert.equal(h.document.querySelector('#composer-status').textContent,result.error || result.throws);
+  }
+  const h=await composerHarness('paused',{post:()=>({error:'Key expired',status:401})});type(h,'Private draft');await h.composer.submit();assert(!h.core.getState().authenticated);assert.equal(h.local.has('ac-dashboard-key'),false);assert.equal(h.document.querySelector('#sign-in-error').textContent,'Key expired');
+});
+test('M4 single-flight submission locks Send through preparation and POST',async()=>{
+  let release;const h=await composerHarness('paused',{post:()=>new Promise(resolve=>{release=()=>resolve({ok:true});})});type(h,'Send exactly once');const pending=h.composer.submit();h.composer.submit();key(h,'Enter');h.document.querySelector('#send-message').click();assert.equal(posts(h).length,1);assert(h.document.querySelector('#send-message').disabled);assert.equal(h.document.querySelector('#composer-status').textContent,'Sending…');release();await pending;
+  let ready;const idle=await composerHarness('new');idle.options.preflight={...fx.composerPreflight};idle.options.respond=undefined;
+  idle.options.post=()=>new Promise(resolve=>{ready=()=>resolve({id:'new'});});type(idle,'One new session');const starting=idle.composer.submit();idle.composer.submit();await tick();assert.equal(posts(idle).length,1);ready();await starting;
+});
+test('M4 pause, resume and chip are exact aliases; menu errors stay inline',async()=>{
+  const h=await composerHarness('paused');type(h,'/pause');await h.composer.submit();type(h,'/resume');await h.composer.submit();h.document.querySelector('#resume-session').click();await tick();assert.deepEqual(posts(h).map(c=>c.body),[{run:'run_test',action:'pause'},{run:'run_test',action:'resume'},{run:'run_test',action:'resume'}]);
+  h.document.querySelector('[data-session-control="resume"]').click();await tick();assert.equal(posts(h).at(-1).body.action,'resume');h.options.post=()=>({error:'Cannot resume this session'});h.document.querySelector('[data-session-control="resume"]').click();await tick();assert.equal(h.document.querySelector('#control-error').textContent,'Cannot resume this session');
+});
+test('M4 Stop always confirms, starts focus on Cancel, and Cancel/Escape send nothing',async()=>{
+  const h=await composerHarness('paused');type(h,'/stop');await h.composer.submit();const dialog=h.document.querySelector('#stop-dialog');assert(dialog.hasAttribute('open'));assert.equal(h.document.activeElement.id,'cancel-stop');assert(dialog.textContent.includes('cannot be resumed'));assert.equal(posts(h).length,0);
+  h.document.querySelector('#cancel-stop').click();assert(!dialog.hasAttribute('open'));assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer').value,'/stop');
+  h.document.querySelector('[data-session-control="stop"]').click();assert(dialog.hasAttribute('open'));key(h,'Escape',{},h.document.querySelector('#cancel-stop'));assert(!dialog.hasAttribute('open'));assert.equal(posts(h).length,0);
+  await h.composer.submit();h.document.querySelector('#confirm-stop').click();await tick();assert.deepEqual(posts(h),[{url:'/api/control',body:{run:'run_test',action:'stop'}}]);assert(!dialog.hasAttribute('open'));assert.equal(h.document.querySelector('#composer').value,'');assert.equal(h.document.activeElement.id,'composer');
+});
+test('M4 /check and /title route active and finished-focused sessions exactly',async()=>{
+  const h=await composerHarness('paused');for(const text of ['/check Save and reload','/title Storage session']){type(h,text);await h.composer.submit();}assert.deepEqual(posts(h).map(c=>c.body),[{run:'run_test',action:'goal_check',text:'Save and reload'},{run:'run_test',action:'title',text:'Storage session'}]);
+  const done=await composerHarness('finished');done.core.focus('run_test');await done.runTimers(0);type(done,'/title New name');await done.composer.submit();assert.deepEqual(posts(done).at(-1).body,{run:'run_test',action:'title',text:'New name'});
+  type(done,'/check Not active');const n=posts(done).length;await done.composer.submit();assert.equal(posts(done).length,n);assert.match(done.document.querySelector('#composer-status').textContent,/no active session/);
+});
+test('M4 slash suggestions/help are local and deferred decisions never send',async()=>{
+  const h=await composerHarness('paused');type(h,'/');assert(!h.document.querySelector('#composer-options').hidden);assert.deepEqual([...h.document.querySelectorAll('#composer-options button')].map(n=>n.textContent),['/pause','/resume','/stop','/check','/title','/help']);
+  type(h,'/help');await h.composer.submit();assert.equal(posts(h).length,0);assert(!h.document.querySelector('#composer-options').hidden);
+  for(const text of ['/mystery','/verify','/apply','/discard','/team approve','/check','/pause extra']){type(h,text);await h.composer.submit();assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer').value,text);assert(h.document.querySelector('#composer-status').textContent);if(/verify|apply|discard|team/.test(text))assert(!h.document.querySelector('#composer-classic').hidden);}
+});
+test('M4 mention list supports arrows, Enter and Escape with active-descendant',async()=>{
+  const h=await composerHarness('paused');type(h,'@');const list=h.document.querySelector('#composer-options');assert(!list.hidden);assert(!list.textContent.includes('hermes'));assert.equal(h.document.querySelector('#composer').getAttribute('aria-activedescendant'),'composer-option-0');key(h,'ArrowDown');assert.equal(h.document.querySelector('#composer').getAttribute('aria-activedescendant'),'composer-option-1');key(h,'Enter');assert.equal(h.document.querySelector('#composer').value,'@coder-2 ');assert(list.hidden);assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');assert.equal(posts(h).length,0);
+  type(h,'@');key(h,'Escape');assert(list.hidden);assert.equal(h.document.querySelector('#composer').getAttribute('aria-activedescendant'),null);
+});
+test('M4 key rules distinguish fine/touch pointers, modifiers and composition',async()=>{
+  for(const coarse of [false,true]){
+    const h=await composerHarness('paused',{coarse});type(h,'A draft');assert.equal(key(h,'Enter',{shiftKey:true}).defaultPrevented,false);assert.equal(key(h,'Enter',{isComposing:true}).defaultPrevented,false);assert.equal(posts(h).length,0);
+    const enter=key(h,'Enter');await tick();assert.equal(enter.defaultPrevented,!coarse);assert.equal(posts(h).length,coarse?0:1);
+    for(const modifier of ['ctrlKey','metaKey']){type(h,'A modifier draft');key(h,'Enter',{[modifier]:true});await tick();}assert.equal(posts(h).length,coarse?2:3);
+  }
+});
+test('M4 Basic/Advanced Settings and unavailability reasons disclose progressively',async()=>{
+  const h=await composerHarness('new');await h.composer.openSettings();assert(!h.document.querySelector('#settings-sheet').hidden);assert(h.document.querySelector('#settings-basic'));assert(!h.document.querySelector('#settings-advanced').open);
+  assert(h.document.querySelector('input[value="container"]').disabled);assert(h.document.querySelector('input[value="vm"]').disabled);assert(h.document.querySelector('#isolation-options').textContent.includes('No container runtime installed'));assert(h.document.querySelector('#isolation-options').textContent.includes('KVM unavailable on this server'));assert.equal(h.document.querySelectorAll('#isolation-options details').length,2);assert(!h.document.querySelector('option[value="internet"]'));assert(h.document.querySelector('#settings-sheet').textContent.includes('Paid models and the stuck watch: set them in the classic dashboard'));
+  assert(h.document.querySelector('#isolated-fields').hidden);setting(h,'mode','team','change');assert(!h.document.querySelector('#team-size-field').hidden);assert.equal(h.document.querySelector('#setting-team_size').value,'3');
+  h.document.querySelector('#add-goal-check').click();const check=h.document.querySelector('[data-check="0"]');check.value='Reload saved data';check.dispatchEvent(new h.window.Event('input',{bubbles:true}));h.document.querySelector('[data-remove-check="0"]').click();assert.equal(h.document.querySelectorAll('[data-check]').length,0);
+  key(h,'Escape',{},h.document.querySelector('#close-settings'));assert(h.document.querySelector('#settings-sheet').hidden);assert.equal(h.document.activeElement.id,'composer');
+});
+test('M4 preflight blocks dirty start until explicit acknowledgement',async()=>{
+  const h=await composerHarness('new',{preflight:{...fx.composerPreflight,dirty_count:3}});type(h,'A dirty-folder goal');await h.composer.submit();assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer').value,'A dirty-folder goal');assert(!h.document.querySelector('#settings-sheet').hidden);assert(h.document.querySelector('#settings-advanced').open);assert(h.document.querySelector('#dirty-folder').textContent.includes('3'));assert(!h.document.querySelector('#allow-dirty').checked);
+  h.document.querySelector('#allow-dirty').checked=true;await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'A dirty-folder goal',allow_dirty:true});assert(!h.document.querySelector('#allow-dirty').checked);assert(!JSON.parse(h.local.get('acx-settings')).allow_dirty);
+});
+test('M4 Auto previews before sending and preview shapes match classic',async()=>{
+  const h=await composerHarness('new');await h.composer.openSettings();type(h,'A small goal');setting(h,'mode','auto','change');await tick();assert(h.document.querySelector('#mode-preview').textContent.includes('Auto would use one agent. Small goal'));
+  assert.deepEqual(posts(h).at(-1),{url:'/api/mode/preview',body:{goal:'A small goal',goal_checks:[],verifier:'',max_steps:8}});await h.composer.submit();assert.equal(posts(h).at(-1).url,'/api/runs');assert.equal(posts(h).at(-1).body.mode,'auto');
+  for(const [mode,values,expected] of [['web',{command:'python3 -m http.server',port:'8080'},{mode:'web',command:'python3 -m http.server',port:8080}],['static',{path:'site/index.html'},{mode:'static',path:'site/index.html'}],['cli',{command:'python3 app.py',args:'--help'},{mode:'cli',command:'python3 app.py',args:'--help'}],['desktop',{command:'xterm',width:'1200',height:'700'},{mode:'desktop',command:'xterm',width:1200,height:700}]]){
+    const p=await composerHarness('new');await p.composer.openSettings();const select=p.document.querySelector('#preview-mode');select.value=mode;select.dispatchEvent(new p.window.Event('change',{bubbles:true}));for(const [name,value] of Object.entries(values)){const node=p.document.querySelector('#preview-'+name);node.value=value;node.dispatchEvent(new p.window.Event('input',{bubbles:true}));}type(p,'Preview goal');await p.composer.submit();assert.deepEqual(posts(p).at(-1).body.preview,expected);
+  }
+});
+test('M4 connections retry is an existing POST and forbidden fields never leave chat',async()=>{
+  const f=fx.composerFixture('new');f.state.health.ready=false;const h=await harness(f.state,{thread:f.thread,channels:f.channels});type(h,'Blocked goal');assert(h.document.querySelector('#send-message').disabled);assert.equal(h.document.querySelector('#composer-blocked').textContent,'Connections are not ready');h.document.querySelector('#check-connections').click();await tick();assert.deepEqual(posts(h),[{url:'/api/check',body:{}}]);
+  const p=await composerHarness('new',{local:{'acx-settings':JSON.stringify({mode:'single',models:{coder:'paid'},spend_cap:8,confirm:'approve',watch:true,network:'internet'})},session:{'acx-draft':'Restore only the unsent draft'}});assert.equal(p.document.querySelector('#composer').value,'Restore only the unsent draft');await p.composer.submit();const body=posts(p).at(-1).body;for(const field of ['models','spend_cap','confirm','watch'])assert(!Object.hasOwn(body,field));assert.notEqual(body.network,'internet');assert.equal(p.session.has('acx-draft'),false);assert(!p.local.has('acx-draft'));
+});
+
+test('M4 available isolation and all changed Basic/Advanced values send their exact shapes',async()=>{
+  const f=fx.composerFixture('new');f.state.sandbox={unavailable:'',models_configured:true};f.state.vm_env={unavailable:'',models_configured:true};
+  const h=await harness(f.state,{thread:f.thread,channels:f.channels});await h.composer.openSettings();
+  const container=h.document.querySelector('input[value="container"]');assert(!container.disabled);container.checked=true;container.dispatchEvent(new h.window.Event('change',{bubbles:true}));assert(!h.document.querySelector('#isolated-fields').hidden);
+  setting(h,'network','none','change');setting(h,'cpus',2);setting(h,'memory_gb',4);setting(h,'setup','npm ci');setting(h,'mode','team','change');setting(h,'team_size',2);setting(h,'max_steps',4);setting(h,'run_minutes',20);
+  h.document.querySelector('#add-goal-check').click();const check=h.document.querySelector('[data-check="0"]');check.value='Persist changes';check.dispatchEvent(new h.window.Event('input',{bubbles:true}));type(h,'A team goal');await h.composer.submit();
+  assert.deepEqual(posts(h).at(-1).body,{goal:'A team goal',isolation:'container',network:'none',cpus:2,memory_gb:4,setup:'npm ci',mode:'team',team_size:2,max_steps:4,run_minutes:20,goal_checks:['Persist changes']});
+});
+test('M4 unknown mention Enter reports an error, and goal check rows stay bounded',async()=>{
+  const h=await composerHarness('paused');type(h,'@missing');assert(h.document.querySelector('#composer-options').hidden);key(h,'Enter');await tick();assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer-status').textContent,'This session has no agent named missing');
+  const idle=await composerHarness('new');await idle.composer.openSettings();for(let i=0;i<21;i++)idle.document.querySelector('#add-goal-check').click();assert.equal(idle.document.querySelectorAll('[data-check]').length,20);assert(idle.document.querySelector('#add-goal-check').disabled);
+});
+
+test('M4 remembered Auto makes its explanation visible before a session can start',async()=>{
+  const h=await composerHarness('new',{local:{'acx-settings':JSON.stringify({mode:'auto'})}});type(h,'An Auto goal');await h.composer.submit();assert(!h.document.querySelector('#settings-sheet').hidden);assert(h.document.querySelector('#mode-preview').textContent.includes('Auto would'));assert(!posts(h).some(c=>c.url==='/api/runs'));
+  h.document.querySelector('#close-settings').click();await h.composer.submit();assert.equal(posts(h).at(-1).url,'/api/runs');assert.equal(posts(h).at(-1).body.mode,'auto');
+});
+
+test('M4 active pause flags come from the active server details while an older session is focused',async()=>{
+  const f=fx.composerFixture('active');f.thread.live.status='coding';f.thread.sessions[0].status='coding';f.state.runs[0].status='coding';delete f.state.runs[0].pause;
+  f.state.run={id:'old',status:'completed',title:'Older session'};f.state.agents=[];
+  const h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url==='/api/state?scope=current&run=run_test'?{...f.state,run:{id:'run_test',status:'coding',pause:true},agents:[{name:'coder-2',type:'coder'}]}:undefined});
+  await tick();assert(!h.document.querySelector('#resume-session').hidden);assert.equal(h.document.querySelector('[data-session-control="resume"]').textContent,'Resume');
+  h.document.querySelector('#resume-session').click();await tick();assert.deepEqual(posts(h).at(-1).body,{run:'run_test',action:'resume'});
+});
+test('M4 edits made during submission remain an unsent draft',async()=>{
+  let release;const h=await composerHarness('paused',{post:()=>new Promise(resolve=>{release=()=>resolve({ok:true});})});type(h,'The submitted note');const request=h.composer.submit();type(h,'My next note');release();await request;assert.equal(h.document.querySelector('#composer').value,'My next note');assert.equal(h.session.get('acx-draft'),'My next note');assert.equal(posts(h)[0].body.text,'The submitted note');
+});
+
+test('M4 an in-flight Auto preview also prevents a concurrent session POST',async()=>{
+  let release;const h=await composerHarness('new',{post:(url)=>url==='/api/mode/preview'?new Promise(resolve=>{release=()=>resolve({mode:'single',reasons:['Small goal']});}):({id:'new'})});await h.composer.openSettings();type(h,'Previewed goal');setting(h,'mode','auto','change');assert(h.document.querySelector('#send-message').disabled);await h.composer.submit();assert.equal(posts(h).filter(c=>c.url==='/api/runs').length,0);release();await tick();h.document.querySelector('#close-settings').click();const sending=h.composer.submit();await tick();
+  // Sending re-reads the same preview first, so session creation still waits for it.
+  assert.equal(posts(h).filter(c=>c.url==='/api/runs').length,0);release();await sending;assert.equal(posts(h).filter(c=>c.url==='/api/runs').length,1);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

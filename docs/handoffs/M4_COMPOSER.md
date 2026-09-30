@@ -282,3 +282,133 @@ Assert the §6 footer budgets at 390 × 844, and assert that there is no horizon
 3. Push to `feature/chat-first-redesign`. No PR and no merge unless the owner asks.
 
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
+
+---
+
+## M4 completion report — Codex, 2026-09-30
+
+### Implementation and scope
+
+Verified `/home/charlesjackson/AgentControl` on `feature/chat-first-redesign`, with a clean starting tree.
+`git pull --ff-only origin feature/chat-first-redesign` advanced the branch to `137a5b8` before implementation.
+Read `CURRENT_STATE.md`, the binding architecture, this handoff, and the accepted M3/M3.1 handoffs and reviews.
+
+Added `AC.composer` in `chat/composer.js` and mounted it in the existing project room. The one input supports
+new goals, finished-session follow-ups with inherited verifier/turn-limit/mode, Hermes notes, one targeted
+agent (last mention wins), pause/resume, confirmed stop, `/check`, `/title` and local `/help`. The header menu
+and Resume chip call the same controls. Stop starts focus on Cancel; Cancel and Escape send nothing.
+Basic Settings show title, verifier, up to twenty checks and mode; Advanced starts collapsed and exposes
+the permitted limits, isolation availability/reasons, network/resource/setup options and classic preview shapes.
+Auto's explanation must be visible before sending; dirty folders require the explicit acknowledgement.
+Remembered preferences are restricted to allowed Settings under `acx-settings`; the unsent draft is session-only.
+
+All writes use the existing endpoints and request shapes in §2. `core.post()` uses the existing authenticated
+`api()` and 401 handling. Successful writes clear only the submitted draft (new edits survive), set the stable
+status node, follow to the bottom and request one immediate coalesced read refresh. Nothing inserts submitted
+text or decision state into the timeline. Preparation, POSTs and Auto previews share the submission guard.
+When an older session is focused, an existing active-session `/api/state` details read supplies the real agent
+roster and pause flag; it does not supply room messages or create another conversation store.
+
+`thread.js` changes only the outcome Reply link. The existing ordering, paging, keyed disclosure state,
+SSE/polling refresh, receipts, bounded ten-page stale-action revalidation, rail disclosure, privacy guards and
+classic decision pointers remain intact. `/verify`, `/apply`, `/discard` and `/team` remain unavailable
+with a classic link. No paid-model, stuck-watch, internet-during-work or M5 controls were added.
+Only the eleven files allowed in §7 changed; fixtures are append-only. Backend, API, schema, orchestration,
+classic frontend and unrelated tests are unchanged. No architecture conflict or implementation deviation.
+
+### Required verification
+
+| Command | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)**, 254.364 s; no timing-sensitive failure in this M4 run |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed**, unchanged classic tests |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **67/67 passed**: all 42 existing tests plus 25 M4 regressions |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m4` | **84 combinations + 4 regressions passed**, 134 temporary screenshots |
+| `git diff --check` | passed |
+
+The three environment skips were:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`: container opt-in/runtime/image gate.
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`: desktop display tools gate.
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`: VM opt-in/KVM gate.
+
+The OpenCode end-to-end trio ran and passed. Python/socket tests and Chromium ran outside the sandbox.
+No protected test was weakened or changed. Logs: `/tmp/ac-python-verified.log`, `/tmp/ac-m4-classic.log`,
+`/tmp/ac-m4-chat.log` and `/tmp/ac-m4-browser.log`.
+
+The new regressions cover exact start/follow-up/note/control bodies, every terminal outcome's Reply link,
+server-only message appearance while the thread response is held, one immediate refresh, persistent draft
+on failures/401, draft edits during sending, active-session agent and pause metadata while focusing history,
+single-flight preparation/POST/Auto previews, Stop confirmation/focus/cancellation, mention and slash keys,
+touch Enter behavior, focused finished-session rename, Basic/Advanced disclosure, isolation reasons,
+dirty acknowledgement, Auto visibility, all preview shapes, preferences and prohibited payload fields.
+Existing M3/M3.1 guards and revalidation regressions still pass.
+
+### Phone measurements and screenshots
+
+At **390 × 844**, in both light and dark:
+
+| Idle state | Footer | Waiting row | Timeline | Viewport retained |
+|---|---:|---:|---:|---:|
+| Without waiting | **57 px** (limit 72) | absent | **683.5 px** | **81.0%** |
+| With waiting | **105 px** (limit 120) | **40 px** | **635.5 px** | **75.3%** |
+
+The matrix asserts these budgets for every phone case, waiting-row height 32–40 px, text/link alignment
+within 1 px, visible Hermes target chips, no joined waiting/link text, no horizontal overflow and no page errors.
+It retains the expanded long-token, newest-message visibility, context/drawer, stale-link and scrim checks.
+The idle footer removes the visible eyebrow and duplicate classic link; classic stays in the header menu,
+waiting row, rail and actionable messages. Settings is a side sheet on desktop and bottom sheet on phones.
+
+A ten-line draft is capped by six lines plus padding (151 px at the current line height) or 40% of the viewport,
+whichever is smaller. Chromium phone emulation shrank the visual viewport to **390 × 480** and restored it;
+the app height followed `visualViewport` and the composer stayed above the reduced viewport's lower edge.
+**Limitation:** an actual phone OS keyboard was unavailable; this verifies viewport emulation, not native
+keyboard interaction. The browser writes measurements to `/tmp/chat-shots-m4/footer-measurements.json`.
+
+Inspected actual images, including:
+
+- `/tmp/chat-shots-m4/composerIdle-phone-light.png` and `composerIdle-desktop-dark.png`.
+- `composerNote-phone-dark.png`, `composerPaused-phone-light.png` and `composerFollow-desktop-light.png`.
+- `composerBasic-desktop-light.png`, `composerAdvanced-desktop-light.png` and `composerAdvanced-phone-dark.png`.
+- `composerStop-phone-light.png` and `composerKeyboard-phone-light.png`.
+- Real-server `/tmp/ac-m4-real-desktop.png` and `/tmp/ac-m4-real-phone.png`.
+
+The images confirm the compact footer, waiting-row alignment, visible target, desktop/phone sheets,
+Stop confirmation, follow-up target and reduced-viewport placement. Screenshots and scratch logs remain
+temporary artifacts outside the repository.
+
+### Real server check
+
+Ran the real `app.handler`/Controller and journal on a temporary localhost HTTP server using only
+`tests/test_workflow.py`'s `FakeManager` and `FakeAPI` (held fake task); no real Hermes/model/agent ran.
+Chromium used `/chat` and the normal authenticated APIs. Scratch commands:
+
+```sh
+python3 /tmp/ac-m4-real-server.py
+NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m4-real-check.cjs
+NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m4-real-follow.cjs
+```
+
+Both browser checks passed. Starting run `5059a3f622da` sent only `{goal}`, recorded the `goal` event and
+returned that goal to the room through `/api/thread`. Hermes and `@coder-1` notes appeared through the same
+read model; the targeted note sent text without the token and returned `detail.to: 'coder-1'`. `/title` updated
+the server title, and `/check` recorded a goal check and its journal note. Pause set the real pause flag;
+Resume cleared it; Stop required the dialog and produced the stopped outcome and the recorded control events.
+A 1,001-character goal check produced the server's inline 400 error and retained the draft. `/` and `/classic`
+returned HTTP 200 with the unchanged classic app. No browser page errors occurred.
+
+The separate follow-up check clicked the stopped session's real Reply link, created a child with the correct
+`parent_run`, inherited verifier/mode/turn limit, observed the child goal from `/api/thread`, and stopped the
+fake child through confirmation. Evidence: `/tmp/ac-m4-real-check.json`, `/tmp/ac-m4-real-check.log` and
+`/tmp/ac-m4-real-follow.log`. An initial scratch assertion expected the targeted-note journal prefix in the
+public text; it was corrected to the existing projection contract (text plus `detail.to`); production code
+and the backend contract were unchanged.
+
+### Open questions and carried-forward limitations
+
+No unresolved M4 implementation issue or scope deviation. The large phone footer and misaligned waiting
+strip from the M3.1 review are fixed and verified. As the accepted review explicitly defers them, Load earlier
+focus, partial-session divider counts and live refresh of the single-session fallback remain unchanged.
+The research/skill actionable-state versus waiting-count mismatch remains visible and untouched; its
+server-side reconciliation is an explicit prerequisite for M5. M5 has not begun. Native phone keyboard
+verification remains an environment limitation for review.

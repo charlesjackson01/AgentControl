@@ -37,12 +37,13 @@ SAMPLE = ('Task: make the test suite pass. Turn 5. The agent ran `pytest`, saw t
 GUESS = {
     # From the 422 replies: a top-level model is required ('jev' is accepted); questions are told
     # apart by `type`; choice criteria are a map of name -> description; score criteria are an
-    # ordered list of level descriptions.
+    # ordered list of level descriptions; a noul needs `criteria` or
+    # `instructions` (an unknown field such as `proposition` is ignored).
     'model': 'jev',
     'state': SAMPLE,
     'questions': {
         'stuck': {'type': 'noul',
-                  'proposition': 'The agent is stuck: repeating the same actions or errors without progress toward the task.'},
+                  'instructions': 'The agent is stuck: repeating the same actions or errors without progress toward the task.'},
         'pattern': {'type': 'choice', 'criteria': {
             'repeating_failure': 'The same failure recurs after each attempt.',
             'undo_redo': 'The agent keeps undoing and redoing the same change.',

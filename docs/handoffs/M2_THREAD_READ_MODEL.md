@@ -312,3 +312,89 @@ For each terminal run, emit `out:<runId>` at `run.ended`, ranked last. `actor` i
 3. Push to `feature/chat-first-redesign`. No PR and no merge unless the owner asks.
 
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict in your report instead of choosing silently.
+
+## Completion — 2026-09-30 (Codex)
+
+Built the authenticated `/api/channels` and `/api/thread` GET routes, `conversation.py`
+with pure session/message projection and a lazy journal gatherer, and the single new
+read-only `Store.events_page` SELECT. The journal remains the only writable state.
+No existing endpoint, schema, orchestration module, frontend, or approval rule changed.
+
+`MAPPING` covers existing literal and dynamic event kinds, with an explicit bounded system
+fallback for future kinds. Hermes request prompts, lifecycle/watch noise and OpenCode tool
+payloads are excluded. Decisions whitelist public fields; turns contain no transcript or
+activity. Notes, receipts, proposal/research/skill action descriptors and terminal outcomes
+follow the handoff. Actions describe existing endpoints and never execute them.
+
+Paging walks sessions newest first and returns each page oldest first. The URL-safe base64
+cursor carries version 1 and `(session.created, session.id, message.at, rank, source_seq,
+message.id)`; the final stable id resolves ties between different record types. A strict
+position comparison and one-message lookahead determine the next cursor. Revisions are CRC32
+of canonical UTF-8 JSON without `rev`, and known messages become `{id, rev, same}`.
+
+The SELECT batch cap is **5,000 events**, with continuation by event id. V1's permitted
+materialisation scope is **one session's non-omitted messages**, with no destructive hard
+cutoff on session history. A 5,010-event regression proves that crossing the batch boundary
+does not lose records. The thread retains only page messages and session metadata after
+advancing to another session. All documented per-message and list bounds are enforced;
+generic nested detail additionally caps lists/maps at 50 entries and depth at eight.
+Channel metadata scans timestamps in bounded SELECT batches, including omitted events,
+so its updated time reflects durable activity. At most one workspace status lookup occurs
+per thread request, after the page's sessions are known.
+
+Verification (final tree, before commit):
+- `python3 -m unittest discover -s agent-autonomy/tests`: **383 tests, OK (skipped=3)**,
+  outside the sandbox; includes **24 projection/reader tests and 8 HTTP tests**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`: **82/82**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`: **16/16**,
+  unchanged by M2, including both M1.1 regressions.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots`:
+  **24 combinations + 4 regressions**, 54 screenshots, unchanged by M2.
+- `git diff --check` and an AST comparison of the existing journal against the M1.1 commit passed;
+  its only change is the added reader. The scope/read-method audit passed.
+
+Skipped tests, by name:
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+Existing integration-test flakiness was observed on one intermediate full run:
+`test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish`,
+`test_modes.AutoRunTests.test_your_explicit_choice_is_never_overridden`, and
+`test_paid.PaidModelTests.test_coder_prompt_names_its_model_and_the_gateway_routes_it_with_the_key`.
+All three passed unchanged in isolation, and the complete final rerun passed.
+No protected code or existing regression tests were changed to make them pass.
+Final bounds tests cover 50k-character session titles/results/notes/summaries, and notes that
+look like JSON remain verbatim. Submission uncertainty follows the preceding recorded
+OpenCode submission's step identifier; folded prompt text is stripped before retaining
+annotation metadata. A team regression prevents attributing it to another prepared turn.
+
+No contract changes or scope deviations. No unresolved M2 correctness issues.
+
+Sample from the HTTP test journal containing one single-agent and one team session
+(session-start messages omitted, temporary project path replaced; other fields are actual
+projection output):
+
+```json
+{
+  "channel": "main",
+  "project": "<temporary test project>",
+  "sessions": [
+    {"id": "single", "title": "Build CLI", "status": "completed", "created": "2026-09-30T12:00:00+00:00", "ended": "2026-09-30T12:05:00+00:00", "parent": null, "mode": "single", "summary": "CLI complete"},
+    {"id": "team", "title": "Build CLI", "status": "awaiting_approval", "created": "2026-09-30T13:00:00+00:00", "ended": null, "parent": null, "mode": "team", "summary": ""}
+  ],
+  "messages": [
+    {"id": "turn:step1", "at": "2026-09-30T12:00:01+00:00", "session": "single", "actor": "coder-1", "kind": "turn", "text": "Implement CLI", "refs": {"step": "step1", "agent": "coder-1"}, "detail": {"number": 1, "status": "completed", "kind": "task", "ended": "2026-09-30T12:00:03+00:00", "verification": {"status": "passed", "exit_code": 0}, "files": [{"path": "cli.py", "change": "new", "added": 10, "removed": 0}], "files_omitted": 0, "result_tail": "Tests passed", "prompt": "Implement the CLI"}, "action": null, "rev": 85148469},
+    {"id": "out:single", "at": "2026-09-30T12:05:00+00:00", "session": "single", "actor": "agentcontrol", "kind": "outcome", "text": "CLI complete", "refs": {}, "detail": {"status": "completed", "ended": "2026-09-30T12:05:00+00:00"}, "action": null, "rev": 3860861494},
+    {"id": "ev:1", "at": "2026-09-30T17:18:44+00:00", "session": "single", "actor": "you", "kind": "goal", "text": "Build CLI", "refs": {"event": 1}, "detail": {}, "action": null, "rev": 2030250745},
+    {"id": "ev:2", "at": "2026-09-30T17:18:44+00:00", "session": "single", "actor": "hermes", "kind": "decision", "text": "Implement CLI", "refs": {"event": 2}, "detail": {"action": "code", "title": "CLI", "plan": ["Build", "Test"]}, "action": null, "rev": 2903569878},
+    {"id": "ev:3", "at": "2026-09-30T17:18:44+00:00", "session": "team", "actor": "hermes", "kind": "proposal", "text": "CLI team", "refs": {"event": 3}, "detail": {"proposal": {"agents": [{"name": "coder-1", "role": "coder"}], "tasks": [{"id": "cli", "title": "Implement CLI"}]}, "warnings": []}, "action": {"endpoint": "/api/control", "fields": {"run": "team"}, "choices": ["approve_team", "single_agent", "repropose"]}, "rev": 3894610887}
+  ],
+  "before": null,
+  "live": {"session": "team", "phase": "code", "status": "awaiting_approval"}
+}
+```
+
+Open questions for Opus: none requiring a contract change. The allowed v1 one-session
+materialisation can use memory proportional to that session's public history; a streaming
+large-session projection is a possible future optimisation. M3 has not been started.

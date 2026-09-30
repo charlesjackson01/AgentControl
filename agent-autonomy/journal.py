@@ -169,6 +169,22 @@ class Store:
             rows = c.execute('SELECT id,created,kind,detail FROM events WHERE run=? ORDER BY id DESC LIMIT ?', (run, limit)).fetchall()
         return [dict(zip(('id', 'created', 'kind', 'detail'), r)) for r in reversed(rows)]
 
+    def events_page(self, run, before_id=None, limit=500, exclude_kinds=()):
+        """Read older events, newest first; values (including excluded kinds) are bound parameters."""
+        query = 'SELECT id,created,kind,detail FROM events WHERE run=?'
+        params = [run]
+        if before_id is not None:
+            query += ' AND id < ?'
+            params.append(before_id)
+        if exclude_kinds:
+            query += ' AND kind NOT IN (' + ','.join('?' for _ in exclude_kinds) + ')'
+            params.extend(exclude_kinds)
+        query += ' ORDER BY id DESC LIMIT ?'
+        params.append(limit)
+        with self.connection() as c:
+            rows = c.execute(query, params).fetchall()
+        return [dict(zip(('id', 'created', 'kind', 'detail'), row)) for row in rows]
+
     def latest_events(self, run, kind, limit=300):
         """The most recent events of one kind for a run, newest first."""
         with self.connection() as c:

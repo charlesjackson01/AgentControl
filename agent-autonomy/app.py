@@ -132,6 +132,20 @@ def handler(controller, key):
                 except KeyError:
                     return self.reply(404, {'error': 'Unknown run'})
                 return self.reply(200, {'run': ident, 'agents': controller.agents(run), 'types': agent_registry.types()})
+            if path.path in ('/api/channels', '/api/thread'):
+                import conversation
+                query = urllib.parse.parse_qs(path.query, keep_blank_values=True)
+                try:
+                    if path.path == '/api/channels':
+                        return self.reply(200, conversation.channels(controller))
+                    return self.reply(200, conversation.thread(
+                        controller, channel=query.get('channel', [None])[0],
+                        session_id=query.get('session', [None])[0], before=query.get('before', [None])[0],
+                        limit=query.get('limit', [200])[0], known=parse_known(query.get('known', [''])[0])))
+                except KeyError:
+                    return self.reply(404, {'error': 'Unknown session'})
+                except ValueError as exc:
+                    return self.reply(400, {'error': str(exc)})
             if path.path == '/api/state':
                 query = urllib.parse.parse_qs(path.query)
                 return self.reply(200, controller.state(query.get('run', [''])[0], (query.get('scope') or ['current'])[0],

@@ -35,11 +35,11 @@ SAMPLE = ('Task: make the test suite pass. Turn 5. The agent ran `pytest`, saw t
           'KeyError in test_parse. This is the third time it made this same edit.')
 
 GUESS = {
-    # From the 422 replies: a top-level model is required ('jev' is accepted); questions are told
+    # From the 422 replies: a top-level model is required ('jev' is unknown; ids are jev-latest or a pinned jev-1.13.0); questions are told
     # apart by `type`; choice criteria are a map of name -> description; score criteria are an
     # ordered list of level descriptions; a noul needs `criteria` or
     # `instructions` (an unknown field such as `proposition` is ignored).
-    'model': 'jev',
+    'model': 'jev-latest',
     'state': SAMPLE,
     'questions': {
         'stuck': {'type': 'noul',

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import handler
 import conversation as cv
 import test_workflow as workflow
-from test_conversation import run, step, packet
+from test_conversation import run, step, packet, receipt
 
 
 class ThreadAPITests(unittest.TestCase):
@@ -169,6 +169,77 @@ class ThreadAPITests(unittest.TestCase):
         self.assertEqual([s['id'] for s in focused['sessions']], ['other'])
         self.assertEqual(self.get('/api/channels')['channels'][0]['sessions'], 2)
 
+    def test_decided_team_request_and_planner_projection(self):
+        self.save_run('team', mode='team', team={'state': 'approved', 'agents': {'coder-2': {'session': 'ses2'}}})
+        p = packet(sessionID='ses2');p.pop('agent')
+        self.store.save_review(receipt(run='team', request=p))
+        self.store.event('team', 'Hermes decision', {'mode': 'multi', 'agents': [{'name': 'coder-2'}],
+                                                  'tasks': [{'title': 'CLI'}], 'reason': 'Parallel work helps'})
+        result = self.get('/api/thread', session='team')
+        request = next(m for m in result['messages'] if m['kind'] == 'request')
+        self.assertEqual(request['actor'], 'coder-2');self.assertIsNone(request['action'])
+        decision = next(m for m in result['messages'] if m['kind'] == 'decision')
+        self.assertEqual(decision['text'], 'Parallel work helps')
+        self.assertEqual(decision['detail']['proposal_counts'], {'agents': 1, 'tasks': 1})
+
+    def test_outcome_actions_and_revisions_are_independent_of_page_and_view(self):
+        for ident, created, ended in [('old', '2026-09-29T12:00:00+00:00', '2026-09-29T12:05:00+00:00'),
+                                      ('new', '2026-09-30T12:00:00+00:00', '2026-09-30T12:05:00+00:00')]:
+            self.save_run(ident, created=created, ended=ended, status='completed', verifier=['true'], workspace={'toplevel': self.project})
+        calls = []
+        def workspace(value):
+            calls.append(value['id']);return {'state': 'open', 'apply_blocked': ''}
+        self.controller.workspace_status = workspace
+        full = self.get('/api/thread')
+        full_out = {m['session']: m for m in full['messages'] if m['kind'] == 'outcome'}
+        self.assertEqual(calls, ['new'])
+        self.assertIsNone(full_out['old']['action'])
+        self.assertEqual(full_out['old']['detail']['workspace'], {'state': 'open'})
+        self.assertEqual(full_out['new']['action']['choices'], ['apply', 'discard_workspace', 'verify'])
+        calls.clear()
+        newest = self.get('/api/thread', limit=1)
+        self.assertEqual(newest['messages'], [full_out['new']]);self.assertEqual(calls, ['new'])
+        calls.clear()
+        old_page = self.get('/api/thread', before=cv.encode_cursor(cv.position(self.store.get('runs', 'new'),
+                                       next(m for m in full['messages'] if m['id'] == 'run:new'))), limit=1)
+        self.assertEqual(old_page['messages'], [full_out['old']]);self.assertEqual(calls, [])
+        for ident in ('old', 'new'):
+            calls.clear()
+            focused = self.get('/api/thread', session=ident)
+            outcome = next(m for m in focused['messages'] if m['kind'] == 'outcome')
+            self.assertEqual(outcome, full_out[ident])
+            self.assertEqual(calls, ['new'] if ident == 'new' else [])
+        calls.clear()
+        # The newest session is on this page, but its outcome is not; no git call is needed.
+        without_outcome = self.get('/api/thread', before=cv.encode_cursor(cv.position(self.store.get('runs', 'new'), full_out['new'])), limit=1)
+        self.assertEqual(without_outcome['messages'][0]['id'], 'run:new')
+        self.assertEqual(calls, [])
+        calls.clear()
+        known = ','.join(m['id']+':'+str(m['rev']) for m in full['messages'])
+        delta = self.get('/api/thread', session='old', known=known)
+        self.assertTrue(all(m.get('same') for m in delta['messages']));self.assertEqual(calls, [])
+
+    def test_outcome_workspace_lookup_respects_recorded_flags_and_channel_membership(self):
+        self.save_run('old', created='2026-09-29', status='completed', ended='2026-09-29T12:05:00+00:00',
+                      workspace={'toplevel': self.project}, verifier=['true'])
+        self.save_run('new', status='completed', ended='2026-09-30T12:05:00+00:00', verifier=['true'])
+        calls = []
+        def workspace(value):
+            calls.append(value['id']);return {'state': 'open', 'apply_blocked': ''}
+        self.controller.workspace_status = workspace
+        for flags in ({'applied': True}, {'discarded': True}, None):
+            self.store.update('runs', 'new', workspace={'toplevel': self.project, **flags} if flags else None)
+            result = self.get('/api/thread')
+            self.assertEqual(calls, [])
+            newest = next(m for m in result['messages'] if m['id'] == 'out:new')
+            self.assertEqual(newest['action']['choices'], ['verify'])
+            self.assertIsNone(next(m for m in result['messages'] if m['id'] == 'out:old')['action'])
+        self.store.put('runs', run('foreign', project='/other', created='2026-10-01', status='completed',
+                                 ended='2026-10-01T12:05:00+00:00', verifier=['true'], workspace={'toplevel': '/other'}))
+        foreign = self.get('/api/thread', session='foreign')
+        self.assertIsNone(next(m for m in foreign['messages'] if m['kind'] == 'outcome')['action'])
+        self.assertEqual(calls, [])
+
     def test_limit_clamping_empty_room_and_known_entry_cap(self):
         empty = self.get('/api/thread')
         self.assertEqual((empty['sessions'], empty['messages'], empty['before']), ([], [], None))
@@ -194,5 +265,3 @@ class ThreadAPITests(unittest.TestCase):
         proposal = next(m for m in result['messages'] if m['kind'] == 'proposal')
         self.assertEqual(proposal['action']['endpoint'], '/api/control')
         self.assertNotIn('PRIVATE', json.dumps(result))
-        # A temporary sample supports the required handoff report without a second store.
-        Path('/tmp/ac-thread-sample.json').write_text(json.dumps(result, indent=2))

@@ -156,3 +156,110 @@ whole table. That also slows classic `/api/state` and `Lifecycle`.
    - "D6: `events_run_id` index added as migration `_v7`"
 2. Append a completion report to this file: the changes, test commands and counts (with skipped tests named), the benchmark numbers, and any deviation.
 3. Set M2.1 to done in `CURRENT_STATE.md`, then push. No PR and no merge unless the owner asks.
+
+## Completion — 2026-09-30 (Codex)
+
+Started from `4d7a46b` after a fast-forward pull on `feature/chat-first-redesign`, with a clean tree.
+Implemented Parts A and B only:
+- Request actors prefer the recorded packet's `agent`, then the pure `agent_for_session` mapping over
+  `run.session`, specialists and team agents, then the older single-agent fallback.
+- Outcome eligibility comes from the channel's newest terminal session before paging. Older outcomes
+  have identical null actions and revisions across full pages, older pages and session views. Workspace
+  status is read at most once, only when that newest outcome is returned and its recorded workspace is open.
+- Hermes decisions choose non-empty recorded summary, reason or title. Planner-shaped decisions expose
+  only planning/count metadata and existing whitelisted fields; textless decisions are folded.
+- Channels read one newest event per session and only the active session's steps/capabilities. Gather
+  uses one event scan per 5,000-row batch and splits public events/annotations in Python; prompt text
+  remains stripped from annotations.
+- Appended exactly `_v7` and its migration-list entry, creating only `events_run_id ON events(run, id)`.
+  Tests prove a v6 journal reaches version 7 with every table's rows unchanged, no other schema change,
+  and an indexed events-page query plan. Existing migrations and Store methods are unchanged.
+
+The only optional handoff item taken was removing the persistent `/tmp/ac-thread-sample.json` write from
+`test_public_single_and_team_shapes`. Its assertions are unchanged. No UI, orchestration, agent,
+approval, verification, existing journal-read semantics, or M3 work was changed. An AST audit confirms
+all existing tests are unchanged except that explicitly permitted sample-file write removal.
+
+### Verification
+
+`python3 -m unittest discover -s agent-autonomy/tests`: **398 tests, OK (skipped=3)**
+outside the sandbox, on the final implementation. No intermittent test failures occurred in this run.
+The 15 added regressions cover attribution, stable outcome actions/revisions across pages and views,
+planner decisions, scan counts, and the narrowly approved migration/query plan. Existing paging,
+5,010-event, read-only, journal and migration tests pass unchanged.
+
+Skipped tests by name:
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+Focused checks and existing browser suites also passed:
+- `python3 -m unittest discover -s agent-autonomy/tests -p test_conversation.py -v`: **34 passed**.
+- `python3 -m unittest discover -s agent-autonomy/tests -p test_thread_api.py -v`: **11 passed** outside the sandbox.
+- `python3 -m unittest discover -s agent-autonomy/tests -p test_journal.py -v`: **7 passed**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`: **82/82**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`: **16/16**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots`:
+  **24 combinations + 4 regressions**, 54 screenshots; all browser tests unchanged.
+  Chromium's initial sandbox launch was blocked by socket restrictions; the unsandboxed run passed.
+- `git diff --check` and scope/AST audits passed. `journal.py` only appends the exact approved `_v7`
+  function and list entry; existing journal functions, all six prior migrations, and test assertions are intact.
+
+### Performance
+
+Synthetic scratch journal: **100 sessions × 1,000 `OpenCode tool` events**, **4,126 bytes per payload**,
+**439.7 MiB** before indexing. All sessions are terminal, so the default first thread page walks all
+100 sessions and returns 200 start/outcome messages. No tool text is emitted. Measurements call the
+same endpoint projection functions used by GET routes, excluding HTTP transport; medians of three
+sequential calls on the same machine/journal, with no regression suite running during timing.
+
+| Version | `/api/channels` median | first `/api/thread` median |
+|---|---:|---:|
+| Starting implementation, v6 without index | 1,777.556 ms | 3,072.008 ms |
+| Part A, v6 without index | 726.911 ms | 1,679.906 ms |
+| Starting implementation with D6 index only | 280.403 ms | 150.448 ms |
+| Parts A + B, v7 | **12.851 ms** | **91.929 ms** |
+
+The final read-model queries use `events_run_id`; `EXPLAIN QUERY PLAN` checks cover both the first
+batch and `id < before_id` continuation with excluded kinds. Benchmark artifacts stay outside the
+repository in `/tmp/ac-m21-bench`; commands: `python3 /tmp/ac-m21-benchmark.py before`, then
+`python3 /tmp/ac-m21-benchmark.py after`. The script preserves the starting conversation/journal
+modules, builds the fixture at v6 with `MIGRATIONS[:6]`, measures Part A, applies the actual `_v7`
+migration, and measures the index-only baseline and final projection. No extra benchmark index exists.
+
+### Sample team response
+
+Trimmed `/api/thread?session=team` projection from a scratch test journal. Other messages and most
+risk/session metadata omitted; the decided packet has `sessionID: "ses2"` and no `agent`, and the
+team run records `coder-2.session = "ses2"`:
+
+```json
+{
+  "channel": "main",
+  "project": "/project",
+  "sessions": [{"id": "team", "mode": "team", "status": "coding", "title": "Build CLI"}],
+  "messages": [{
+    "id": "req:permission:p1",
+    "rev": 1571612196,
+    "at": "2026-09-30T12:00:03+00:00",
+    "session": "team",
+    "actor": "coder-2",
+    "kind": "request",
+    "text": "bash · npm test",
+    "refs": {},
+    "detail": {
+      "kind": "permission",
+      "permission": "bash",
+      "patterns": ["npm test"],
+      "receipt": {"action": "approve", "state": "sent", "actor": "you"}
+    },
+    "action": null
+  }],
+  "before": null,
+  "live": {"session": "team", "phase": "code", "status": "coding"}
+}
+```
+
+No scope deviations, additional schema changes, or unresolved M2.1 issues. The previously documented
+backend timing-sensitive tests and v1 per-session materialisation remain outside this milestone.
+M3 has not been started.

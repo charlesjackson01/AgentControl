@@ -153,6 +153,21 @@ def position(run, msg):
     return (run.get('created', ''), run['id'], msg['at'], rank, int(seq or 0), msg['id'])
 
 
+def agent_for_session(run, session_id):
+    """Resolve a recorded OpenCode session without querying or changing execution state."""
+    if not session_id:
+        return None
+    if run.get('session') == session_id:
+        return 'coder-1'
+    for name, agent in (run.get('specialists') or {}).items():
+        if agent.get('session') == session_id:
+            return name
+    for name, agent in ((run.get('team') or {}).get('agents') or {}).items():
+        if agent.get('session') == session_id:
+            return name
+    return None
+
+
 def request_message(run, packet, receipt, at, pending):
     b = Bounds()
     ident = packet.get('request_id') or packet.get('id') or packet.get('requestID') or ''
@@ -173,7 +188,7 @@ def request_message(run, packet, receipt, at, pending):
             action = {'endpoint': '/api/review', 'fields': {'run': run['id'], 'kind': kind, 'request_id': ident, 'fingerprint': packet['fingerprint']}}
         else:
             detail['refresh_needed'] = True
-    return message(run, f'req:{kind}:{ident}', at, packet.get('agent', 'coder-1'), 'request', text, detail, action=action, bounds=b)
+    return message(run, f'req:{kind}:{ident}', at, packet.get('agent') or agent_for_session(run, packet.get('sessionID')) or 'coder-1', 'request', text, detail, action=action, bounds=b)
 
 
 def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annotations=(), workspace=None, actionable_outcome=False):
@@ -228,11 +243,18 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
                 detail['redirect_for'], text = b.text(redirect[1]), redirect[2]
         elif kind == 'decision':
             if isinstance(data, dict):
-                text = data.get('summary', '')
+                text = next((data[k] for k in ('summary', 'reason', 'title')
+                             if isinstance(data.get(k), str) and data[k].strip()), '')
                 detail = b.fields(data, ('action', 'title', 'role', 'question'))
                 detail['plan'] = b.value(data.get('plan', []), limit=300, count=12)
+                if ('agents' in data or 'tasks' in data) and not data.get('action'):
+                    detail['planning'] = True
+                    detail['proposal_counts'] = {'agents': len(data.get('agents') or []),
+                                                 'tasks': len(data.get('tasks') or [])}
             else:
                 detail['raw'] = True
+            if not isinstance(text, str) or not text.strip():
+                continue
             if event['id'] in repaired_ids:
                 detail['repaired'] = True
         elif isinstance(data, dict):
@@ -402,10 +424,15 @@ def gather(controller, runs):
     """Thin, lazy read adapter. At most one session's records are held at a time."""
     for run in runs:
         store = controller.store
-        yield {'run': run, 'steps': store.steps(run['id']),
-               'events': list(read_events(store, run['id'], OMITTED | FOLDED)),
-               'annotations': [annotation_record(e) for e in read_events(store, run['id'], set(MAPPING) - ANNOTATIONS) if e['kind'] in ANNOTATIONS],
-               'reviews': store.reviews(run['id']), 'capabilities': store.capabilities(run['id'], limit=2**31 - 1)}
+        events, annotations = [], []
+        for event in read_events(store, run['id'], OMITTED | (FOLDED - ANNOTATIONS)):
+            if event['kind'] in ANNOTATIONS:
+                annotations.append(annotation_record(event))
+            else:
+                events.append(event)
+        yield {'run': run, 'steps': store.steps(run['id']), 'events': events,
+               'annotations': annotations, 'reviews': store.reviews(run['id']),
+               'capabilities': store.capabilities(run['id'], limit=2**31 - 1)}
 
 
 def thread(controller, channel=None, session_id=None, before=None, limit=200, known=None):
@@ -419,6 +446,7 @@ def thread(controller, channel=None, session_id=None, before=None, limit=200, kn
     except (ValueError, TypeError):
         limit = 200
     room_runs = channel_runs(controller)
+    newest_terminal = next((r for r in room_runs if r.get('status') in TERMINAL), None)
     runs = [controller.store.get('runs', session_id)] if session_id is not None else room_runs
     active = next((r for r in room_runs if r.get('status') not in TERMINAL), None)
     selected = []
@@ -438,14 +466,17 @@ def thread(controller, channel=None, session_id=None, before=None, limit=200, kn
     selected = selected[-limit:]
     page_ids = {r['id'] for r, _ in selected}
     page_runs = sorted([b['run'] for ident, b in bundles.items() if ident in page_ids], key=lambda r: (r.get('created', ''), r['id']))
-    newest_terminal = next((r for r in reversed(page_runs) if r.get('status') in TERMINAL), None)
-    workspace_run = next((r for r in reversed(page_runs) if r.get('status') in TERMINAL and r.get('workspace') and not r['workspace'].get('applied') and not r['workspace'].get('discarded')), None)
+    outcome_ids = {r['id'] for r, m in selected if m['kind'] == 'outcome'}
+    workspace_run = newest_terminal if newest_terminal and newest_terminal['id'] in outcome_ids else None
+    if workspace_run and (not workspace_run.get('workspace') or workspace_run['workspace'].get('applied') or workspace_run['workspace'].get('discarded')):
+        workspace_run = None
     workspace = controller.workspace_status(workspace_run) if workspace_run else None
     outcome_updates = {}
     for r in page_runs:
-        if r.get('status') in TERMINAL:
-            outcome_updates[r['id']] = next(m for m in project_session(r, workspace=workspace if r is workspace_run else None,
-                                                                      actionable_outcome=r is newest_terminal) if m['kind'] == 'outcome')
+        if r['id'] in outcome_ids:
+            outcome_updates[r['id']] = next(m for m in project_session(
+                r, workspace=workspace if workspace_run and r['id'] == workspace_run['id'] else None,
+                actionable_outcome=bool(newest_terminal and r['id'] == newest_terminal['id'])) if m['kind'] == 'outcome')
     full = [revision(outcome_updates.get(r['id'], m) if m['kind'] == 'outcome' else m) for r, m in selected]
     known = known or {}
     return {'channel': 'main', 'project': str(controller.s.project), 'sessions': [session(r) for r in page_runs],
@@ -460,11 +491,12 @@ def channels(controller):
     waiting = 0
     updated = None
     for run in runs:
-        steps = controller.store.steps(run['id'])
-        latest_event = max((e['created'] for e in read_events(controller.store, run['id'], ())), default=None)
-        times = [s.get('created') for s in steps] + [latest_event]
+        is_active = active and run['id'] == active['id']
+        steps = controller.store.steps(run['id']) if is_active else []
+        events = controller.store.events_page(run['id'], None, 1)
+        times = [s.get('created') for s in steps] + [e['created'] for e in events]
         updated = max([t for t in [updated, *times] if t], default=None)
-        if active and run['id'] == active['id'] and not run.get('stop'):
+        if is_active and not run.get('stop'):
             waiting = len(run.get('pending', [])) + sum(s.get('status') == 'awaiting_approval' and bool(s.get('request')) for s in steps)
             waiting += int((run.get('team') or {}).get('state') == 'proposed')
             waiting += sum(i.get('state') in ('awaiting_fetch', 'proposed') for i in controller.store.capabilities(run['id'], limit=2**31 - 1))

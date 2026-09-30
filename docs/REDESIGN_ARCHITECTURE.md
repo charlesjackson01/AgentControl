@@ -374,3 +374,9 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 - 2026-09-30 (owner decision):
   - **D6 approved:** the `events(run, id)` index, as the single `_v7` migration in M2.1 Part B.
   - It is a narrow exception to invariant 1, and no other schema change is authorised.
+
+- 2026-09-30 (M2.1 completion):
+  - M2.1: decided requests are attributed via the recorded session id.
+  - The actionable outcome is the channel's newest terminal session, independent of page and view.
+  - Planner-shaped Hermes decisions use recorded `reason`/`title` or are folded.
+  - D6: `events_run_id` index added as migration `_v7`; no other schema changes.

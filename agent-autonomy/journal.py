@@ -55,8 +55,13 @@ def _v6(c):
     c.execute('CREATE INDEX IF NOT EXISTS usage_created ON usage(created)')
 
 
+def _v7(c):
+    """Index events by run (redesign M2.1): reads by run no longer scan the whole table."""
+    c.execute('CREATE INDEX IF NOT EXISTS events_run_id ON events(run, id)')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6]
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7]
 USAGE_FIELDS = ('run', 'agent', 'source', 'endpoint', 'model', 'tokens_in', 'tokens_out', 'duration_ms', 'queued_ms', 'status', 'cost', 'ref')
 GENESIS = '0' * 64
 

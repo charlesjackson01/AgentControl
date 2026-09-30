@@ -117,6 +117,65 @@ class ProjectionTests(unittest.TestCase):
         self.assertNotIn('PRIVATE', json.dumps(msgs))
         self.assertEqual(cv.annotation_record(annotations[0])['detail'], {'step': 1, 'agent': 'coder-1'})
 
+    def test_decided_team_request_uses_recorded_session(self):
+        r = run(mode='team', team={'agents': {'coder-2': {'session': 'ses2'}}})
+        p = packet(sessionID='ses2');p.pop('agent')
+        msg = self.find(cv.project_session(r, reviews=[receipt(request=p)]), 'request')
+        self.assertEqual(msg['actor'], 'coder-2')
+        self.assertIsNone(msg['action'])
+
+    def test_decided_specialist_request_uses_recorded_session(self):
+        r = run(specialists={'reviewer-1': {'session': 'review-session'}})
+        p = packet(sessionID='review-session');p.pop('agent')
+        msg = self.find(cv.project_session(r, reviews=[receipt(request=p)]), 'request')
+        self.assertEqual(msg['actor'], 'reviewer-1')
+
+    def test_pending_request_explicit_actor_takes_precedence(self):
+        r = run(session='main', team={'agents': {'coder-2': {'session': 'ses2'}}},
+                pending=[packet(agent='tester-1', sessionID='ses2')])
+        self.assertEqual(self.find(cv.project_session(r), 'request')['actor'], 'tester-1')
+
+    def test_request_unknown_session_falls_back_to_coder_one(self):
+        p = packet(sessionID='missing');p.pop('agent')
+        for pending in (True, False):
+            msgs = cv.project_session(run(pending=[p]) if pending else run(), reviews=[] if pending else [receipt(request=p)])
+            self.assertEqual(self.find(msgs, 'request')['actor'], 'coder-1')
+
+    def test_agent_for_session_is_pure_and_uses_only_recorded_pairs(self):
+        r = run(session='main', specialists={'reviewer-1': {'session': 'review'}},
+                team={'agents': {'coder-2': {'session': 'ses2'}}})
+        before = copy.deepcopy(r)
+        for session_id, actor in [('main', 'coder-1'), ('review', 'reviewer-1'), ('ses2', 'coder-2'), ('missing', None), (None, None)]:
+            self.assertEqual(cv.agent_for_session(r, session_id), actor)
+        self.assertEqual(r, before)
+        self.assertIsNone(cv.agent_for_session({}, None))
+
+    def test_planner_decision_reason_title_and_counts_without_raw_payload(self):
+        for fields, text in [({'reason': 'Parallel work helps'}, 'Parallel work helps'),
+                             ({'summary': '  ', 'reason': '', 'title': 'CLI team'}, 'CLI team')]:
+            data = {'mode': 'multi', 'agents': [{'prompt': 'PRIVATE'}]*2, 'tasks': [{'prompt': 'PRIVATE'}]*3, **fields}
+            msg = self.find(cv.project_session(run(), events=[event(1, 'Hermes decision', data)]), 'decision')
+            self.assertEqual(msg['text'], text)
+            self.assertEqual(msg['actor'], 'hermes')
+            self.assertTrue(msg['detail']['planning'])
+            self.assertEqual(msg['detail']['proposal_counts'], {'agents': 2, 'tasks': 3})
+            self.assertNotIn('agents', msg['detail']);self.assertNotIn('tasks', msg['detail'])
+            self.assertNotIn('PRIVATE', json.dumps(msg))
+        msg = self.find(cv.project_session(run(), events=[event(1, 'Hermes decision', {'agents': [], 'reason': 'r'*50000})]), 'decision')
+        self.assertEqual(len(msg['text']), 2000);self.assertTrue(msg['detail']['truncated'])
+
+    def test_decision_without_text_is_folded(self):
+        for data in ({'agents': [], 'tasks': []}, {'summary': ' ', 'reason': '', 'title': ''}, {'action': 'code'}, ''):
+            msgs = cv.project_session(run(), events=[event(1, 'Hermes decision', data)])
+            self.assertFalse(any(m['kind'] == 'decision' for m in msgs))
+
+    def test_normal_decision_projection_is_unchanged(self):
+        data = {'summary': 'Public summary', 'reason': 'Fallback', 'title': 'CLI', 'action': 'code', 'plan': ['Build', 'Test']}
+        msg = self.find(cv.project_session(run(), events=[event(1, 'Hermes decision', data)]), 'decision')
+        self.assertEqual(msg, {'id': 'ev:1', 'at': '2026-09-30T12:00:02+00:00', 'session': 'single',
+            'actor': 'hermes', 'kind': 'decision', 'text': 'Public summary', 'refs': {'event': 1},
+            'detail': {'action': 'code', 'title': 'CLI', 'plan': ['Build', 'Test']}, 'action': None})
+
     def test_pending_request_exact_action(self):
         msg = self.find(cv.project_session(run(pending=[packet()])), 'request')
         self.assertEqual((msg['id'], msg['actor'], msg['text']), ('req:permission:p1', 'coder-2', 'bash · npm test'))
@@ -307,6 +366,55 @@ class ReaderTests(unittest.TestCase):
         cv.thread(self.controller, limit=1)
         self.assertEqual(seen, ['new', 'old'])  # one lookahead to prove an older page exists
         self.assertEqual(self.workspace_calls, [])
+
+    def test_channels_reads_one_event_row_and_only_active_steps_and_capabilities(self):
+        self.store.put('runs', run('old', created='2026-09-29', status='completed'))
+        self.store.put('runs', run('active', pending=[packet()]))
+        self.store.put('steps', step('old-step', run='old', created='2099-01-01'))
+        self.store.put('steps', step('research', run='active', agent='researcher-1', status='awaiting_approval',
+                                     request={'question': 'Docs'}, created='2026-09-30T13:00:00+00:00'))
+        self.store.put_capability({'id': 'c1', 'run': 'active', 'created': run()['created'], 'state': 'proposed'})
+        self.store.event('old', 'control', 'Recorded')
+        with self.store.connection() as c:c.execute("UPDATE events SET created='2026-09-30T12:30:00+00:00'")
+        calls = {'events': [], 'steps': [], 'capabilities': []}
+        events_page, steps, capabilities = self.store.events_page, self.store.steps, self.store.capabilities
+        def counted_events(ident, before_id=None, limit=500, exclude_kinds=()):
+            calls['events'].append((ident, before_id, limit));return events_page(ident, before_id, limit, exclude_kinds)
+        def counted_steps(ident):
+            calls['steps'].append(ident);return steps(ident)
+        def counted_capabilities(ident, limit=200):
+            calls['capabilities'].append(ident);return capabilities(ident, limit)
+        self.store.events_page, self.store.steps, self.store.capabilities = counted_events, counted_steps, counted_capabilities
+        result = cv.channels(self.controller)['channels'][0]
+        self.assertEqual(result['updated'], '2026-09-30T13:00:00+00:00')
+        self.assertEqual(result['waiting'], 3)
+        self.assertCountEqual(calls['events'], [('active', None, 1), ('old', None, 1)])
+        self.assertEqual(calls['steps'], ['active']);self.assertEqual(calls['capabilities'], ['active'])
+
+    def test_gather_uses_one_event_scan_per_batch_and_strips_prompt_annotations(self):
+        r = self.store.put('runs', run())
+        with self.store.connection() as c:
+            c.executemany('INSERT INTO events(run,created,kind,detail) VALUES(?,?,?,?)',
+                          [('single', run()['created'], 'control', str(i)) for i in range(5010)])
+        self.store.event('single', 'OpenCode prompt', {'step': 1, 'agent': 'coder-2', 'text': 'PRIVATE'})
+        self.store.event('single', 'submission uncertain', 'Acknowledgement lost')
+        self.store.event('single', 'OpenCode tool', 'PRIVATE')
+        self.store.event('single', 'Hermes request', 'PRIVATE')
+        calls = [];original = self.store.events_page
+        def events_page(ident, before_id=None, limit=500, exclude_kinds=()):
+            calls.append((ident, before_id, limit, set(exclude_kinds)))
+            return original(ident, before_id, limit, exclude_kinds)
+        self.store.events_page = events_page
+        bundle = next(cv.gather(self.controller, [r]))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][:3], ('single', None, 5000))
+        self.assertIsNotNone(calls[1][1])
+        for call in calls:self.assertEqual(call[3], cv.OMITTED | (cv.FOLDED - cv.ANNOTATIONS))
+        self.assertEqual(len(bundle['events']), 5010)
+        self.assertEqual(len(bundle['annotations']), 2)
+        prompt = next(e for e in bundle['annotations'] if e['kind'] == 'OpenCode prompt')
+        self.assertEqual(prompt['detail'], {'step': 1, 'agent': 'coder-2'})
+        self.assertNotIn('PRIVATE', json.dumps(bundle))
 
     def test_many_events_are_not_silently_capped(self):
         self.store.put('runs', run())

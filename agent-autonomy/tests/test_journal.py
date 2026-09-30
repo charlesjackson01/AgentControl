@@ -54,6 +54,45 @@ class JournalTests(unittest.TestCase):
         with sqlite3.connect(self.path) as c:
             self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], len(MIGRATIONS))
 
+    def test_v6_migrates_to_v7_with_only_the_approved_index_and_unchanged_rows(self):
+        with sqlite3.connect(self.path) as c:
+            for migration in MIGRATIONS[:6]:migration(c)
+            c.execute('PRAGMA user_version = 6')
+            c.execute('INSERT INTO runs VALUES (?,?)', ('old', json.dumps({'id': 'old', 'created': '2026-09-01'})))
+            c.execute('INSERT INTO steps VALUES (?,?,?)', ('s1', 'old', json.dumps({'id': 's1', 'run': 'old', 'number': 1})))
+            c.execute('INSERT INTO events(run,created,kind,detail) VALUES(?,?,?,?)', ('old', 'x', 'goal', 'kept'))
+            tables = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            before_rows = {name: list(c.execute('SELECT * FROM ' + name)) for name in tables}
+            before_schema = set(c.execute('SELECT type,name,tbl_name,sql FROM sqlite_master'))
+        store = Store(self.path)
+        with store.connection() as c:
+            self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], 7)
+            self.assertEqual({name: list(c.execute('SELECT * FROM ' + name)) for name in tables}, before_rows)
+            after_schema = set(c.execute('SELECT type,name,tbl_name,sql FROM sqlite_master'))
+            self.assertEqual(after_schema - before_schema,
+                {('index', 'events_run_id', 'events', 'CREATE INDEX events_run_id ON events(run, id)')})
+            self.assertFalse(before_schema - after_schema)
+            self.assertEqual([row[2] for row in c.execute('PRAGMA index_info(events_run_id)')], ['run', 'id'])
+        Store(self.path)
+        with store.connection() as c:
+            self.assertEqual(set(c.execute('SELECT type,name,tbl_name,sql FROM sqlite_master')), after_schema)
+            self.assertEqual({name: list(c.execute('SELECT * FROM ' + name)) for name in tables}, before_rows)
+
+    def test_events_page_query_plan_uses_events_run_id(self):
+        store = Store(self.path)
+        store.event('old', 'goal', 'kept')
+        with store.connection() as c:
+            for before in (None, 100):
+                query = 'SELECT id,created,kind,detail FROM events WHERE run=?'
+                params = ['old']
+                if before is not None:
+                    query += ' AND id < ?';params.append(before)
+                query += ' AND kind NOT IN (?,?) ORDER BY id DESC LIMIT ?'
+                params.extend(['OpenCode tool', 'Hermes request', 5000])
+                plan = c.execute('EXPLAIN QUERY PLAN ' + query, params).fetchall()
+                self.assertTrue(any('USING INDEX events_run_id' in row[3] for row in plan), plan)
+                self.assertFalse(any('SCAN events' in row[3] for row in plan), plan)
+
     def test_unversioned_v5_journal_migrates_without_data_loss(self):
         with sqlite3.connect(self.path) as c:
             c.executescript(LEGACY_SCHEMA)

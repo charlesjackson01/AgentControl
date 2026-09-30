@@ -709,7 +709,7 @@ button:hover:not(:disabled) {
   min-width:0;
   max-width:1800px;
   width:100%;
-  margin:auto;
+  margin:0 auto;   /* centre horizontally only; margin:auto also centred short pages vertically */
 }
 
 .workspace-footer {
@@ -2296,6 +2296,28 @@ button:hover:not(:disabled) {
   padding-top:20px;
 }
 
+/* The sign-in is an XP window too: a solid body (readable, not on the blue desktop) under a blue title bar. */
+:root[data-theme=xp] .auth-panel {
+  background:var(--ac-surface-2);
+  border:3px solid var(--ac-xp-frame);
+  border-radius:var(--ac-radius-lg) var(--ac-radius-lg) 0 0;
+  padding:0 24px 24px;
+  margin-top:0;
+  box-shadow:var(--ac-shadow-dialog);
+}
+
+:root[data-theme=xp] .auth-panel .brand {
+  margin:0 -24px 22px;
+  padding:6px 8px 6px 12px;
+  background:var(--ac-xp-titlebar);
+  color:var(--ac-chrome-text);
+  font-weight:700;
+}
+
+:root[data-theme=xp] .auth-panel .muted {
+  color:var(--ac-text);
+}
+
 :root[data-theme=xp] .ac-panel__title {
   position:absolute;
   top:-8px;
@@ -3204,6 +3226,10 @@ button:hover:not(:disabled) {
   background:repeating-linear-gradient(90deg,var(--ac-success-text) 0,var(--ac-success-text) 7px,var(--ac-surface) 7px,var(--ac-surface) 9px);
 }
 
+:root[data-theme=xp] .xp-time-meter.over>span {
+  background:repeating-linear-gradient(90deg,var(--ac-danger) 0,var(--ac-danger) 7px,var(--ac-surface) 7px,var(--ac-surface) 9px);
+}
+
 :root[data-theme=xp] .turn-table-head,
 :root[data-theme=xp] .turn>summary {
   display:grid;
@@ -3454,7 +3480,7 @@ kbd {
   display:grid;
   grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,2.4fr) minmax(0,1fr);
   gap:22px;
-  align-items:stretch;
+  align-items:start;   /* each stage is as tall as its content; no empty boxes beside the terminal */
 }
 
 .stage {

@@ -22,6 +22,11 @@
   position:relative;
   overflow-x:auto;
   scrollbar-width:thin;
+  scroll-snap-type:x proximity;   /* a scrolled strip starts on a whole tab, never half a label */
+}
+
+.ws-tabs > * {
+  scroll-snap-align:start;
 }
 
 .ws-tab {

@@ -366,7 +366,8 @@ function renderWsTabs(agents) {
   setHTML($('ws-tabs'), `<button class="ws-tab ws-home" data-view="mission" title="Back to Mission">Mission</button>${tabs}`);
   // Keep the active tab visible in a scrolling tab bar without scrolling the page.
   const bar = $('ws-tabs'), tab = bar.querySelector('.ws-tab.active');
-  if (tab && (tab.offsetLeft < bar.scrollLeft || tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth)) bar.scrollLeft = Math.max(0, tab.offsetLeft - 8);
+  if (tab && tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = Math.max(0, tab.offsetLeft);
+  else if (tab && tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
   const closed = agents.filter(a => !wsState.open.includes(a.name));
   $('ws-add-new').classList.toggle('hidden', !wsState.fresh.length && !wsState.changed.some(n => !wsState.open.includes(n)));
   setHTML($('ws-menu'), agents.map(a => {

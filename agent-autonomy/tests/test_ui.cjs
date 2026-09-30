@@ -86,7 +86,7 @@ test('run layout renders real fixture data without the old hero',async()=>{
  assert.match(h.document.getElementById('inline-approvals').textContent,/python3 -m unittest/);
  assert(!h.document.getElementById('metric-stage'));
  assert(!h.document.body.textContent.includes('Stay close to the work'));
- assert.match(h.document.getElementById('goal-checks').textContent,/0 of 1 verified/);
+ assert.match(h.document.getElementById('goal-checks').textContent,/1 saved requirement/);
  assert.match(h.document.getElementById('agent-list').textContent,/model unchecked/);
 });
 test('theme changes persist and retain steering drafts without network writes',async()=>{
@@ -1318,6 +1318,23 @@ test('W5 pop-out: opens the agent in its own window, fed by the dashboard with n
  // If the dashboard goes away, the pop-out fetches for itself.
  vmRun(pop,'relay.seen = 0; relay.boot = 0');await pop.poll();
  assert.equal(pop.calls.filter(c=>c.url.startsWith('/api/state')).length,1);
+});
+test('audit quick wins: honest review copy, a balloon only for new requests, over-budget wording, neutral goal checks',async()=>{
+ const h=await harness();
+ await h.click('[data-review]');
+ const footer=h.document.getElementById('review-footer').textContent;
+ assert.doesNotMatch(footer,/tick the box/,'no box is offered for this request, so the footer does not mention one');
+ assert.match(footer,/applies to this request only/);
+ const balloon=h.document.getElementById('xp-notification');
+ assert(!balloon.classList.contains('hidden'),'a request you have not seen pops the balloon');
+ balloon.classList.add('hidden');await h.poll();
+ assert(balloon.classList.contains('hidden'),'the same request does not bring it back');
+ h.state.inbox.push({...h.state.inbox[0],id:'req_2',request_id:'req_2',patterns:['ls']});await h.poll();
+ assert(!balloon.classList.contains('hidden'),'a new one does');
+ assert.equal(vmRun(h,"budgetLabel({used:600,allowed:1800})"),'10m 0s of 30m 0s');
+ assert.equal(vmRun(h,"budgetLabel({used:7200,allowed:1800})"),'30m 0s limit · over by 1h 30m');
+ assert.match(h.document.getElementById('goal-checks').textContent,/saved requirement/);
+ assert.equal(h.document.querySelectorAll('#goal-checks .check-progress').length,0,'no progress bar that reads as failing');
 });
 function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

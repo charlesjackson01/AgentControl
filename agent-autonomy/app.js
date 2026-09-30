@@ -28,6 +28,7 @@ let toastTimer, errorTimer, pollTimer, failures = 0, announcedRequests = '', dif
 let selectedTurn = null, shownStage = '';
 let runScope = 'current', projectBrowse = null;   // run history: this project or all; the Projects dialog's folder
 const seenRequests = new Set();
+const balloon = {seen: new Set(), timer: 0};
 const dismissedReceipts = new Set();
 
 function savedView() { const v = readItem('local', 'ac-view'); return VIEWS.includes(v) && v !== 'new' ? v : 'mission'; }
@@ -73,6 +74,11 @@ function budget(run, now = Date.now()) {
   const allowed = run.time_limit_seconds ?? (run.deadline * 1000 - start) / 1000;
   return {used: Number.isFinite(start) ? Math.max(0, (end - start) / 1000) : 0, allowed: Math.max(0, Math.round(allowed || 0))};
 }
+/* "12m 0s of 30m 0s", or, past the limit, "30m limit · over by 3h 2m" (the limit includes time waiting for you). */
+function budgetLabel(b) {
+  return b.allowed && b.used > b.allowed ? `${duration(b.allowed)} limit · over by ${duration(b.used - b.allowed)}` : `${duration(b.used)} of ${duration(b.allowed)}`;
+}
+function overBudget(b) { return !!b.allowed && b.used > b.allowed; }
 function runTitle(run, limit = 140) {
   const text = (run?.title || run?.goal || '').split('\n')[0].trim();
   if (text.length <= limit) return text;
@@ -439,7 +445,7 @@ function renderShell() {
     <button class="toolbar-tool" data-action="pause" aria-label="${xpResume ? 'Resume' : 'Pause'}" aria-keyshortcuts="p"><span class="tool-badge pause-badge">${icon(xpResume ? 'play' : 'pause')}</span><span class="tool-label">${xpResume ? 'Resume' : 'Pause'}</span></button>
     <button class="toolbar-tool" data-action="stop" aria-label="Stop run" aria-keyshortcuts="x"><span class="tool-badge stop-badge">${icon('stop')}</span><span class="tool-label">Stop</span></button>` : '');
   const b = budget(current);
-  const budgetText = current ? `${data.steps.length}/${current.max_steps} prompts · ${duration(b.used)} / ${duration(b.allowed)}` : '';
+  const budgetText = current ? `${data.steps.length}/${current.max_steps} prompts · ${overBudget(b) ? budgetLabel(b) : `${duration(b.used)} / ${duration(b.allowed)}`}` : '';
   $('terminal-budget').textContent = budgetText;
   $('xp-budget').textContent = budgetText;
   $('xp-status').textContent = connected ? state.text : 'Reconnecting';
@@ -453,8 +459,16 @@ function renderShell() {
   $('approval-total').textContent = `${waiting} pending`;
   $('tray-count').textContent = inbox.length ? `⚠ ${inbox.length}` : '';
   $('tray-clock').textContent = new Date().toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
-  $('xp-notification').classList.toggle('hidden', !inbox.length);
-  $('notification-text').textContent = inbox.length ? requestTitle(inbox[0]) : '';
+  // XP's balloon pops up for a request you have not seen yet, then hides itself; the tray keeps the count.
+  const keys = inbox.map(requestKey), unseen = keys.filter(k => !balloon.seen.has(k));
+  balloon.seen = new Set(keys);
+  if (!inbox.length) { clearTimeout(balloon.timer); $('xp-notification').classList.add('hidden'); }
+  else if (unseen.length) {
+    $('notification-text').textContent = requestTitle(inbox.find(p => unseen.includes(requestKey(p))));
+    $('xp-notification').classList.remove('hidden');
+    clearTimeout(balloon.timer);
+    balloon.timer = setTimeout(() => $('xp-notification').classList.add('hidden'), 8000);
+  }
   const signature = inbox.map(requestKey).sort().join(',');
   if (signature !== announcedRequests) {
     $('approval-announcement').textContent = inbox.length ? `${plural(inbox.length, 'OpenCode request')} waiting for your review.` : 'No requests waiting for review.';
@@ -584,11 +598,11 @@ function renderRunHeader(steps, pending, finished) {
   setHTML($('run-header'), `<header class="run-header">
     ${statusHTML(current, pending)}
     <div class="title-row"><h1 title="${esc(current.goal.split('\n')[0])}">${esc(runTitle(current))}</h1>${data.capabilities?.run_titles ? `<button class="text-button rename-button" data-action="rename" aria-label="Rename this run">Rename</button>` : ''}</div>
-    <div class="run-meta"><span class="mono">${esc(data.project)}</span><span>${duration(b.used)} of ${duration(b.allowed)}</span>
+    <div class="run-meta"><span class="mono">${esc(data.project)}</span><span class="${overBudget(b) ? 'warning-text' : ''}">${budgetLabel(b)}</span>
       <span>${finished ? 'Used' : 'Prompt'} ${steps.length} of ${current.max_steps}</span><span>Started ${when(current.created)}</span></div>
     ${current.parent_run ? `<p class="small muted">Follow-up to <button class="text-button" data-run="${esc(current.parent_run)}">#${esc(current.parent_run.slice(0, 6))}</button></p>` : ''}
     <details class="brief" data-key="brief-${esc(current.id)}"><summary>Read brief</summary><p>${esc(current.goal)}</p></details>
-    <div class="xp-only xp-time-meter" role="progressbar" aria-label="Run time budget used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}"><span style="width:${percent}%"></span></div>
+    <div class="xp-only xp-time-meter ${overBudget(b) ? 'over' : ''}" role="progressbar" aria-label="Run time budget used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(percent)}"><span style="width:${percent}%"></span></div>
     <div class="run-actions">${controls}${current.pause && current.status !== 'paused' ? '<span class="small warning-text">Pause requested at the next boundary</span>' : ''}</div>
     <p class="run-summary">${esc(current.summary)}</p>
   </header>`);
@@ -798,6 +812,13 @@ function expandTerminal(open) {
 function renderChecks() {
   const checks = current.goal_checks || [], passed = checks.filter(c => c.status === 'passed').length;
   const list = checks.map(c => `<div class="check-row ${esc(c.status)}"><span class="check-symbol">${c.status === 'passed' ? '✓' : c.status === 'failed' ? '×' : '○'}</span><span><span class="sr-only">${esc(c.status)}: </span>${esc(c.criterion)}${c.evidence ? '<small>' + esc(pretty(c.evidence)) + '</small>' : ''}</span></div>`).join('');
+  // Until a check has actually been evaluated, it is a saved requirement, not "0 of N": no progress bar that reads as failing.
+  const evaluated = checks.some(c => ['passed', 'failed'].includes(c.status));
+  if (checks.length && !evaluated) {
+    setHTML($('goal-checks'), `<section class="ac-panel"><h2 class="ac-panel__title">Goal checks <span class="muted">· ${plural(checks.length, 'saved requirement')}</span></h2>
+      ${list}<p class="small muted">Not checked one by one yet. Hermes works toward them; your verification command is the independent check.</p></section>`);
+    return;
+  }
   setHTML($('goal-checks'), `<section class="ac-panel"><h2 class="ac-panel__title">Goal checks ${checks.length ? `<span class="check-ring mac-only" aria-hidden="true" style="--check-progress:${passed / checks.length * 100}%"></span><span class="muted">· ${passed} of ${checks.length} verified</span>` : ''}</h2>
     ${checks.length ? `<div class="check-progress" aria-label="${passed} of ${checks.length} checks verified">${checks.map(c => `<span class="${['passed', 'failed'].includes(c.status) ? c.status : ''}"></span>`).join('')}</div>
       <div class="terminal-only block-progress" aria-label="${passed} of ${checks.length} verified">${checks.map(c => `<span class="${c.status === 'passed' ? 'success-text' : c.status === 'failed' ? 'error' : 'muted'}">${c.status === 'pending' ? '░░' : '██'}</span>`).join('')}</div>
@@ -1023,7 +1044,7 @@ function renderMission() {
   setHTML($('mission-head'), `<section class="mission-head">
     <div class="mission-title"><div class="eyebrow">Mission control${finished ? ' · last run' : ''}</div>
       <h1 id="mission-title">${esc(runTitle(current, 120))}</h1>
-      <p class="small muted">${statusHTML(current, runRequests())} <span>${isTeam() ? plural(Object.keys(current.team?.agents || {}).length, 'agent') : 'One coder'}</span> · <span>${steps.length} of ${current.max_steps} prompts</span> · <span>${duration(b.used)} of ${duration(b.allowed)}</span></p>
+      <p class="small muted">${statusHTML(current, runRequests())} <span>${isTeam() ? plural(Object.keys(current.team?.agents || {}).length, 'agent') : 'One coder'}</span> · <span>${steps.length} of ${current.max_steps} prompts</span> · <span class="${overBudget(b) ? 'warning-text' : ''}">${budgetLabel(b)}</span></p>
       <p class="small">${esc(current.summary)}</p></div>
     <div class="mission-actions row wrap">${waiting ? `<button class="ac-btn primary" data-view="approvals" aria-live="polite">${plural(waiting, 'item')} waiting for you</button>` : '<span class="small muted" aria-live="polite">Nothing waiting for you</span>'}
       <button class="ac-btn" data-run="${esc(current.id)}">Open run</button>${controls}</div></section>`);
@@ -1642,7 +1663,7 @@ function openReview(id, intent) {
   const raw = pretty(Object.fromEntries(Object.entries(p).filter(([k]) => !['run', 'goal', 'receipt', 'fingerprint', 'risk'].includes(k))));
   $('review-body').innerHTML = `<span class="ac-status attention">OpenCode · #${esc(p.run.slice(0, 6))}</span><h2>${esc(requestTitle(p))}</h2><p class="small muted">${esc(p.goal)}</p>
     ${riskHTML(p)}${permission ? permissionHTML(p) : questionsHTML(p)}${details('Full OpenCode request', raw, 'raw-request')}<div id="review-feedback" role="status"></div>`;
-  $('review-footer').innerHTML = `<small>${permission ? (p.risk?.decision === 'confirm' ? 'Critical: type the confirmation word first.' : 'Approval applies to this request only unless you tick the box above.') : 'Answers go to this OpenCode session.'}</small>
+  $('review-footer').innerHTML = `<small>${permission ? (p.risk?.decision === 'confirm' ? 'Critical: type the confirmation word first.' : (p.risk?.remember_allowed ? 'Approval applies to this request only unless you tick the box above.' : 'Approval applies to this request only.')) : 'Answers go to this OpenCode session.'}</small>
     <button class="ac-btn danger-button" id="deny-review" aria-keyshortcuts="d">${permission ? 'Deny and redirect' : 'Reject question'}</button>
     <button class="ac-btn primary" id="approve-review" aria-keyshortcuts="a">${permission ? 'Approve once' : 'Send answers'}</button>`;
   $('deny-review').onclick = () => submitReview('reject');

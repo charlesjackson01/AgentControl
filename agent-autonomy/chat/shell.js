@@ -5,13 +5,14 @@
   let contextOpen = core.read('localStorage','acx-context-open') === 'true';
   const sessionHref = id=>'#/s/'+encodeURIComponent(id);
   function setContext(open) { contextOpen = open; core.write('localStorage','acx-context-open',String(open)); render(core.getState()); }
-  function panels() { $('scrim').hidden = !$('app').classList.contains('rail-open') && !contextOpen; }
+  function panels() { $('scrim').hidden = !$('app').classList.contains('rail-open') && $('context').hidden; }
   function memberList(members, full = false) { return members.map(member=>`<li><span class="member-name">${e(member.name)}</span><span class="muted">${e(member.role)}</span><span>${e(member.symbol)} ${e(member.stateLabel)}</span>${full && member.task ? `<p>${e(member.task)}</p>` : ''}${full && member.since ? `<small>Since ${e(m.timeLabel(member.since))}</small>` : ''}</li>`).join(''); }
   function render(snapshot) {
     $('sign-in').hidden = snapshot.authenticated; $('app').hidden = !snapshot.authenticated;
     $('sign-in-error').textContent = snapshot.authError;
     $('banner').hidden = !snapshot.error; $('banner-text').textContent = snapshot.error;
     if (!snapshot.authenticated) return;
+    if (!snapshot.focused && focused && root.location.hash === '#/') focused = '';
     const state = snapshot.state;
     if (!state) { $('room-header').textContent = 'Connecting…'; return; }
     const sessions = m.sessionsFromState(state), members = m.membersFromState(state), connections = m.connectionsFromState(state), waiting = m.waitingFromState(state);

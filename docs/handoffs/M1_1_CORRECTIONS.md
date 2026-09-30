@@ -86,3 +86,29 @@ Remove `/api/agents` from that script's route stub, or leave it as an unused 404
 1. Append a short completion report to this file: what changed, the test commands and counts (with skipped tests named), and any deviation.
 2. In `CURRENT_STATE.md`, set M1.1 to done.
 3. Push to `feature/chat-first-redesign`. No PR and no merge unless the owner asks.
+
+## Completion — 2026-09-30 (Codex)
+
+Removed the redundant `/api/agents` request. Each refresh renders the returned `/api/state`,
+including a missing selected session; missing sessions clear focus, replace the hash with `#/`,
+and show the required dismissible notice. Refresh failures remain recoverable. The scrim now
+follows the context panel's rendered visibility and the rail drawer.
+
+Regression coverage includes fresh and subsequent bogus links, live updates after a stale link
+and a failed refresh, one state request per refresh with no roster requests, saved context on
+the room, and returning from a session. Chromium checks both 1024 px and 390 px, including
+actual browser Back navigation and centre-point hit testing against the scrim.
+
+Verification: classic DOM 82/82; chat DOM 16/16; browser matrix 24 combinations plus four
+regressions, 54 screenshots in `/tmp/chat-shots`. Python: 351 tests, OK (skipped=3), outside the sandbox.
+Skipped: `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`,
+`test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`.
+The initial sandbox run had two team timeouts and one VM background-log race;
+the complete rerun passed without backend or test changes.
+Commands: `python3 -m unittest discover -s agent-autonomy/tests`;
+`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`;
+`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`;
+`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots`.
+
+No scope deviations or unresolved M1.1 issues. Backend and classic UI are unchanged.

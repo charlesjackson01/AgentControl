@@ -34,11 +34,15 @@
     const requested = focused, generation = epoch;
     try {
       const result = await api('/api/state?scope=current&run='+encodeURIComponent(requested));
-      const runId = requested || (result.runs || []).find(r=>!['completed','blocked','failed','stopped','limit_reached'].includes(r.status))?.id || result.run?.id;
-      const roster = runId ? await api('/api/agents?run='+encodeURIComponent(runId)) : {agents:[]};
       if (generation !== epoch || requested !== focused) return;
-      if (runId) agentsByRun[runId] = roster.agents || [];
-      state = {...result,agents:roster.agents || []}; error = ''; emit();
+      if (result.run?.id) agentsByRun[result.run.id] = result.agents || [];
+      state = result; error = '';
+      if (requested && result.run?.id !== requested) {
+        focused = '';
+        error = "That session is not in this project's history.";
+        root.location.replace('#/');
+      }
+      emit();
     } catch {} finally {
       refreshing = false;
       if (again) { again = false; scheduleRefresh(); }

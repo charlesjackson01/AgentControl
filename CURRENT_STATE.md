@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Opus (M1 architecture review; M1.1 and M2 handoffs).
+**Last updated:** 2026-09-30, by Codex (M1.1 complete; M2 next).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -23,7 +23,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Planning: decisions D1–D5 | ✅ done | Opus | recorded in the architecture doc §2 |
 | D1 backend merge | ✅ done | Opus | `af4da89`; tree = `967aa85` + redesign docs |
 | **M1 App shell** | ✅ accepted (review 2026-09-30) | Codex | read-only `/chat`, `/classic` alias; completion report and Opus review in `docs/handoffs/M1_APP_SHELL.md` |
-| **M1.1 Shell corrections** | ⏭ ready; **must land before M3** | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: an unknown session link freezes live updates; a stale context preference leaves the scrim over the room |
+| **M1.1 Shell corrections** | ✅ done | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
 | **M2 Thread read model** | ⏭ ready | Codex | `docs/handoffs/M2_THREAD_READ_MODEL.md`: `conversation.py`, `/api/channels`, `/api/thread`, `Store.events_page`; backend read path only |
 | M3–M9 | not started | | M3 (room timeline) needs M1.1 + M2; see architecture §12 |
 
@@ -31,14 +31,14 @@ The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, 
 `/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
 Messaging and actions remain in classic; `/` and `/classic` serve the unchanged classic UI.
 
-## Tests (at `990f258`, re-verified in the Opus review environment 2026-09-30)
+## Tests (M1.1, verified by Codex 2026-09-30)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **351 tests, OK (skipped=6)** here; 3 skipped in Codex's environment (see below) |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **351 tests, OK (skipped=3)** outside the sandbox (see named gates below) |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
-| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **13/13 passed** |
-| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots` | **24 combinations passed**, 50 temporary screenshots; no horizontal overflow at 390 px |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **16/16 passed** |
+| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots` | **24 combinations + 4 regressions passed**, 54 temporary screenshots; no horizontal overflow at 390 px |
 
 DOM test dependencies (test-only, installed outside the repo):
 `npm install --prefix /tmp/ac-tests --no-save linkedom cssom playwright-core`.
@@ -85,6 +85,5 @@ Six skipped means none of those are available. Codex's three skips mean the Open
 
 ## Next step
 
-1. Codex executes **`docs/handoffs/M1_1_CORRECTIONS.md`** (small; frontend only) and
-   **`docs/handoffs/M2_THREAD_READ_MODEL.md`** (backend read path only). They touch disjoint files and can run in either order or in parallel.
+1. M1.1 is complete. Codex executes **`docs/handoffs/M2_THREAD_READ_MODEL.md`** (backend read path only).
 2. Opus reviews both, then writes the M3 handoff (room timeline rendering `/api/thread`).

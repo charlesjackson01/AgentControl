@@ -13,7 +13,8 @@ async function harness(state = fixture(), options = {}) {
   const storage = map=>({getItem:k=>map.get(k),setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)});
   Object.defineProperty(window,'localStorage',{value:storage(local),writable:true,configurable:true}); Object.defineProperty(window,'sessionStorage',{value:storage(session),writable:true,configurable:true});
   if(options.storageDenied) for(const name of ['localStorage','sessionStorage']) Object.defineProperty(window,name,{configurable:true,get(){throw Error('Storage denied');}});
-  window.location = {hash:options.hash || '#/'};
+  window.location = {hash:options.hash || '#/',replace(hash){this.hash=hash;}};
+  if(options.contextOpen) local.set('acx-context-open','true');
   const timers = new Map(), calls = []; let next = 0, streamWake;
   const context = vm.createContext({window,document,console,TextDecoder,AbortController,Date,URL,encodeURIComponent,decodeURIComponent,
     setTimeout:(fn,delay)=>{const id=++next;timers.set(id,{fn,delay});return id;},clearTimeout:id=>timers.delete(id),
@@ -27,7 +28,7 @@ async function harness(state = fixture(), options = {}) {
       if (options.unauthorized) return {ok:false,status:401,json:async()=>({error:'Key rejected by server'})};
       if (options.fail) return {ok:false,status:500,json:async()=>({error:'Backend unavailable'})};
       if (options.hold && url.startsWith('/api/state')) await new Promise(resolve=>{options.release=resolve;});
-      return {ok:true,status:200,json:async()=>url.startsWith('/api/agents') ? {agents:clone(state.agents || [])} : clone(state)};
+      return {ok:true,status:200,json:async()=>{const result=clone(state);if(url.endsWith('run=bogus')) result.run=null;return result;}};
     }});
   for (const file of ['core.js','model.js','shell.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   await tick();
@@ -49,9 +50,35 @@ test('sessions ordered, deep links focus and open context',async()=>{
   const h=await harness(richActive());const rail=[...h.document.querySelectorAll('#session-list a')];assert.match(rail[0].getAttribute('href'),/run_test/);
   const timeline=[...h.document.querySelectorAll('[data-session]')];assert.equal(timeline[0].dataset.session,'run_old');
   h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);
-  assert.equal(h.document.querySelector('#context').hidden,false);assert.equal(h.document.querySelector('.focused').dataset.session,'run_test');assert.match(h.calls.at(-2).url,/scope=current&run=run_test/);
+  assert.equal(h.document.querySelector('#context').hidden,false);assert.equal(h.document.querySelector('.focused').dataset.session,'run_test');assert.match(h.calls.at(-1).url,/scope=current&run=run_test/);
   h.shell.setContext(false);assert.equal(h.local.get('acx-context-open'),'false');
   h.window.location.hash='#/unknown';h.shell.route();assert.equal(h.window.location.hash,'#/');
+});
+test('unknown fresh session recovers and uses only state',async()=>{
+  const h=await harness(richActive(),{hash:'#/s/bogus'});
+  assert.equal(h.window.location.hash,'#/');assert.equal(h.core.getState().focused,'');
+  assert.equal(h.document.querySelectorAll('#session-list a').length,2);
+  assert.match(h.document.querySelector('#banner-text').textContent,/That session is not in this project's history/);
+  assert.equal(h.document.querySelector('#context').hidden,true);assert.equal(h.document.querySelector('#scrim').hidden,true);
+  h.document.querySelector('#dismiss-error').click();assert.equal(h.document.querySelector('#banner').hidden,true);
+  const n=h.calls.length;await h.core.refresh();assert.equal(h.calls.length,n+1);
+  assert.equal(h.calls.filter(c=>c.url.startsWith('/api/agents')).length,0);
+});
+test('stale link and failed refresh preserve later live updates',async()=>{
+  const state=richActive(), options={stream:true};const h=await harness(state,options);
+  h.window.location.hash='#/s/bogus';h.shell.route();await h.runTimers(0);
+  options.fail=true;await h.core.refresh();options.fail=false;
+  state.runs[0].title='Updated session';await h.emit('event: change\ndata: {}\n\n');await h.runTimers(0);
+  assert.match(h.document.querySelector('#session-list').textContent,/Updated session/);
+  assert.equal(h.calls.filter(c=>c.url.startsWith('/api/agents')).length,0);
+});
+test('saved context and return to room leave no scrim',async()=>{
+  const h=await harness(richActive(),{contextOpen:true});
+  for(const id of ['scrim','context'])assert.equal(h.document.getElementById(id).hidden,true);
+  h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);
+  assert.equal(h.document.getElementById('context').hidden,false);
+  h.window.location.hash='#/';h.shell.route();
+  for(const id of ['scrim','context'])assert.equal(h.document.getElementById(id).hidden,true);
 });
 test('every presence state has a symbol and label, Hermes first',async()=>{
   const states=['working','waiting_on_you','needs_attention','paused','idle','finished','failed','stopped','blocked','limit_reached'];

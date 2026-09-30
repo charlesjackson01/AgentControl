@@ -17,12 +17,34 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  fs.mkdirSync(out,{recursive:true});const browser=await chromium.launch({executablePath,headless:true,args:['--no-sandbox']});let count=0;
  try {for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team}))for(const [size,[width,height]] of Object.entries({desktop:[1440,900],laptop:[1024,768],phone:[390,844]}))for(const colorScheme of ['light','dark']){
   const page=await browser.newPage({viewport:{width,height},colorScheme});const errors=[];page.on('pageerror',err=>errors.push(err.message));
-  await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.pathname.startsWith('/api/')){assert.equal(route.request().headers().authorization,'Bearer test-key');if(url.pathname==='/api/events')return route.fulfill({status:503,body:'unavailable'});return route.fulfill({contentType:'application/json',body:JSON.stringify(url.pathname==='/api/agents'?{agents:state.agents||[]}:state)});}const file=url.pathname==='/chat'? 'index.html':url.pathname.slice('/chat/'.length);assert(!file.includes('/'));return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
+  await page.route('**/*',async route=>{const url=new URL(route.request().url());if(url.pathname.startsWith('/api/')){assert.equal(route.request().headers().authorization,'Bearer test-key');if(url.pathname==='/api/events')return route.fulfill({status:503,body:'unavailable'});return route.fulfill({contentType:'application/json',body:JSON.stringify(url.searchParams.get('run')==='bogus'?{...state,run:null,agents:[]}:state)});}const file=url.pathname==='/chat'? 'index.html':url.pathname.slice('/chat/'.length);assert(!file.includes('/'));return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#live').waitFor();
   const overflow=()=>page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);assert.equal(await overflow(),false,`${name}/${size}/${colorScheme} overflow`);
   await page.screenshot({animations:'disabled',path:path.join(out,`${name}-${size}-${colorScheme}.png`)});count++;
   if(state.run){await page.evaluate(id=>location.hash='#/s/'+id,state.run.id);await page.locator('#context:not([hidden])').waitFor();assert.equal(await overflow(),false);await page.screenshot({animations:'disabled',path:path.join(out,`${name}-${size}-${colorScheme}-context.png`)});count++;await page.locator('#close-context').click();}
   if(size==='phone'){await page.locator('#open-rail').click();assert.equal(await page.locator('#rail').isVisible(),true);assert.equal(await overflow(),false);await page.screenshot({animations:'disabled',path:path.join(out,`${name}-${size}-${colorScheme}-drawer.png`)});count++;await page.keyboard.press('Escape');assert.equal(await page.locator('#rail').isVisible(),false);}
   assert.deepEqual(errors,[]);await page.close();
- }}finally{await browser.close();}console.log(`${count} screenshots; 24 state/viewport/appearance combinations passed`);
+ }
+ for(const width of [1024,390])for(const stale of [true,false]){
+  const page=await browser.newPage({viewport:{width,height:844},colorScheme:'light'});
+  await page.route('**/*',async route=>{
+   const url=new URL(route.request().url());
+   if(url.pathname==='/api/events')return route.fulfill({status:503,body:'unavailable'});
+   if(url.pathname==='/api/agents')throw Error('Unexpected roster fetch');
+   if(url.pathname==='/api/state')return route.fulfill({contentType:'application/json',body:JSON.stringify(url.searchParams.get('run')==='bogus'?{...active,run:null,agents:[]}:active)});
+   const file=url.pathname==='/chat'?'index.html':url.pathname.slice('/chat/'.length);
+   return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});
+  });
+  await page.addInitScript(stale=>{localStorage.setItem('ac-dashboard-key','test-key');if(stale)localStorage.setItem('acx-context-open','true');},stale);
+  await page.goto('http://agentcontrol.test/chat'+(stale?'#/':'#/s/bogus'));
+  await page.locator('#session-list a').first().waitFor({state:'attached'});
+  assert.equal(await page.evaluate(()=>location.hash),'#/');
+  assert.equal(await page.evaluate(()=>document.elementFromPoint(innerWidth/2,innerHeight/2)?.id==='scrim'),false);
+  if(stale){
+   await page.evaluate(()=>location.hash='#/s/run_test');await page.locator('#context:not([hidden])').waitFor();
+   await page.goBack();await page.waitForFunction(()=>location.hash==='#/' && document.getElementById('scrim').hidden && document.getElementById('context').hidden);
+  }
+  await page.screenshot({path:path.join(out,`regression-${width}-${stale?'scrim':'bogus'}.png`)});count++;await page.close();
+ }
+ }finally{await browser.close();}console.log(`${count} screenshots; 24 state/viewport/appearance combinations and 4 regression cases passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

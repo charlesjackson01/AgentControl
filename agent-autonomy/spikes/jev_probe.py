@@ -35,16 +35,20 @@ SAMPLE = ('Task: make the test suite pass. Turn 5. The agent ran `pytest`, saw t
           'KeyError in test_parse. This is the third time it made this same edit.')
 
 GUESS = {
+    # From probe 1 (HTTP 422): a top-level model is required, questions are told apart by `type`,
+    # and choice and score questions need `criteria`. The model id and score criteria type are
+    # still guesses; the server names them if they are wrong.
+    'model': 'jev',
     'state': SAMPLE,
     'questions': {
         'stuck': {'type': 'noul',
                   'proposition': 'The agent is stuck: repeating the same actions or errors without progress toward the task.'},
-        'pattern': {'type': 'choice', 'options': {
+        'pattern': {'type': 'choice', 'criteria': {
             'repeating_failure': 'The same failure recurs after each attempt.',
             'undo_redo': 'The agent keeps undoing and redoing the same change.',
             'tool_errors': 'Tools keep failing (bad commands, missing files).',
             'progressing': 'Each attempt changes the outcome; the agent is making progress.'}},
-        'progress': {'type': 'score', 'levels': [
+        'progress': {'type': 'score', 'criteria': 'How much progress the agent is making toward the task.', 'levels': [
             'No progress toward the task.', 'Some progress, but blocked.', 'Clear progress.', 'Task nearly done.']},
     },
 }
@@ -82,10 +86,13 @@ def main():
     p.add_argument('--body', help='JSON file to send instead of the built-in guess')
     p.add_argument('--show-body', action='store_true', help='print the request body and exit (sends nothing)')
     p.add_argument('--yes', action='store_true', help='send without asking')
+    p.add_argument('--model', help='model id to send (default: the body\'s own)')
     p.add_argument('--timeout', type=float, default=30)
     a = p.parse_args()
 
     body = json.loads(Path(a.body).read_text()) if a.body else GUESS
+    if a.model:
+        body = {**body, 'model': a.model}
     if a.show_body:
         print(json.dumps(body, indent=2))
         return

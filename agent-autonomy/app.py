@@ -217,7 +217,7 @@ def handler(controller, key):
                                          mode=body.get('mode', 'single'), **({'team_size': body['team_size']} if 'team_size' in body else {}),
                                          isolation=body.get('isolation', 'host'), cpus=body.get('cpus', 4), memory_gb=body.get('memory_gb', 8),
                                          network=body.get('network', 'setup'), confirm=body.get('confirm'),
-                                         models=body.get('models'), spend_cap=body.get('spend_cap'))
+                                         models=body.get('models'), spend_cap=body.get('spend_cap'), watch=body.get('watch') is True)
                     return self.reply(201, {'id': run['id']})
                 if self.path == '/api/preview/ticket':
                     return self.reply(200, {'ticket': controller.preview.issue_ticket(), 'port': controller.preview.listen_port})
@@ -342,6 +342,9 @@ def main():
     p.add_argument('--skills-library', type=Path, default=Path(os.environ.get('AGENTCONTROL_SKILLS', '~/agentcontrol/skills')),
                    help='Folder of skills you curate (each a folder with SKILL.md)')
     p.add_argument('--research-toolsets', default='', help='Hermes toolsets the researcher may use, comma-separated (see spikes/hermes_research_probe.py). Empty: no researcher')
+    p.add_argument('--jev-key', default='', help='Name of your TypeSafe Jev key in the ai-arch secret store (e.g. typesafe); enables the optional stuck watch')
+    p.add_argument('--jev-model', default=None, help='Jev model id to use (default: the pinned version the probe was checked with)')
+    p.add_argument('--jev-stuck-threshold', type=float, default=0.8, help='Jev probability that counts as a high check (two in a row flag an agent)')
     p.add_argument('--hermes-provider', default='', help="A provider in your Hermes config.yaml whose base_url is this gateway; lets Hermes use a per-run model (see README)")
     p.add_argument('--max-parallel-agents', type=int, default=None, help='Agents that may work at once (default: model slots + 1)')
     p.add_argument('--vm-baseline', type=Path, default=None, help='ai-arch baseline qcow2 that VM runs clone (read-only); unset = no VM runs')
@@ -365,6 +368,8 @@ def main():
     p.add_argument('--projects-root', type=Path, default=None,
                    help='Folder the dashboard may browse and create projects in (default: your home folder)')
     a = p.parse_args()
+    if not 0.5 <= a.jev_stuck_threshold < 1:
+        p.error('--jev-stuck-threshold must be at least 0.5 and below 1')
     project = a.project.expanduser().resolve()
     if not project.is_dir():
         p.error(f'Project directory does not exist: {project}')
@@ -383,6 +388,7 @@ def main():
                  skills_library=a.skills_library, container_runtime=a.container_runtime,
                  allow_rootful_containers=a.allow_rootful_containers,
                  research_toolsets=tuple(t.strip() for t in a.research_toolsets.split(',') if t.strip()),
+                 jev_key_ref=a.jev_key, jev_threshold=a.jev_stuck_threshold, **({'jev_model': a.jev_model} if a.jev_model else {}),
                  max_parallel_agents=a.max_parallel_agents, hermes_provider=a.hermes_provider,
                  vm_baseline=a.vm_baseline.expanduser() if a.vm_baseline else None, vm_template=a.vm_template, vm_uri=a.vm_uri,
                  vm_ssh_key=a.vm_ssh_key.expanduser() if a.vm_ssh_key else None, vm_user=a.vm_user, vm_opencode=a.vm_opencode,

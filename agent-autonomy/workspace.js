@@ -359,7 +359,7 @@ function renderWsTabs(agents) {
     const a = byName[name] || {name, state: 'idle'}, [label] = AGENT_STATE[a.state] || [a.state || 'idle'];
     const active = name === wsFocused(), shown = !active && wsVisible().includes(name), fresh = wsState.fresh.includes(name), changed = wsState.changed.includes(name), since = wsSince(a.since);
     return `<span class="ws-tab ${active ? 'active' : ''} ${shown ? 'shown' : ''} ${esc(wsTone(a))}" data-index="${i + 1}">
-      <button role="tab" aria-selected="${active}" data-ws-open="${esc(name)}" title="${esc(wsAgentLabel(name))} · ${esc(label)}${since ? ' ' + esc(since) : ''}${changed ? ' · changed while you were away' : ''}${i < 9 ? ` · key ${i + 1}` : ''}">
+      <button role="tab" aria-selected="${active}" data-ws-open="${esc(name)}" title="${esc(wsAgentLabel(name))} · ${esc(label)}${since ? ' ' + esc(since) : ''}${a.watch?.suspected ? ' · possibly stuck' : ''}${changed ? ' · changed while you were away' : ''}${i < 9 ? ` · key ${i + 1}` : ''}">
         <span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span class="ws-tab-name">${esc(wsAgentLabel(name))}</span>${fresh ? '<span class="ws-new">new</span>' : ''}${changed ? '<span class="ws-changed" aria-hidden="true"></span>' : ''}${wsPopped(name) ? '<span class="ws-popped" title="Also open in its own window">↗</span>' : ''}<span class="sr-only">, ${esc(label)}${changed ? ', changed while you were away' : ''}${wsPopped(name) ? ', popped out' : ''}</span></button>
       <button class="ws-close" data-ws-close="${esc(name)}" aria-label="Close ${esc(wsAgentLabel(name))}'s workspace (the agent keeps working)" title="Close tab · the agent keeps working">×</button></span>`;
   }).join('');
@@ -486,7 +486,7 @@ function renderWsHead(p, a, steps) {
     ['Works in', where],
     ['Usage', `${hermes ? plural(current.decision_count || 0, 'decision') : `${plural(steps.length, 'turn')} · ${plural(a.stats?.tool_calls || 0, 'tool call')}`}${u ? ` · ${tokens(u.tokens_in)} in / ${tokens(u.tokens_out)} out${u.cost ? ' · ' + money(u.cost, 4) : ''}` : ' · no model calls yet'}`]];
   setHTML(p.part('head'), `<div class="ws-id"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(role)}">${esc(roleMark(a.name))}</span>
-      <div><h1 id="ws-title${p.suffix}">${esc(wsAgentLabel(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span>${a.since ? `<span class="small muted ws-since" title="${esc(new Date(a.since).toLocaleString())}">${esc(wsSince(a.since))}</span>` : ''}</h1>
+      <div><h1 id="ws-title${p.suffix}">${esc(wsAgentLabel(a.name))} <span class="ac-status ${tone}"><span class="dot"></span>${esc(label)}</span>${watchMark(a)}${a.since ? `<span class="small muted ws-since" title="${esc(new Date(a.since).toLocaleString())}">${esc(wsSince(a.since))}</span>` : ''}</h1>
       <p class="small muted">${esc(title || a.role || '')}${a.runtime ? ' · ' + esc(a.runtime) : ''} · run “${esc(runTitle(current, 60))}”</p>
       ${a.task ? `<p class="small ws-now">${esc(a.task)}</p>` : ''}</div></div>
     <dl class="ws-facts small">${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`);

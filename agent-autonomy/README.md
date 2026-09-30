@@ -719,6 +719,29 @@ Then:
   - The gateway asks streams to include token counts, and uses the provider's own reported cost when it gives one (`report_cost`, OpenRouter's usage accounting). Otherwise it computes cost from the registry prices.
 - **Usage** (sidebar) lists calls, tokens and spend this month or for all time, by run, agent and model. Local calls always show $0. `GET /api/usage?period=month|all` returns the same.
 
+## Stuck watch (optional, TypeSafe Jev)
+
+A coder can loop: the same failing test, the same edit undone and redone, the same wrong command. Without the watch, nothing notices until a hard limit ends the run. The stuck watch asks [TypeSafe's Jev](https://typesafe.ai) after each coder turn whether the coder looks stuck.
+
+- **What Jev is:** a hosted model that answers typed questions with calibrated probabilities instead of writing text. It is paid and runs only on TypeSafe's servers. A check costs about $0.00004.
+- **Advisory only:**
+  - After **two high checks in a row** (0.8 or more by default), the agent shows **"possibly stuck · 0.91"** in Mission, its workspace tab and header.
+  - You get one push notification.
+  - Hermes sees a note in its next decision.
+  - Nothing is paused, stopped, prompted or approved by the watch.
+- **You opt in per run** in New run → Stuck watch, with the typed `approve`: it sends the goal, the turn's title, recent verification results and the end of the coder's turn (commands, their output and the coder's messages) to TypeSafe. No files or diffs are sent, and private model reasoning is never recorded. **Turn off** on Mission → Resources stops it for that run.
+- **Budget:**
+  - One check after each coder or tester turn, plus one per 10 minutes of a turn that runs long, at most 60 per run.
+  - Calls appear in **Usage** (endpoint `jev`) and count toward the run and monthly spend caps; once a cap is reached, the watch stops calling.
+  - If Jev is unreachable or replies with something unexpected, the run records one "watch unavailable" note and carries on as if the watch were off.
+
+Setup:
+1. Put your key in ai-arch's secret store: `(umask 077; printf '%s' 'YOUR_KEY' > ~/.local/share/ai-arch/secrets/typesafe)`.
+2. Check it with `python3 agent-autonomy/spikes/jev_probe.py`. It sends one request about a built-in sample text and prints the reply.
+3. Start AgentControl with `--jev-key typesafe`. For the services, add it to `AGENTCONTROL_ARGS` in `~/.config/agentcontrol/agentcontrol.env` and restart.
+
+The model is pinned to `jev-1.13.0`, the version the probe was checked against, so answers don't shift when TypeSafe updates `jev-latest`. `--jev-model` changes it, and `--jev-stuck-threshold` (0.5 up to 1) changes what counts as high.
+
 ## Agents
 
 Every run records the agents working on it:

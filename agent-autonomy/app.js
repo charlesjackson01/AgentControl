@@ -428,6 +428,7 @@ function renderShell() {
   togglePreviewFields('new');
   renderIsolation();
   renderModelsPicker();
+  renderWatchOption();
 
   const crumbs = [project, {mission: 'Mission', workspace: 'Workspace', new: 'New run', runs: 'Runs', approvals: 'Approvals', activity: 'Activity', project: 'Project', skills: 'Skills', usage: 'Usage'}[view]];
   if (current && !['new', 'mission'].includes(view)) crumbs.push('#' + current.id.slice(0, 6));
@@ -974,6 +975,7 @@ function agentCard(a) {
     <header class="agent-card__head"><span class="agent-avatar ${hermes ? 'hermes' : 'opencode'} role-${esc(roleOf(name))}">${esc(roleMark(name))}</span>
       <button class="agent-card__name" data-agent="${esc(name)}" aria-label="Open ${esc(name)}"><strong>${esc(hermes ? 'Hermes' : name)}</strong><small>${esc(title || a.role || (hermes ? 'Orchestrator' : 'Coder'))}</small></button>
       <span class="ac-status ${tone}" ${a.since ? `title="${esc(label)} since ${esc(new Date(a.since).toLocaleString())}"` : ''}><span class="dot"></span>${esc(label)}</span></header>
+    ${watchMark(a) ? `<p class="agent-watch">${watchMark(a)}</p>` : ''}
     ${body}
     <footer class="agent-card__foot"><span class="small muted">${stats.map(esc).join(' · ')}</span><span class="agent-where small muted">${where}</span>
       <button class="ac-btn compact" data-workspace="${esc(name)}" aria-label="Open ${esc(hermes ? 'Hermes' : name)}'s workspace">Workspace</button>
@@ -1026,7 +1028,9 @@ function renderMissionResources() {
       <button class="text-button small" data-view="project">Open Project</button></dd>`;
   const s = data.spend || {};
   const spend = s.cap || s.run ? `<dt>Spend</dt><dd>${money(s.run, 4)}${s.cap ? ` of ${money(s.cap)} cap` : ''}</dd>` : '';
-  return `<section class="ac-panel"><h2 class="ac-panel__title">Resources</h2><dl class="facts small">${model}${box}${spend}${previewLine}</dl></section>`;
+  const watching = current.watch ? `<dt>Stuck watch</dt><dd>On · TypeSafe Jev <small class="muted">Advisory; sends the end of each coder turn to TypeSafe.</small>
+      ${ended.has(current.status) ? '' : '<button class="text-button small" data-action="watch-off">Turn off</button>'}</dd>` : '';
+  return `<section class="ac-panel"><h2 class="ac-panel__title">Resources</h2><dl class="facts small">${model}${box}${spend}${watching}${previewLine}</dl></section>`;
 }
 function renderMission() {
   const finished = !current || ended.has(current.status);
@@ -1052,7 +1056,7 @@ function renderMission() {
   setHTML($('mission-tasks'), renderMissionTasks());
   setHTML($('mission-resources'), renderMissionResources());
   // State changes are listed on the Activity page and in each workspace; here they would crowd out the rest.
-  const events = (data.events || []).filter(e => e.kind !== 'agent state').slice(-8).reverse().map(e => {
+  const events = (data.events || []).filter(e => e.kind !== 'agent state' && e.kind !== 'watch').slice(-8).reverse().map(e => {
     let parsed; try { parsed = JSON.parse(e.detail); } catch {}
     return `<li><span class="muted small">${when(e.created)}</span> <strong class="small">${esc(e.kind)}</strong> <span class="small">${esc(String(eventSummary(e, parsed) || '').slice(0, 160))}</span></li>`;
   }).join('');
@@ -1166,6 +1170,18 @@ function paidChosen() {
   return Object.values(chosenModels()).some(id => paid.has(id));
 }
 function togglePaidFields() { $('paid-fields').classList.toggle('hidden', !paidChosen()); }
+function renderWatchOption() {
+  const available = !!data?.watch?.available;
+  $('watch-section').classList.toggle('hidden', !available);
+  if (!available) $('watch-enabled').checked = false;
+  $('watch-confirm-field').classList.toggle('hidden', !$('watch-enabled').checked);
+}
+/* Advisory mark from the stuck watch (Jev). Never claims certainty: "possibly stuck" with the probability. */
+function watchMark(a) {
+  const w = a?.watch;
+  if (!w?.suspected) return '';
+  return `<span class="watch-mark" title="Advisory from TypeSafe Jev: ${esc(w.label || 'no progress')} (probability ${Number(w.probability).toFixed(2)} on the last two checks). Nothing was changed.">possibly stuck · ${Number(w.probability).toFixed(2)}</span>`;
+}
 function modelsBody() {
   const models = chosenModels();
   if (!Object.keys(models).length) return {};
@@ -1408,6 +1424,7 @@ function stateName(state) { return state ? (AGENT_STATE[state]?.[0] || String(st
 function eventSummary(e, parsed) {
   if (!parsed || typeof parsed !== 'object') return e.detail;
   if (e.kind === 'agent state' && parsed.agent) return `${parsed.agent}: ${stateName(parsed.from)} → ${stateName(parsed.to)}${parsed.task ? ' · ' + parsed.task : ''}`;
+  if (e.kind === 'watch' && parsed.agent) return `${parsed.agent}: stuck probability ${Number(parsed.probability).toFixed(2)} · looks like ${String(parsed.pattern || '').replaceAll('_', ' ')}${parsed.when === 'long turn' ? ' (long turn)' : ''}`;
   if (parsed.tool) return `${parsed.tool}${parsed.title ? ': ' + parsed.title : ''}${parsed.status ? ' · ' + parsed.status : ''}`;
   return parsed.summary || parsed.title || (parsed.text ? String(parsed.text) : '') || parsed.status || '';
 }
@@ -2007,6 +2024,7 @@ async function togglePause() {
   toast(resume ? 'Resuming the workflow' : 'Pause requested at the next boundary');
 }
 const ACTIONS = {
+  'watch-off': async () => { await control('watch_off'); toast('Stuck watch is off. Nothing more is sent to TypeSafe for this run.'); },
   projects: async () => {
     $('project-new-name').value = ''; $('projects-error').textContent = '';
     $('projects-dialog').showModal();
@@ -2214,6 +2232,8 @@ function init() {
     if ($('verify-enabled').checked && !$('verify').value.trim()) { $('start-error').textContent = 'Enter a verification command or turn off independent verification.'; return; }
     if (($('iso-container').checked || $('iso-vm').checked) && $('container-network').value === 'internet' && $('container-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to let agents use the internet, or choose another network setting.'; return; }
     if (paidChosen() && $('paid-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to allow paid models, or pick your local model for every role.'; return; }
+    const watching = !!data?.watch?.available && $('watch-enabled').checked;
+    if (watching && $('watch-confirm').value.trim().toLowerCase() !== 'approve') { $('start-error').textContent = 'Type approve to send turn excerpts to TypeSafe, or untick the stuck watch.'; return; }
     if (preflight?.usable && preflight.dirty_count && !$('allow-dirty')?.checked) { $('start-error').textContent = 'Your project has uncommitted changes. Commit them, or tick “Start from my last commit anyway”.'; return; }
     $('start-run').disabled = true;
     try {
@@ -2227,6 +2247,7 @@ function init() {
         ...isolationBody(),
         ...modelsBody(),
         ...(paidChosen() ? {confirm: $('paid-confirm').value.trim()} : {}),
+        ...(watching ? {watch: true, confirm: $('watch-confirm').value.trim()} : {}),
         ...(preflight?.usable && $('setup-cmd').value.trim() ? {setup: $('setup-cmd').value.trim()} : {})});
       selected = result.id; parentRun = null; selectedTurn = null; $('run-title').value = '';
       showView('runs');
@@ -2238,6 +2259,7 @@ function init() {
   document.querySelectorAll('input[name="isolation"]').forEach(radio => { radio.onchange = () => { renderIsolation(); renderModelsPicker(); }; });
   // A VM, like a container, reaches other models through the run gateway.
   $('models-picker').addEventListener('change', togglePaidFields);
+  $('watch-enabled').onchange = renderWatchOption;
   $('usage-period').onchange = loadUsage;
   $('container-network').onchange = renderIsolation;
   ['goal', 'verify', 'max-prompts'].forEach(id => $(id).addEventListener('input', scheduleAutoPreview));

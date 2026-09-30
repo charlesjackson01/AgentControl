@@ -5279,3 +5279,26 @@ button.task-node {
   justify-content:flex-end;
   margin-top:10px;
 }
+
+/* Stuck watch (J): an advisory mark next to an agent's state. Words and a symbol, not colour alone. */
+.watch-mark {
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  margin-left:6px;
+  padding:2px 8px;
+  border:1px dashed var(--ac-warning);
+  border-radius:var(--ac-radius-round);
+  background:var(--ac-warning-soft);
+  color:var(--ac-warning-text);
+  font-size:var(--ac-text-xs);
+  font-weight:600;
+  white-space:nowrap;
+  vertical-align:middle;
+}
+.watch-mark::before { content:'?'; font-weight:700; }
+:root[data-theme="terminal"] .watch-mark { border-radius:0; background:transparent; }
+:root[data-theme="terminal"] .watch-mark::before { content:'[?'; }
+:root[data-theme="terminal"] .watch-mark::after { content:']'; }
+.agent-watch { margin:0; }
+.agent-watch .watch-mark { margin-left:0; }

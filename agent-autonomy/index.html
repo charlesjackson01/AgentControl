@@ -210,6 +210,11 @@
                 <label for="paid-confirm">Paid models send your prompts and code to an outside provider and cost money. Type <strong>approve</strong> to allow it.</label><input id="paid-confirm" autocomplete="off" placeholder="approve">
                 <p class="small muted">When the cap is reached, the run pauses; you can raise it or switch back to your local model.</p></div>
             </section>
+            <section id="watch-section" class="ac-panel hidden"><h2 class="ac-panel__title">Stuck watch <span class="muted small">· optional</span></h2>
+              <label class="check"><input type="checkbox" id="watch-enabled"> <span>Warn me when a coder looks stuck (TypeSafe Jev)</span></label>
+              <p class="small muted">After each coder turn, Jev estimates whether the coder is repeating itself without progress. It only warns you and tells Hermes; it never pauses, stops or approves anything. Each check costs a fraction of a cent and counts toward your monthly cap.</p>
+              <div id="watch-confirm-field" class="hidden"><label for="watch-confirm">This sends the goal and the end of each coder turn (commands, output, the coder’s messages) to TypeSafe. Type <strong>approve</strong> to allow it.</label><input id="watch-confirm" autocomplete="off" placeholder="approve"></div>
+            </section>
             <section class="ac-panel"><h2 class="ac-panel__title">Live preview <span class="muted small">· optional</span></h2><p class="small muted">Starts automatically when the run completes, in the Project tab.</p><div class="preview-fields" data-preview-form="new">
                 <label for="new-preview-mode">Preview type</label>
                 <select id="new-preview-mode" data-preview-mode>

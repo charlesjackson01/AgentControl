@@ -355,4 +355,12 @@ Live team run in the dashboard: worked, once the OpenCode server was running. Th
   - Verified in Chromium: real mouse drag and resize survive a reload, and live output reached a pop-out with 0 requests of its own.
 - Remaining: W7 (optional Hermes stream-json).
 
+**Jev (TypeSafe) stuck watch:**
+- J0 probe on your server (2026-09-30), five rounds until HTTP 200 in 644 ms:
+  - `POST https://api.typesafe.ai/v1/systemone` with `model` (`jev-latest` or pinned `jev-1.13.0`; `jev` is unknown), `state` text, and named `questions` told apart by `type`.
+  - `noul` needs `instructions` or `criteria`; `choice` criteria are a map of option → description; `score` criteria are an ordered list of levels. Unknown fields are ignored silently.
+  - The reply has `answers` (`noul` probability; `choice` with `confidence` and `probabilities`; `score` with `confidence`, `legend` and `probabilities`) and `usage` token counts.
+- J1–J3 are complete: `adapters/jev.py` (strict parsing, key never logged), `watch.py` (advisory, opt-in with typed approve, budgeted, spend caps respected), the "possibly stuck" mark, New run option and Turn off. Tested against a fake Jev serving the probed format.
+- Still to check on your server: one real run with the watch on.
+
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

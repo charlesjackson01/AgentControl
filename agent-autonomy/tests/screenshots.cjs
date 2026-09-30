@@ -48,6 +48,15 @@ function withSurfaces(s) {
     {id: 'vm', kind: 'vm-console', title: 'VM screen', state: 'running', interactive: true, frame: 'vm', input: 'vm', agents: 'all', note: s.vm.name, provider: 'vm-console'}];
   return s;
 }
+function withWatch(s) {
+  s.watch = {available: true, model: 'jev-1.13.0', threshold: 0.8};
+  if (s.run) {
+    s.run.watch = true;
+    const coder = (s.agents || []).find(a => a.name === 'coder-1');
+    if (coder) coder.watch = {probability: 0.91, pattern: 'repeating_failure', label: 'the same failure keeps recurring', confidence: 0.9, suspected: true, checks: 2};
+  }
+  return s;
+}
 function withMission(s) {
   const team = s.run.mode === 'team';
   s.agents = [{name: 'hermes', type: 'orchestrator', role: 'Orchestrator', runtime: 'hermes-cli', model: 'Hermes profile test-profile', state: team ? 'idle' : 'idle', task: '', stats: {turns: 3, tool_calls: 0}},
@@ -152,6 +161,10 @@ const scenarios = {
   mission: {state: () => withMission(teamState()), view: 'mission'},
   missionsingle: {state: () => withMission((() => { const s = fx.richActive(); s.inbox[0].agent = 'coder-1'; return s; })()), view: 'mission'},
   missionempty: {state: fx.empty, view: 'mission'},
+  // J: the stuck watch flags coder-1 (advisory), shown on Mission, in the workspace, and offered in New run.
+  watch: {state: () => withWatch(withMission(teamState())), view: 'mission'},
+  watchworkspace: {state: () => withWatch(withMission(teamState())), view: 'mission', click: '[data-agent-card="coder-1"] [data-workspace]'},
+  watchnewrun: {state: () => withWatch(fx.empty()), click: ['#empty-state [data-action="new"]', '#watch-enabled']},
   agent: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent="coder-2"]'},
   specialists: {state: () => withSpecialists(teamState()), view: 'mission'},
   workspace: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="coder-2"] [data-workspace]'},

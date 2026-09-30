@@ -156,11 +156,13 @@ def transitions(previous, current):
     return changes
 
 
-def describe(agents, run, steps, pending, events=(), lifecycle=None):
+def describe(agents, run, steps, pending, events=(), lifecycle=None, watch=None):
     """Agents for the API: identity + type info + derived state + simple counters.
     `lifecycle` maps an agent to its latest recorded 'agent state' event; `since` is that event's
-    time only while it still matches the derived state, so it can never contradict it."""
+    time only while it still matches the derived state, so it can never contradict it.
+    `watch` maps an agent to its stuck-watch summary (watch.summary); advisory, shown as-is."""
     lifecycle = lifecycle or {}
+    watch = watch or {}
     counts = {}
     for event in events:
         name = agent_for_event(event.get('kind', ''), event.get('detail'))
@@ -175,6 +177,7 @@ def describe(agents, run, steps, pending, events=(), lifecycle=None):
                        'description': kind.description if kind else '', 'tools': list(kind.tools) if kind else [],
                        'state': state, 'task': task,
                        'since': (lifecycle.get(agent['name']) or {}).get('created') if (lifecycle.get(agent['name']) or {}).get('to') == state else None,
+                       'watch': watch.get(agent['name']),
                        'stats': {'turns': len(own) if agent['type'] != 'orchestrator' else run.get('decision_count', 0),
                                  'tool_calls': tools, 'activity': counts.get(agent['name'], 0)}})
     return result

@@ -15,6 +15,8 @@ from errors import Attention, OpenCodeHTTPError, ReviewConflict, Stopped
 from journal import Store, now
 from adapters.opencode import OpenCode
 from adapters.hermes import Hermes
+from adapters import jev as jev_api
+from watch import Watch
 from proc import process
 from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
 from events import EventBus
@@ -80,6 +82,11 @@ class Settings:
     vm_opencode: Path = None                # OpenCode binary copied into VMs; default: the one on PATH
     vm_storage: Path = None                 # clone disks; QEMU must reach it. Default: <baseline folder>/agentcontrol-runs
     projects_root: Path = None              # where the dashboard may browse and create projects; default: your home
+    jev_key_ref: str = ''                   # TypeSafe Jev key in the ai-arch secret store (J); empty = stuck watch unavailable
+    jev_url: str = jev_api.URL
+    jev_model: str = jev_api.MODEL
+    jev_threshold: float = 0.8              # a check at or above this counts as high; two in a row flag the agent
+    jev_interval: float = 600               # seconds a turn may run before it is also checked mid-turn
 
 
 def review_packet(request, messages=()):
@@ -202,6 +209,12 @@ class Controller:
         self.lifecycle.flush()   # record restart changes now; the thread then only follows new activity
         self.lifecycle.start()
         self.threads['lifecycle'] = self.lifecycle.thread   # joined with the run threads on shutdown
+        client = jev_api.Jev(self.s.jev_key_ref, self.s.jev_url, self.s.jev_model) if self.s.jev_key_ref else None
+        self.watch = Watch(self, client, self.s.jev_threshold, self.s.jev_interval)
+        if client:
+            thread = threading.Thread(target=self.watch.loop, args=(self.shutdown,), daemon=True, name='stuck-watch')
+            thread.start()
+            self.threads['watch'] = thread
 
     def _store_changed(self, kind, run):
         self.events.publish(kind, run)
@@ -244,7 +257,7 @@ class Controller:
 
     def new(self, goal, verifier='', max_steps=8, goal_checks=None, run_minutes=None, parent_run=None, title=None, preview=None,
             allow_dirty=False, setup='', mode='single', team_size=planner.MAX_AGENTS,
-            isolation='host', cpus=4, memory_gb=8, network='setup', confirm=None, models=None, spend_cap=None):
+            isolation='host', cpus=4, memory_gb=8, network='setup', confirm=None, models=None, spend_cap=None, watch=False):
         if not isinstance(goal, str) or not 1 <= len(goal.strip()) <= 12_000:
             raise ValueError('Enter a goal of 1–12,000 characters')
         title = self._title(title)
@@ -265,6 +278,12 @@ class Controller:
             if network == 'internet' and str(confirm or '').strip().lower() != permissions.CONFIRM_WORD:
                 raise ValueError(f'Internet access while agents work is critical: type {permissions.CONFIRM_WORD} to confirm.')
         model_choice, cap = self._check_models(models, spend_cap, confirm, isolation)
+        if watch:
+            if not self.watch.available:
+                raise ValueError('The stuck watch needs a TypeSafe Jev key: start AgentControl with --jev-key typesafe.')
+            if str(confirm or '').strip().lower() != permissions.CONFIRM_WORD:
+                raise ValueError('The stuck watch sends the goal and the end of each coder turn to TypeSafe: '
+                                 f'type {permissions.CONFIRM_WORD} to confirm.')
         if mode not in ('single', 'team', 'auto'):
             raise ValueError('Mode must be single, team, or auto')
         if mode in ('team', 'auto') and (type(team_size) is not int or not 2 <= team_size <= planner.MAX_AGENTS):
@@ -313,7 +332,7 @@ class Controller:
                    'parent_run': parent_run or None, 'title': title, 'preview': preview, 'project': str(self.s.project),
                    'parent_context': {'id': parent['id'], 'goal': parent['goal'], 'summary': parent['summary']} if parent else None,
                    'workspace': workspace, 'setup': setup_argv, 'mode': mode, 'auto': auto, 'isolation': isolation,
-                   'models': model_choice, 'spend_cap': cap,
+                   'models': model_choice, 'spend_cap': cap, 'watch': bool(watch),
                    'container': self._container_record(ident, cpus, memory_gb, network) if isolation == 'container' else None,
                    'vm': self._vm_record(ident, cpus, memory_gb, network) if isolation == 'vm' else None,
                    'team': {'state': 'proposing', 'max_agents': team_size, 'proposals': 0, 'notes': [], 'agents': {}, 'tasks': [],
@@ -326,6 +345,9 @@ class Controller:
             self.store.event(ident, 'goal', goal)
             if model_choice:
                 self.store.audit_append(ident, {'action': 'models chosen', 'actor': HUMAN, 'models': model_choice, 'spend_cap': cap})
+            if watch:
+                self.store.audit_append(ident, {'action': 'stuck watch on', 'actor': HUMAN, 'service': 'TypeSafe Jev', 'model': self.s.jev_model,
+                                                'sends': 'goal, turn title, verification results, end of each coder turn transcript'})
             if isolation == 'container':
                 c = run['container']
                 self.store.audit_append(ident, {'action': 'container requested', 'actor': HUMAN, 'runtime': c['runtime'], 'rootless': c['rootless'],
@@ -521,6 +543,14 @@ class Controller:
             return self._team_decision(ident, action, text)
         if action in ('container_stop', 'container_start'):
             return self._container_control(ident, action)
+        if action == 'watch_off':
+            with self.lock:
+                if not self.store.get('runs', ident).get('watch'):
+                    raise ValueError('The stuck watch is not on for this run')
+                self.store.update('runs', ident, watch=False)
+                self.store.event(ident, 'control', 'Stuck watch turned off. Nothing more is sent to TypeSafe for this run.')
+                self.store.audit_append(ident, {'action': 'stuck watch off', 'actor': HUMAN})
+            return self.store.get('runs', ident)
         if action == 'title':
             with self.lock:
                 self.store.update('runs', ident, title=self._title(text))
@@ -929,6 +959,7 @@ class Controller:
                           **({'integration': integration} if integration else {}))
         self.store.event(ident, 'verification', verification)
         self.store.event(ident, 'file changes', proof)
+        self.watch.check(ident, step['id'])   # advisory; returns quietly when the watch is off or fails
         return after
 
     def _manager_prompt(self, run, snap, steps):
@@ -972,6 +1003,9 @@ class Controller:
         skills = self._skills_context(run)
         if skills:
             context['skills'] = skills
+        watched = self.watch.context(run['id']) if run.get('watch') else None
+        if watched:
+            context['watch'] = watched
         status = self.role_status()
         left = MAX_DELEGATIONS - (run.get('delegations') or 0)
         if any(not status.get(r) for r in agent_registry.SPECIALISTS) and left > 0:
@@ -2858,7 +2892,7 @@ class Controller:
             inbox = [{**p, 'run': run['id']} for p in run.get('pending', [])] if run['status'] not in TERMINAL else []
         recorded = self.store.agents(run['id']) or agent_registry.default_agents(run, self.s.profile)
         return agent_registry.describe(recorded, run, steps, inbox, self.store.events(run['id'], limit=1000),
-                                       self.lifecycle.latest(run['id']))
+                                       self.lifecycle.latest(run['id']), self.watch.summaries(run['id']) if run.get('watch') else None)
 
     # ---- projects ---------------------------------------------------------------
     @staticmethod
@@ -2943,6 +2977,8 @@ class Controller:
                 'roles': self.role_status(),
                 'spend': self.spend_status(run),
                 'model_options': self.model_options(),
+                'watch': {'available': self.watch.available, 'model': self.s.jev_model if self.watch.available else None,
+                          'threshold': self.s.jev_threshold},
                 'research_requests': self.research_requests(),
                 'permissions': {'policy': permissions.POLICY, 'levels': permissions.LEVELS, 'labels': permissions.LABELS,
                                 'confirm_word': permissions.CONFIRM_WORD},

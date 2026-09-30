@@ -912,7 +912,7 @@ test('the Project tab shows the VM screen and sends clicks, text and keys',async
  const img=h.document.getElementById('vm-screen');
  Object.defineProperty(img,'naturalWidth',{value:1280});Object.defineProperty(img,'naturalHeight',{value:800});
  img.getBoundingClientRect=()=>({left:0,top:0,width:640,height:400});
- img.dispatchEvent(Object.assign(new h.context.window.Event('click'),{clientX:320,clientY:100,button:0}));await tick();
+ img.dispatchEvent(Object.assign(new h.context.window.Event('click',{bubbles:true}),{clientX:320,clientY:100,button:0}));await tick();
  assert.deepEqual(h.calls.find(c=>c.url==='/api/vm/input').body,{run:'run_test',action:'click',x:640,y:200,width:1280,height:800,button:1});
  h.document.getElementById('vm-type').value='ls -la';
  await h.document.getElementById('vm-type-form').onsubmit({preventDefault(){}});await tick();
@@ -1160,6 +1160,86 @@ test('W4 split falls back to one pane when the window is too narrow',async()=>{
  assert.match(d.getElementById('ws-head').textContent,/Hermes/,'tabs still switch the one visible pane');
  h.context.window.matchMedia=()=>({matches:true});vmRun(h,'renderWorkspace()');
  assert(!d.getElementById('ws-pane-1').classList.contains('hidden'),'back to two panes when there is room');
+});
+// W6: preview surfaces inside a workspace pane.
+const surf=(id,kind,extra={})=>({id,kind,title:{web:'Web preview',terminal:'Program output',desktop:'Desktop app','vm-console':'VM screen','browser-session':'Researcher browser'}[kind],state:'running',interactive:kind!=='web',frame:null,input:null,agents:'all',note:'',provider:'preview',...extra});
+async function openViewer(h,agent='coder-2'){await h.click(`[data-workspace="${agent}"]`);const box=h.document.getElementById('ws-preview-box');box.open=true;box.dispatchEvent(new h.context.window.Event('toggle'));await tick();await tick();return box;}
+test('W6: a workspace shows the live web preview in its own frame, from a one-time ticket, and starts nothing',async()=>{
+ const s=missionFixture();s.run.preview={mode:'web',command:'python3 -m http.server',port:8000};s.preview={state:'running',run:'run_test',mode:'web',started:1790600000};
+ s.surfaces=[surf('preview','web',{note:'python3 -m http.server'})];
+ const h=await harness(s);
+ await h.click('[data-workspace="coder-2"]');
+ const tickets=()=>h.calls.filter(c=>c.url==='/api/preview/ticket').length, closed=tickets();   // the Project tab's own frame may hold one
+ await h.poll();
+ assert.equal(tickets(),closed,'a closed viewer fetches nothing');
+ await openViewer(h);
+ assert.equal(tickets(),closed+1,'the viewer redeems its own ticket');
+ const frame=h.document.querySelector('#ws-surface iframe.ws-surface-frame');
+ assert(frame,'the web preview is shown in the pane');
+ assert.match(frame.getAttribute('src'),/:9999\/__ac\/enter\?ticket=tkt/);
+ assert.match(frame.getAttribute('sandbox'),/allow-scripts/);
+ assert.match(h.document.getElementById('ws-preview-sum').textContent,/Web preview · running/);
+ assert.equal(h.calls.filter(c=>c.url==='/api/preview').length,0,'opening the viewer never starts or restarts the preview');
+ await h.poll();
+ assert.equal(h.document.querySelector('#ws-surface iframe'),frame,'a refresh does not reload the frame');
+ // Expand moves the viewer into a modal dialog; closing it (×, Esc) puts it back in the pane with a fresh ticket.
+ await h.click('[data-ws-expand="0"]');
+ const dialog=h.document.getElementById('ws-viewer-dialog');
+ assert(dialog.open);assert.match(h.document.getElementById('ws-preview-box').className,/expanded/);
+ assert(h.document.getElementById('ws-viewer-host').contains(h.document.getElementById('ws-surface')));
+ assert.match(h.document.getElementById('ws-viewer-title').textContent,/coder-2/);
+ await tick();
+ const expandedTickets=tickets();
+ await h.click('[data-close="ws-viewer-dialog"]');dialog.dispatchEvent(new h.context.window.Event('close'));await tick();await tick();
+ assert(!dialog.open);assert.doesNotMatch(h.document.getElementById('ws-preview-box').className,/expanded/);
+ assert(h.document.getElementById('ws-preview-box').contains(h.document.getElementById('ws-surface')),'the viewer is back in its pane');
+ assert.equal(tickets(),expandedTickets+1,'a moved frame redeems a new ticket');
+ assert.equal(h.calls.filter(c=>c.url==='/api/preview').length,0);
+});
+test('W6: a stopped preview offers Start (explicit), the program output and screens are shared, and the picker switches surfaces',async()=>{
+ const s=missionFixture();s.run.preview={mode:'cli',command:'python3 todo.py'};s.preview={state:'idle',run:'run_test',mode:'cli'};
+ s.surfaces=[surf('preview','terminal',{state:'idle',interactive:false,input:'preview'}),surf('vm','vm-console',{frame:'vm',input:'vm',provider:'vm-console',note:'ac-run'})];
+ s.vm={live:'running',name:'ac-run'};
+ const h=await harness(s);await openViewer(h);
+ assert(h.document.querySelector('#ws-surface img[data-surface-screen="vm"]'),'a running surface is shown first');
+ await h.click('#ws-preview [data-ws-surface="preview"]');
+ assert.match(h.document.getElementById('ws-surface').textContent,/nothing starts by opening this view/);
+ assert(h.document.querySelector('#ws-preview [data-action="preview-start"]'),'Start is an explicit button');
+ assert.equal(h.document.querySelectorAll('#ws-preview [data-ws-surface]').length,2);
+ await h.click('#ws-preview [data-ws-surface="vm"]');
+ const img=h.document.querySelector('#ws-surface img[data-surface-screen="vm"]');
+ assert(img,'the VM screen is shown in the pane');
+ assert.equal(vmRun(h,'wsSurfaceWatch().vm'),true,'the shared loop now fetches VM frames');
+ Object.defineProperty(img,'naturalWidth',{value:1280});Object.defineProperty(img,'naturalHeight',{value:800});
+ img.getBoundingClientRect=()=>({left:0,top:0,width:640,height:400});
+ img.dispatchEvent(Object.assign(new h.context.window.Event('click',{bubbles:true}),{clientX:320,clientY:100,button:0}));await tick();
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/vm/input').pop().body,{run:'run_test',action:'click',x:640,y:200,width:1280,height:800,button:1});
+ const form=h.document.querySelector('#ws-surface [data-ws-type="vm"]');form.querySelector('input').value='ls';
+ form.dispatchEvent(new h.context.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/vm/input').pop().body,{run:'run_test',action:'type',text:'ls'});
+ // The running program's output, from the shared buffer.
+ h.state.preview={state:'running',run:'run_test',mode:'cli'};h.state.surfaces[0]={...h.state.surfaces[0],state:'running',interactive:true};
+ vmRun(h,"preview.buffer = 'Tasks: 2\\n'");
+ await h.click('#ws-preview [data-ws-surface="preview"]');await h.poll();
+ assert.match(h.document.querySelector('#ws-surface [data-surface-output]').textContent,/Tasks: 2/);
+ // Closing the viewer stops the fetching.
+ const box=h.document.getElementById('ws-preview-box');box.open=false;box.dispatchEvent(new h.context.window.Event('toggle'));await tick();
+ assert.deepEqual(vmRun(h,'JSON.stringify(wsSurfaceWatch())'),JSON.stringify({preview:false,vm:false,generic:[]}));
+ assert.equal(h.calls.filter(c=>c.url==='/api/preview').length,0);
+});
+test('W6: a provider surface (e.g. a browser session) uses the generic routes, and only for its agents',async()=>{
+ const s=missionFixture();
+ s.surfaces=[surf('browser','browser-session',{frame:'surface',input:'surface',provider:'browser-session',agents:['coder-2']})];
+ const h=await harness(s);
+ await openViewer(h,'coder-1');
+ assert.match(h.document.getElementById('ws-preview').textContent,/No preview is set up/,'not shown to other agents');
+ await openViewer(h,'coder-2');
+ const img=h.document.querySelector('#ws-surface img[data-surface-screen="surface"]');
+ assert.equal(img.dataset.surfaceId,'browser');
+ assert.equal(vmRun(h,'JSON.stringify(wsSurfaceWatch().generic)'),'["browser"]');
+ const form=h.document.querySelector('#ws-surface [data-ws-type="surface"]');form.querySelector('input').value='hello';
+ form.dispatchEvent(new h.context.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+ assert.deepEqual(h.calls.filter(c=>c.url==='/api/surface/input').pop().body,{run:'run_test',id:'browser',action:'type',text:'hello'});
 });
 function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

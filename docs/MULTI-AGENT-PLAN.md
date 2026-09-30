@@ -342,6 +342,11 @@ Live team run in the dashboard: worked, once the OpenCode server was running. Th
   - Two panes are drawn by one pane renderer, each with its own terminal. The focused pane receives tab choices.
   - The divider resizes with the mouse or keyboard, and the layout persists.
   - Below 1,000 px, only the focused pane is shown.
-- Next: W5, windowed mode and pop-outs.
+- W6 is complete: preview surfaces in the workspace.
+  - `surfaces.py` describes a run's web, program-output, desktop and VM-console surfaces from the existing preview and VM status. They point at the existing endpoints and never start anything.
+  - A provider registry (browser session and VNC as documented interfaces, no built-in provider) has generic, audited frame and input routes.
+  - Each workspace pane has a viewer (a picker, and Expand into a top-layer dialog). One shared frame fetch per surface runs only while a viewer is open.
+  - Verified in Chromium against a real web preview and a real desktop app on Xvfb.
+- Remaining: W5 (windowed mode and pop-outs), then W7 (optional Hermes stream-json).
 
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

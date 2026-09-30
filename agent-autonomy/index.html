@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <link rel="icon" id="favicon" href="data:,">
   <script>try{const t=localStorage.getItem('ac-theme');if(['mac','terminal','xp'].includes(t))document.documentElement.dataset.theme=t}catch{}try{if(localStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('trial-dashboard-key'))document.documentElement.classList.add('has-key')}catch{}</script>
-  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5"><link rel="stylesheet" href="/workspace.css?v=6">
+  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5"><link rel="stylesheet" href="/workspace.css?v=7">
   <script src="/app.js?v=5" defer></script>
-  <script src="/workspace.js?v=6" defer></script>
+  <script src="/workspace.js?v=7" defer></script>
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true"><defs>
@@ -151,7 +151,7 @@
               <form id="preview-args-form" class="preview-input"><label for="preview-args" class="sr-only">Arguments for this start</label><input id="preview-args" autocomplete="off" placeholder="Arguments for this start, e.g. add &quot;Buy milk&quot;"><button class="ac-btn compact">Run with arguments</button></form>
             </div>
             <div id="preview-desktop" class="preview-desktop hidden">
-              <div class="desktop-screen"><img id="preview-screen" alt="Live screen of the desktop preview. Click to click inside it."></div>
+              <div class="desktop-screen"><img id="preview-screen" data-surface-screen="preview" alt="Live screen of the desktop preview. Click to click inside it."></div>
               <form id="desktop-type-form" class="preview-input"><label for="desktop-type" class="sr-only">Type into the desktop app</label><input id="desktop-type" autocomplete="off" placeholder="Type text into the focused window"><button class="ac-btn compact">Type</button>
                 <span class="row wrap desktop-keys"><button type="button" class="ac-btn compact" data-desktop-key="Return">Enter</button><button type="button" class="ac-btn compact" data-desktop-key="Escape">Esc</button><button type="button" class="ac-btn compact" data-desktop-key="Tab">Tab</button><button type="button" class="ac-btn compact" data-desktop-key="BackSpace">⌫</button><button type="button" class="ac-btn compact" data-desktop-key="Up">↑</button><button type="button" class="ac-btn compact" data-desktop-key="Down">↓</button><button type="button" class="ac-btn compact" data-desktop-key="Left">←</button><button type="button" class="ac-btn compact" data-desktop-key="Right">→</button></span></form>
             </div>
@@ -159,7 +159,7 @@
           </section>
           <section id="vm-console" class="ac-panel vm-console hidden" aria-label="VM screen">
             <h2 class="ac-panel__title">VM screen <span id="vm-console-meta" class="muted small"></span></h2>
-            <div class="desktop-screen"><img id="vm-screen" alt="Live screen of the run's virtual machine. Click to click inside it."></div>
+            <div class="desktop-screen"><img id="vm-screen" data-surface-screen="vm" alt="Live screen of the run's virtual machine. Click to click inside it."></div>
             <form id="vm-type-form" class="preview-input"><label for="vm-type" class="sr-only">Type into the VM</label><input id="vm-type" autocomplete="off" placeholder="Type text into the VM"><button class="ac-btn compact">Type</button>
               <span class="row wrap desktop-keys"><button type="button" class="ac-btn compact" data-vm-key="Return">Enter</button><button type="button" class="ac-btn compact" data-vm-key="Escape">Esc</button><button type="button" class="ac-btn compact" data-vm-key="Tab">Tab</button><button type="button" class="ac-btn compact" data-vm-key="BackSpace">⌫</button><button type="button" class="ac-btn compact" data-vm-key="Up">↑</button><button type="button" class="ac-btn compact" data-vm-key="Down">↓</button></span></form>
             <p class="small muted">Clicks and keys go to the VM's own console through libvirt and are recorded in the audit log (not what you type).</p>
@@ -265,6 +265,7 @@
 <dialog id="projects-dialog" class="dialog wide-dialog" aria-labelledby="projects-title"><header class="dialog-header"><h2 id="projects-title">Projects</h2><button class="icon-button" data-close="projects-dialog" aria-label="Close projects">×</button></header><div class="dialog-body"><p class="small">Current project: <span id="projects-current" class="mono"></span></p><p id="projects-blocked" class="warning-text small hidden" role="status"></p><section class="ac-panel"><h3 class="ac-panel__title">New project</h3><form id="project-create-form"><label for="project-new-name">Name</label><div class="folder-row"><span id="projects-root-prefix" class="mono muted small"></span><input id="project-new-name" maxlength="64" placeholder="my-app" autocomplete="off" required><button class="ac-btn primary" id="project-create">Create</button></div><p class="small muted">Creates the folder with a git repository and an empty first commit, then makes it the current project.</p></form></section><section class="ac-panel"><h3 class="ac-panel__title">Browse</h3><div id="projects-crumbs" class="projects-crumbs small mono"></div><div id="projects-list" class="projects-list"></div><div class="dialog-actions"><button class="ac-btn primary" id="project-use-browsed" data-action="project-use">Use this folder</button></div></section><p id="projects-error" class="error" role="alert"></p></div></dialog>
 <dialog id="terminal-dialog" class="dialog terminal-dialog" aria-label="OpenCode terminal"><div id="terminal-dialog-body" class="terminal-dialog-body"></div></dialog>
 <dialog id="diff-dialog" class="dialog wide-dialog" aria-labelledby="diff-title"><header class="dialog-header"><h2 id="diff-title">Captured file changes</h2><button class="icon-button" data-close="diff-dialog" aria-label="Close diff">×</button></header><div id="diff-body" class="dialog-body"></div><footer class="dialog-footer"><button class="ac-btn" data-action="download-diff">Download recorded diff</button></footer></dialog>
+<dialog id="ws-viewer-dialog" class="dialog ws-viewer-dialog" aria-labelledby="ws-viewer-title"><header class="dialog-header"><h2 id="ws-viewer-title">Preview</h2><button class="icon-button" data-close="ws-viewer-dialog" aria-label="Collapse the preview" title="Collapse (Esc)">×</button></header><div id="ws-viewer-host" class="dialog-body"></div></dialog>
 <dialog id="help-dialog" class="dialog" aria-labelledby="help-title"><header class="dialog-header"><h2 id="help-title">How AgentControl works</h2><button class="icon-button" data-close="help-dialog" aria-label="Close help">×</button></header><div class="dialog-body"><p>Hermes turns your brief into a coding prompt. OpenCode executes it. AgentControl collects file changes and runs your verification command, then Hermes decides the next turn.</p><p>You review permissions and answer questions. Steering notes enter the next planning turn. Pause waits at a turn boundary; Stop asks the active session to abort.</p><p>Goal checks are saved requirements. They remain pending until the backend can provide individual evidence. A passing verification command only proves what that command checks.</p><h3>Keyboard shortcuts</h3><table class="shortcut-table"><tbody>
   <tr><td><kbd>a</kbd></td><td>Review the waiting approval; approve inside the review window</td></tr>
   <tr><td><kbd>d</kbd></td><td>Deny and redirect</td></tr>

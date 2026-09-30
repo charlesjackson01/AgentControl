@@ -137,6 +137,14 @@ def handler(controller, key):
                     return self.reply(200, controller.vm_console(ident), 'image/png')
                 except (ValueError, KeyError, RuntimeError) as exc:
                     return self.reply(409, {'error': str(exc)})
+            if path.path == '/api/surface/frame':
+                query = urllib.parse.parse_qs(path.query)
+                try:
+                    return self.reply(200, controller.surface_frame((query.get('run') or [''])[0], (query.get('id') or [''])[0]), 'image/png')
+                except KeyError:
+                    return self.reply(404, {'error': 'No such surface'})
+                except (ValueError, RuntimeError) as exc:
+                    return self.reply(409, {'error': str(exc)})
             if path.path == '/api/preview/frame':
                 try:
                     return self.reply(200, controller.preview.frame(), 'image/png')
@@ -230,6 +238,12 @@ def handler(controller, key):
                     verifier = str(body.get('verifier') or '')[:2000]
                     return self.reply(200, controller.auto_decision(str(body.get('goal', ''))[:12000], checks, verifier.split(),
                                                                     steps if type(steps) is int else 8))
+                if self.path == '/api/surface/input':
+                    extra = {k: body[k] for k in ('x', 'y', 'width', 'height', 'text', 'key', 'button') if k in body}
+                    try:
+                        return self.reply(200, controller.surface_input(body['run'], str(body.get('id', '')), body.get('action'), **extra))
+                    except KeyError:
+                        return self.reply(404, {'error': 'No such surface'})
                 if self.path == '/api/vm/input':
                     extra = {k: body[k] for k in ('x', 'y', 'width', 'height', 'text', 'key', 'button') if k in body}
                     return self.reply(200, controller.vm_input(body['run'], body.get('action'), **extra))

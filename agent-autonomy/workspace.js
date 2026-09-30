@@ -44,7 +44,8 @@ function wsPaneHTML(i) {
       <aside class="ws-side"><div id="ws-approvals${x}"></div><div id="ws-task${x}"></div><div id="ws-files${x}"></div></aside>
     </div>
     <section id="ws-notes${x}" class="ws-notes"></section>
-    <details id="ws-preview-box${x}" class="ws-preview ac-panel"><summary>Preview</summary><div id="ws-preview${x}"></div></details>`;
+    <details id="ws-preview-box${x}" class="ws-preview ac-panel" data-ws-viewer="${i}"><summary><span>Preview</span><span id="ws-preview-sum${x}" class="small muted ws-preview-sum"></span></summary>
+      <div id="ws-preview${x}" class="ws-surface-head"></div><div id="ws-surface${x}" class="ws-surface-body"></div></details>`;
 }
 [0, 1].forEach(i => { const root = $(i ? 'ws-pane-1' : 'ws-pane'); if (root) root.innerHTML = wsPaneHTML(i); });
 const wsPanes = [wsPane(0), wsPane(1)];
@@ -270,7 +271,7 @@ function renderWsPane(p, a, split) {
   renderWsApprovals(p, a);
   renderWsFiles(p, a, steps);
   renderWsNotes(p, a);
-  renderWsPreview(p);
+  renderWsSurface(p, a);
   const recordedOnly = hermes || researcher;
   p.part('term').classList.toggle('hidden', recordedOnly);
   p.part('log').classList.toggle('hidden', !recordedOnly);
@@ -393,12 +394,115 @@ function renderWsLog(p, a, steps) {
   setHTML(p.part('log'), `<p class="small muted ws-log-note">Hermes runs as one call per decision, so this is the recorded log of those calls (what AgentControl sent and what came back), not a live stream.</p>${items || '<p class="small muted">No Hermes calls recorded yet.</p>'}`);
 }
 
-function renderWsPreview(p) {
-  const status = previewStatus(), mine = status.run === current.id && previewLive(status);
-  const vm = current.isolation === 'vm';
-  setHTML(p.part('preview'), `<p class="small">${mine ? `Live preview: <strong>${esc(p.mode)}</strong> · ${esc(p.state)}` : current.preview ? `Preview set up (${esc(current.preview.mode)}), not running.` : 'No preview is set up for this run.'}</p>
-    <p class="row wrap"><button class="ac-btn compact" data-view="project">${mine ? 'Open the live preview' : 'Open Project'}</button>${vm ? '<button class="ac-btn compact" data-view="project">Open the VM screen</button>' : ''}</p>
-    <p class="small muted">The preview is shared by every view. Opening it here does not start another program.</p>`);
+/* ---- Preview surfaces (W6) --------------------------------------------------------------------
+   The run's surfaces (data.surfaces, from surfaces.py) shown inside a pane: the web preview in an
+   iframe, a program's output, the desktop preview or the VM screen as a clickable image. Frames are
+   fetched only while a viewer is open and on screen, one fetch per surface for every viewer showing
+   it. Opening or expanding a viewer never starts anything; Start and Stop stay explicit buttons. */
+const SURFACE_LABEL = {web: 'Web', terminal: 'Program', desktop: 'Desktop', 'vm-console': 'VM screen', 'browser-session': 'Browser', vnc: 'VNC'};
+function wsSurfaces(agent) { return (data?.surfaces || []).filter(x => x.agents === 'all' || (x.agents || []).includes(agent)); }
+function wsViewerOpen(p) { return view === 'workspace' && !document.hidden && !!p.part('preview-box')?.open && !!p.shown && !$(p.i ? 'ws-pane-1' : 'ws-pane').classList.contains('hidden'); }
+function wsChosenSurface(p, list) { return list.find(x => x.id === p.surface) || list.find(x => ['starting', 'running'].includes(x.state)) || list[0] || null; }
+/* What the shared preview loop (pollPreview in app.js) should fetch for open workspace viewers. */
+function wsSurfaceWatch() {
+  const watch = {preview: false, vm: false, generic: []};
+  wsPanes.forEach(p => {
+    if (!wsViewerOpen(p)) return;
+    const x = wsChosenSurface(p, wsSurfaces(p.shown));
+    if (x?.frame === 'preview' || x?.kind === 'terminal') watch.preview = true;
+    if (x?.frame === 'vm') watch.vm = true;
+    if (x?.frame === 'surface' && !watch.generic.includes(x.id)) watch.generic.push(x.id);
+  });
+  return watch;
+}
+
+function renderWsSurface(p, a) {
+  const list = wsSurfaces(a.name), x = wsChosenSurface(p, list), status = previewStatus();
+  const mine = status.run === current.id, live = x && ['starting', 'running'].includes(x.state);
+  p.part('preview-sum').textContent = x ? `· ${x.title} · ${x.state}` : '· none';
+  const picker = list.length > 1 ? `<div class="ws-surface-pick" role="group" aria-label="Surfaces">${list.map(y =>
+    `<button class="ws-chip ${y.id === x.id ? 'active' : ''}" data-ws-surface="${esc(y.id)}" aria-pressed="${y.id === x.id}">${esc(SURFACE_LABEL[y.kind] || y.kind)}</button>`).join('')}</div>` : '';
+  const controls = x?.provider === 'preview' ? previewControlsHTML(status, mine) : '';
+  const expanded = p.part('preview-box').classList.contains('expanded');
+  setHTML(p.part('preview'), !x
+    ? `<p class="small muted">No preview is set up for this run. Choose how to run it in the Project tab.</p><p><button class="ac-btn compact" data-view="project">Open Project</button></p>`
+    : `${picker}<div class="ws-surface-bar"><span class="small"><strong>${esc(x.title)}</strong> ${x.note ? `<span class="mono muted">${esc(x.note)}</span>` : ''}</span>
+      <span class="row wrap">${controls}<button class="ac-btn compact" data-ws-expand="${p.i}" aria-pressed="${expanded}">${expanded ? 'Collapse' : 'Expand'}</button></span></div>`);
+  // The body only changes when the surface or whether it runs changes, so an iframe is not reloaded on every refresh.
+  const body = !x ? '' : !live ? `<p class="small muted ws-surface-idle">${x.provider === 'preview' ? 'Not running. Start it with the button above; nothing starts by opening this view.' : 'Not available right now.'}</p>`
+    : x.kind === 'web' ? `<iframe class="ws-surface-frame" title="Live preview of the project" referrerpolicy="no-referrer" sandbox="allow-scripts allow-forms allow-same-origin allow-popups allow-modals allow-downloads"></iframe><p class="small muted ws-surface-address"></p>`
+    : x.kind === 'terminal' ? `<pre class="ws-surface-output" data-surface-output role="log" aria-label="Program output"></pre>${wsTypeForm(p, 'preview-input', 'Type input for the program')}`
+    : x.frame ? `<img class="ws-surface-screen" alt="${esc(x.title)}; click to click, right-click to right-click" data-surface-screen="${esc(x.frame === 'surface' ? 'surface' : x.frame)}" data-surface-id="${esc(x.id)}">
+        ${x.interactive ? wsTypeForm(p, x.frame === 'vm' ? 'vm' : x.frame === 'surface' ? 'surface' : 'desktop', 'Type text') + wsKeys(x.frame) : ''}`
+    : '<p class="small muted">This surface has no viewer yet.</p>';
+  setHTML(p.part('surface'), body);
+  if (!x || !live) return;
+  const box = p.part('surface');
+  if (x.kind === 'web') { const frame = box.querySelector('iframe'); if (frame && wsViewerOpen(p)) ensurePreviewFrame(status, frame, box.querySelector('.ws-surface-address')); }
+  const out = box.querySelector('[data-surface-output]');
+  if (out && !out.dataset.filled) { out.textContent = preview.buffer || ''; out.dataset.filled = '1'; out.scrollTop = out.scrollHeight; }
+  const img = box.querySelector('img[data-surface-screen]');
+  if (img && !img.getAttribute('src')) {
+    const url = x.frame === 'vm' ? vmScreenURL : x.frame === 'preview' ? preview.screenURL : wsGenericURL[x.id];
+    if (url) img.src = url;
+  }
+}
+function wsTypeForm(p, target, label) {
+  return `<form class="preview-input ws-surface-type" data-ws-type="${esc(target)}"><label class="sr-only" for="ws-type${p.suffix}">${esc(label)}</label><input id="ws-type${p.suffix}" autocomplete="off" placeholder="${esc(label)}"><button class="ac-btn compact">Send</button></form>`;
+}
+function wsKeys(frame) {
+  const attr = frame === 'vm' ? 'data-vm-key' : frame === 'preview' ? 'data-desktop-key' : 'data-ws-surface-key';
+  return `<span class="row wrap desktop-keys">${[['Return', 'Enter'], ['Escape', 'Esc'], ['Tab', 'Tab'], ['BackSpace', '⌫']].map(([k, l]) => `<button type="button" class="ac-btn compact" ${attr}="${k}">${l}</button>`).join('')}</span>`;
+}
+
+/* Surfaces from other providers (not the preview or the VM) are read through /api/surface/frame. */
+const wsGenericURL = {};
+let wsGenericTimer = 0;
+async function wsPollGeneric() {
+  clearTimeout(wsGenericTimer);
+  const ids = key && connected && current ? wsSurfaceWatch().generic : [];
+  for (const id of ids) {
+    try {
+      const response = await fetch(`/api/surface/frame?run=${encodeURIComponent(current.id)}&id=${encodeURIComponent(id)}`, {headers: {Authorization: 'Bearer ' + key}});
+      if (!response.ok) continue;
+      const url = URL.createObjectURL(await response.blob());
+      document.querySelectorAll(`img[data-surface-screen="surface"][data-surface-id="${CSS?.escape ? CSS.escape(id) : id}"]`).forEach(img => { img.src = url; });
+      if (wsGenericURL[id]) URL.revokeObjectURL(wsGenericURL[id]);
+      wsGenericURL[id] = url;
+    } catch {}
+  }
+  if (ids.length) wsGenericTimer = setTimeout(wsPollGeneric, 1000);
+}
+function wsSurfaceInput(id, body) { return api('/api/surface/input', 'POST', {run: current.id, id, ...body}); }
+/* Opening a viewer starts the shared preview loop (it may not be running if the Project tab was never opened). */
+function wsViewerChanged() {
+  renderWorkspace();
+  const watch = wsSurfaceWatch();
+  if (watch.preview || watch.vm) pollPreview();
+  if (watch.generic.length) wsPollGeneric();
+}
+/* Expanding moves the pane's viewer into a modal dialog (the browser's top layer, so no theme frame
+   can clip it) and back when it closes. A moved iframe reloads, so it is given a fresh ticket. */
+function wsExpand(i, on) {
+  const p = wsPanes[i], box = p.part('preview-box'), dialog = $('ws-viewer-dialog'), host = $('ws-viewer-host');
+  if (on === box.classList.contains('expanded')) return;
+  const forgetFrame = () => p.part('surface').querySelectorAll('iframe[data-key]').forEach(f => { f.dataset.key = ''; });
+  if (on) {
+    if (dialog.open) dialog.close();   // one expanded viewer at a time
+    box.open = true;
+    box.classList.add('expanded');
+    dialog.dataset.pane = String(i);
+    $('ws-viewer-title').textContent = `Preview · ${wsAgentLabel(p.shown)}`;
+    host.append(p.part('preview'), p.part('surface'));
+    forgetFrame();
+    dialog.showModal();
+  } else {
+    box.classList.remove('expanded');
+    box.append(p.part('preview'), p.part('surface'));
+    forgetFrame();
+    if (dialog.open && dialog.dataset.pane === String(i)) dialog.close();
+  }
+  wsViewerChanged();
 }
 
 /* On the XP theme every open workspace is a window button on the taskbar, flashing when its agent waits for you. */
@@ -426,6 +530,13 @@ async function workspaceClick(b) {
     wsTurn[b.dataset.wsAgent || pane.shown] = b.dataset.wsTurn || null; pane.term.reset(null); renderWorkspace(); return true;
   }
   if (b.dataset.wsMode !== undefined) { setWorkspaceMode(b.dataset.wsMode); return true; }
+  if (b.dataset.wsSurface !== undefined) { wsPaneOf(b).surface = b.dataset.wsSurface; wsViewerChanged(); return true; }
+  if (b.dataset.wsExpand !== undefined) { const i = Number(b.dataset.wsExpand); wsExpand(i, !wsPanes[i].part('preview-box').classList.contains('expanded')); return true; }
+  if (b.dataset.wsSurfaceKey !== undefined) {
+    const img = wsPaneOf(b).part('surface').querySelector('img[data-surface-id]');
+    if (img) await wsSurfaceInput(img.dataset.surfaceId, {action: 'key', key: b.dataset.wsSurfaceKey}).catch(e => pageError(e.message));
+    return true;
+  }
   if (b.dataset.wsFocus !== undefined) { focusPane(Number(b.dataset.wsFocus)); return true; }
   if (b.dataset.wsDiff !== undefined) { openDiff(b.dataset.wsDiff); return true; }
   return false;
@@ -452,6 +563,23 @@ Object.assign(ACTIONS, {
 function wsPaneOf(el) { return wsPanes[Number(el?.closest?.('[data-pane]')?.dataset.pane) || 0]; }
 
 document.addEventListener('submit', async event => {
+  const typing = event.target.closest?.('[data-ws-type]');
+  if (typing) {
+    event.preventDefault();
+    const input = typing.querySelector('input'), text = input.value, target = typing.dataset.wsType;
+    if (!text) return;
+    try {
+      if (target === 'preview-input') await previewAction('input', {text: text + '\n'});
+      else if (target === 'desktop') { await previewAction('type', {text}); await refreshScreen(); }
+      else if (target === 'vm') await vmInput({action: 'type', text});
+      else {
+        const img = typing.closest('.ws-surface-body').querySelector('img[data-surface-id]');
+        await wsSurfaceInput(img.dataset.surfaceId, {action: 'type', text});
+      }
+      input.value = '';
+    } catch (error) { pageError(error.message); }
+    return;
+  }
   const form = event.target.closest?.('[data-ws-note]');
   if (!form) return;
   event.preventDefault();
@@ -461,6 +589,20 @@ document.addEventListener('submit', async event => {
   catch (error) { pageError(error.message); }
 });
 wsPanes.forEach(p => p.part('term-body')?.addEventListener('scroll', p.term.onScroll));
+wsPanes.forEach(p => p.part('preview-box')?.addEventListener('toggle', () => { if (!p.part('preview-box').open) wsExpand(p.i, false); else wsViewerChanged(); }));
+// Esc, × or Collapse close the dialog; the viewer then returns to its pane.
+$('ws-viewer-dialog')?.addEventListener('close', () => {
+  const i = Number($('ws-viewer-dialog').dataset.pane);
+  if (wsPanes[i]?.part('preview-box').classList.contains('expanded')) wsExpand(i, false);
+});
+// Clicks on a provider's own surface (the preview and VM screens are handled in app.js).
+document.addEventListener('click', event => {
+  const img = event.target?.closest?.('img[data-surface-screen="surface"]');
+  if (!img || !img.naturalWidth) return;
+  const rect = img.getBoundingClientRect();
+  const x = Math.round((event.clientX - rect.left) / rect.width * img.naturalWidth), y = Math.round((event.clientY - rect.top) / rect.height * img.naturalHeight);
+  wsSurfaceInput(img.dataset.surfaceId, {action: 'click', x, y, width: img.naturalWidth, height: img.naturalHeight, button: 1}).catch(e => pageError(e.message));
+});
 // Clicking anywhere in a pane focuses it, so the next tab opens there.
 [0, 1].forEach(i => $(i ? 'ws-pane-1' : 'ws-pane')?.addEventListener('pointerdown', () => focusPane(i)));
 

@@ -169,6 +169,24 @@ Tabs are only views:
 - Below about 1,000 px wide (phones, narrow windows), only the focused pane is shown, with a note.
 - Each pane has its own terminal, approvals, files and notes. As with tabs, nothing about the layout is sent to the server or affects an agent.
 
+**Preview in the workspace.** Each workspace's **Preview** section shows the run's live surfaces inside the pane:
+- the web preview (in a frame)
+- a program's output (a command-line preview)
+- the desktop preview's screen
+- the VM screen for VM runs
+
+You can click, right-click and type into the desktop and VM screens, as in the Project tab. **Expand** opens the viewer in a large window; Esc, × or **Collapse** puts it back. With more than one surface, buttons switch between them.
+
+What doesn't happen:
+- Opening or expanding a viewer never starts anything. **Start preview** and **Stop preview** stay explicit buttons.
+- Nothing is fetched while a viewer is closed. When it's open, one frame request per second serves every viewer showing that screen, including the Project tab.
+
+The previews are described by `surfaces.py`, and new kinds plug in there as providers:
+- a browser session of an agent's own
+- a VNC display, such as ai-arch's
+
+None ships with AgentControl, so nothing depends on ai-arch. A provider that serves its own frames is read through `/api/surface/frame` and takes input through `/api/surface/input`. Both routes need the dashboard key, and every input is recorded in the audit log (never the text typed).
+
 A windowed layout comes in a later step.
 
 ## Controls

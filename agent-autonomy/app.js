@@ -1394,7 +1394,7 @@ function renderActivity() {
 // ---------------------------------------------------------------------------
 // Live project preview (Project tab)
 // ---------------------------------------------------------------------------
-const preview = {offset: 0, frameKey: '', timer: null, screenURL: '', lastStatus: {}, opened: new Set(), width: '100%'};
+const preview = {offset: 0, buffer: '', timer: null, screenURL: '', lastStatus: {}, opened: new Set(), width: '100%'};
 function previewStatus() { return data?.preview || {state: 'idle'}; }
 function previewForCurrent() { const p = previewStatus(); return !!current && p.run === current.id; }
 function previewLive(p = previewStatus()) { return ['starting', 'running'].includes(p.state); }
@@ -1498,20 +1498,24 @@ function renderPreviewStrip() {
     <div class="strip-item"><small>Goal checks</small><strong>${checks.length}</strong></div>
     <div class="strip-item"><button class="text-button" data-view="runs">Open the run</button>${files.length ? '<button class="text-button" data-action="diff">View changes</button>' : ''}</div>`);
 }
-async function ensurePreviewFrame(p) {
+/* Point a preview iframe (the Project tab's, or a workspace viewer's) at the running preview.
+   Each frame redeems its own one-time ticket. */
+async function ensurePreviewFrame(p, frame = $('preview-frame'), address = $('preview-address')) {
   const key = `${p.run}:${p.started}`;
-  if (preview.frameKey === key) return;
-  preview.frameKey = key;
+  if (frame.dataset.key === key) return;
+  frame.dataset.key = key;
   try {
     const {ticket, port} = await api('/api/preview/ticket', 'POST', {});
     const base = `${location.protocol}//${location.hostname}:${port}`;
-    $('preview-frame').src = `${base}/__ac/enter?ticket=${encodeURIComponent(ticket)}`;
-    $('preview-address').textContent = base + '/';
-  } catch (error) { preview.frameKey = ''; pageError(error.message); }
+    frame.src = `${base}/__ac/enter?ticket=${encodeURIComponent(ticket)}`;
+    if (address) address.textContent = base + '/';
+  } catch (error) { frame.dataset.key = ''; pageError(error.message); }
 }
 function appendPreviewOutput(text, reset) {
   const clean = stripAnsi(text);
-  for (const target of [$('preview-term-body'), $('preview-log')]) {
+  // Kept so a workspace viewer opened later starts with what was already printed.
+  preview.buffer = ((reset ? '' : preview.buffer || '') + clean).slice(-200000);
+  for (const target of [$('preview-term-body'), $('preview-log'), ...document.querySelectorAll('[data-surface-output]')]) {
     const atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 24;
     if (reset) target.textContent = '';
     if (clean) target.append(clean);
@@ -1523,8 +1527,10 @@ async function pollPreview() {
   clearTimeout(preview.timer);
   const p = previewStatus();
   let delay = 1500;
+  // The Project tab, or a workspace viewer that is open and showing this surface, needs updates.
+  const watch = globalThis.wsSurfaceWatch?.() || {};
   try {
-    if (key && connected && view === 'project' && previewForCurrent() && !document.hidden) {
+    if (key && connected && (view === 'project' || watch.preview) && previewForCurrent() && !document.hidden) {
       if (previewLive(p) || preview.offset < (p.offset || 0)) {
         const result = await api('/api/preview/output?since=' + preview.offset);
         if (typeof result.text === 'string') {
@@ -1541,23 +1547,28 @@ async function pollPreview() {
       }
       if (previewLive(p) && p.mode === 'desktop') await refreshScreen();
     }
-    if (key && connected && view === 'project' && data?.vm?.live === 'running' && !document.hidden) await refreshVmScreen();
+    if (key && connected && (view === 'project' || watch.vm) && data?.vm?.live === 'running' && !document.hidden) await refreshVmScreen();
   } catch {}
   preview.timer = setTimeout(pollPreview, delay);
 }
+/* One frame fetch updates every screen showing the desktop preview (Project tab and workspace panes). */
 async function refreshScreen() {
   const response = await fetch('/api/preview/frame', {headers: {Authorization: 'Bearer ' + key}});
   if (!response.ok) return;
   const url = URL.createObjectURL(await response.blob());
-  $('preview-screen').src = url;
+  document.querySelectorAll('img[data-surface-screen="preview"]').forEach(img => { img.src = url; });
   if (preview.screenURL) URL.revokeObjectURL(preview.screenURL);
   preview.screenURL = url;
 }
-function resetPreviewOutput() { preview.offset = 0; $('preview-term-body').textContent = ''; $('preview-log').textContent = ''; }
+function resetPreviewOutput() {
+  preview.offset = 0; preview.buffer = '';
+  $('preview-term-body').textContent = ''; $('preview-log').textContent = '';
+  document.querySelectorAll('[data-surface-output]').forEach(e => { e.textContent = ''; });
+}
 async function previewAction(action, extra = {}) {
   const status = await api('/api/preview', 'POST', {run: current.id, action, ...extra});
   if (status && status.state) data.preview = status;
-  if (['start', 'restart'].includes(action)) { resetPreviewOutput(); preview.frameKey = ''; }
+  if (['start', 'restart'].includes(action)) { resetPreviewOutput(); document.querySelectorAll('iframe[data-key]').forEach(f => { f.dataset.key = ''; }); }
   renderProject();
   pollPreview();
   return status;
@@ -1573,7 +1584,7 @@ function autoOpenProject() {
   }
 }
 function screenClick(event) {
-  const p = previewStatus(), img = $('preview-screen'), rect = img.getBoundingClientRect();
+  const p = previewStatus(), img = event.target?.closest?.('img[data-surface-screen]') || $('preview-screen'), rect = img.getBoundingClientRect();
   if (!rect.width || !p.width) return;
   const x = Math.round((event.clientX - rect.left) / rect.width * p.width), y = Math.round((event.clientY - rect.top) / rect.height * p.height);
   previewAction('click', {x: Math.max(0, x), y: Math.max(0, y), button: event.button === 2 ? 3 : 1}).then(refreshScreen).catch(e => pageError(e.message));
@@ -1849,7 +1860,7 @@ async function refreshVmScreen() {
   const response = await fetch('/api/vm/screen?run=' + encodeURIComponent(current.id), {headers: {Authorization: 'Bearer ' + key}});
   if (!response.ok) { $('vm-console-meta').textContent = '· screen unavailable'; return; }
   const blob = await response.blob(), url = URL.createObjectURL(blob);
-  $('vm-screen').src = url;
+  document.querySelectorAll('img[data-surface-screen="vm"]').forEach(img => { img.src = url; });
   if (vmScreenURL) URL.revokeObjectURL(vmScreenURL);
   vmScreenURL = url;
 }
@@ -1857,7 +1868,7 @@ async function vmInput(body) {
   try { await api('/api/vm/input', 'POST', {run: current.id, ...body}); await refreshVmScreen(); } catch (error) { pageError(error.message); }
 }
 function vmClick(event) {
-  const img = $('vm-screen'), rect = img.getBoundingClientRect(), width = img.naturalWidth, height = img.naturalHeight;
+  const img = event.target?.closest?.('img[data-surface-screen]') || $('vm-screen'), rect = img.getBoundingClientRect(), width = img.naturalWidth, height = img.naturalHeight;
   if (!rect.width || !width) return;
   const x = Math.min(width - 1, Math.max(0, Math.round((event.clientX - rect.left) / rect.width * width)));
   const y = Math.min(height - 1, Math.max(0, Math.round((event.clientY - rect.top) / rect.height * height)));
@@ -2044,7 +2055,7 @@ const ACTIONS = {
   'preview-start': () => previewAction('start'),
   'preview-restart': () => previewAction('restart'),
   'preview-stop': () => previewAction('stop'),
-  'preview-reload': () => { preview.frameKey = ''; ensurePreviewFrame(previewStatus()); },
+  'preview-reload': () => { $('preview-frame').dataset.key = ''; ensurePreviewFrame(previewStatus()); },
   'preview-open': async () => {
     const {ticket, port} = await api('/api/preview/ticket', 'POST', {});
     window.open(`${location.protocol}//${location.hostname}:${port}/__ac/enter?ticket=${encodeURIComponent(ticket)}`, '_blank', 'noopener');
@@ -2267,16 +2278,21 @@ function init() {
     if (!$('desktop-type').value) return;
     try { await previewAction('type', {text: $('desktop-type').value}); $('desktop-type').value = ''; await refreshScreen(); } catch (error) { pageError(error.message); }
   };
-  $('preview-screen').addEventListener('click', screenClick);
-  $('vm-screen').addEventListener('click', vmClick);
-  $('vm-screen').addEventListener('contextmenu', event => { event.preventDefault(); vmClick(event); });
+  // Clicks on any screen: the Project tab's, or one in a workspace viewer (right-click is button 3).
+  const onScreen = event => {
+    const img = event.target?.closest?.('img[data-surface-screen]');
+    if (!img) return;
+    if (event.type === 'contextmenu') event.preventDefault();
+    (img.dataset.surfaceScreen === 'vm' ? vmClick : screenClick)(event);
+  };
+  document.addEventListener('click', onScreen);
+  document.addEventListener('contextmenu', onScreen);
   $('vm-type-form').onsubmit = async event => {
     event.preventDefault();
     if (!$('vm-type').value) return;
     await vmInput({action: 'type', text: $('vm-type').value});
     $('vm-type').value = '';
   };
-  $('preview-screen').addEventListener('contextmenu', event => { event.preventDefault(); screenClick(event); });
   $('term-body').addEventListener('scroll', term.onScroll);
   $('terminal-dialog').addEventListener('close', () => expandTerminal(false));
   $('stage-track').addEventListener('scroll', () => {

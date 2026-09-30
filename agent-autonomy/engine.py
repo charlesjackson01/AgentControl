@@ -19,6 +19,7 @@ from proc import process
 from verify import SKIP_DIRS, TEXT_SUFFIXES, evidence, snapshot, transcript
 from events import EventBus
 from lifecycle import Lifecycle, StopEvent
+import surfaces as surface_registry
 import agents as agent_registry
 import roles
 import permissions
@@ -169,6 +170,7 @@ class Controller:
         self.pending_signatures = {}  # last approval list written per run, to avoid rewriting unchanged state
         self.preview = PreviewManager(self.s.project, self.s.preview_idle)
         self.preview.on_change = lambda: self.events.publish('preview', self.preview.run or None)
+        self.surfaces = surface_registry.default_registry()   # what the dashboard's viewers can show (W6)
         self.health = {'ready': False, 'message': 'Checking connections…'}
         self.models_error = ''
         self.gateway_info = None  # set by app.py when the model gateway is listening
@@ -2567,6 +2569,29 @@ class Controller:
             live = self._vm(run).state()
         return {**v, 'live': live}
 
+    def _surface(self, ident, surface_id):
+        run = self.store.get('runs', ident)
+        return self.surfaces.find(run, {'preview': self.preview.status(), 'vm': self.vm_status(run)}, surface_id)
+
+    def surface_frame(self, ident, surface_id):
+        """A frame from a registered provider that serves its own (not the preview or the VM,
+        which keep their endpoints)."""
+        provider, item = self._surface(ident, surface_id)
+        if item.get('frame') != 'surface':
+            raise ValueError('This surface has no frames here')
+        return provider.frame(self.store.get('runs', ident), surface_id)
+
+    def surface_input(self, ident, surface_id, action, **fields):
+        """Your input to a provider's surface, audited like the VM console (never the text typed)."""
+        provider, item = self._surface(ident, surface_id)
+        if item.get('input') != 'surface' or not item.get('interactive'):
+            raise ValueError('This surface does not take input')
+        if action not in ('click', 'type', 'key'):
+            raise ValueError('Action must be click, type, or key')
+        result = provider.input(self.store.get('runs', ident), surface_id, action, **fields)
+        self.store.audit_append(ident, {'action': f'surface {action}', 'actor': HUMAN, 'name': f"{item['kind']}:{surface_id}"})
+        return result or {'ok': True}
+
     def vm_console(self, ident):
         run = self.store.get('runs', ident)
         if not self._vm_rec(run) or self._vm(run).state() != 'running':
@@ -2913,7 +2938,7 @@ class Controller:
                     'created': r['created'], 'parent_run': r.get('parent_run'), 'prompt_count': self.store.step_count(r['id']),
                     'project': self.run_project(r)} for r in runs[:30]],
                 'runs_scope': 'all' if scope == 'all' else 'current', 'projects_root': str(self.projects_root()),
-                'preview': self.preview.status(),
+                'preview': (preview_status := self.preview.status()),
                 'agent_types': agent_registry.types(),
                 'roles': self.role_status(),
                 'spend': self.spend_status(run),
@@ -2927,7 +2952,8 @@ class Controller:
                 'workspace': self.workspace_status(run) if run else None,
                 'container': self.container_status(run) if run else None,
                 'sandbox': self.sandbox_status(),
-                'vm': self.vm_status(run) if run else None,
+                'vm': (vm := self.vm_status(run) if run else None),
+                'surfaces': self.surfaces.describe(run, {'preview': preview_status, 'vm': vm}),
                 'vm_env': self.vm_env_status(),
                 'skills': self.skills_status(run),
                 'usage': self.store.usage_summary(ident) if run else None,

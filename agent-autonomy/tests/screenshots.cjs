@@ -40,6 +40,14 @@ function withLifecycle(s) {
     {id: 904, kind: 'agent state', created: at(1), detail: JSON.stringify({agent: 'coder-1', from: 'working', to: 'finished', task: ''})}];
   return s;
 }
+function withSurfaces(s) {
+  s.run.preview = {mode: 'web', command: 'python3 -m http.server 8000', port: 8000};
+  s.preview = {state: 'idle', run: s.run.id, mode: 'web'};
+  s.surfaces = [
+    {id: 'preview', kind: 'web', title: 'Web preview', state: 'idle', interactive: false, frame: null, input: null, agents: 'all', note: 'python3 -m http.server 8000', provider: 'preview'},
+    {id: 'vm', kind: 'vm-console', title: 'VM screen', state: 'running', interactive: true, frame: 'vm', input: 'vm', agents: 'all', note: s.vm.name, provider: 'vm-console'}];
+  return s;
+}
 function withMission(s) {
   const team = s.run.mode === 'team';
   s.agents = [{name: 'hermes', type: 'orchestrator', role: 'Orchestrator', runtime: 'hermes-cli', model: 'Hermes profile test-profile', state: team ? 'idle' : 'idle', task: '', stats: {turns: 3, tool_calls: 0}},
@@ -149,6 +157,11 @@ const scenarios = {
   workspace: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="coder-2"] [data-workspace]'},
   workspacehermes: {state: () => withMission(teamState()), view: 'mission', click: '[data-agent-card="hermes"] [data-workspace]'},
   workspaceempty: {state: fx.empty, view: 'workspace'},
+  // W6: the VM console shown inside coder-1's workspace, then expanded over the workspace.
+  workspacevm: {state: () => withSurfaces(withVm(withMission(teamState()))), view: 'mission',
+    click: ['[data-agent-card="coder-1"] [data-workspace]', '#ws-preview-box summary']},
+  workspacevmexpanded: {state: () => withSurfaces(withVm(withMission(teamState()))), view: 'mission',
+    click: ['[data-agent-card="coder-1"] [data-workspace]', '#ws-preview-box summary', '[data-ws-expand="0"]']},
   // W4: split view, coder-1 on the left and coder-2 (waiting on you) focused on the right. Phones fall back to one pane.
   workspacesplit: {state: () => withMission(teamState()), view: 'workspace',
     storage: {'ac-workspaces': JSON.stringify({run: 'run_test', open: ['hermes', 'coder-1', 'coder-2'], active: 'coder-1', second: 'coder-2', focus: 1, mode: 'split', ratio: .5,
@@ -280,6 +293,7 @@ async function main() {
     const file = `${name}-${theme}-${size}.png`;
     if (only && !file.includes(only)) continue;
     const {context, page, errors} = await open(browser, theme, viewport, scenario);
+    await page.evaluate(() => window.scrollTo(0, 0));   // clicks may have scrolled; capture from the top
     await page.screenshot({path: path.join(out, file), fullPage: true});
     const o = await overflow(page);
     report.push({file, errors, ...o});

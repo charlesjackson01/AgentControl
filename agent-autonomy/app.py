@@ -71,8 +71,20 @@ def handler(controller, key):
 
         def do_GET(self):
             path = urllib.parse.urlsplit(self.path)
-            if path.path == '/':
+            if path.path in ('/', '/classic'):
                 return self.reply(200, (ROOT / 'index.html').read_text(), 'text/html; charset=utf-8')
+            if path.path in ('/chat', '/chat/'):
+                return self.reply(200, (ROOT / 'chat' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
+            if path.path.startswith('/chat/'):
+                import re
+                name = path.path[len('/chat/'):]
+                chat_root = (ROOT / 'chat').resolve()
+                asset = (chat_root / name).resolve()
+                if (re.fullmatch(r'[a-z0-9][a-z0-9-]*\.(css|js)', name)
+                        and asset.parent == chat_root and asset.is_file()):
+                    kind = 'text/css' if name.endswith('.css') else 'text/javascript'
+                    return self.reply(200, asset.read_bytes(), kind + '; charset=utf-8')
+                return self.reply(404, {'error': 'Not found'})
             assets = {'/themes.css': 'text/css; charset=utf-8', '/app.css': 'text/css; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
                       '/workspace.css': 'text/css; charset=utf-8', '/workspace.js': 'text/javascript; charset=utf-8'}
             if path.path in assets:

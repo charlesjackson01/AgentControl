@@ -270,3 +270,40 @@ python3 agent-autonomy/app.py --host 127.0.0.1 --port 8766 --project /path/to/pr
 
 If a requirement here conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict in the
 completion report instead of choosing silently.
+
+
+## Completion report — 2026-09-30 (Codex)
+
+Built the isolated, read-only `/chat` shell and `/classic` alias on `feature/chat-first-redesign`, starting at
+`b060f618976cee14c3ba25e033a0faef29ef6da0`. Server changes are confined to `do_GET` static routing, with
+strict asset names, resolved-path containment, fixed content types and existing security headers.
+
+The six frontend files implement shared-key Connect with optional device storage, guarded storage access,
+authenticated fetch SSE, coalesced state/roster refreshes, polling fallback and stream retry. Pure adapters
+provide project channels, ordered sessions, member presence and Connections. The shell includes session
+focus routing, recorded summaries, Session/Members context tabs, persisted collapse preference, the waiting
+pointer and a disabled composer with classic links. Light/dark tokens support the desktop frame, laptop
+overlay and phone drawer/bottom sheet. API text is escaped; no agent messages or decision controls are added.
+
+Validation:
+- `python3 -m unittest discover -s agent-autonomy/tests`: **351 tests, OK (3 skipped)**, 243.555 s;
+  includes four new HTTP route tests. The baseline documentation listed six skips; this environment skipped three.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`: **82/82 passed**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`: **13/13 passed**,
+  including key rejection/storage failures, focus/order/presence, escaping, read-only controls, SSE coalescing,
+  stream rejection/drop, polling, pure adapters, tokens and isolation.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots`:
+  **24 combinations passed** (empty, active/waiting, completed, team × desktop/laptop/phone × light/dark),
+  with **50 temporary screenshots** including focused context and phone drawers. Assertions verify no horizontal
+  overflow, panel behavior, authenticated API calls and no browser page errors. Representative desktop,
+  phone and dark-mode images were visually reviewed; a cramped phone header was corrected before the final pass.
+- `git diff --check`: passed. Classic frontend files and fixtures remain unchanged.
+
+No scope deviations. Test-only npm dependencies live in `/tmp/ac-tests`; screenshots live in `/tmp/chat-shots`
+and are not committed. The documented `/opt/pw-browsers` location was absent; the optional screenshot runner
+also discovers cached Playwright Chromium and accepts `CHROMIUM_PATH`. Sandbox restrictions prevented local
+test sockets and Chromium startup, so those checks were rerun successfully with approved execution outside
+the sandbox. No runtime dependencies were added.
+
+No blocking open questions for Opus. M2 remains unimplemented; its channel/thread read model is the next task.
+The existing 30-session state cap is intentional for M1. No PR or merge into `main` is part of this work.

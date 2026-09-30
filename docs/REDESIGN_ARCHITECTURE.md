@@ -41,6 +41,7 @@ The priorities, in order:
 | D4 | **No theme system** in the new UI: Mac, Terminal and XP are not ported. There is one design language (§9), built on design tokens so theming *could* return later. |
 | D5 | A read-only `/api/thread` (and `/api/channels`) presentation layer over the journal is approved. It changes no orchestration. |
 | D6 | **Approved by the owner, 2026-09-30.** One index, `events_run_id ON events(run, id)`, added by one append-only `journal.py` migration (`_v7`) in M2.1 (`M2_1_CORRECTIONS.md` Part B). It adds no table, no column and no data change. This is a **narrow exception** to invariant 1's no-migration rule, not a precedent: any other schema change, including other indexes, needs its own owner decision. |
+| D7 | **Pending owner decision (recommended: approve).** Two narrow `engine.py` guards: `decide_research` refuses finished or stopping sessions, and `fetch_capability` refuses finished sessions, each before any state change, audit entry or network access. Nothing else in the engine changes. See `M5_0_ACTIONABILITY.md` Part B. |
 
 ## 3. Invariants (never weakened)
 
@@ -393,3 +394,9 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   - For M4: the slash commands are split between M4 (run controls, `/check`, `/title`, `/help`) and M5 (decisions).
   - The idle composer is a single line. Phone footer budgets at 390 × 844 are ≤ 72 px idle and ≤ 120 px with the waiting row.
   - Paid models, the stuck watch and internet-during-work stay in classic until a later milestone.
+- 2026-09-30 (M4 review):
+  - M4 needs M4.1 corrections before acceptance: title, goal checks and `allow_dirty` are per-session and never remembered;
+    only a leading `@agent` targets a note, and every other `@word` is literal. This corrects the M4 handoff's mention rules.
+  - The M5 prerequisite is defined in `M5_0_ACTIONABILITY.md`: actionable means the session accepts decisions (not
+    finished, not stopping), outcomes excepted. `channels.waiting` must count exactly the actionable non-outcome items.
+  - D7 (engine guards) was raised for the owner.

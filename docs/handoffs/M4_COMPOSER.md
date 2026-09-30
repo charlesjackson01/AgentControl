@@ -412,3 +412,104 @@ focus, partial-session divider counts and live refresh of the single-session fal
 The research/skill actionable-state versus waiting-count mismatch remains visible and untouched; its
 server-side reconciliation is an explicit prerequisite for M5. M5 has not begun. Native phone keyboard
 verification remains an environment limitation for review.
+
+
+## Architecture, correctness and UX review — 2026-09-30 (Opus)
+
+**Verdict: corrections required before M4 is accepted (M4.1).** The composer's architecture, endpoints, failure
+handling and phone layout are right. **Two write-path defects send content the user did not see or did not write**;
+they are handed off in `docs/handoffs/M4_1_CORRECTIONS.md`. Separately, the M5 prerequisite has been investigated
+and defined in `docs/handoffs/M5_0_ACTIONABILITY.md`.
+
+Reviewed: `137a5b8..30e83f2` (the single commit `30e83f2`), with the suites re-run, the screenshot matrix and
+footer measurements regenerated, and the pure helpers probed directly.
+
+### Re-run in the review environment (at `30e83f2`)
+
+| Suite | Result |
+|---|---|
+| Python | **398 tests, OK (skipped=6)**: the same six environment gates; 3 in Codex's environment |
+| Classic DOM | **82/82** |
+| Chat DOM | **67/67**. Against the pre-M4 frontend, the 25 new tests all fail (42/67), as expected with no composer |
+| Browser | **84 combinations + 4 regressions**, 134 screenshots |
+
+**Footer measurements at 390 × 844, reproduced exactly:**
+- idle **57 px** (limit ≤ 72)
+- with the waiting row **105 px** (limit ≤ 120; the row itself 40 px)
+- the conversation keeps **81.0%** of the viewport, or **75.3%** with the waiting row (minimum 65%)
+
+The renders (`composerIdle-desktop-light`, `composerNote-phone-light`, `composerAdvanced-phone-dark`,
+`composerStop-phone-light`) look deliberately compact, not merely inside the budgets:
+- one line holding the target chip, the input, a gear-only Settings button on phones, and Send
+- a bottom-sheet Settings panel with Advanced collapsed
+- a clear Stop dialog with Cancel focused
+- the mention list above the input
+
+**Limitation:** native phone-keyboard behaviour is **unverified** (only `visualViewport` emulation was tested).
+M8 must check it on a real device.
+
+### Verified
+
+- **Same room, no new interaction model.** The one composer lives in the existing footer; Settings is a sheet;
+  Stop is a `<dialog>`; the session menu sits in the room header. There is no new page, panel mode or message store:
+  the composer holds only the draft and the Settings preferences.
+- **Endpoints and shapes.** The only calls are `/api/runs`, `/api/control` (instruction, goal_check, title, pause,
+  resume, stop), `/api/check`, `/api/mode/preview`, `/api/workspace/preflight`, `/api/sandbox` and `/api/state`.
+  Real-server checks with the test fakes show the exact bodies. `models`, `spend_cap`, `confirm`, `watch` and
+  `network:'internet'` are refused on the client and stripped from stored settings.
+- **Server-authoritative appearance.** There is no local echo. After a 2xx response, the draft clears only if it is
+  unchanged, the status node reads "Sent · it will appear in the room", and one immediate coalesced refresh runs.
+  A test holds `/api/thread` and proves the timeline does not change until it returns.
+- **Failure behaviour:**
+  - a 4xx error shows inline and keeps the draft
+  - a 401 returns to sign-in, keeping the draft in `sessionStorage`
+  - a network failure keeps the draft
+  - single-flight covers preparation (preflight and Auto preview) and the POST
+  - Resume, Check again and the session controls are disabled while a request is in flight
+  - Stop re-checks that the active session is still the one confirmed
+  - nothing false is left in the room after a failure
+- **Out of scope, as required.**
+  - `/verify`, `/apply`, `/discard` and `/team` say "not available here" with a classic link and send nothing.
+  - There are no decision controls, paid-model, stuck-watch or internet options, and no client-side decision state.
+  - The research/skill mismatch is untouched and still visible (the M3.1 guard test is intact).
+- **Carried-forward polish:**
+  - Resolved: the phone footer height, the waiting-row alignment and the duplicate classic link.
+  - Still deferred, legitimately: focus after "Load earlier", the partial-session divider count, and live refresh of
+    the single-session view. These are now scheduled for M8 (phone and accessibility).
+
+### Findings
+
+**Blocking** (handed off in `M4_1_CORRECTIONS.md`):
+
+1. **The previous session's title and goal checks are silently resent with the next session.**
+   - After a successful start, `submit()` saves the whole `settings` object to `acx-settings`, including `title` and
+     `goal_checks`. Within one page load, `settings` is never reset either.
+   - Probe: after a session with title "Todo CLI v1" and goal check "Persist tasks to JSON", the next goal "Add a web UI"
+     sends `{"title":"Todo CLI v1","goal_checks":["Persist tasks to JSON"], …}`.
+   - Goal checks are acceptance criteria Hermes must satisfy, and the Settings sheet is closed by default, so the user never sees them.
+   - The handoff's remember-list (§2.8) was verifier, limits, mode, isolation, network and preview. The test
+     "new session sends only goal and remembered/changed settings" **asserts** the title is remembered, so it fixed the defect in place.
+2. **Mention parsing blocks or rewrites ordinary notes.**
+   - Any `@word` is treated as a target: "Pin @types/node to v20" and "Use the @pytest.fixture decorator" **cannot be
+     sent** ("no agent named types").
+   - Every known mention is stripped: "Ask @coder-2 to sync with @coder-1 on the schema" is sent as
+     **"Ask  to sync with  on the schema"**, routed to `coder-1`.
+   - The first behaviour follows this handoff's own wording ("an unknown name is a local error"; "a second mention
+     replaces the first"), so **the spec is corrected** in M4.1: only a leading `@agent` targets, and every other `@word` is literal text.
+
+**Should fix before M5** (also in M4.1):
+
+3. The empty room still says "Start a session in classic", although the composer now starts sessions.
+4. Cancelling a follow-up leaves the parent's verifier, turn limit and mode in the in-memory settings, so the next
+   *new* session inherits them, and saves them after it succeeds.
+
+**Optional polish:**
+
+5. A network failure shows the browser's raw text ("Failed to fetch"). Say that the request may or may not have been recorded, and to check the room before resending.
+6. The session menu stays open behind the Stop dialog.
+7. Native-keyboard verification, and the three deferred M3 items, move to M8.
+
+### The M5 prerequisite
+
+This was investigated as requested; see `M5_0_ACTIONABILITY.md` for the definition, the authoritative source, the layer, the impact and the tests.
+M5 itself stays unstarted.

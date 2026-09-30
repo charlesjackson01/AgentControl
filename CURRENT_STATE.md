@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Codex (M4 implemented and verified; awaiting architecture/UX review).
+**Last updated:** 2026-09-30, by Opus (M4 review: corrections required (M4.1); M5 prerequisite defined (M5.0); D7 raised).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Next:** review the completion report in `M4_COMPOSER.md` |
+| Handoffs | `docs/handoffs/`. **Next:** `M4_1_CORRECTIONS.md` and `M5_0_ACTIONABILITY.md` (independent). The full M5 handoff follows once both are accepted |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -22,6 +22,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 |---|---|---|---|
 | Planning: decisions D1–D5 | ✅ done | Opus | recorded in the architecture doc §2 |
 | **D6 events index** | ✅ **approved by the owner 2026-09-30** | owner | exactly one `events(run, id)` index via migration `_v7`, implemented in M2.1 Part B; a narrow exception to the no-migration rule, not permission for other schema changes (architecture §2 and §3) |
+| **D7 engine guards** | ⚠ **owner decision needed** (recommended: approve) | owner | `decide_research` refuses finished or stopping sessions, and `fetch_capability` refuses finished sessions; nothing else in the engine changes (architecture §2; `M5_0_ACTIONABILITY.md` Part B). Record the decision here: **D7: pending** |
 | D1 backend merge | ✅ done | Opus | `af4da89`; tree = `967aa85` + redesign docs |
 | **M1 App shell** | ✅ accepted (review 2026-09-30) | Codex | read-only `/chat`, `/classic` alias; completion report and Opus review in `docs/handoffs/M1_APP_SHELL.md` |
 | **M1.1 Shell corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
@@ -29,7 +30,9 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M2.1 Read-model corrections** | ✅ accepted (review 2026-09-30) | Codex | Parts A + B: recorded-session request attribution, stable outcome actions/revisions, non-empty planner decisions, cheaper reads, and exactly the D6 `_v7` index; 15 new regressions |
 | **M3 Room timeline** | ✅ accepted (with M3.1, review 2026-09-30) | Codex | `thread.js`: read-only project room, keyed updates, paging, session disclosure, deep links and waiting pointers; completion report in `docs/handoffs/M3_ROOM_TIMELINE.md` |
 | **M3.1 Timeline corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M3_1_CORRECTIONS.md`: classic receipt labels, server revalidation capped at ten pages with history reset, separate waiting lines, exact strip wording, real rail cap note; eight new regressions |
-| **M4 Composer** | ✅ implemented, awaiting review | Codex | `docs/handoffs/M4_COMPOSER.md`: new session, follow-up, notes with `@agent`, pause/resume/confirmed stop, `/check` and `/title`, Basic/Advanced Settings; server-authoritative messages, compact phone footer; decisions stay in classic until M5 |
+| **M4 Composer** | ✅ reviewed 2026-09-30: architecture, endpoints, failure handling and phone budgets verified; **corrections required (M4.1)** | Codex | measured 57 px idle / 105 px with waiting / ≥ 75.3% conversation at 390 × 844; the native keyboard is unverified (M8) |
+| **M4.1 Composer corrections** | ⏭ ready; **blocking M4 acceptance** | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: no remembered title or goal checks, no follow-up leak, a leading-only `@agent`, empty-room copy |
+| **M5.0 Actionability (M5 prerequisite)** | ⏭ ready (Part A); Part B needs D7 | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: one definition of actionable shared by the thread and `waiting`; `detail.expired` for items left undecided when a session ended |
 | M5–M9 | not started | | see architecture §12 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `composer.js`, `shell.js`.
@@ -40,11 +43,11 @@ The new read-only endpoints project the journal with bounded messages, stable id
 The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` still supplies members, Connections, the rail session list and context. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
 Backend read-model tests: `tests/test_conversation.py` (34) and `tests/test_thread_api.py` (11); journal tests (7) include v6-to-v7 preservation and index query plans.
 
-## Tests (M4 working tree on `137a5b8`; verified by Codex 2026-09-30)
+## Tests (at `30e83f2`; re-verified in the Opus review environment 2026-09-30)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)**; OpenCode tests ran; no timing failure in this M4 run |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=6)** here (all six gates below); 3 in Codex's environment, where the OpenCode tests ran |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
 | Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **67/67 passed** (42 carried forward + 25 M4 regressions) |
 | Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m4` | **84 combinations + 4 regressions passed**, 134 temporary screenshots; idle phone footer 57 px, with waiting 105 px, waiting row 40 px; timeline ≥75.3%; waiting text aligned, no overflow or page errors |
@@ -112,15 +115,22 @@ ordering, paging, disclosure state, receipt labels and bounded stale-action reva
 - `/api/state` caps runs at 30. The rail's session list still inherits that in M3; the timeline itself pages the full history through `/api/thread`.
   Reviewed and acceptable: older sessions stay reachable through paging, deep links and "continues" links. M3.1 now shows a
   "Showing 30 of N sessions · older sessions are in the room history" note using the actual counts; M6 replaces the rail's data source.
-- For M5: `/api/thread` can mark research and skill items actionable on finished sessions, while `/api/channels.waiting`
-  counts only the active session. **An explicit M5 prerequisite:** reconcile it server-side before M5 offers real
-  controls (see the M3 review). M3.1 and M4 deliberately do not work around it.
+- **M5 prerequisite, now defined (`M5_0_ACTIONABILITY.md`).** `/api/thread` gives research (`awaiting_approval`) and
+  skill (`proposed` / `awaiting_fetch`) items an `action` with no session-state check, while `waiting` counts only the
+  active, non-stopping session. In the engine:
+  - approving research on a finished session is recorded and audited, but never runs (research executes only inside the session's control loop)
+  - approving a skill on a finished session is refused, while fetching it is still allowed
+
+  The fix: actionable = the session accepts decisions (not finished, not stopping), outcomes excepted, in
+  `conversation.py`, with `waiting` computed from the same predicates. Engine guards are optional, pending **D7**.
 - Still deferred from the accepted M3/M3.1 reviews: focus after Load earlier, partial-session divider counts,
-  and live refresh of the single-session fallback view. M4 only adds the outcome Reply link in `thread.js`.
+  and live refresh of the single-session fallback view. **Scheduled for M8** (phone and accessibility), together with
+  **native phone-keyboard verification** of the composer (M4 verified `visualViewport` emulation only).
 
 ## Next step
 
-1. Opus reviews **M4** and its completion report in `docs/handoffs/M4_COMPOSER.md`.
-2. After acceptance, Opus writes the M5 handoff (decision controls). **M5 prerequisite:** reconcile the research/skill
-   action versus `waiting` mismatch server-side first (see Known issues).
-3. M5–M9 remain unstarted; the architecture contract stays binding.
+1. **The owner decides D7** (the engine guards for dead research and skill decisions). Record it in the progress table.
+2. Codex executes **`docs/handoffs/M4_1_CORRECTIONS.md`** and **`docs/handoffs/M5_0_ACTIONABILITY.md`** (Part A,
+   plus Part B only if D7 is approved). They are independent and may run in either order.
+3. Opus reviews both. Once they are accepted, M4 is accepted and Opus writes the full M5 handoff (decision controls).
+4. M5–M9 remain unstarted; the architecture contract stays binding.

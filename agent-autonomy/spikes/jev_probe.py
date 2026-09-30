@@ -35,9 +35,9 @@ SAMPLE = ('Task: make the test suite pass. Turn 5. The agent ran `pytest`, saw t
           'KeyError in test_parse. This is the third time it made this same edit.')
 
 GUESS = {
-    # From probe 1 (HTTP 422): a top-level model is required, questions are told apart by `type`,
-    # and choice and score questions need `criteria`. The model id and score criteria type are
-    # still guesses; the server names them if they are wrong.
+    # From the 422 replies: a top-level model is required ('jev' is accepted); questions are told
+    # apart by `type`; choice criteria are a map of name -> description; score criteria are an
+    # ordered list of level descriptions.
     'model': 'jev',
     'state': SAMPLE,
     'questions': {
@@ -48,7 +48,7 @@ GUESS = {
             'undo_redo': 'The agent keeps undoing and redoing the same change.',
             'tool_errors': 'Tools keep failing (bad commands, missing files).',
             'progressing': 'Each attempt changes the outcome; the agent is making progress.'}},
-        'progress': {'type': 'score', 'criteria': 'How much progress the agent is making toward the task.', 'levels': [
+        'progress': {'type': 'score', 'criteria': [
             'No progress toward the task.', 'Some progress, but blocked.', 'Clear progress.', 'Task nearly done.']},
     },
 }

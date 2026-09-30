@@ -314,3 +314,105 @@ Screenshot review found and resolved a footer-layout scroll issue; the final mat
 No scope deviations, API contract gaps or unresolved M3 issues. The existing 30-session rail limit, environment
 gates, backend timing-sensitive tests and v1 server materialisation remain documented in `CURRENT_STATE.md`.
 M3 is ready for architecture review; M4 has not begun.
+
+
+## Architecture and UX review — 2026-09-30 (Opus)
+
+**Verdict: M3 is architecturally sound, but corrections are required before M4.** Nothing is blocking.
+Three correctness and UX issues on the decision surface must be fixed first; they are handed off in
+`docs/handoffs/M3_1_CORRECTIONS.md`. The M4 handoff will be written once M3.1 is accepted.
+
+Reviewed: `53d23cf..aee4296` (the single commit `aee4296`), the rendered screenshot matrix, and targeted DOM probes
+of the shipped `thread.js`.
+
+### Re-run in the review environment (at `aee4296`)
+
+| Suite | Result |
+|---|---|
+| Python | **398 tests, OK (skipped=6)**: the same six environment gates; 3 in Codex's environment |
+| Classic DOM | **82/82** |
+| Chat DOM | **34/34** |
+| Browser | **42 combinations + 4 regressions**, 90 screenshots; I reviewed them myself (listed below) |
+
+No backend, schema, classic or orchestration file changed.
+
+### Verified
+
+- **The project room is the primary surface.** The timeline replaced M1's session blocks. Sessions are dividers inside the one room.
+  Older sessions collapse to their divider, goal and outcome; the newest and live sessions stay expanded.
+  "Viewing one session" is a clearly labelled, temporary mode with "Back to room".
+- **The data contract holds.**
+  - Timeline content comes only from `/api/thread`; room identity and waiting counts come from `/api/channels`.
+  - `/api/state` feeds only members, Connections, the rail session list and the context panel.
+  - There are no `/api/agents` calls, no POSTs, and no browser storage of messages.
+  - The client cache is page-lifetime and read-only (`thread.js`), so there is no second conversation store.
+- **Merging and paging:**
+  - `mergeNewest` keeps the server's order, resolves stubs from the cache, and replaces the newest window from its first overlap.
+  - `prependOlder` removes duplicates, and a gap is walked for at most 5 pages before a reset.
+  - Tests cover moved requests (pending → decided), a 250-message gap and its reset, prepend ordering, the beginning marker and the scroll anchor.
+- **Keyed rendering:** unchanged messages keep their DOM node. Disclosure state is remembered per message id, including
+  when older history is prepended into a quiet group (tested). Focus is restored inside replaced nodes.
+- **Live refresh:** each SSE change produces one coalesced cycle of `/api/state`, `/api/channels` and `/api/thread`
+  (with `known=`), and a 401 from any of them returns to sign-in (tested).
+- **Attribution and actions:**
+  - `actor` is rendered as given, and the decided `coder-2` fixture shows `coder-2`.
+  - Only messages with a non-null `action` show "Waiting for you" and exactly one classic link.
+  - Only the newest finished session's outcome is actionable (server rule), and a newly finished session retires the older outcome's marker.
+  - `fingerprint`, `fields` and `choices` never reach the DOM, and no control names a decision (tested).
+- **Privacy:** everything is plain escaped text; Markdown and HTML render literally. The turn's `prompt` is the
+  bounded public task from `/api/thread`, not the Hermes request. No reasoning, raw tool output or text in Hermes's
+  or an agent's voice appears; the live status line comes only from `live.phase`.
+- **Composer:** still disabled, with the honest placeholder. No write path exists.
+- **Screenshots reviewed:**
+  - `threadTeam-desktop-light`, `threadActive-desktop-dark`, `threadLong-laptop-light`, `threadTeam-laptop-dark-context`, `threadTeam-phone-light`
+  - The room reads as calm, one line per quiet item, with "N updates" grouping, "Details" disclosure under
+    human-readable summaries, subtle request borders and no cards inside cards. Light and dark both hold up.
+  - There is no horizontal overflow at 390 px.
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before M4** (handed off in `M3_1_CORRECTIONS.md`):
+
+1. **A denied request, or an answered question, looks merely "Confirmed".**
+   - `receiptState` maps only `approve` to a word; it looks for `deny`, but the engine records **`reject`**
+     (`Controller.review` accepts `approve|reject` for permissions and `answer|reject` for questions).
+   - Probe with the shipped `thread.js` and receipts in state `confirmed`: approve → "Approved by you · Confirmed";
+     **reject → "Confirmed"**; **answer → "Confirmed"**.
+   - On the surface that reports your decisions, a denied `rm -rf` reading as "Confirmed" is misleading.
+     The fixtures contain no reject or answer receipts, so the tests could not catch it.
+   - Classic's `receiptLabel` already defines the right words.
+2. **Stale "Waiting for you" markers, and one unbounded page walk.**
+   - Only a newly finished session's effect on *outcome* actions is revalidated.
+   - A proposal, research, skill or request that is still marked actionable but lies outside the newest 200-message
+     window keeps "! Waiting for you" after it has been decided in classic.
+   - The outcome revalidation loop in `core.refresh` also has **no page cap**. Every other walk is capped at 5 or 10 pages.
+3. **Inline actionable rows run text together.** In quiet one-line rows (for example a skill item),
+   "! Waiting for you" and its link render as **"! Waiting for youOpen in classic dashboard"** (seen in
+   `threadTeam-desktop-light` and `threadTeam-phone-light`). Also, the waiting strip reads "N waiting for you ·
+   requests" although the count also includes proposals, research and skills; the handoff wording was "! N waiting for you".
+
+**Optional polish** (fold into M4 or later):
+
+4. On a 390 × 844 phone, the disabled composer, its label and a second "Open classic dashboard" link take about a
+   third of the viewport. M4 replaces the composer; make it compact there.
+5. Focus is lost after "Load earlier", because `#thread-history` is re-rendered. Keep focus on the control, or move it to the first newly loaded message.
+6. "Show N messages" on a collapsed divider counts only the loaded messages.
+7. The "Viewing one session" view is not refreshed live.
+
+### The known limitations in `CURRENT_STATE.md`
+
+- **The `/api/state` 30-session cap on the rail: acceptable for M3.**
+  - The conversation is complete: the timeline pages all history through `/api/thread`.
+  - A session older than the rail's 30 is still reachable through "Load earlier", deep links (10-page lookup,
+    then the single-session view) and "continues" links. Nothing is lost; only the rail's shortcut list is shorter.
+  - Make it honest cheaply: M3.1 shows "Showing 30 of N sessions" using `/api/channels`' `sessions` count.
+  - Replace the rail's data source in M6 (members and team), when `/api/state`'s role is revisited.
+- **V1 server materialisation of one session at a time: acceptable.** It was measured in the M2.1 review (tens of
+  milliseconds with the index). Revisit only if single sessions reach tens of thousands of non-folded events.
+
+**Note for M5 (server, not M3.1).** `/api/thread` can mark a research step (`awaiting_approval`) or a skill
+(`proposed` / `awaiting_fetch`) actionable on a *finished* session, while `/api/channels.waiting` counts only the
+active session. M5, which adds real decision controls, must decide whether such items are actionable at all. That
+needs reconciling server-side, with a contract note, before any control is offered for them.

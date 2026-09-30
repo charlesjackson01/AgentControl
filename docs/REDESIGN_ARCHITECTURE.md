@@ -382,3 +382,8 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   - D6: `events_run_id` index added as migration `_v7`; no other schema changes.
 - 2026-09-30 (M2.1 review): M2.1 accepted. The M3 handoff was checked against the final API and gained §2.1
   (the final API behaviour to rely on).
+- 2026-09-30 (M3 review):
+  - The M3 architecture is accepted: the room is built on `/api/channels` and `/api/thread` only, with a page-lifetime read cache.
+  - M3.1 corrections are required before M4: receipt labels follow classic `receiptLabel` semantics; stale action
+    markers are revalidated only by bounded (≤ 10-page) re-reads, never cleared by the client; the waiting line is separate.
+  - M5 must reconcile `/api/thread` actions on finished sessions with `/api/channels.waiting`.

@@ -187,7 +187,25 @@ The previews are described by `surfaces.py`, and new kinds plug in there as prov
 
 None ships with AgentControl, so nothing depends on ai-arch. A provider that serves its own frames is read through `/api/surface/frame` and takes input through `/api/surface/input`. Both routes need the dashboard key, and every input is recorded in the audit log (never the text typed).
 
-A windowed layout comes in a later step.
+**Windows.** **Tabs | Split | Windows** in the tab bar (`\` cycles through them). In Windows mode, every open agent gets its own window on a desk:
+- Drag a title bar to move it, and the corner grip to resize it. Double-click the title bar, or use its maximize button, to fill the desk.
+- Minimize sends a window to the strip at the bottom; click it there, or its tab, to restore it.
+- Close (×) is the same as closing the tab: the agent keeps working.
+- Clicking a window brings it to the front, and `o` brings forward the one furthest back.
+- Positions and sizes are remembered in this browser. A window placed on a larger screen is fitted into a smaller one without losing its saved size.
+- At most four windows are drawn at once. Opening a fifth minimizes the one you used least recently, which keeps a large team cheap to display.
+- Themes:
+  - Mac windows have traffic-light buttons.
+  - Terminal windows are plain boxes, with the focused one's border lit, like tmux.
+  - XP windows have a blue title bar with minimize, maximize and close. Their taskbar buttons restore a window, or minimize it when it's already in front.
+- On narrow screens and phones, Windows mode shows the focused workspace alone, with a note.
+
+**Pop-outs.** **Pop out ↗** (in the tab bar, or on a window) opens a workspace in its own browser window. It is fed by this dashboard:
+- Each time the dashboard refreshes, it hands the same data to its pop-outs over a same-origin `BroadcastChannel`. A pop-out makes no requests and opens no event stream while the dashboard is open.
+- If the dashboard is closed, the pop-out switches to its own updates within about 20 seconds.
+- Approvals, notes and preview input from a pop-out go straight to the API, as from the dashboard.
+- Opening or closing a pop-out never affects an agent, and it leaves your saved tabs alone.
+- The dashboard marks popped-out tabs with ↗.
 
 ## Controls
 
@@ -360,7 +378,7 @@ Window decorations are decorative and contain no real OS logos.
 - `t`: open the OpenCode terminal full screen.
 - `?`: show the shortcut table.
 - `1`–`9`, `]`, `[`: in Workspace, pick, next or previous agent tab.
-- `\` and `o`: in Workspace, switch between tabs and split view; focus the other pane.
+- `\` and `o`: in Workspace, cycle tabs, split view and windows; focus the other pane or bring the back window forward.
 - `Enter` sends a steering note on devices with a keyboard; `Shift+Enter` adds a line.
 
 Shortcuts are ignored in editable fields, while a modifier key is held, and

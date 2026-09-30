@@ -162,6 +162,13 @@ const scenarios = {
     click: ['[data-agent-card="coder-1"] [data-workspace]', '#ws-preview-box summary']},
   workspacevmexpanded: {state: () => withSurfaces(withVm(withMission(teamState()))), view: 'mission',
     click: ['[data-agent-card="coder-1"] [data-workspace]', '#ws-preview-box summary', '[data-ws-expand="0"]']},
+  // W5: windows (coder-2 in front, Hermes minimized to the dock) and a popped-out workspace.
+  workspacewindows: {state: () => withMission(teamState()), view: 'workspace',
+    storage: {'ac-workspaces': JSON.stringify({run: 'run_test', open: ['hermes', 'coder-1', 'coder-2'], active: 'coder-2', second: 'coder-1', focus: 0, mode: 'windows', ratio: .5,
+      winFocus: 'coder-2', known: ['hermes', 'coder-1', 'coder-2'], fresh: [], changed: [], states: {hermes: 'idle', 'coder-1': 'working', 'coder-2': 'waiting_on_you'},
+      windows: {hermes: {x: 20, y: 12, w: 600, h: 500, z: 1, min: true, max: false}, 'coder-1': {x: 16, y: 16, w: 560, h: 520, z: 2, min: false, max: false},
+        'coder-2': {x: 420, y: 70, w: 600, h: 560, z: 3, min: false, max: false}}})}},
+  workspacepopout: {state: () => withMission(teamState()), view: 'workspace', query: '?popout=coder-2&run=run_test', wait: 2600},
   // W4: split view, coder-1 on the left and coder-2 (waiting on you) focused on the right. Phones fall back to one pane.
   workspacesplit: {state: () => withMission(teamState()), view: 'workspace',
     storage: {'ac-workspaces': JSON.stringify({run: 'run_test', open: ['hermes', 'coder-1', 'coder-2'], active: 'coder-1', second: 'coder-2', focus: 1, mode: 'split', ratio: .5,
@@ -259,8 +266,8 @@ async function open(browser, theme, [width, height], scenario) {
   });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto('http://agentcontrol.test/', {waitUntil: 'domcontentloaded'});
-  await page.waitForTimeout(400);
+  await page.goto('http://agentcontrol.test/' + (scenario.query || ''), {waitUntil: 'domcontentloaded'});
+  await page.waitForTimeout(scenario.wait || 400);
   for (const click of [].concat(scenario.click || [])) {
     if (!(await page.locator(click + ':visible').count()) && (await page.locator('[data-action="drawer"]:visible').count())) {
       // Navigation lives in the drawer on phones.

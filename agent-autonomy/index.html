@@ -6,9 +6,9 @@
   <meta name="color-scheme" content="light dark">
   <link rel="icon" id="favicon" href="data:,">
   <script>try{const t=localStorage.getItem('ac-theme');if(['mac','terminal','xp'].includes(t))document.documentElement.dataset.theme=t}catch{}try{if(localStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('ac-dashboard-key')||sessionStorage.getItem('trial-dashboard-key'))document.documentElement.classList.add('has-key')}catch{}</script>
-  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5"><link rel="stylesheet" href="/workspace.css?v=7">
+  <link rel="stylesheet" href="/themes.css?v=5"><link rel="stylesheet" href="/app.css?v=5"><link rel="stylesheet" href="/workspace.css?v=8">
   <script src="/app.js?v=5" defer></script>
-  <script src="/workspace.js?v=7" defer></script>
+  <script src="/workspace.js?v=8" defer></script>
 </head>
 <body>
 <svg class="icon-sprite" aria-hidden="true"><defs>
@@ -87,7 +87,7 @@
         <div id="connection-banner" class="notice hidden" role="status"></div><div id="page-error" class="notice danger hidden row between" role="alert"><span id="page-error-text"></span><button class="icon-button" data-action="dismiss-error" aria-label="Dismiss error">×</button></div>
         <section id="view-workspace" class="view hidden" aria-label="Agent workspaces">
           <div class="ws-bar"><nav id="ws-tabs" class="ws-tabs" role="tablist" aria-label="Agent workspaces"></nav>
-            <div class="ws-modes" role="group" aria-label="Layout"><button data-ws-mode="tabs" aria-pressed="true" title="One workspace at a time">Tabs</button><button data-ws-mode="split" aria-pressed="false" title="Two workspaces side by side (key \)">Split</button></div><div class="ws-add-wrap"><button id="ws-add" class="ws-add" data-action="ws-menu" aria-haspopup="true" aria-expanded="false" title="Open an agent workspace">+<span id="ws-add-new" class="ws-new-dot hidden" aria-label="new agent"></span></button><div id="ws-menu" class="ws-menu hidden" role="menu"></div></div></div>
+            <div class="ws-modes" role="group" aria-label="Layout"><button data-ws-mode="tabs" aria-pressed="true" title="One workspace at a time">Tabs</button><button data-ws-mode="split" aria-pressed="false" title="Two workspaces side by side (key \)">Split</button><button data-ws-mode="windows" aria-pressed="false" title="Movable, resizable windows">Windows</button></div><button id="ws-popout" class="ws-popout hidden" data-ws-popout="" title="Open the focused workspace in its own browser window">Pop out ↗</button><div class="ws-add-wrap"><button id="ws-add" class="ws-add" data-action="ws-menu" aria-haspopup="true" aria-expanded="false" title="Open an agent workspace">+<span id="ws-add-new" class="ws-new-dot hidden" aria-label="new agent"></span></button><div id="ws-menu" class="ws-menu hidden" role="menu"></div></div></div>
           <div id="ws-empty" class="ws-empty hidden"></div>
           <p id="ws-narrow" class="ws-narrow small muted hidden">Split view needs a wider window; showing the focused pane.</p>
           <div id="ws-panes" class="ws-panes">
@@ -95,6 +95,7 @@
             <div id="ws-divider" class="ws-divider hidden" role="separator" aria-orientation="vertical" aria-label="Resize the two panes (arrow keys; double-click resets)" aria-controls="ws-pane ws-pane-1" aria-valuemin="20" aria-valuemax="80" aria-valuenow="50" tabindex="0"></div>
             <article id="ws-pane-1" class="ws-pane hidden" data-pane="1" role="region" aria-labelledby="ws-title-1"></article>
           </div>
+          <div id="ws-desk" class="ws-desk hidden" aria-label="Workspace windows"><div id="ws-dock" class="ws-dock"></div></div>
         </section>
         <section id="view-mission" class="view" aria-labelledby="mission-title">
           <div id="mission-head"></div>
@@ -271,7 +272,7 @@
   <tr><td><kbd>d</kbd></td><td>Deny and redirect</td></tr>
   <tr><td><kbd>p</kbd></td><td>Pause or resume the run</td></tr>
   <tr><td><kbd>1</kbd>–<kbd>9</kbd> <kbd>[</kbd> <kbd>]</kbd></td><td>In Workspace: pick an agent tab, or the previous or next one</td></tr>
-  <tr><td><kbd>\</kbd> <kbd>o</kbd></td><td>In Workspace: switch between tabs and split view; focus the other pane</td></tr>
+  <tr><td><kbd>\</kbd> <kbd>o</kbd></td><td>In Workspace: cycle tabs, split view and windows; focus the other pane or bring the back window forward</td></tr>
   <tr><td><kbd>x</kbd></td><td>Stop the run (asks for confirmation)</td></tr>
   <tr><td><kbd>/</kbd></td><td>Write a steering note for Hermes</td></tr>
   <tr><td><kbd>t</kbd></td><td>Open the OpenCode terminal full screen</td></tr>

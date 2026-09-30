@@ -347,6 +347,12 @@ Live team run in the dashboard: worked, once the OpenCode server was running. Th
   - A provider registry (browser session and VNC as documented interfaces, no built-in provider) has generic, audited frame and input routes.
   - Each workspace pane has a viewer (a picker, and Expand into a top-layer dialog). One shared frame fetch per surface runs only while a viewer is open.
   - Verified in Chromium against a real web preview and a real desktop app on Xvfb.
-- Remaining: W5 (windowed mode and pop-outs), then W7 (optional Hermes stream-json).
+- W5 is complete: windows and pop-outs.
+  - A desk of movable, resizable, minimizable and maximizable workspace windows, using the shared pane renderer.
+  - At most 4 are drawn at once, and the geometry persists per agent.
+  - Phones fall back to one pane.
+  - Pop-outs are fed by the dashboard over a BroadcastChannel (no extra requests or event streams), and fall back to their own updates when the dashboard closes.
+  - Verified in Chromium: real mouse drag and resize survive a reload, and live output reached a pop-out with 0 requests of its own.
+- Remaining: W7 (optional Hermes stream-json).
 
 Daily use: `agent-autonomy/deploy/install-user-services.sh` runs OpenCode and the dashboard as systemd user services (see the README's Daily use section).

@@ -22,7 +22,10 @@ async function harness(state=fixture(),savedTheme='mac') {
  for(const s of document.querySelectorAll('select'))Object.defineProperty(s,'value',{value:s.querySelector('option')?.value || '',writable:true});
  const storage=new Map([['ac-theme',savedTheme]]),calls=[],intervals=[];
  if(state.savedView)storage.set('ac-view',state.savedView);
- const context=vm.createContext({TextDecoder,TextEncoder,AbortController,location:{protocol:'http:',hostname:'100.1.2.3'},document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
+ if(state.opened)window.open=(...args)=>{state.opened.push(args);return {}};
+ // A shared fake BroadcastChannel lets two harnesses (a dashboard and its pop-out) talk, as tabs do.
+ const Channel=state.bus?class{constructor(){this.onmessage=null;state.bus.add(this)}postMessage(m){const copy=JSON.parse(JSON.stringify(m));for(const c of state.bus)if(c!==this)c.onmessage?.({data:copy})}close(){state.bus.delete(this)}}:undefined;
+ const context=vm.createContext({TextDecoder,TextEncoder,AbortController,BroadcastChannel:Channel,location:{protocol:'http:',hostname:'100.1.2.3',pathname:'/',search:state.search||''},document,window,console,URL,Blob,Date,Map,Set,JSON,Math,Number,String,Array,Object,module:undefined,
   sessionStorage:{getItem:()=> 'test-dashboard-key',setItem:()=>{}},
   localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
   setInterval:fn=>intervals.push(fn),clearTimeout:()=>{},setTimeout:()=>1,
@@ -1141,6 +1144,7 @@ test('W4 split: two agents side by side, tabs load into the focused pane, the di
  const r=await harness(Object.assign(missionFixture(),{savedView:'workspace'}));
  r.storage.set('ac-workspaces',h.storage.get('ac-workspaces'));vmRun(r,'wsState = wsLoad(); renderWorkspace();');
  assert(!r.document.getElementById('ws-pane-1').classList.contains('hidden'));
+ await key(h,'\\');assert.equal(wsSaved(h).mode,'windows','\\ cycles tabs → split → windows');
  await key(h,'\\');
  assert(d.getElementById('ws-pane-1').classList.contains('hidden'));assert.equal(wsSaved(h).mode,'tabs');
  assert.equal(posts(h),before+1);
@@ -1240,6 +1244,80 @@ test('W6: a provider surface (e.g. a browser session) uses the generic routes, a
  const form=h.document.querySelector('#ws-surface [data-ws-type="surface"]');form.querySelector('input').value='hello';
  form.dispatchEvent(new h.context.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
  assert.deepEqual(h.calls.filter(c=>c.url==='/api/surface/input').pop().body,{run:'run_test',id:'browser',action:'type',text:'hello'});
+});
+// W5: windows and pop-outs.
+function pointer(h,type,target,x,y){const e=Object.assign(new h.context.window.Event(type,{bubbles:true,cancelable:true}),{clientX:x,clientY:y,pointerId:1});target.dispatchEvent(e);}
+test('W5 windows: one window per open agent, moved, resized, minimized, restored, maximized and closed without a request',async()=>{
+ const h=await harness(missionFixture());const before=posts(h);
+ await h.click('[data-workspace="coder-1"]');
+ await h.click('[data-ws-mode="windows"]');
+ const d=h.document,win=n=>d.querySelector(`.ws-window[data-ws-window="${n}"]`);
+ assert(!d.getElementById('ws-desk').classList.contains('hidden'));assert(d.getElementById('ws-panes').classList.contains('hidden'));
+ assert.deepEqual(['hermes','coder-1','coder-2'].map(n=>!!win(n)&&!win(n).classList.contains('hidden')),[true,true,true]);
+ const two=win('coder-2'),i=two.dataset.pane;
+ assert.match(d.getElementById('ws-head-'+i).textContent,/coder-2[\s\S]*Waiting on you/);
+ assert.match(d.getElementById('ws-term-body-'+i).textContent,/npm test/,'each window has its own live terminal');
+ assert.equal(d.querySelectorAll(`#ws-approvals-${i} [data-approval-card]`).length,1);
+ assert.match(d.getElementById('ws-win-title-'+i).textContent,/! coder-2 · Waiting on you/);
+ assert.match(win('coder-1').className,/focused/);
+ // Move and resize by dragging; the geometry is saved.
+ const g0=wsSaved(h).windows['coder-2'];
+ pointer(h,'pointerdown',two.querySelector('.ws-win-title'),100,100);pointer(h,'pointermove',d,160,140);pointer(h,'pointerup',d,160,140);
+ let g=wsSaved(h).windows['coder-2'];
+ assert.deepEqual([g.x-g0.x,g.y-g0.y],[60,40]);assert.match(two.className,/focused/,'dragging brings it to the front');
+ pointer(h,'pointerdown',two.querySelector('.ws-win-grip'),0,0);pointer(h,'pointermove',d,-900,-900);pointer(h,'pointerup',d,0,0);
+ g=wsSaved(h).windows['coder-2'];assert.deepEqual([g.w,g.h],[360,260],'never smaller than the minimum');
+ // Minimize to the dock, restore from it; maximize; close = close the tab.
+ await h.click(`.ws-window[data-ws-window="coder-2"] [data-ws-win="min"]`);
+ assert(win('coder-2').classList.contains('hidden'));assert.match(d.getElementById('ws-dock').textContent,/coder-2/);
+ await h.click('#ws-dock [data-ws-open="coder-2"]');
+ assert(!win('coder-2').classList.contains('hidden'));assert.equal(d.getElementById('ws-dock').textContent,'');
+ await h.click(`.ws-window[data-ws-window="coder-2"] [data-ws-win="max"]`);
+ assert.match(win('coder-2').className,/max/);assert.equal(wsSaved(h).windows['coder-2'].max,true);
+ await h.click(`.ws-window[data-ws-window="hermes"] [data-ws-win="close"]`);
+ assert(win('hermes').classList.contains('hidden'));assert.deepEqual(wsSaved(h).open,['coder-1','coder-2']);
+ assert.match(d.getElementById('ws-menu').textContent,/Hermes[\s\S]*closed/);
+ // o brings the window furthest back forward.
+ const front=wsSaved(h).winFocus;await key(h,'o');assert.notEqual(wsSaved(h).winFocus,front);
+ assert.equal(posts(h),before,'windows never send anything');
+});
+test('W5 windows: at most four are drawn, and narrow screens show the focused one',async()=>{
+ const s=missionFixture();
+ s.agents.push({name:'tester-1',type:'tester',role:'Tester',state:'idle',stats:{}},{name:'reviewer-1',type:'reviewer',role:'Reviewer',state:'idle',stats:{}});
+ const h=await harness(s);await h.click('[data-workspace="coder-1"]');await h.click('[data-ws-mode="windows"]');
+ const d=h.document,shown=[...d.querySelectorAll('.ws-window')].filter(w=>!w.classList.contains('hidden'));
+ assert.equal(shown.length,4);assert.equal(d.querySelectorAll('#ws-dock [data-ws-open]').length,1);
+ const waiting=d.querySelector('#ws-dock [data-ws-open]').dataset.wsOpen;
+ await h.click(`#ws-dock [data-ws-open="${waiting}"]`);
+ assert.equal([...d.querySelectorAll('.ws-window')].filter(w=>!w.classList.contains('hidden')).length,4,'restoring one minimizes the least recent');
+ h.context.window.matchMedia=()=>({matches:false});vmRun(h,'renderWorkspace()');
+ assert(d.getElementById('ws-desk').classList.contains('hidden'));assert(!d.getElementById('ws-pane').classList.contains('hidden'));
+ assert.match(d.getElementById('ws-narrow').textContent,/Windows need a wider window/);
+ assert.match(d.getElementById('ws-head').textContent,new RegExp(waiting));
+});
+test('W5 pop-out: opens the agent in its own window, fed by the dashboard with no requests of its own',async()=>{
+ const bus=new Set(),opened=[];
+ const main=await harness(Object.assign(missionFixture(),{bus,opened}));
+ await main.click('[data-workspace="coder-2"]');
+ await main.click('#ws-popout');
+ assert.equal(opened[0][0],'/?popout=coder-2&run=run_test');
+ const pop=await harness(Object.assign(missionFixture(),{bus,search:'?popout=coder-2&run=run_test'}));await tick();
+ assert(pop.document.body.classList.contains('popout'));
+ assert.match(pop.document.getElementById('ws-head').textContent,/coder-2[\s\S]*Waiting on you/,'the relayed state is shown');
+ assert.equal(pop.calls.filter(c=>c.url.startsWith('/api/state')).length,0,'the pop-out made no state request');
+ assert.equal(pop.calls.filter(c=>c.url==='/api/events').length,0,'and opened no event stream');
+ assert.equal(pop.storage.get('ac-workspaces'),undefined,'the dashboard’s saved tabs are untouched');
+ assert.match(main.document.querySelector('#ws-tabs [data-ws-open="coder-2"]').textContent,/↗/,'the dashboard marks the popped-out tab');
+ // Live: the dashboard’s next refresh reaches the pop-out.
+ main.state.agents[2].state='working';main.state.agents[2].task='t2: HTML list';await main.poll();await tick();
+ assert.match(pop.document.getElementById('ws-head').textContent,/coder-2[\s\S]*Working/);
+ // Actions go straight to the API.
+ const form=pop.document.querySelector('[data-ws-note]');form.querySelector('input').value='Check the list markup';
+ form.dispatchEvent(new pop.context.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+ assert.deepEqual(pop.calls.filter(c=>c.url==='/api/control').pop().body,{run:'run_test',action:'instruction',text:'Check the list markup',agent:'coder-2'});
+ // If the dashboard goes away, the pop-out fetches for itself.
+ vmRun(pop,'relay.seen = 0; relay.boot = 0');await pop.poll();
+ assert.equal(pop.calls.filter(c=>c.url.startsWith('/api/state')).length,1);
 });
 function vmRun(h,code){return vm.runInContext(code,h.context);}
 (async()=>{let failed=0;for(const [name,fn]of tests){try{await fn();console.log('PASS '+name)}catch(error){failed++;console.error('FAIL '+name);console.error(error)}}console.log(`${tests.length-failed}/${tests.length} UI checks passed (DOM only; no rendered layout).`);process.exitCode=failed?1:0})();

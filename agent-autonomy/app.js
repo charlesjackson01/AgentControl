@@ -14,7 +14,13 @@ const ended = new Set(['completed', 'blocked', 'failed', 'stopped', 'limit_reach
 const KEY_NAME = 'ac-dashboard-key', LEGACY_KEY_NAME = 'trial-dashboard-key';
 
 const VIEWS = ['mission', 'workspace', 'runs', 'approvals', 'activity', 'new', 'project', 'skills', 'usage'];
-let key = readKey(), selected = '', data = null, current = null, view = savedView();
+/* A pop-out (W5) is this page opened as ?popout=<agent>&run=<id>: one workspace, fed by the main
+   dashboard over a BroadcastChannel (see workspace.js), with its own requests only as a fallback. */
+const POPOUT = urlParam('popout'), relay = {seen: 0, boot: Date.now()};
+function urlParam(name) { const m = String(globalThis.location?.search || '').match(new RegExp('[?&]' + name + '=([^&#]*)')); try { return m ? decodeURIComponent(m[1]) : ''; } catch { return ''; } }
+/* True while a pop-out is (or may soon be) fed by the main window, so it fetches nothing itself. */
+function relayFresh() { return !!POPOUT && (relay.seen ? Date.now() - relay.seen < 20000 : Date.now() - relay.boot < 1500); }
+let key = readKey(), selected = POPOUT ? urlParam('run') : '', data = null, current = null, view = POPOUT ? 'workspace' : savedView();
 let agentFilter = null;
 let refreshing = false, connected = false, reviewBusy = false, reviewing = null, stopRunId = '', parentRun = null;
 let refreshAgain = false;
@@ -216,6 +222,7 @@ function setFavicon(count) {
 }
 function notificationsOn() { return readItem('local', 'ac-notify') === 'on' && typeof Notification !== 'undefined' && Notification.permission === 'granted'; }
 function notifyNewRequests(inbox) {
+  if (POPOUT) return;   // the main dashboard already notifies
   const fresh = inbox.filter(p => !seenRequests.has(requestKey(p)));
   const firstLoad = !seenRequests.size && !announcedRequests;
   inbox.forEach(p => seenRequests.add(requestKey(p)));
@@ -277,8 +284,17 @@ function mergeSteps(result) {
   result.steps = result.steps.map(s => s.same ? held.get(s.id) : s);
   return true;
 }
+/* Show a fresh /api/state snapshot (from our own request, or relayed by the main window). */
+function applyState(result) {
+  data = result; current = data.run; connected = true; failures = 0; lastStateTime = Date.now();
+  $('auth').classList.add('hidden');
+  $('boot').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  $('auth-error').textContent = '';
+  render();
+}
 async function refresh() {
-  if (!key) return;
+  if (!key || relayFresh()) return;
   // A change notice that arrives mid-refresh must not be lost: remember it and refresh once more.
   if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
@@ -294,12 +310,8 @@ async function refresh() {
       result = await api('/api/state' + (query ? '?' + query.replace(/&?known=[^&]*/, '') : ''));
       if (requestedRun !== selected) return;
     }
-    data = result; current = data.run; connected = true; failures = 0; lastStateTime = Date.now();
-    $('auth').classList.add('hidden');
-    $('boot').classList.add('hidden');
-    $('app').classList.remove('hidden');
-    $('auth-error').textContent = '';
-    render();
+    applyState(result);
+    globalThis.wsRelayPost?.();   // pop-outs showing this run get the same snapshot, without a request of their own
   } catch (error) {
     connected = false; failures++;
     if (!$('auth').classList.contains('hidden')) $('auth-error').textContent = error.message;
@@ -328,6 +340,7 @@ function handleEventBlock(block) {
 }
 async function connectEvents() {
   clearTimeout(live.retry);
+  if (relayFresh()) return;   // a pop-out fed by the main window needs no stream of its own
   if (!key || live.state !== 'off' || typeof fetch !== 'function' || typeof TextDecoder === 'undefined') return;
   live.state = 'connecting';
   const abort = typeof AbortController === 'function' ? new AbortController() : null;
@@ -1574,7 +1587,7 @@ async function previewAction(action, extra = {}) {
   return status;
 }
 function autoOpenProject() {
-  if (!current) return;
+  if (!current || POPOUT) return;
   const before = preview.lastStatus[current.id];
   preview.lastStatus[current.id] = current.status;
   if (before && before !== 'completed' && current.status === 'completed' && current.preview && !preview.opened.has(current.id)) {
@@ -1704,7 +1717,7 @@ async function submitReview(action) {
 function showView(next) {
   if (!VIEWS.includes(next)) return;
   view = next;
-  if (next !== 'new') { try { localStorage.setItem('ac-view', next); } catch {} }
+  if (next !== 'new' && !POPOUT) { try { localStorage.setItem('ac-view', next); } catch {} }
   document.querySelectorAll('.view').forEach(e => e.classList.toggle('hidden', e.id !== 'view-' + next));
   document.querySelectorAll('.nav [data-view], .tabbar [data-view]').forEach(b => { b.classList.toggle('active', b.dataset.view === next); b.setAttribute('aria-current', b.dataset.view === next ? 'page' : 'false'); });
   closeDrawer();
@@ -2155,6 +2168,7 @@ function fillExample() {
   ['Add, list, and complete tasks from the command line.', 'Save tasks to JSON and reload them.', 'Tests cover adding, completing, and save/reload behavior.', 'Document usage in demo_app/README.md.'].forEach(addCheckInput);
 }
 function init() {
+  if (POPOUT) document.body.classList.add('popout');
   setTheme(document.documentElement.dataset.theme, false);
   setFavicon(0);
   if (key) { $('auth').classList.add('hidden'); $('boot').classList.remove('hidden'); }

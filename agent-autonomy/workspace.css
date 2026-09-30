@@ -520,6 +520,226 @@ button.ws-tab {
 }
 
 /* ---------------------------------------------------------------------------
+   Windows (W5): a desk of movable, resizable workspace windows
+   --------------------------------------------------------------------------- */
+.ws-desk {
+  position:relative;
+  height:max(560px, calc(100vh - 190px));
+  overflow:hidden;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius);
+  background:var(--ac-surface-2);
+}
+
+.ws-desk.hidden {
+  display:none;
+}
+
+.ws-window {
+  position:absolute;
+  display:flex;
+  flex-direction:column;
+  min-width:360px;
+  min-height:260px;
+  background:var(--ac-surface);
+  border:1px solid var(--ac-border-strong);
+  border-radius:var(--ac-radius);
+  box-shadow:var(--ac-shadow-card);
+  overflow:hidden;
+}
+
+.ws-window.hidden {
+  display:none;
+}
+
+.ws-window.focused {
+  box-shadow:var(--ac-shadow-dialog);
+}
+
+.ws-window.max {
+  border-radius:0;
+}
+
+.ws-win-bar {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex:0 0 auto;
+  padding:4px 8px;
+  background:var(--ac-surface-2);
+  border-bottom:1px solid var(--ac-border);
+  cursor:move;
+  user-select:none;
+  touch-action:none;
+}
+
+.ws-window.max .ws-win-bar {
+  cursor:default;
+}
+
+.ws-win-title {
+  flex:1;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:var(--ac-text-sm);
+  font-weight:600;
+  color:var(--ac-text-muted);
+}
+
+.ws-window.focused .ws-win-title {
+  color:var(--ac-text);
+}
+
+.ws-win-controls {
+  display:inline-flex;
+  gap:6px;
+}
+
+.ws-win-btn {
+  display:inline-grid;
+  place-items:center;
+  width:14px;
+  height:14px;
+  padding:0;
+  border:0;
+  border-radius:var(--ac-radius-circle);
+  background:var(--ac-border-strong);
+  color:var(--ac-surface);
+  font:inherit;
+  font-size:10px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.ws-win-btn span {
+  visibility:hidden;
+}
+
+.ws-win-bar:hover .ws-win-btn span,
+.ws-win-btn:focus-visible span {
+  visibility:visible;
+}
+
+.ws-win-pop,
+.ws-popout {
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  font:inherit;
+  font-size:var(--ac-text-xs);
+  padding:2px 8px;
+  cursor:pointer;
+}
+
+.ws-popout {
+  flex:0 0 auto;
+  align-self:center;
+  margin:0 4px 4px 0;
+}
+
+.ws-popout.hidden {
+  display:none;
+}
+
+.ws-win-body {
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  padding:10px;
+}
+
+/* A window is narrow: stack its output and side column, like a split pane. */
+.ws-win-body .ws-grid {
+  grid-template-columns:minmax(0, 1fr);
+}
+
+.ws-win-body .ws-head {
+  flex-direction:column;
+}
+
+.ws-win-grip {
+  position:absolute;
+  right:0;
+  bottom:0;
+  width:16px;
+  height:16px;
+  cursor:nwse-resize;
+  touch-action:none;
+  background:linear-gradient(135deg, transparent 50%, var(--ac-border-strong) 50%, transparent 60%, transparent 70%, var(--ac-border-strong) 70%, transparent 80%);
+}
+
+.ws-window.max .ws-win-grip {
+  display:none;
+}
+
+.ws-window.dragging {
+  opacity:.92;
+}
+
+.ws-dock {
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:100000;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+}
+
+.ws-dock:empty {
+  display:none;
+}
+
+.ws-dock-item {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  font:inherit;
+  font-size:var(--ac-text-sm);
+  padding:4px 10px;
+  cursor:pointer;
+  box-shadow:var(--ac-shadow-card);
+}
+
+.ws-popped {
+  font-size:var(--ac-text-xs);
+  color:var(--ac-accent);
+}
+
+/* A pop-out window shows one workspace, without the dashboard around it. */
+body.popout .sidebar,
+body.popout .toolbar,
+body.popout .addressbar,
+body.popout .xp-titlebar,
+body.popout .xp-menu,
+body.popout .xp-taskbar,
+body.popout .tabbar,
+body.popout .terminal-keybar,
+body.popout .ws-bar,
+body.popout .ws-pane-bar {
+  display:none !important;
+}
+
+body.popout .app-layout {
+  display:block;
+}
+
+body.popout .workspace {
+  max-width:none;
+  padding:12px 16px;
+}
+
+/* ---------------------------------------------------------------------------
    Layout switch and split view (W4)
    --------------------------------------------------------------------------- */
 .ws-modes {
@@ -745,6 +965,28 @@ button.ws-tab {
   box-shadow:0 0 0 1px var(--ac-accent);
 }
 
+:root[data-theme=mac] .ws-window {
+  border-radius:var(--ac-radius-lg);
+  border-color:var(--ac-border);
+}
+
+:root[data-theme=mac] .ws-win-bar {
+  justify-content:flex-start;
+  background:var(--ac-surface);
+}
+
+:root[data-theme=mac] .ws-win-close { background:var(--ac-danger); }
+:root[data-theme=mac] .ws-win-min { background:var(--ac-warning); }
+:root[data-theme=mac] .ws-win-max { background:var(--ac-success); }
+
+:root[data-theme=mac] .ws-window:not(.focused) .ws-win-btn {
+  background:var(--ac-border-strong);
+}
+
+:root[data-theme=mac] .ws-win-title {
+  text-align:center;
+}
+
 :root[data-theme=mac] .ws-add {
   border:0;
   border-radius:var(--ac-radius-circle);
@@ -884,6 +1126,61 @@ button.ws-tab {
   border-radius:0;
 }
 
+/* Terminal windows: plain boxes; the focused one has the accent border, like tmux's active pane. */
+:root[data-theme=terminal] .ws-desk {
+  border-radius:0;
+  background:var(--ac-surface);
+}
+
+:root[data-theme=terminal] .ws-window {
+  border-radius:0;
+  border-color:var(--ac-term-border);
+  box-shadow:none;
+}
+
+:root[data-theme=terminal] .ws-window.focused {
+  border-color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-win-bar {
+  background:none;
+  font-family:var(--ac-font-mono);
+  border-bottom-color:var(--ac-term-border);
+}
+
+:root[data-theme=terminal] .ws-win-title::before { content:"["; }
+:root[data-theme=terminal] .ws-win-title::after { content:"]"; }
+
+:root[data-theme=terminal] .ws-window.focused .ws-win-title {
+  color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-win-controls {
+  order:3;
+}
+
+:root[data-theme=terminal] .ws-win-btn {
+  width:auto;
+  height:auto;
+  border-radius:0;
+  background:none;
+  color:var(--ac-text-muted);
+  font-family:var(--ac-font-mono);
+  font-size:var(--ac-text-xs);
+}
+
+:root[data-theme=terminal] .ws-win-btn span {
+  visibility:visible;
+}
+
+:root[data-theme=terminal] .ws-win-pop,
+:root[data-theme=terminal] .ws-popout,
+:root[data-theme=terminal] .ws-dock-item {
+  border-radius:0;
+  box-shadow:none;
+  font-family:var(--ac-font-mono);
+}
+
 /* tmux marks a window with activity with "#". */
 :root[data-theme=terminal] .ws-changed {
   width:auto;
@@ -1009,6 +1306,72 @@ button.ws-tab {
   background:var(--ac-surface-2);
   border-left:1px solid var(--ac-surface);
   border-right:1px solid var(--ac-border-strong);
+}
+
+/* XP windows: blue title bar with minimize, maximize and close on the right; faded when inactive. */
+:root[data-theme=xp] .ws-desk {
+  border-radius:0;
+  background:var(--ac-surface-2);
+}
+
+:root[data-theme=xp] .ws-window {
+  border:3px solid var(--ac-xp-frame);
+  border-radius:var(--ac-radius-lg) var(--ac-radius-lg) 0 0;
+  background:var(--ac-surface-2);
+}
+
+:root[data-theme=xp] .ws-win-bar {
+  background:var(--ac-xp-titlebar);
+  border-bottom:0;
+}
+
+:root[data-theme=xp] .ws-window:not(.focused) .ws-win-bar {
+  opacity:.7;
+}
+
+:root[data-theme=xp] .ws-win-title,
+:root[data-theme=xp] .ws-window.focused .ws-win-title {
+  color:var(--ac-chrome-text);
+  font-weight:700;
+}
+
+:root[data-theme=xp] .ws-win-controls {
+  order:3;
+  gap:2px;
+}
+
+:root[data-theme=xp] .ws-win-btn {
+  width:21px;
+  height:21px;
+  border:1px solid var(--ac-chrome-text);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-accent);
+  color:var(--ac-chrome-text);
+  font-size:var(--ac-text-sm);
+  font-weight:700;
+}
+
+:root[data-theme=xp] .ws-win-btn span {
+  visibility:visible;
+}
+
+:root[data-theme=xp] .ws-win-close {
+  order:3;
+  background:var(--ac-xp-close);
+}
+
+:root[data-theme=xp] .ws-win-min { order:1; }
+:root[data-theme=xp] .ws-win-max { order:2; }
+
+:root[data-theme=xp] .ws-win-pop {
+  background:var(--ac-xp-button);
+  border-color:var(--ac-xp-button-border);
+}
+
+:root[data-theme=xp] .ws-dock-item {
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-xp-button);
+  border-color:var(--ac-xp-button-border);
 }
 
 :root[data-theme=xp] .xp-ws-task {

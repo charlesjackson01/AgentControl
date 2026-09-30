@@ -1,4 +1,4 @@
-/* AgentControl Workspaces: tabbed (W1) and split (W4) layouts.
+/* AgentControl Workspaces: tabbed (W1), split (W4) and windowed (W5) layouts, and pop-outs (W5).
 
    A workspace is a view of one agent in the current run, built only from /api/state that the
    dashboard already fetches. Opening, closing or switching workspaces never sends anything to
@@ -11,16 +11,22 @@
 
    Split view shows two panes side by side. Pane 0 shows wsState.active and pane 1 wsState.second;
    a tab opens its agent in the focused pane. Both panes are drawn by the same code: pane 0 keeps
-   the element ids ws-<part>, pane 1 uses ws-<part>-1. */
+   the element ids ws-<part>, pane 1 uses ws-<part>-1.
+
+   Windows mode shows each open agent in a movable, resizable window on a desk (panes 2 and up,
+   created on demand, ws-<part>-<i>); at most WS_MAX_WINDOWS are drawn, the rest wait minimized.
+   A pop-out is this page in another browser window showing one agent; the main page relays its
+   state to it over a BroadcastChannel, so a pop-out adds no requests and no event stream. */
 
 const WS_KEY = 'ac-workspaces';
-let wsState = wsLoad();          // {run, open, active, known, fresh, changed, states, mode, second, focus, ratio}
+let wsState = wsLoad();          // {run, open, active, known, fresh, changed, states, mode, second, focus, ratio, windows, winFocus}
+const WS_MAX_WINDOWS = 4;
 const wsTurn = {};               // agent -> the turn chosen in its pane (null = follow the latest)
 
 /* One pane: its elements (by part name), its own terminal, and the agent it currently shows. */
 function wsPane(i) {
   const suffix = i ? '-' + i : '';
-  const pane = {i, suffix, shown: '', part: name => $('ws-' + name + suffix)};
+  const pane = {i, suffix, shown: '', root: null, part: name => $('ws-' + name + suffix)};
   pane.term = makeTerm(() => ({box: pane.part('term'), body: pane.part('term-body'), held: pane.part('term-held'), empty: pane.part('term-empty'),
     title: pane.part('term-title'), meta: pane.part('term-meta'), jump: pane.part('term-jump'), follow: pane.part('term-follow')}), () => pane.shown || 'opencode');
   return pane;
@@ -49,6 +55,8 @@ function wsPaneHTML(i) {
 }
 [0, 1].forEach(i => { const root = $(i ? 'ws-pane-1' : 'ws-pane'); if (root) root.innerHTML = wsPaneHTML(i); });
 const wsPanes = [wsPane(0), wsPane(1)];
+wsPanes[0].root = $('ws-pane');
+wsPanes[1].root = $('ws-pane-1');
 const wsTerm = wsPanes[0].term;   // the first pane's terminal (kept for callers of W1)
 
 function wsSplitFits() { try { return !window.matchMedia || window.matchMedia('(min-width: 1000px)').matches; } catch { return true; } }
@@ -56,30 +64,43 @@ function wsSplit() { return wsState.mode === 'split' && !!wsState.second && wsSt
 function wsPaneAgent(i) { return i ? (wsSplit() ? wsState.second : '') : wsState.active; }
 /* The pane a tab click or key loads into; in tabbed mode, or when split does not fit, the only pane. */
 function wsFocusIndex() { return wsSplit() && wsState.focus ? 1 : 0; }
-function wsFocused() { return wsPaneAgent(wsFocusIndex()); }
-function wsVisible() { return wsSplit() && wsSplitFits() ? [wsState.active, wsState.second] : [wsFocused() || wsState.active]; }
+function wsWindows() { return wsState.mode === 'windows' && wsSplitFits(); }
+function wsFocused() {
+  if (wsState.mode === 'windows') { const drawn = wsDrawn(); return drawn.includes(wsState.winFocus) ? wsState.winFocus : drawn[0] || wsState.active; }
+  return wsPaneAgent(wsFocusIndex());
+}
+function wsVisible() {
+  if (wsState.mode === 'windows') return wsWindows() ? wsDrawn() : [wsFocused()];
+  return wsSplit() && wsSplitFits() ? [wsState.active, wsState.second] : [wsFocused() || wsState.active];
+}
 
 function wsLoad() {
   try {
     const saved = JSON.parse(readItem('local', WS_KEY) || '{}');
     return {run: saved.run || '', open: saved.open || [], active: saved.active || '', known: saved.known || [], fresh: saved.fresh || [],
-      changed: saved.changed || [], states: saved.states || {}, mode: saved.mode === 'split' ? 'split' : 'tabs',
-      second: saved.second || '', focus: saved.focus ? 1 : 0, ratio: Math.min(.8, Math.max(.2, Number(saved.ratio) || .5))};
-  } catch { return {run: '', open: [], active: '', known: [], fresh: [], changed: [], states: {}, mode: 'tabs', second: '', focus: 0, ratio: .5}; }
+      changed: saved.changed || [], states: saved.states || {}, mode: ['split', 'windows'].includes(saved.mode) ? saved.mode : 'tabs',
+      second: saved.second || '', focus: saved.focus ? 1 : 0, ratio: Math.min(.8, Math.max(.2, Number(saved.ratio) || .5)),
+      windows: saved.windows && typeof saved.windows === 'object' ? saved.windows : {}, winFocus: saved.winFocus || ''};
+  } catch { return {run: '', open: [], active: '', known: [], fresh: [], changed: [], states: {}, mode: 'tabs', second: '', focus: 0, ratio: .5, windows: {}, winFocus: ''}; }
 }
-function wsSave() { try { localStorage.setItem(WS_KEY, JSON.stringify(wsState)); } catch {} }
+// A pop-out shows one agent and keeps its layout to itself; the main page's saved tabs are never touched.
+function wsSave() { if (POPOUT) return; try { localStorage.setItem(WS_KEY, JSON.stringify(wsState)); } catch {} }
 
 /* Keep the tab list in step with the run's agents. New agents Hermes adds become tabs marked
    "new" but never take focus away from the workspace you are looking at. */
 function wsSync() {
   if (!current) return [];
   const agents = missionAgents(), names = agents.map(a => a.name);
+  if (POPOUT) {
+    wsState = {...wsState, run: current.id, open: names.includes(POPOUT) ? [POPOUT] : [], active: POPOUT, mode: 'tabs', second: '', focus: 0};
+    return agents;
+  }
   if (wsState.run !== current.id) {
     const first = agents.find(a => a.state === 'waiting_on_you') || agents.find(a => a.state === 'working' && a.name !== 'hermes') || agents.find(a => a.name !== 'hermes') || agents[0];
     // A new run keeps your layout choice (tabs or split, pane widths); the panes start over.
     wsState = {run: current.id, open: [...names], active: first?.name || '', known: [...names], fresh: [], changed: [],
       states: Object.fromEntries(agents.map(a => [a.name, a.state])), mode: wsState.mode, focus: 0, ratio: wsState.ratio,
-      second: wsPickSecond(first?.name, names, agents)};
+      second: wsPickSecond(first?.name, names, agents), windows: wsState.windows || {}, winFocus: first?.name || ''};
     wsSave();
     return agents;
   }
@@ -116,7 +137,14 @@ function openWorkspace(name) {
   if (!current) return;
   wsSync();
   if (!wsState.open.includes(name)) wsState.open.push(name);
-  if (wsSplit() && wsSplitFits()) {
+  if (wsState.mode === 'windows') {
+    // Restore it if minimized, bring it to the front, and keep at most WS_MAX_WINDOWS drawn.
+    const g = wsGeom(name);
+    g.min = false; g.z = wsTopZ() + 1;
+    wsState.winFocus = name;
+    wsState.active = name;
+    wsEnforceCap(name);
+  } else if (wsSplit() && wsSplitFits()) {
     // Already on screen: focus its pane. Otherwise it replaces the focused pane's agent.
     if (name === wsState.active) wsState.focus = 0;
     else if (name === wsState.second) wsState.focus = 1;
@@ -141,6 +169,7 @@ function closeWorkspace(name) {
   wsState.fresh = wsState.fresh.filter(n => n !== name);
   if (wsState.active === name) { wsState.active = wsState.second && wsState.open.includes(wsState.second) ? wsState.second : wsState.open[0] || ''; wsState.focus = 0; }
   if (wsState.second === name || wsState.second === wsState.active) wsState.second = wsPickSecond(wsState.active, wsState.open, missionAgents());
+  if (wsState.winFocus === name) wsState.winFocus = '';
   wsSave();
   renderWorkspace();
 }
@@ -150,6 +179,18 @@ function stepWorkspace(delta) {
 }
 /* Layout changes are browser-only too: nothing is sent, no agent is touched. */
 function setWorkspaceMode(mode) {
+  if (mode === 'windows') {
+    wsSync();
+    wsState.mode = 'windows';
+    wsState.winFocus = wsState.active;
+    const g = wsGeom(wsState.active);
+    g.min = false; g.z = wsTopZ() + 1;
+    wsEnforceCap(wsState.active, false);
+    if (!wsSplitFits()) toast('Windows need a wider window; they appear when there is room.');
+    wsSave();
+    renderWorkspace();
+    return;
+  }
   if (mode === 'split') {
     wsSync();
     if (!wsState.second) wsState.second = wsPickSecond(wsState.active, wsState.open, missionAgents());
@@ -179,6 +220,124 @@ function setPaneRatio(ratio, save = true) {
   $('ws-divider')?.setAttribute('aria-valuenow', String(Math.round(wsState.ratio * 100)));
   if (save) wsSave();
 }
+/* ---- Windows (W5) ------------------------------------------------------------------------------ */
+function wsTopZ() { return Math.max(0, ...Object.values(wsState.windows).map(w => w.z || 0)); }
+function wsGeom(name) {
+  if (!wsState.windows[name]) {
+    const n = Object.keys(wsState.windows).length, width = $('ws-desk')?.clientWidth || 1100;
+    wsState.windows[name] = {x: 20 + 32 * (n % 6), y: 12 + 32 * (n % 6), w: Math.max(420, Math.min(760, Math.round(width * .58))), h: 560, z: wsTopZ() + 1, min: false, max: false};
+  }
+  return wsState.windows[name];
+}
+/* Open agents drawn as windows, front first. */
+function wsDrawn() { return wsState.open.filter(n => !wsGeom(n).min).sort((a, b) => wsGeom(b).z - wsGeom(a).z).slice(0, WS_MAX_WINDOWS); }
+function wsEnforceCap(keep, tell = true) {
+  const shown = wsState.open.filter(n => !wsGeom(n).min).sort((a, b) => wsGeom(b).z - wsGeom(a).z);
+  const extra = shown.slice(WS_MAX_WINDOWS).filter(n => n !== keep);
+  extra.forEach(n => { wsGeom(n).min = true; });
+  if (extra.length && tell) toast(`At most ${WS_MAX_WINDOWS} windows are shown; ${extra.map(wsAgentLabel).join(', ')} minimized.`);
+}
+function minimizeWindow(name) {
+  wsGeom(name).min = true;
+  if (wsState.winFocus === name) wsState.winFocus = wsDrawn()[0] || '';
+  wsSave();
+  renderWorkspace();
+}
+function toggleMaximize(name) {
+  const g = wsGeom(name);
+  g.max = !g.max; g.z = wsTopZ() + 1;
+  wsState.winFocus = name;
+  wsSave();
+  renderWorkspace();
+}
+/* Bring a window to the front and focus it, without redrawing any pane (a click inside still lands). */
+function raiseWindow(name) {
+  const g = wsGeom(name);
+  if (wsState.winFocus === name && g.z === wsTopZ()) return;
+  g.z = wsTopZ() + 1;
+  wsState.winFocus = name;
+  wsState.active = name;
+  wsSave();
+  Object.entries(wsWinPanes).forEach(([n, p]) => { p.root.style.zIndex = String(wsGeom(n).z); p.root.classList.toggle('focused', n === name); });
+  const agents = missionAgents();
+  renderWsTabs(agents);
+  renderXpTasks(agents);
+}
+function wsPlace(name) {
+  const p = wsWinPanes[name], g = wsGeom(name);
+  if (!p) return;
+  // Fit the saved geometry into the desk as it is now (a smaller screen); what is saved is left as it was.
+  const desk = $('ws-desk'), W = desk?.clientWidth || 0, H = desk?.clientHeight || 0;
+  const w = W ? Math.min(g.w, W) : g.w, h = H ? Math.min(g.h, H) : g.h;
+  const x = W ? Math.max(0, Math.min(g.x, W - w)) : g.x, y = H ? Math.max(0, Math.min(g.y, H - h)) : g.y;
+  Object.assign(p.root.style, g.max ? {left: '0px', top: '0px', width: '100%', height: '100%'} : {left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px'});
+  p.root.style.zIndex = String(g.z);
+  p.root.classList.toggle('max', !!g.max);
+}
+const wsWinPanes = {};   // agent -> its window's pane
+function wsWindowPane(name) {
+  if (wsWinPanes[name]) return wsWinPanes[name];
+  const i = wsPanes.length, label = esc(wsAgentLabel(name)), win = document.createElement('div');
+  win.className = 'ws-window';
+  win.dataset.pane = String(i);
+  win.dataset.wsWindow = name;
+  win.setAttribute('role', 'region');
+  win.setAttribute('aria-label', `${wsAgentLabel(name)} workspace window`);
+  win.innerHTML = `<div class="ws-win-bar" data-ws-drag="${esc(name)}" title="Drag to move · double-click to maximize">
+      <span class="ws-win-controls">
+        <button class="ws-win-btn ws-win-close" data-ws-win="close" data-ws-name="${esc(name)}" aria-label="Close ${label}'s window (the agent keeps working)" title="Close · the agent keeps working"><span aria-hidden="true">×</span></button>
+        <button class="ws-win-btn ws-win-min" data-ws-win="min" data-ws-name="${esc(name)}" aria-label="Minimize ${label}'s window" title="Minimize"><span aria-hidden="true">–</span></button>
+        <button class="ws-win-btn ws-win-max" data-ws-win="max" data-ws-name="${esc(name)}" aria-label="Maximize ${label}'s window" title="Maximize"><span aria-hidden="true">□</span></button>
+      </span>
+      <span class="ws-win-title" id="ws-win-title-${i}"></span>
+      <button class="ws-win-pop" data-ws-popout="${esc(name)}" title="Open ${label} in its own browser window">Pop out</button>
+    </div>
+    <div class="ws-win-body">${wsPaneHTML(i)}</div>
+    <span class="ws-win-grip" data-ws-resize="${esc(name)}" title="Drag to resize" aria-hidden="true"></span>`;
+  $('ws-desk').append(win);
+  const p = wsPane(i);
+  p.root = win;
+  wsPanes.push(p);
+  wsWinPanes[name] = p;
+  wsWirePane(p);
+  return p;
+}
+function renderWsWindows(byName) {
+  const drawn = wsDrawn(), focused = wsFocused();
+  Object.entries(wsWinPanes).forEach(([n, p]) => p.root.classList.toggle('hidden', !drawn.includes(n)));
+  drawn.forEach(name => {
+    const a = byName[name];
+    if (!a) return;
+    const p = wsWindowPane(name);
+    wsPlace(name);
+    p.root.classList.toggle('focused', name === focused);
+    const [label] = AGENT_STATE[a.state] || [a.state || 'idle'];
+    $('ws-win-title-' + p.i).textContent = `${WS_MARK[a.state] || '○'} ${wsAgentLabel(name)} · ${label}`;
+    if (view === 'workspace') renderWsPane(p, a, false);
+  });
+  const waiting = wsState.open.filter(n => !drawn.includes(n) && byName[n]);
+  setHTML($('ws-dock'), waiting.length ? `<span class="small muted">Minimized</span>${waiting.map(n => {
+    const a = byName[n];
+    return `<button class="ws-dock-item ${esc(wsTone(a))}" data-ws-open="${esc(n)}" title="Restore ${esc(wsAgentLabel(n))}"><span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span>${esc(wsAgentLabel(n))}</button>`;
+  }).join('')}` : '');
+}
+
+/* ---- Pop-outs and the relay (W5) ------------------------------------------------------------- */
+const wsChannel = (() => { try { return typeof BroadcastChannel === 'function' ? new BroadcastChannel('agentcontrol') : null; } catch { return null; } })();
+const wsPopouts = {};   // (main page) agent -> when its pop-out last said hello
+function wsPopped(name) { return Date.now() - (wsPopouts[name] || 0) < 30000; }
+/* Main page: after each refresh, hand the same snapshot to pop-outs showing this run. */
+function wsRelayPost() {
+  if (POPOUT || !wsChannel || !data?.run || !Object.keys(wsPopouts).some(wsPopped)) return;
+  try { wsChannel.postMessage({type: 'state', run: data.run.id, data}); } catch {}
+}
+function wsCanPopOut() { return !POPOUT && !!wsChannel && typeof window.open === 'function' && wsSplitFits(); }
+function popOut(name) {
+  if (!current || !name) return;
+  const url = `${location.pathname || '/'}?popout=${encodeURIComponent(name)}&run=${encodeURIComponent(current.id)}`;
+  const opened = window.open(url, 'ac-popout-' + name, 'popup,width=980,height=860');
+  if (!opened) toast('The browser blocked the pop-up. Allow pop-ups for this dashboard to pop workspaces out.');
+}
 function closeWsMenu() { $('ws-menu')?.classList.add('hidden'); $('ws-add')?.setAttribute('aria-expanded', 'false'); }
 
 const WS_NOTICE = new Set(['waiting_on_you', 'needs_attention', 'failed', 'finished', 'blocked', 'limit_reached']);
@@ -201,7 +360,7 @@ function renderWsTabs(agents) {
     const active = name === wsFocused(), shown = !active && wsVisible().includes(name), fresh = wsState.fresh.includes(name), changed = wsState.changed.includes(name), since = wsSince(a.since);
     return `<span class="ws-tab ${active ? 'active' : ''} ${shown ? 'shown' : ''} ${esc(wsTone(a))}" data-index="${i + 1}">
       <button role="tab" aria-selected="${active}" data-ws-open="${esc(name)}" title="${esc(wsAgentLabel(name))} · ${esc(label)}${since ? ' ' + esc(since) : ''}${changed ? ' · changed while you were away' : ''}${i < 9 ? ` · key ${i + 1}` : ''}">
-        <span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span class="ws-tab-name">${esc(wsAgentLabel(name))}</span>${fresh ? '<span class="ws-new">new</span>' : ''}${changed ? '<span class="ws-changed" aria-hidden="true"></span>' : ''}<span class="sr-only">, ${esc(label)}${changed ? ', changed while you were away' : ''}</span></button>
+        <span class="ws-mark" aria-hidden="true">${WS_MARK[a.state] || '○'}</span><span class="ws-tab-name">${esc(wsAgentLabel(name))}</span>${fresh ? '<span class="ws-new">new</span>' : ''}${changed ? '<span class="ws-changed" aria-hidden="true"></span>' : ''}${wsPopped(name) ? '<span class="ws-popped" title="Also open in its own window">↗</span>' : ''}<span class="sr-only">, ${esc(label)}${changed ? ', changed while you were away' : ''}${wsPopped(name) ? ', popped out' : ''}</span></button>
       <button class="ws-close" data-ws-close="${esc(name)}" aria-label="Close ${esc(wsAgentLabel(name))}'s workspace (the agent keeps working)" title="Close tab · the agent keeps working">×</button></span>`;
   }).join('');
   setHTML($('ws-tabs'), `<button class="ws-tab ws-home" data-view="mission" title="Back to Mission">Mission</button>${tabs}`);
@@ -222,8 +381,12 @@ function renderWsTabs(agents) {
 
 function renderWorkspace() {
   if (!data || !$('view-workspace')) return;
-  const split = wsSplit(), fits = wsSplitFits(), both = split && fits;
-  document.querySelectorAll('[data-ws-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.wsMode === (split ? 'split' : 'tabs'))));
+  const split = wsSplit(), fits = wsSplitFits(), both = split && fits, windows = wsWindows();
+  const mode = wsState.mode === 'windows' ? 'windows' : split ? 'split' : 'tabs';
+  document.querySelectorAll('[data-ws-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.wsMode === mode)));
+  $('ws-popout')?.classList.toggle('hidden', !wsCanPopOut() || !current);
+  $('ws-desk')?.classList.toggle('hidden', !windows || !current);
+  $('ws-panes').classList.toggle('hidden', windows);
   if (!current) {
     setHTML($('ws-tabs'), '<button class="ws-tab ws-home" data-view="mission">Mission</button>');
     wsPanes.forEach(p => $(p.i ? 'ws-pane-1' : 'ws-pane').classList.add('hidden'));
@@ -238,6 +401,14 @@ function renderWorkspace() {
   renderWsTabs(agents);
   renderXpTasks(agents);
   const byName = Object.fromEntries(agents.map(a => [a.name, a]));
+  if (POPOUT) document.title = `${wsAgentLabel(POPOUT)} · AgentControl`;
+  if (windows) {
+    $('ws-narrow').classList.add('hidden');
+    $('ws-empty').classList.toggle('hidden', wsState.open.length > 0);
+    if (!wsState.open.length) setHTML($('ws-empty'), '<section class="ac-panel"><p>All workspace windows are closed. The agents keep working; open one again with <strong>+</strong>.</p></section>');
+    renderWsWindows(byName);
+    return;
+  }
   // When split does not fit (phones, narrow windows) the focused pane is shown alone.
   const first = both ? byName[wsState.active] : byName[wsFocused()] || byName[wsState.active];
   const second = both ? byName[wsState.second] : null;
@@ -246,7 +417,9 @@ function renderWorkspace() {
   $('ws-pane-1').classList.toggle('hidden', !second);
   $('ws-divider').classList.toggle('hidden', !second);
   $('ws-panes').classList.toggle('split', !!second);
-  $('ws-narrow').classList.toggle('hidden', !(split && !fits && view === 'workspace'));
+  const narrow = (split || wsState.mode === 'windows') && !fits && view === 'workspace';
+  $('ws-narrow').classList.toggle('hidden', !narrow);
+  if (narrow) $('ws-narrow').textContent = `${wsState.mode === 'windows' ? 'Windows need' : 'Split view needs'} a wider window; showing the focused workspace.`;
   setPaneRatio(wsState.ratio, false);
   if (!first) {
     setHTML($('ws-empty'), '<section class="ac-panel"><p>All workspace tabs are closed. The agents keep working; open one again with <strong>+</strong>.</p></section>');
@@ -401,7 +574,7 @@ function renderWsLog(p, a, steps) {
    it. Opening or expanding a viewer never starts anything; Start and Stop stay explicit buttons. */
 const SURFACE_LABEL = {web: 'Web', terminal: 'Program', desktop: 'Desktop', 'vm-console': 'VM screen', 'browser-session': 'Browser', vnc: 'VNC'};
 function wsSurfaces(agent) { return (data?.surfaces || []).filter(x => x.agents === 'all' || (x.agents || []).includes(agent)); }
-function wsViewerOpen(p) { return view === 'workspace' && !document.hidden && !!p.part('preview-box')?.open && !!p.shown && !$(p.i ? 'ws-pane-1' : 'ws-pane').classList.contains('hidden'); }
+function wsViewerOpen(p) { return view === 'workspace' && !document.hidden && !!p.part('preview-box')?.open && !!p.shown && !!p.root && !p.root.closest('.hidden'); }
 function wsChosenSurface(p, list) { return list.find(x => x.id === p.surface) || list.find(x => ['starting', 'running'].includes(x.state)) || list[0] || null; }
 /* What the shared preview loop (pollPreview in app.js) should fetch for open workspace viewers. */
 function wsSurfaceWatch() {
@@ -515,6 +688,7 @@ function renderXpTasks(agents) {
     const a = byName[name], button = document.createElement('button');
     button.className = `xp-task xp-ws-task ${a.state === 'waiting_on_you' ? 'xp-flash' : ''} ${view === 'workspace' && wsVisible().includes(name) ? 'active' : ''}`;
     button.dataset.wsOpen = name;
+    button.dataset.wsTaskbar = '';
     button.textContent = `${WS_MARK[a.state] || '○'} ${wsAgentLabel(name)}`;
     bar.insertBefore(button, tray);
   });
@@ -522,7 +696,21 @@ function renderXpTasks(agents) {
 
 /* Clicks and keys that belong to workspaces. Returns true when handled. */
 async function workspaceClick(b) {
-  if (b.dataset.wsOpen !== undefined) { openWorkspace(b.dataset.wsOpen); return true; }
+  if (b.dataset.wsOpen !== undefined) {
+    // On the XP taskbar, clicking the window in front minimizes it, like Windows does.
+    const name = b.dataset.wsOpen;
+    if (b.dataset.wsTaskbar !== undefined && wsWindows() && wsFocused() === name && !wsGeom(name).min) minimizeWindow(name);
+    else openWorkspace(name);
+    return true;
+  }
+  if (b.dataset.wsWin !== undefined) {
+    const name = b.dataset.wsName;
+    if (b.dataset.wsWin === 'close') closeWorkspace(name);
+    if (b.dataset.wsWin === 'min') minimizeWindow(name);
+    if (b.dataset.wsWin === 'max') toggleMaximize(name);
+    return true;
+  }
+  if (b.dataset.wsPopout !== undefined) { popOut(b.dataset.wsPopout || wsFocused()); return true; }
   if (b.dataset.wsClose !== undefined) { closeWorkspace(b.dataset.wsClose); return true; }
   if (b.dataset.workspace !== undefined) { openWorkspace(b.dataset.workspace); return true; }
   if (b.dataset.wsTurn !== undefined) {
@@ -546,7 +734,12 @@ function workspaceKey(event) {
   if (/^[1-9]$/.test(event.key)) { const name = wsState.open[Number(event.key) - 1]; if (name) openWorkspace(name); return true; }
   if (event.key === ']') { stepWorkspace(1); return true; }
   if (event.key === '[') { stepWorkspace(-1); return true; }
-  if (event.key === '\\') { setWorkspaceMode(wsSplit() ? 'tabs' : 'split'); return true; }
+  if (event.key === '\\') { setWorkspaceMode(wsState.mode === 'windows' ? 'tabs' : wsSplit() ? 'windows' : 'split'); return true; }
+  if (event.key === 'o' && wsWindows()) {
+    const drawn = wsDrawn();
+    if (drawn.length > 1) raiseWindow(drawn[drawn.length - 1]);   // the window furthest back comes forward
+    return true;
+  }
   if (event.key === 'o' && wsSplit() && wsSplitFits()) { focusPane(wsState.focus ? 0 : 1); return true; }
   return false;
 }
@@ -588,8 +781,13 @@ document.addEventListener('submit', async event => {
   try { await control('instruction', text, current.id, agent === 'hermes' ? null : agent); input.value = ''; toast('Note saved for Hermes’s next decision.'); }
   catch (error) { pageError(error.message); }
 });
-wsPanes.forEach(p => p.part('term-body')?.addEventListener('scroll', p.term.onScroll));
-wsPanes.forEach(p => p.part('preview-box')?.addEventListener('toggle', () => { if (!p.part('preview-box').open) wsExpand(p.i, false); else wsViewerChanged(); }));
+function wsWirePane(p) {
+  p.part('term-body')?.addEventListener('scroll', p.term.onScroll);
+  p.part('preview-box')?.addEventListener('toggle', () => { if (!p.part('preview-box').open) wsExpand(p.i, false); else wsViewerChanged(); });
+  // Clicking anywhere in a pane focuses it (split) or brings its window to the front (windows).
+  p.root?.addEventListener('pointerdown', () => { if (p.root.dataset.wsWindow) raiseWindow(p.root.dataset.wsWindow); else focusPane(p.i); });
+}
+wsPanes.forEach(wsWirePane);
 // Esc, × or Collapse close the dialog; the viewer then returns to its pane.
 $('ws-viewer-dialog')?.addEventListener('close', () => {
   const i = Number($('ws-viewer-dialog').dataset.pane);
@@ -603,8 +801,36 @@ document.addEventListener('click', event => {
   const x = Math.round((event.clientX - rect.left) / rect.width * img.naturalWidth), y = Math.round((event.clientY - rect.top) / rect.height * img.naturalHeight);
   wsSurfaceInput(img.dataset.surfaceId, {action: 'click', x, y, width: img.naturalWidth, height: img.naturalHeight, button: 1}).catch(e => pageError(e.message));
 });
-// Clicking anywhere in a pane focuses it, so the next tab opens there.
-[0, 1].forEach(i => $(i ? 'ws-pane-1' : 'ws-pane')?.addEventListener('pointerdown', () => focusPane(i)));
+/* Windows: drag a title bar to move, the corner grip to resize, double-click a title bar to maximize. */
+document.addEventListener('pointerdown', event => {
+  const bar = event.target?.closest?.('[data-ws-drag]'), grip = event.target?.closest?.('[data-ws-resize]');
+  if ((!bar && !grip) || event.target.closest('button')) return;
+  const name = bar ? bar.dataset.wsDrag : grip.dataset.wsResize, g = wsGeom(name), p = wsWinPanes[name];
+  if (!p || g.max) return;
+  raiseWindow(name);
+  const start = {x: event.clientX, y: event.clientY, g: {...g}}, desk = $('ws-desk').getBoundingClientRect?.() || {width: 0, height: 0};
+  const within = (v, low, high) => Math.round(Math.max(low, desk.width ? Math.min(high, v) : v));
+  const move = e => {
+    const dx = e.clientX - start.x, dy = e.clientY - start.y;
+    if (grip) { g.w = within(start.g.w + dx, 360, desk.width - g.x); g.h = within(start.g.h + dy, 260, desk.height - g.y); }
+    else { g.x = within(start.g.x + dx, 0, desk.width - 120); g.y = within(start.g.y + dy, 0, desk.height - 40); }
+    wsPlace(name);
+  };
+  const up = () => {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    p.root.classList.remove('dragging');
+    wsSave();
+  };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+  p.root.classList.add('dragging');
+  event.preventDefault();
+});
+document.addEventListener('dblclick', event => {
+  const bar = event.target?.closest?.('[data-ws-drag]');
+  if (bar && !event.target.closest('button')) toggleMaximize(bar.dataset.wsDrag);
+});
 
 /* The divider: drag it, use the arrow keys on it, or double-click it to share the width evenly. */
 (function wsDivider() {
@@ -634,3 +860,32 @@ window.addEventListener?.('resize', () => {
   globalThis.cancelAnimationFrame?.(wsResize);
   wsResize = globalThis.requestAnimationFrame?.(() => renderWorkspace()) || 0;
 });
+
+/* The relay is wired last, once everything it may call is defined. */
+if (wsChannel) {
+  wsChannel.onmessage = ({data: message}) => {
+    if (!message || typeof message !== 'object') return;
+    if (!POPOUT && message.type === 'hello' && message.agent) {
+      const first = !wsPopped(message.agent);
+      wsPopouts[message.agent] = Date.now();
+      if (message.run === data?.run?.id) wsRelayPost();
+      if (first && data) renderWorkspace();
+    } else if (!POPOUT && message.type === 'bye' && message.agent) {
+      delete wsPopouts[message.agent];
+      if (data) renderWorkspace();
+    } else if (POPOUT && message.type === 'state' && message.run === selected && message.data) {
+      relay.seen = Date.now();
+      applyState(message.data);
+    }
+  };
+  if (POPOUT) {
+    const hello = () => wsChannel.postMessage({type: 'hello', agent: POPOUT, run: selected});
+    hello();
+    // Keep saying hello; if the main page stops relaying (closed), fall back to our own requests and stream.
+    setInterval(() => {
+      hello();
+      if (!relayFresh()) { refresh(); connectEvents(); schedule(); }
+    }, 5000);
+    window.addEventListener?.('pagehide', () => { try { wsChannel.postMessage({type: 'bye', agent: POPOUT}); } catch {} });
+  }
+}

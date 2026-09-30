@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Opus (M4 review: corrections required (M4.1); M5 prerequisite defined (M5.0); D7 raised).
+**Last updated:** 2026-09-30, by Opus (recorded owner decision D7; M4.1 and M5.0 ready for Codex).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -22,7 +22,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 |---|---|---|---|
 | Planning: decisions D1–D5 | ✅ done | Opus | recorded in the architecture doc §2 |
 | **D6 events index** | ✅ **approved by the owner 2026-09-30** | owner | exactly one `events(run, id)` index via migration `_v7`, implemented in M2.1 Part B; a narrow exception to the no-migration rule, not permission for other schema changes (architecture §2 and §3) |
-| **D7 engine guards** | ⚠ **owner decision needed** (recommended: approve) | owner | `decide_research` refuses finished or stopping sessions, and `fetch_capability` refuses finished sessions; nothing else in the engine changes (architecture §2; `M5_0_ACTIONABILITY.md` Part B). Record the decision here: **D7: pending** |
+| **D7 engine guards** | ✅ **approved by the owner 2026-09-30** | owner | limited exactly to M5.0 Part B: `decide_research` refuses finished or stopping sessions, and `fetch_capability` refuses finished sessions, before any write, audit, download or other effect. Not permission for broader engine, lifecycle, approval, skill, research, API or schema changes |
 | D1 backend merge | ✅ done | Opus | `af4da89`; tree = `967aa85` + redesign docs |
 | **M1 App shell** | ✅ accepted (review 2026-09-30) | Codex | read-only `/chat`, `/classic` alias; completion report and Opus review in `docs/handoffs/M1_APP_SHELL.md` |
 | **M1.1 Shell corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
@@ -32,7 +32,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M3.1 Timeline corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M3_1_CORRECTIONS.md`: classic receipt labels, server revalidation capped at ten pages with history reset, separate waiting lines, exact strip wording, real rail cap note; eight new regressions |
 | **M4 Composer** | ✅ reviewed 2026-09-30: architecture, endpoints, failure handling and phone budgets verified; **corrections required (M4.1)** | Codex | measured 57 px idle / 105 px with waiting / ≥ 75.3% conversation at 390 × 844; the native keyboard is unverified (M8) |
 | **M4.1 Composer corrections** | ⏭ ready; **blocking M4 acceptance** | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: no remembered title or goal checks, no follow-up leak, a leading-only `@agent`, empty-room copy |
-| **M5.0 Actionability (M5 prerequisite)** | ⏭ ready (Part A); Part B needs D7 | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: one definition of actionable shared by the thread and `waiting`; `detail.expired` for items left undecided when a session ended |
+| **M5.0 Actionability (M5 prerequisite)** | ⏭ **ready: Parts A and B** (D7 approved) | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: one definition of actionable shared by the thread and `waiting`; `detail.expired`; the two D7 engine guards |
 | M5–M9 | not started | | see architecture §12 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `composer.js`, `shell.js`.
@@ -122,15 +122,14 @@ ordering, paging, disclosure state, receipt labels and bounded stale-action reva
   - approving a skill on a finished session is refused, while fetching it is still allowed
 
   The fix: actionable = the session accepts decisions (not finished, not stopping), outcomes excepted, in
-  `conversation.py`, with `waiting` computed from the same predicates. Engine guards are optional, pending **D7**.
+  `conversation.py`, with `waiting` computed from the same predicates. The two engine guards are approved under **D7** (M5.0 Part B).
 - Still deferred from the accepted M3/M3.1 reviews: focus after Load earlier, partial-session divider counts,
   and live refresh of the single-session fallback view. **Scheduled for M8** (phone and accessibility), together with
   **native phone-keyboard verification** of the composer (M4 verified `visualViewport` emulation only).
 
 ## Next step
 
-1. **The owner decides D7** (the engine guards for dead research and skill decisions). Record it in the progress table.
-2. Codex executes **`docs/handoffs/M4_1_CORRECTIONS.md`** and **`docs/handoffs/M5_0_ACTIONABILITY.md`** (Part A,
-   plus Part B only if D7 is approved). They are independent and may run in either order.
-3. Opus reviews both. Once they are accepted, M4 is accepted and Opus writes the full M5 handoff (decision controls).
-4. M5–M9 remain unstarted; the architecture contract stays binding.
+1. Codex executes **`docs/handoffs/M4_1_CORRECTIONS.md`** and **`docs/handoffs/M5_0_ACTIONABILITY.md`** (Parts A and B;
+   D7 approved, limited to the two guards). They are independent and may run in either order.
+2. Opus reviews both. Once they are accepted, M4 is accepted and Opus writes the full M5 handoff (decision controls).
+3. M5–M9 remain unstarted; the architecture contract stays binding.

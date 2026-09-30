@@ -2,8 +2,8 @@
 
 **From:** Opus (architecture) → **To:** Codex (implementation)
 **Branch:** `feature/chat-first-redesign`. Commit and push only there; **never merge into `main`**.
-**Status:** **Part A is required before M5.** Part B needs owner decision **D7** (see §4); do it only if
-`CURRENT_STATE.md` records D7 as approved.
+**Status:** **Parts A and B are both required before M5.** The owner approved **D7** on 2026-09-30, limited exactly
+to Part B as written in §4.
 **Independent of** `M4_1_CORRECTIONS.md`. The only shared file is `chat/thread.js`: one research/skill label here,
 one empty-state line there. Either order works.
 **Read first:**
@@ -103,13 +103,13 @@ In `tests/test_thread_api.py`: one HTTP case for the invariant, and a check that
 
 In `tests/test_chat_ui.cjs`: the expired label renders, with no waiting line and no classic decision link on that item.
 
-## 4. Part B: engine guards (only with owner decision D7)
+## 4. Part B: engine guards (required; D7 approved 2026-09-30)
 
 The projection makes the UI truthful. The API still **accepts a research approval for a finished or stopping session**,
 recording an audited decision that can never execute. It also fetches skills from the network for finished sessions.
 M5 will add real controls, so the server should refuse these dead decisions itself.
 
-**D7 (for the owner): allow two narrow guards in `engine.py`, and nothing else.**
+**D7 (approved): two narrow guards in `engine.py`, and nothing else.**
 - `decide_research`: if the session is finished or stopping, raise `ValueError("This session has ended; its research
   task can no longer run.")` **before** any state change, audit entry or event.
 - `fetch_capability`: if the item's session is finished, raise `ValueError("This session has ended; the skill can no
@@ -122,7 +122,17 @@ M5 will add real controls, so the server should refuse these dead decisions itse
   or state change (snapshot the row counts and the audit chain).
 - Active-session behaviour is unchanged: the existing research and skill tests pass unmodified.
 
-If D7 is not approved, skip Part B, record that in the report, and M5 must not offer those two actions for such items (Part A already ensures it).
+**Implementation boundary (binding):**
+- Each guard needs only a **read** of the owning run: `self.store.get('runs', …)`. Add it at the top of the existing
+  method, before its first write, audit entry, event, or (for `fetch_capability`) its call to `_fetch_into`.
+  - In `decide_research`, add it inside the existing lock, after the existing step and run-ownership check, and before
+    the fingerprint check or any update.
+  - In `fetch_capability`, read `item['run']` and refuse if it is finished, before `_fetch_into`.
+- `app.py` already maps `ValueError` to HTTP 400 for `/api/research/decide` and `/api/skills/fetch`. **No `app.py` change.**
+- **Explicitly out of scope, not covered by D7:** a session that finishes **while** an already-accepted fetch is in
+  progress (`_fetch_into` runs outside the lock). Leave the existing post-fetch behaviour unchanged, and mention the case in your report.
+- If either guard seems to need anything more (another method, a lifecycle hook, a state rewrite, a new endpoint or
+  field, or a change to `decide_capability`, `review()`, `_team_decision`, `_end()` or `_retire_skills`), **stop and report the conflict.** Do not expand D7.
 
 ## 5. Out of scope
 
@@ -140,12 +150,12 @@ If D7 is not approved, skip Part B, record that in the report, and M5 must not o
    - `agent-autonomy/chat/thread.js` (the expired label only)
    - the three test files named above
    - `docs/REDESIGN_ARCHITECTURE.md`, `CURRENT_STATE.md` and this file
-   - with D7 only: the two guards in `agent-autonomy/engine.py` and their tests
+   - the two D7 guards in `agent-autonomy/engine.py` (only those lines) and their tests
 4. Your report includes a trimmed `/api/thread` sample with one expired research item and the matching `/api/channels`.
 
 ## 7. When you finish
 
-1. Append a completion report: the changes, test commands and counts (with skipped tests named), whether Part B was done, and the samples.
+1. Append a completion report: the changes, test commands and counts (with skipped tests named), the exact `engine.py` lines changed for D7, and the samples.
 2. Set M5.0 to done in `CURRENT_STATE.md`, then push. No PR and no merge unless the owner asks.
 
 After M5.0 (and M4.1) are accepted, Opus writes the full M5 handoff (decision controls) on this single definition of actionable.

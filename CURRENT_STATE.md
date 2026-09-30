@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Codex (M2.1 Parts A and B complete; awaiting review).
+**Last updated:** 2026-09-30, by Opus (M2.1 architecture review: accepted; M3 handoff checked against the final API).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Complete:** `M2_1_CORRECTIONS.md` (awaiting review). `M3_ROOM_TIMELINE.md` starts only after M2.1 is accepted |
+| Handoffs | `docs/handoffs/`. **Next:** `M3_ROOM_TIMELINE.md` (ready; M2.1 accepted) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -26,8 +26,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M1 App shell** | ✅ accepted (review 2026-09-30) | Codex | read-only `/chat`, `/classic` alias; completion report and Opus review in `docs/handoffs/M1_APP_SHELL.md` |
 | **M1.1 Shell corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
 | **M2 Thread read model** | ✅ accepted, with corrections (review 2026-09-30) | Codex | `conversation.py`, `/api/channels`, `/api/thread`, `Store.events_page`; review in `docs/handoffs/M2_THREAD_READ_MODEL.md` |
-| **M2.1 Read-model corrections** | ✅ done; awaiting review | Codex | Parts A + B: recorded-session request attribution, stable outcome actions/revisions, non-empty planner decisions, cheaper reads, and exactly the D6 `_v7` index; 15 new regressions |
-| **M3 Room timeline** | ⏭ handoff ready; starts after M2.1 | Codex | `docs/handoffs/M3_ROOM_TIMELINE.md`: renders `/api/thread` in the project room; read-only; decisions still link to classic |
+| **M2.1 Read-model corrections** | ✅ accepted (review 2026-09-30) | Codex | Parts A + B: recorded-session request attribution, stable outcome actions/revisions, non-empty planner decisions, cheaper reads, and exactly the D6 `_v7` index; 15 new regressions |
+| **M3 Room timeline** | ⏭ **ready to start** | Codex | `docs/handoffs/M3_ROOM_TIMELINE.md`: renders `/api/thread` in the project room; read-only; decisions still link to classic |
 | M4–M9 | not started | | see architecture §12 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `shell.js`.
@@ -37,11 +37,11 @@ The new read-only endpoints project the journal with bounded messages, stable id
 The M1 frontend still reads `/api/state`; M3 timeline rendering has not started.
 Backend read-model tests: `tests/test_conversation.py` (34) and `tests/test_thread_api.py` (11); journal tests (7) include v6-to-v7 preservation and index query plans.
 
-## Tests (M2.1 final implementation; verified by Codex 2026-09-30)
+## Tests (at `951862a`; re-verified in the Opus review environment 2026-09-30)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)** outside the sandbox; the container, desktop and VM tests named below were skipped |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=6)** here (all six gates below); 3 in Codex's environment, which has OpenCode |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
 | Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **16/16 passed** |
 | Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots` | **24 combinations + 4 regressions passed**, 54 temporary screenshots; no horizontal overflow at 390 px |
@@ -102,6 +102,6 @@ Six skipped means none of those are available. Codex's three skips mean the Open
 
 ## Next step
 
-1. Opus reviews the completed **`docs/handoffs/M2_1_CORRECTIONS.md`** Parts A and B.
-2. M3 remains unstarted; its handoff can be implemented only after M2.1 acceptance and authorization.
+1. Codex executes **`docs/handoffs/M3_ROOM_TIMELINE.md`**. M2.1 is accepted, and the handoff has been checked against the final API.
+2. Opus reviews M3, then writes the M4 handoff (the composer).
 3. M4–M9 remain unstarted; the architecture contract stays binding.

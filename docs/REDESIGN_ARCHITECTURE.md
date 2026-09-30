@@ -380,3 +380,5 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   - The actionable outcome is the channel's newest terminal session, independent of page and view.
   - Planner-shaped Hermes decisions use recorded `reason`/`title` or are folded.
   - D6: `events_run_id` index added as migration `_v7`; no other schema changes.
+- 2026-09-30 (M2.1 review): M2.1 accepted. The M3 handoff was checked against the final API and gained §2.1
+  (the final API behaviour to rely on).

@@ -263,3 +263,72 @@ team run records `coder-2.session = "ses2"`:
 No scope deviations, additional schema changes, or unresolved M2.1 issues. The previously documented
 backend timing-sensitive tests and v1 per-session materialisation remain outside this milestone.
 M3 has not been started.
+
+
+## Architecture review — 2026-09-30 (Opus)
+
+**Verdict: M2.1 accepted.** Nothing is blocking, and nothing needs fixing before M3. M3 may start.
+
+Reviewed: `4d7a46b..951862a` (the single commit `951862a`) against this handoff, the D6 decision and the architecture contract.
+
+### Re-run in the review environment (at `951862a`)
+
+| Suite | Result |
+|---|---|
+| Python | **398 tests, OK (skipped=6)**: the same six environment gates; Codex's environment, which has OpenCode, gives 3 |
+| Classic DOM | **82/82** |
+| Chat DOM | **16/16** |
+| Browser | **24 combinations + 4 regressions** |
+
+No change to `engine.py`, `app.py`, `adapters/`, `lifecycle.py`, `permissions.py`, `verify.py` or `agent-autonomy/chat/`.
+
+### Verified
+
+- **A1 attribution.** `agent_for_session` reads only `run.session`, `run.specialists` and `run.team.agents`.
+  The actor precedence is the packet's `agent`, then the recorded session, then `coder-1`.
+  Tests cover team, specialist, explicit-actor and unknown-session cases, pure and over HTTP.
+- **A2 page-independent outcomes.**
+  - The actionable outcome is taken from `channel_runs()` before paging.
+  - `workspace_status` runs only when that outcome is on the page and its workspace is open (at most once).
+  - The HTTP test checks that full, newest, older-page and `session=` views return an **identical** `out:old`
+    (`action: null`, same `rev`) and an identical actionable `out:new`, with the call counts asserted.
+  - A foreign-project session is never actionable.
+- **A3 decisions.** The text is the first non-empty of `summary`, `reason`, `title`, and a decision without text is folded.
+  - Planner payloads add only `planning` and `proposal_counts`.
+  - The agent and task payloads, including their prompts, never appear (asserted with a `PRIVATE` marker).
+  - `reason` is Hermes's requested public output field (classic already shows it as the plan summary), not reasoning.
+- **A4 reads.**
+  - `channels()` makes one `events_page(run, None, 1)` per run and reads steps and capabilities for the active run only (asserted with counting wrappers).
+  - `gather()` makes one query per 5,000-row batch, and its split into events and annotations matches the old two queries exactly.
+- **D6 / `_v7`:**
+  - It is appended as `MIGRATIONS[6]` and uses `CREATE INDEX IF NOT EXISTS events_run_id ON events(run, id)`.
+  - The test diffs the whole `sqlite_master` of a v6 journal: the **only** new schema object is that index, and every table's rows are unchanged. Reopening is idempotent.
+  - `EXPLAIN QUERY PLAN` uses the index for both the first batch and continuation queries.
+  - Measured here on an existing 461 MB v6 journal: the first open builds the index in **64 ms**, and later opens take 1 ms.
+  - Rollback-safe: older code opening a v7 journal finds no migrations to apply, and the index is harmless to it.
+  - No other migration, index, table, column, trigger or data change exists.
+- **The regression tests reproduce the original bugs.** I ran the new tests against the pre-M2.1 `conversation.py`
+  and `journal.py` from `4d7a46b`: **12 of the 15 fail** there. The 3 that pass guard behaviour that should not change
+  (an explicit pending actor, the unknown-session fallback, and an ordinary decision's exact shape).
+- **Semantics preserved.** On a mixed 12-session journal with increasing, insertion-ordered timestamps, the old and new
+  code produce **byte-identical** results for all 14 `channel=main` pages at `limit=37`, for the `session=` view, and
+  for `/api/channels`. Nothing private leaked. So the speedup comes from indexing and read reduction, not from changed output.
+- **Paging, read-only, bounds and auth** are unchanged. The existing paging, 5,010-event, read-only snapshot and
+  byte-identical `/api/state` tests pass as they were.
+- **Benchmark method.** Codex took medians of three sequential calls on the same machine and journal, at the
+  projection layer (HTTP excluded). The fixture was built at v6, then the **actual** `_v7` was applied; no benchmark-only
+  index was involved. The first thread page on an all-terminal journal walks all 100 sessions, a worst case for that endpoint.
+  - My independent single-call run with `tracemalloc` on (a pessimistic setting) gave `/api/channels` **2,408 → 54 ms**
+    and the first `/api/thread` page **2,361 → 181 ms**, the same order of improvement as Codex's 1,777.6 → 12.9 ms and 3,072.0 → 91.9 ms.
+  - One caveat for later milestones: the measurements are warm-cache and exclude HTTP and gzip.
+
+### Findings
+
+**Blocking:** none. **Should fix before M3:** none.
+
+**Optional polish** (carry into a later milestone if convenient):
+1. `channels.updated` takes each run's newest event **by id**. That equals the newest by time while `created` is written
+   at insert time, which it is (`journal.now()`), but a backwards wall-clock jump could understate it. It is cosmetic.
+2. The optional M2 items that were not taken still apply:
+   - Narrow the `KeyError` → 404 handling to the session lookup.
+   - An outcome whose run has no `ended` field sorts right after its session start.

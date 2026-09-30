@@ -2,8 +2,8 @@
 
 **From:** Opus (architecture) → **To:** Codex (implementation)
 **Branch:** `feature/chat-first-redesign`. Commit and push only there; **never merge into `main`**.
-**Prerequisite:** **M2.1 must be accepted first** (`docs/handoffs/M2_1_CORRECTIONS.md`). M2.1 does not change the API
-shape, but M3 relies on its attribution and page-independent outcome fixes.
+**Prerequisite:** M2.1 is **accepted** (review 2026-09-30, `docs/handoffs/M2_1_CORRECTIONS.md`), and this handoff has been
+checked against the final M2.1 API behaviour (see §2.1).
 **Read first, in this order:**
 1. `CURRENT_STATE.md`
 2. `docs/REDESIGN_ARCHITECTURE.md` (binding; §1, §3, §5, §6, §9, §10 and §11 matter most)
@@ -52,6 +52,20 @@ Where an item is actionable, it says so honestly and links to the classic dashbo
   rendering in M3, because model output is untrusted.
 - Unknown `kind` values render as a quiet system line, using `text`. Unknown `detail` keys are ignored.
 
+### 2.1 Final API behaviour to rely on (after M2.1)
+
+- **Request actors are correct in team runs.** A decided request keeps the agent that made it (mapped from its
+  recorded session). Render `actor` as given; never infer it on the client.
+- **Only one outcome can be actionable:** the **channel's newest terminal session**. Every other outcome has
+  `action: null`, and its `detail.workspace` holds only `{state}` from recorded flags (no `apply_blocked`).
+  The same outcome has the same `action` and `rev` on every page and in the `session=` view, so merging pages by `id` and `rev` is safe.
+- **Decisions always have visible text.** A decision without text is folded out, so never assume every turn is
+  preceded by a decision message. Planning decisions carry `detail.planning` and `detail.proposal_counts`.
+- **Pending requests** sort at the end of their session (they use the session's latest time, ranked before the outcome).
+  Once decided, they move to their receipt time, which is inside the newest window.
+- **Cost.** With the D6 index, the first thread page and `/api/channels` take tens of milliseconds on a 460 MB journal,
+  so refreshing all three endpoints on each coalesced change is fine.
+
 ## 3. Rendering by message kind (progressive disclosure)
 
 Actors appear as a small mark plus a name: **you**, **hermes**, the agent name (`coder-2`, `reviewer-1`, …) and **AgentControl**.
@@ -71,7 +85,10 @@ absolute time as a tooltip or `title`. A day separator goes between messages on 
 | `skill` | a quiet line: `text`, agent, state | source, risk, reasons |
 | `progress`, `system` | a **quiet single line** (muted, small). **Consecutive** `progress` and `system` messages within one session collapse into one line, "N updates", which expands to the list | the individual lines |
 | `alert` | a warning line with a "!" symbol (never colour alone) | detail fields, if any |
-| `outcome` | a session footer: the status symbol and label, `text` (the summary, clamped to 3 lines), and the workspace state ("open", "applied" or "discarded"; "apply blocked: …" when present) | full summary |
+| `outcome` | a session footer: the status symbol and label, `text` (the summary, clamped to 3 lines), and the workspace state ("open", "applied" or "discarded"). Add "apply blocked: …" only when `detail.workspace.apply_blocked` is present, which happens only on the actionable newest outcome | full summary |
+
+**Receipt actors.** `detail.receipt.actor` is recorded text. Show `You, via dashboard` as "you"; show any other value
+(for example an automatic rule approval) verbatim. Never guess who acted.
 
 **For every message with a non-null `action`** (a request, proposal, research, skill or outcome), render an
 **"Open in classic dashboard"** link (`/classic`) and a clear "waiting for you" state.
@@ -169,11 +186,12 @@ If you find a contract gap, stop and record it; do not patch the server.
 
 ## 6. Tests
 
-**Fixtures.** Build thread responses in `fixtures.cjs` that match real M2 output. Use the M2 sample in
-`M2_THREAD_READ_MODEL.md`, or copy output from `tests/test_thread_api.py` journals. Provide:
+**Fixtures.** Build thread responses in `fixtures.cjs` that match real M2 and M2.1 output. Start from the sample
+responses in the completion reports of `M2_THREAD_READ_MODEL.md` and `M2_1_CORRECTIONS.md` (the latter has a decided
+request with actor `coder-2`), or copy output from the `tests/test_thread_api.py` journals. Provide:
 - `threadSingle()`: goal, decision, two turns (one failed verification, one uncertain), a decided request, and an outcome with a workspace
 - `threadActive()`: an active session with a pending request (with `action`), a note aimed at `coder-2`, a redirect note, and `live.phase: 'code'`
-- `threadTeam()`: a proposal with `action`, a planning decision with counts, progress lines, research with request and events, and a skill with `action`
+- `threadTeam()`: a proposal with `action`, a planning decision with counts, a **decided request from `coder-2`**, progress lines, research with request and events, and a skill with `action`
 - `threadLong()`: three sessions and more than 400 messages across 3 pages, with cursors
 
 **DOM tests** (in `test_chat_ui.cjs` or a new `test_chat_thread.cjs` with the same harness style):

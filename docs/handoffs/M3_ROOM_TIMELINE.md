@@ -256,3 +256,61 @@ Review the screenshots yourself for calm density and hierarchy: one line per qui
 3. Push to `feature/chat-first-redesign`. No PR and no merge unless the owner asks.
 
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
+
+---
+
+## M3 completion report — Codex, 2026-09-30
+
+Implemented only M3, starting from clean `feature/chat-first-redesign` at `53d23cf` after a fast-forward pull.
+The new `chat/thread.js` exports the required pure cache/disclosure helpers and mounts a keyed project-room
+renderer. `/api/thread` supplies every timeline record; `/api/channels` supplies the room/channel identity,
+active session and waiting count. Members, Connections, the rail session list and context still use `/api/state`.
+No server, schema, orchestration, lifecycle, journal, approval or verification files changed.
+
+The room renders every specified kind as plain escaped text, with bounded public task/file/result details
+expanded in place. Team-plan counts, the decided `coder-2` request and stored receipt actors are covered.
+Unknown details are ignored. Action metadata is used only as a non-null marker: fingerprints, fields and
+choices are never read or shown, and each actionable item has exactly one classic decision link and a waiting
+state. The composer remains disabled; no frontend write was introduced. M4 and later milestones remain unstarted.
+
+Implemented ordered newest-window replacement with `known` stubs, older-page prepending, five-page gap recovery,
+new-message follow/pill behaviour, scroll anchoring, session collapse, parent links, ten-page deep-link/waiting
+lookup, isolated single-session fallback and the existing unknown-session notice. Unchanged message nodes retain
+identity; revised items retain disclosure and restore focused controls. Waiting notes and live status derive from
+thread data. Paging updates divider counts as history arrives. When a new terminal outcome retires actions on a cached
+older outcome, contiguous read pages revalidate that item from the server rather than inventing new metadata. M1.1 stale-session and scrim regressions remain covered.
+
+### Required verification
+
+| Command | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)**, 257.697 s; no failures or timing-test reruns |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed**; classic files/tests untouched |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **34/34 passed**: all 16 shell regressions and 18 M3 tests |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots` | **42 combinations + 4 regressions passed**, 90 temporary screenshots; no page errors or horizontal overflow |
+| Real `app.py` journal check (scratch scripts `/tmp/ac-m3-manual-server.py`, `/tmp/ac-m3-manual-check.cjs`) | Passed room history, live SSE note without reload, three older pages to the beginning, `/` and `/classic`, every rendered classic decision link, and zero frontend writes; 673 journal-projected records cached |
+| `git diff --check` and scope review | Passed; only §5 files changed |
+
+Skipped tests, by full name:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container` — opt-in container runtime/image gate.
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input` — desktop tools unavailable.
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone` — opt-in KVM gate.
+
+The OpenCode integration trio ran and passed. Backend socket tests and Chromium ran outside the filesystem
+sandbox, using the existing test-only dependencies in `/tmp/ac-tests`; no runtime dependency was added.
+The scratch server uses `ThreadAPITests`' actual SQLite journal and unmodified `app.handler`, with its background
+execution workers stopped and SSE enabled. The live note was appended by the scratch fixture, not by `/chat`.
+
+### Screenshots reviewed
+
+Reviewed the temporary images in `/tmp/chat-shots`, including `threadActive-desktop-light.png`,
+`threadTeam-desktop-dark.png`, `threadTeam-phone-light.png`, `threadTeam-laptop-dark-context.png`,
+`threadLong-laptop-dark.png` and `real-journal-room.png`. The room has concise turns, quiet grouped updates,
+simple request borders and no cards inside cards. First-load phone checks assert the newest item is inside the
+scrollable timeline and the waiting strip is visible. Expanded results include a 300-character unbroken token.
+Screenshot review found and resolved a footer-layout scroll issue; the final matrix covers it.
+
+No scope deviations, API contract gaps or unresolved M3 issues. The existing 30-session rail limit, environment
+gates, backend timing-sensitive tests and v1 server materialisation remain documented in `CURRENT_STATE.md`.
+M3 is ready for architecture review; M4 has not begun.

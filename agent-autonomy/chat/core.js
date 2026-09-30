@@ -5,18 +5,19 @@
   function write(storage, name, value) { try { value === null ? root[storage].removeItem(name) : root[storage].setItem(name,value); } catch {} }
   let key = read('localStorage',storageKey) || read('sessionStorage',storageKey) || '';
   let state = null, focused = '', refreshing = false, again = false, scheduled = null, poll = null, retry = null, abort = null, epoch = 0, failures = 0;
+  let channels = null, threadCache = null, single = null, olderTask = null;
   let live = 'Reconnecting…', error = '', authError = '';
   const agentsByRun = {}, listeners = new Set();
   const emit = () => listeners.forEach(fn=>fn(getState()));
-  function getState() { return {state,agentsByRun,focused,live,error,authError,authenticated:!!key}; }
+  function getState() { return {state,channels,thread:threadCache,single,agentsByRun,focused,live,error,authError,authenticated:!!key}; }
   function stop() { epoch++; abort?.abort(); abort = null; [poll,retry,scheduled].forEach(clearTimeout); poll = retry = scheduled = null; }
-  function rejectKey(message) { stop(); key = ''; state = null; Object.keys(agentsByRun).forEach(id=>delete agentsByRun[id]); write('localStorage',storageKey,null); write('sessionStorage',storageKey,null); authError = message; emit(); }
+  function rejectKey(message) { stop(); key = ''; state = null; channels = threadCache = single = null; Object.keys(agentsByRun).forEach(id=>delete agentsByRun[id]); write('localStorage',storageKey,null); write('sessionStorage',storageKey,null); authError = message; emit(); }
   async function api(path, method = 'GET', body) {
     try {
       const response = await fetch(path,{method,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},cache:'no-store',...(body === undefined ? {} : {body:JSON.stringify(body)})});
       const result = await response.json();
       if (response.status === 401) { rejectKey(result.error || 'Please connect again.'); throw Error(result.error || 'Please connect again.'); }
-      if (!response.ok) throw Error(result.error || 'Request failed ('+response.status+')');
+      if (!response.ok) throw Object.assign(Error(result.error || 'Request failed ('+response.status+')'),{status:response.status});
       return result;
     } catch (exception) { if (key) { error = exception.message; emit(); } throw exception; }
   }
@@ -33,21 +34,79 @@
     refreshing = true;
     const requested = focused, generation = epoch;
     try {
-      const result = await api('/api/state?scope=current&run='+encodeURIComponent(requested));
-      if (generation !== epoch || requested !== focused) return;
-      if (result.run?.id) agentsByRun[result.run.id] = result.agents || [];
-      state = result; error = '';
-      if (requested && result.run?.id !== requested) {
-        focused = '';
-        error = "That session is not in this project's history.";
-        root.location.replace('#/');
+      const t = root.AC.thread, cached = threadCache || t.emptyCache();
+      const known = cached.windowIds.slice(-2000).map(id=>id+':'+cached.messages[id].rev).join(',');
+      const [stateResult,channelResult,newest] = await Promise.all([
+        api('/api/state?scope=current&run='+encodeURIComponent(requested)), api('/api/channels'),
+        api('/api/thread?channel=main&limit=200'+(known ? '&known='+encodeURIComponent(known) : ''))
+      ]);
+      if (generation !== epoch) return;
+      let page = {...newest,newestIds:newest.messages.map(m=>m.id)}, walks = 0;
+      while (t.findGap(cached,page) && page.before && walks < 5) {
+        const older = await api('/api/thread?channel=main&limit=200&before='+encodeURIComponent(page.before));
+        page = {...page,messages:[...older.messages,...page.messages],sessions:[...older.sessions,...page.sessions],before:older.before};walks++;
       }
-      emit();
+      // Finishing a session can retire a cached older outcome's actions without moving its position.
+      // Re-read contiguous history through that item; never synthesize a revised receipt or action.
+      const terminal = [...page.messages].reverse().find(m=>!m.same && m.kind==='outcome');
+      const retired = terminal && cached.ids.filter(id=>cached.messages[id].kind==='outcome' && cached.messages[id].action && id!==terminal.id && !page.messages.some(m=>m.id===id));
+      while (retired?.some(id=>!page.messages.some(m=>m.id===id)) && page.before) {
+        const older = await api('/api/thread?channel=main&limit=200&before='+encodeURIComponent(page.before));
+        page = {...page,messages:[...older.messages,...page.messages],sessions:[...older.sessions,...page.sessions],before:older.before};
+        if (generation !== epoch) return;
+      }
+      if (generation !== epoch) return;
+      threadCache = t.mergeNewest(threadCache || cached,page,t.findGap(cached,page) || !page.messages.length || cached.project && cached.project !== page.project);channels = channelResult;
+      if (requested === focused) {
+        if (stateResult.run?.id) agentsByRun[stateResult.run.id] = stateResult.agents || [];
+        state = stateResult;
+      }
+      error = '';emit();
     } catch {} finally {
       refreshing = false;
       if (again) { again = false; scheduleRefresh(); }
       schedulePoll();
     }
+  }
+  async function loadOlder() {
+    if (olderTask) return olderTask;
+    const target = single || threadCache;
+    if (!target?.before) return false;
+    const generation = epoch, cursor = target.before, mode = single;
+    olderTask = (async()=>{
+      const page = await api('/api/thread?'+(mode ? 'session='+encodeURIComponent(focused) : 'channel=main')+'&limit=200&before='+encodeURIComponent(cursor));
+      if (generation !== epoch || mode !== single) return false;
+      const current = single || threadCache;
+      if (current.before !== cursor) return false;
+      const merged = root.AC.thread.prependOlder(current,page);
+      if (mode) single=merged;else threadCache=merged;
+      emit();return true;
+    })();
+    try{return await olderTask;}finally{olderTask=null;}
+  }
+  async function locateSession(id) {
+    const generation=epoch;single=null;
+    for(let page=0;page<=10;page++){
+      if(focused!==id || generation!==epoch)return;
+      if(threadCache?.ids.some(key=>threadCache.messages[key].session===id && threadCache.messages[key].kind==='session_start')){emit();return;}
+      if(page===10 || !threadCache?.before)break;
+      await loadOlder();
+    }
+    try {
+      const page=await api('/api/thread?session='+encodeURIComponent(id)+'&limit=200');
+      if(focused!==id || generation!==epoch)return;
+      single=root.AC.thread.mergeNewest(root.AC.thread.emptyCache(),page);emit();
+    }catch(exception){if(exception.status===404 && focused===id && generation===epoch){focused='';single=null;error="That session is not in this project's history.";root.location.replace('#/');emit();}}
+  }
+  async function locateWaiting() {
+    single=null;
+    for(let page=0;page<=10;page++){
+      const id=threadCache?.ids.find(id=>threadCache.messages[id].action != null);
+      if(id){emit();return id;}
+      if(page===10 || !threadCache?.before)break;
+      await loadOlder();
+    }
+    return null;
   }
   function scheduleRefresh() { if (!scheduled && key) scheduled = setTimeout(()=>{scheduled = null; refresh();},0); }
   // Copied and adapted from classic connectEvents(): authenticated fetch streaming, no key in URLs.
@@ -74,8 +133,8 @@
   }
   function start() { if (key) { refresh(); connectEvents(); } else emit(); }
   function connect(value, remember) { stop(); key = value.trim(); authError = ''; write('localStorage',storageKey,remember ? key : null); write('sessionStorage',storageKey,remember ? null : key); emit(); start(); }
-  function focus(id) { if (id !== focused) { focused = id; scheduleRefresh(); } }
-  const core = {api,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
+  function focus(id) { if (id !== focused) { focused = id; single = null; scheduleRefresh(); } }
+  const core = {api,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
   root.AC = root.AC || {}; root.AC.core = core;
   if (typeof module !== 'undefined' && module.exports) module.exports = core;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -98,3 +98,56 @@ function empty() {
 }
 
 module.exports = {clone, fixture, richActive, richCompleted, empty, transcript, longGoal};
+
+/* M3 public thread fixtures, shaped like conversation.py's test journals.
+   In particular, decided requests retain coder-2 and stored receipt actors. */
+function threadMessage(id,kind,text,detail={},extra={}) {
+  return {id,rev:1,at:'2026-09-28T16:00:00Z',session:'run_test',actor:kind==='goal'||kind==='note' ? 'you' : kind==='decision'||kind==='proposal' ? 'hermes' : 'agentcontrol',kind,text,refs:{},detail,action:null,...extra};
+}
+function threadResponse(messages,sessions,before=null,live={session:null,phase:null,status:null}) {
+  return {channel:'main',project:'/tmp/project',sessions,messages,before,live};
+}
+function threadSession(id='run_test',extra={}) {return {id,title:'Todo CLI',status:'completed',created:'2026-09-28T16:00:00Z',ended:'2026-09-28T16:12:00Z',parent:null,mode:'single',summary:'The todo app works.',...extra};}
+function threadSingle() {
+  const s=threadSession();
+  return threadResponse([
+    threadMessage('run:run_test','session_start',s.title,{title:s.title,mode:'single',parent:null}),
+    threadMessage('ev:1','goal',longGoal),
+    threadMessage('ev:2','decision','Start with storage.',{title:'Create the module',plan:['Read the module','Add tests'],repaired:true}),
+    threadMessage('turn:1','turn','Create the module',{number:1,status:'finished',kind:'task',ended:s.ended,prompt:'Create the todo module.',verification:{status:'failed',exit_code:1},files:[{path:'todo.py',change:'added',added:64,removed:0}],files_omitted:0,result_tail:'Tests failed.'},{actor:'coder-1'}),
+    threadMessage('turn:2','turn','Fix reload',{number:2,status:'finished',kind:'task',ended:s.ended,prompt:'Fix reload and test it.',verification:{status:'passed',exit_code:0},files:[{path:'todo.py',change:'modified',added:12,removed:3}],files_omitted:0,result_tail:'Tests pass. '+ 'x'.repeat(300),uncertain:true},{actor:'coder-1'}),
+    threadMessage('req:permission:p1','request','bash · python3 -m unittest',{kind:'permission',permission:'bash',patterns:['python3 -m unittest'],risk:{level:'R1',label:'Low risk',class:'low',reasons:['Local tests']},receipt:{actor:'You, via dashboard',action:'approve',state:'sent',created:s.created,updated:s.ended}},{actor:'coder-1'}),
+    threadMessage('out:run_test','outcome',s.summary,{status:s.status,ended:s.ended,workspace:{state:'open',apply_blocked:'Working tree changed'}},{action:{endpoint:'/api/control',fields:{run:s.id},choices:['discard_workspace','verify']}})
+  ],[s]);
+}
+function threadActive() {
+  const result=threadSingle(),s=result.sessions[0];s.status='waiting';s.ended=null;
+  result.messages=result.messages.filter(m=>!['outcome','request'].includes(m.kind));
+  result.messages.push(threadMessage('ev:3','note','Keep the format simple.',{to:'coder-2'}),threadMessage('ev:4','note','Use local tests.',{redirect_for:'p0'}),threadMessage('req:permission:p1','request','bash · python3 -m unittest',{kind:'permission',permission:'bash',patterns:['python3 -m unittest'],risk:{level:'R1',label:'Low risk',class:'low',reasons:['Local tests']},receipt:null,pending:true},{actor:'coder-1',action:{endpoint:'/api/review',fields:{run:s.id,kind:'permission',request_id:'p1',fingerprint:'NEVER-SHOW-FINGERPRINT'}}}));
+  result.live={session:s.id,phase:'code',status:'waiting'};return result;
+}
+function threadTeam() {
+  const result=threadActive(),s=result.sessions[0];s.mode='team';s.title='Team todo CLI';
+  result.messages[0].detail.mode='team';
+  const decision=result.messages.find(m=>m.kind==='decision');Object.assign(decision.detail,{planning:true,proposal_counts:{agents:2,tasks:2}});
+  const pending=result.messages.pop();
+  result.messages.push(threadMessage('ev:5','proposal','Build with two agents.',{proposal:{agents:[{name:'coder-1',role:'coder',task:'Storage'},{name:'coder-2',role:'coder',task:'CLI'}],tasks:[{id:'storage',title:'Implement storage',agent:'coder-1',depends_on:[]},{id:'cli',title:'Implement CLI',agent:'coder-2',depends_on:['storage']}]},warnings:['Review integration']},{action:{endpoint:'/api/control',fields:{run:s.id},choices:['approve_team','single_agent','repropose']}}),
+    threadMessage('req:permission:p2','request','bash · python3 -m unittest',{kind:'permission',permission:'bash',patterns:['python3 -m unittest'],risk:{level:'R1',label:'Low risk',class:'low'},receipt:{actor:'you',action:'approve',state:'sent',created:s.created,updated:s.created}},{actor:'coder-2'}),
+    threadMessage('ev:6','progress','Team started'),threadMessage('ev:7','progress','Storage task started'),threadMessage('ev:8','system','Workspace ready'),
+    threadMessage('turn:r','research','Check the documentation',{number:3,status:'finished',kind:'research',request:{question:'Which storage format?',why:'Check compatibility',toolsets:['web'],max_turns:2,seconds:60},events:[{kind:'research started',created:s.created,text:'Reading docs'},{kind:'research result',created:s.created,text:'JSON is supported'}]},{actor:'researcher-1'}),
+    threadMessage('cap:1','skill','Python testing',{name:'Python testing',agent:'coder-2',state:'proposed',source:'local library',risk:{level:'R1',label:'Low risk'},reasons:['Needed for tests']},{action:{endpoint:'/api/skills/decide',fields:{id:'1'},choices:['approve','reject']}}),pending);
+  return result;
+}
+function threadLong() {
+  const sessions=[threadSession('long-0',{title:'First session',created:'2026-09-26T16:00:00Z'}),threadSession('long-1',{title:'Second session',created:'2026-09-27T16:00:00Z',parent:'long-0'}),threadSession('long-2',{title:'Newest session',parent:'long-1'})];
+  const messages=[];
+  for(const s of sessions){
+    const extra={session:s.id,at:s.created};messages.push(threadMessage('run:'+s.id,'session_start',s.title,{parent:s.parent,mode:s.mode},extra),threadMessage('goal:'+s.id,'goal','Build '+s.title,{},extra));
+    for(let i=0;i<147;i++) messages.push(threadMessage('long:'+s.id+':'+i,'decision','Recorded update '+i,{title:'Continue'},extra));
+    messages.push(threadMessage('out:'+s.id,'outcome',s.summary,{status:s.status,workspace:{state:'applied'}},extra));
+  }
+  const page=(start,end,before)=>threadResponse(messages.slice(start,end),sessions.filter(s=>messages.slice(start,end).some(m=>m.session===s.id)),before);
+  return [page(250,450,'long:250'),page(50,250,'long:50'),page(0,50,null)];
+}
+function threadChannels(thread,waiting=0) {return {project:thread.project,channels:[{id:'main',kind:'project',title:'project',sessions:thread.sessions.length,active_session:thread.live.session,waiting,updated:thread.messages.at(-1)?.at || null}]};}
+Object.assign(module.exports,{threadMessage,threadResponse,threadSession,threadSingle,threadActive,threadTeam,threadLong,threadChannels});

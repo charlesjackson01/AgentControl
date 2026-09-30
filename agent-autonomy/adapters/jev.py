@@ -21,6 +21,7 @@ where answers is None on any failure and info['error'] says why. The key is read
 the ai-arch secret store and never appears in results or errors. Standard library only.
 """
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -31,6 +32,19 @@ URL = 'https://api.typesafe.ai/v1/systemone'
 MODEL = 'jev-1.13.0'           # pinned: the answers must not shift when TypeSafe moves jev-latest
 PRICE_IN = 42 / 1e9            # dollars per input token; output tokens are free (TypeSafe pricing)
 MAX_STATE = 200_000            # characters; Jev reads at most 64K tokens per request
+
+
+def key_ref_problem(ref):
+    """Why `ref` is not usable as a secret-store name, or ''. --jev-key takes the NAME of the key file
+    (e.g. 'typesafe'); a pasted key would sit in plain text in the service file and the process list.
+    The message never repeats the value."""
+    ref = str(ref or '')
+    looks_like_key = ref.lower().startswith(('apikey_', 'apikey-', 'sk-', 'ts-', 'bearer')) or len(ref) > 64
+    if looks_like_key or not re.fullmatch(r'[A-Za-z0-9._-]+', ref):
+        return ('--jev-key takes the name of the key file, not the key itself. Put the key in '
+                '~/.local/share/ai-arch/secrets/typesafe (chmod 600) and pass --jev-key typesafe.'
+                + (' If you pasted the key into a command or a settings file, remove it there.' if looks_like_key else ''))
+    return ''
 
 
 def noul(instructions):

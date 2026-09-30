@@ -738,7 +738,7 @@ A coder can loop: the same failing test, the same edit undone and redone, the sa
 Setup:
 1. Put your key in ai-arch's secret store: `(umask 077; printf '%s' 'YOUR_KEY' > ~/.local/share/ai-arch/secrets/typesafe)`.
 2. Check it with `python3 agent-autonomy/spikes/jev_probe.py`. It sends one request about a built-in sample text and prints the reply.
-3. Start AgentControl with `--jev-key typesafe`. For the services, add it to `AGENTCONTROL_ARGS` in `~/.config/agentcontrol/agentcontrol.env` and restart.
+3. Start AgentControl with `--jev-key typesafe` The flag takes the **name** of the key file, never the key itself; AgentControl refuses to start if it gets something that looks like a key. For the services, add it to `AGENTCONTROL_ARGS` in `~/.config/agentcontrol/agentcontrol.env` and restart.
 
 The model is pinned to `jev-1.13.0`, the version the probe was checked against, so answers don't shift when TypeSafe updates `jev-latest`. `--jev-model` changes it, and `--jev-stuck-threshold` (0.5 up to 1) changes what counts as high.
 

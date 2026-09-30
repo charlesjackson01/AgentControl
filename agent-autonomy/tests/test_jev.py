@@ -129,6 +129,23 @@ class AdapterTests(unittest.TestCase):
         self.assertIn('could not be reached', offline.ask('s', q)[1]['error'])
 
 
+class KeyFlagTests(unittest.TestCase):
+    def test_the_flag_takes_a_secret_name_and_refuses_a_pasted_key_without_repeating_it(self):
+        for good in ('typesafe', 'jev.key', 'team_jev-2'):
+            self.assertEqual(jev_api.key_ref_problem(good), '', good)
+        for bad in ('apikey_Abc123SECRET', 'sk-live-SECRET', 'x' * 65, 'my key', '../typesafe', ''):
+            problem = jev_api.key_ref_problem(bad)
+            self.assertIn('name of the key file', problem, bad)
+            if bad:
+                self.assertNotIn(bad, problem)
+        import subprocess
+        done = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'app.py'), '--jev-key', 'apikey_Abc123SECRET'],
+                              capture_output=True, text=True, timeout=30)
+        self.assertEqual(done.returncode, 2)
+        self.assertIn('--jev-key typesafe', done.stderr)
+        self.assertNotIn('Abc123SECRET', done.stdout + done.stderr)
+
+
 class WatchHelperTests(unittest.TestCase):
     def test_tail_keeps_the_end_of_the_turn_within_limits(self):
         parts = [{'type': 'tool', 'tool': 'bash', 'status': 'error', 'summary': f'pytest {n}', 'output': 'KeyError ' * 200} for n in range(60)]

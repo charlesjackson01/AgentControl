@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import agents as agent_registry
 from engine import Controller, ReviewConflict, Settings, TERMINAL
 import gateway
+from adapters import jev as jev_api
 import workspaces
 
 ROOT = Path(__file__).resolve().parent
@@ -368,6 +369,8 @@ def main():
     p.add_argument('--projects-root', type=Path, default=None,
                    help='Folder the dashboard may browse and create projects in (default: your home folder)')
     a = p.parse_args()
+    if a.jev_key and jev_api.key_ref_problem(a.jev_key):
+        p.error(jev_api.key_ref_problem(a.jev_key))
     if not 0.5 <= a.jev_stuck_threshold < 1:
         p.error('--jev-stuck-threshold must be at least 0.5 and below 1')
     project = a.project.expanduser().resolve()

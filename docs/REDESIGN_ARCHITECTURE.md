@@ -121,6 +121,7 @@ agent-autonomy/chat/
   chat.css        layout and components; uses var(--token) only, no raw colour literals
   core.js         AC.core: key storage, api(), live stream (SSE via fetch) + polling fallback, store
   model.js        AC.model: pure view-model adapters (channels, sessions, members, presence)
+                  members come from /api/state `agents` (the selected run); no separate /api/agents call
   shell.js        AC.shell: rendering of the rail, room, context panel; hash router; boot
   (later) thread.js, composer.js, cards.js, members.js, workspace.js
 ```
@@ -201,11 +202,13 @@ Query parameters:
 
 - **Ids are stable** across calls and pages, so the client patches in place.
 - A **cursor** is opaque to the client. Server-side it encodes a (session created, session id, event id) position.
-  Events are paged with a new read-only helper, `Store.events_before(run, id, limit)`. No migration is needed.
+  Events are paged with a new read-only helper, `Store.events_page(run, before_id, limit, exclude_kinds)`. No migration is needed.
 - `action` is present only while the item is actionable. For a request, it carries the review packet with its
   `fingerprint`, taken from the same source as `state.inbox`.
-- The projection lives in **`agent-autonomy/conversation.py`**, as pure functions with no I/O, unit-tested with fixtures.
-  `app.py` gathers inputs from the `Store` and `Controller` and calls it.
+- The projection lives in **`agent-autonomy/conversation.py`**. Its projection functions are pure, with no I/O, and are
+  unit-tested with fixtures. One thin `gather()` in the same module reads inputs through existing **read-only** `Store` and
+  `Controller` methods only, and `app.py` calls it. The detailed, normative event mapping is `conversation.MAPPING`,
+  specified in `docs/handoffs/M2_THREAD_READ_MODEL.md` §5.3. The table below is its summary.
 - `/api/state` stays **byte-identical** for the same journal. The classic UI depends on it.
 
 ### 6.4 Journal → message mapping (normative)
@@ -215,7 +218,7 @@ Query parameters:
 | run created | `session_start` | agentcontrol | the session divider; carries title, mode, parent |
 | event `goal` | `goal` | you | |
 | event `user instruction`, `goal check added` | `note` | you | `detail.to` = agent if aimed; UI shows "read before next turn" until the next decision |
-| event `Hermes decision` (+ `Hermes JSON repaired` folded) | `decision` | hermes | `summary`, `plan`, next `title`; never the raw prompt inline (it is under `detail`) |
+| event `Hermes decision` (+ `Hermes JSON repaired` folded) | `decision` | hermes | `summary`, `plan`, next `title`; the prompt is omitted (it appears in the turn) |
 | step + its `OpenCode prompt/tool/result/needs input`, `file changes`, `verification*` | `turn` | step agent | one message per step; tool events are **folded**, never separate messages |
 | pending request (`run.pending` / inbox) + `approval *` events | `request` | agent | actionable while pending; receipts fold in |
 | `team proposal` + `run.team` | `proposal` | hermes | actionable: `approve_team`, `single_agent`, `repropose` |
@@ -225,7 +228,7 @@ Query parameters:
 | `attention`, `recovery`, `submission uncertain`, `apply conflict`, `completion rejected`, `watch alert` | `alert` | agentcontrol | |
 | run terminal status + `summary` + `workspace` | `outcome` | agentcontrol | actionable: Apply / Discard / Verify now / Reply in session |
 | `control`, `vm`, `container`, `setup`, `preview`, `workspace`, `model warning`, `spend cap`, `applied`, `discarded`, `notification`… | `system` | agentcontrol | quiet line |
-| `connection retry`, `agent state`, per-tool `OpenCode tool`, `notification error` | *omitted* | | still visible in Activity (More) |
+| `Hermes request` (the full manager prompt), `connection retry`, `agent state`, `watch`, per-tool `OpenCode tool`, `notification`, `notification error` | *omitted* or folded | | still visible in Activity (More) and Workspaces |
 
 Any event kind not listed maps to a quiet `system` message and is **never silently dropped**. A unit test
 collects every `store.event(<run>, '<kind>', …)` literal in `agent-autonomy/*.py` and fails if a kind has no mapping.
@@ -339,7 +342,7 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 | # | Name | Scope (summary) | Depends on |
 |---|---|---|---|
 | **M1** | App shell | `/chat` + `/classic` routes; isolated frontend skeleton; sign-in; live data layer; rail (project, channels, sessions, members); room with session blocks; context panel slot; tokens; responsive frame | none |
-| **M2** | Thread read model | `conversation.py`, `GET /api/channels`, `GET /api/thread`, `Store.events_before`, mapping tests | none (parallel with M1) |
+| **M2** | Thread read model | `conversation.py`, `GET /api/channels`, `GET /api/thread`, `Store.events_page`, mapping tests | none (parallel with M1) |
 | **M3** | Room timeline | render `/api/thread`: session blocks, messages, collapsed turns, live deltas, paging up | M1, M2 |
 | **M4** | Composer | new session, notes, `@agent`, reply in session, slash commands, settings sheet | M3 |
 | **M5** | Actionable cards | requests (full review flow), team proposal, research, skills, outcome (Apply/Discard/Verify); pinned waiting pointer | M3 |
@@ -350,3 +353,9 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 
 **Change log of this contract**
 - 2026-09-30: created with decisions D1–D5 (Opus planning session).
+- 2026-09-30 (M1 review):
+  - `conversation.py` may contain one read-only `gather()` beside its pure projection functions.
+  - `Hermes request` and `watch` events are omitted from the thread.
+  - `conversation.MAPPING` (M2 handoff §5.3) is the normative mapping.
+  - The chat shell takes members from `/api/state` and does not call `/api/agents` (see `M1_1_CORRECTIONS.md`).
+  - Overlays (the scrim) follow the panels actually showing, never a saved preference.

@@ -307,3 +307,100 @@ the sandbox. No runtime dependencies were added.
 
 No blocking open questions for Opus. M2 remains unimplemented; its channel/thread read model is the next task.
 The existing 30-session state cap is intentional for M1. No PR or merge into `main` is part of this work.
+
+
+## Architecture review — 2026-09-30 (Opus)
+
+**Verdict: M1 accepted, with two required corrections.** They are handed off in
+`docs/handoffs/M1_1_CORRECTIONS.md` and must land before M3. M2 does not depend on them and may proceed.
+
+Reviewed: `b060f61..990f258` (the single commit `990f258`), all 12 files, against the architecture contract and this handoff.
+
+### Re-run in the review environment (at `990f258`)
+
+| Suite | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests -v` | **351 tests, OK (skipped=6)** |
+| `test_ui.cjs` (classic DOM) | **82/82** |
+| `test_chat_ui.cjs` | **13/13** |
+| `chat_screenshots.cjs` | **50 screenshots, 24 combinations passed** |
+
+### Verified
+
+- **Scope.** Only `app.py` `do_GET`, `agent-autonomy/chat/*`, three new test files, `CURRENT_STATE.md` and this file changed.
+  No existing test file was modified, and `fixtures.cjs` is unchanged.
+- **Backend semantics.** `engine.py`, `adapters/` (Hermes, OpenCode, Jev), `journal.py`, `lifecycle.py`, `permissions.py`,
+  `verify.py` and every POST route are untouched. The chat UI issues only GET requests, and it has no approval,
+  research, skill or team-decision controls (a DOM test asserts this).
+- **Routes and isolation:**
+  - `/` and `/classic` serve byte-identical classic HTML.
+  - Chat assets pass through the strict name regex, containment via `resolve()` (symlinks cannot escape), fixed
+    content types and `reply()` headers. Traversal, encoded traversal, subpaths, dotfiles, `.py` and `.html` all return 404.
+  - No chat file references classic JS or CSS (guarded by a test).
+- **No duplicated source of truth.** All data comes from `/api/state` and `/api/agents`. The only browser storage
+  is the shared key and `acx-context-open`.
+- **Auth.** The key is sent only in the `Authorization` header, never in a URL. The sign-in field is cleared on
+  submit. Storage access is guarded. A 401 from any call, including the SSE stream, returns to sign-in with the server's message.
+- **Live updates:**
+  - fetch-based SSE carrying the key
+  - one refresh in flight plus one trailing refresh
+  - a single poll timer (2 s while active, 10 s when idle) only while the stream is down
+  - reconnect backoff capped at 30 s
+  - `stop()` clears every timer and aborts the stream (tested)
+- **Rendering.** Every API string is escaped (tested with an `<img onerror>` payload). No text impersonates Hermes
+  or an agent: summaries are labelled "Recorded summary", and the composer is disabled with an honest placeholder.
+- **Design and responsive layout.** All colours are tokens in `tokens.css` (guarded), light and dark follow the system,
+  and there are no themes. There are three breakpoints (rail drawer and bottom sheet on phones), no overflow at
+  390 px (asserted in Chromium), and `prefers-reduced-motion` is honoured.
+
+### Test baseline difference (6 skips before, 3 after): environmental, not a regression
+
+In this environment the same commit gives **351 tests, 6 skipped**, the same six as the 347-test baseline, plus the four new route tests. Each skip is gated only by the environment:
+
+| Test | Skip condition |
+|---|---|
+| `test_roles_e2e…test_paid_coder_and_read_only_reviewer` | no OpenCode binary (`OPENCODE_BIN` or `opencode` on `PATH`) |
+| `test_team_e2e…test_installed_skill_reaches_the_agent_on_its_next_turn` | same gate (`test_roles_e2e` imports `OPENCODE` from `test_team_e2e`) |
+| `test_team_e2e…test_two_agents_killed_mid_run_and_resumed` | same gate |
+| `test_preview…test_desktop_preview_shows_frames_and_accepts_input` | `Xvfb`, `xdotool` or `import` missing |
+| `test_container_e2e…` | needs `AGENTCONTROL_CONTAINER_TESTS=1`, a runtime and the image |
+| `test_vm_e2e…` | needs `AGENTCONTROL_VM_TESTS=1` on a KVM host |
+
+M1 changed none of these tests or their gates. The only natural set of exactly three tests that stop being skipped
+together is the **OpenCode-binary trio**. Container and VM need explicit opt-in variables, and the VM test also needs OpenCode.
+So Codex's environment almost certainly had an `opencode` binary, and those three real-OpenCode end-to-end tests
+(with scripted models) **ran and passed there**. That is extra coverage, not lost coverage. From now on, report skips
+by name (as `CURRENT_STATE.md` now does), not only by count.
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before the next UI milestone (M3). Both are handed off in `M1_1_CORRECTIONS.md`:**
+
+1. **An unknown session link freezes the shell.** Reproduced in Chromium.
+   - Trigger: `/chat#/s/<id>` where the id is not in the journal (a stale bookmark, a reset journal, another host, a typo).
+   - `/api/state?run=<id>` returns 200, but the extra `/api/agents?run=<id>` returns **404**.
+     `core.refresh()` throws after the state fetch and before `state = …`, so every refresh discards its result.
+   - A fresh load stays on "Connecting…" forever, showing only an "Unknown run" banner. After a good load, live
+     updates stop silently while 404 polls continue every 2 s.
+   - Root cause: the M1 spec asked for `/api/agents`, which is redundant, because `/api/state` already returns
+     `agents` for the selected run from the same `Controller.agents()`. That part of the fault is in the spec.
+2. **A stale context-panel preference leaves the scrim over the room.** Reproduced at 1024 px and 390 px.
+   - `acx-context-open=true` survives navigation back to `#/`, for example with the browser Back button after opening a session.
+   - The context panel is hidden, but `panels()` shows the scrim whenever the preference is true.
+     The room is dimmed and the first click is swallowed.
+
+**Optional polish** (no action required; fold into later milestones if convenient):
+
+3. On a 401, chat deletes the shared stored key, while classic keeps it and re-prompts. Both are safe;
+   pick one behaviour and document it.
+4. `autocomplete="current-password"` on the key field (classic uses `off`) invites password managers to store the dashboard key.
+5. `/classic/` (with a trailing slash) returns a 401 JSON body instead of the classic page.
+6. `import re` runs on every `/chat/*` request. Hoist it and precompile the pattern.
+7. The terminal-status set is written three times (twice in `core.js`, once in `model.js`).
+8. `#live` (`role="status"`) is recreated on every render. Keep one stable live-region node.
+9. Pluralisation: the waiting strip reads "1 requests waiting".
+10. The context tabs have no arrow-key navigation.
+11. `failures` resets on every 200 from `/api/events`. A proxy that accepts the stream and immediately closes it
+    causes a reconnect (and a full refresh) every second. Reset the backoff only after the stream has stayed open for a while or delivered an event.

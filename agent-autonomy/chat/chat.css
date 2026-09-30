@@ -92,6 +92,7 @@ time { font-size: var(--type-xs); color: var(--muted); }
 .you-bubble { border-left: var(--focus) solid var(--accent); }
 .request-card { border-left: var(--focus) solid var(--warning); padding-left: var(--s3); }
 .waiting-state, .warning { color: var(--warning); }
+.waiting-line { display: block; flex-basis: 100%; margin-top: var(--s1); }
 .quiet, .day-separator, #thread-live { color: var(--muted); font-size: var(--type-xs); }
 .quiet .plain { margin: 0; }
 .day-separator { text-align: center; margin: var(--s4) 0; }

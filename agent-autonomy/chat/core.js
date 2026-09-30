@@ -42,21 +42,26 @@
       ]);
       if (generation !== epoch) return;
       let page = {...newest,newestIds:newest.messages.map(m=>m.id)}, walks = 0;
+      const newestIds = new Set(page.newestIds);
+      const stale = cached.ids.filter(id=>cached.messages[id].action != null && !newestIds.has(id));
+      const previousWaiting = channels?.project === channelResult.project ? channels.channels?.[0]?.waiting : undefined;
+      const revalidate = newest.messages.some(m=>!m.same && m.kind==='outcome') ||
+        previousWaiting !== undefined && channelResult.channels?.[0]?.waiting < previousWaiting;
       while (t.findGap(cached,page) && page.before && walks < 5) {
         const older = await api('/api/thread?channel=main&limit=200&before='+encodeURIComponent(page.before));
         page = {...page,messages:[...older.messages,...page.messages],sessions:[...older.sessions,...page.sessions],before:older.before};walks++;
+        if (generation !== epoch) return;
       }
-      // Finishing a session can retire a cached older outcome's actions without moving its position.
-      // Re-read contiguous history through that item; never synthesize a revised receipt or action.
-      const terminal = [...page.messages].reverse().find(m=>!m.same && m.kind==='outcome');
-      const retired = terminal && cached.ids.filter(id=>cached.messages[id].kind==='outcome' && cached.messages[id].action && id!==terminal.id && !page.messages.some(m=>m.id===id));
-      while (retired?.some(id=>!page.messages.some(m=>m.id===id)) && page.before) {
+      // Decisions outside the newest window must be re-read from the server. Share the
+      // ten-page budget with gap recovery; discard unverifiable history at the bound.
+      const uncovered = ()=>stale.some(id=>!page.messages.some(m=>m.id===id));
+      while (revalidate && uncovered() && page.before && walks < 10) {
         const older = await api('/api/thread?channel=main&limit=200&before='+encodeURIComponent(page.before));
-        page = {...page,messages:[...older.messages,...page.messages],sessions:[...older.sessions,...page.sessions],before:older.before};
+        page = {...page,messages:[...older.messages,...page.messages],sessions:[...older.sessions,...page.sessions],before:older.before};walks++;
         if (generation !== epoch) return;
       }
       if (generation !== epoch) return;
-      threadCache = t.mergeNewest(threadCache || cached,page,t.findGap(cached,page) || !page.messages.length || cached.project && cached.project !== page.project);channels = channelResult;
+      threadCache = t.mergeNewest(threadCache || cached,page,revalidate && uncovered() || t.findGap(cached,page) || !page.messages.length || cached.project && cached.project !== page.project);channels = channelResult;
       if (requested === focused) {
         if (stateResult.run?.id) agentsByRun[stateResult.run.id] = stateResult.agents || [];
         state = stateResult;

@@ -108,3 +108,60 @@ renders as just "Confirmed".
 
 1. Append a completion report to this file: the changes, test commands and counts (with skipped tests named), and the screenshots reviewed.
 2. Set M3.1 to done in `CURRENT_STATE.md`, then push. No PR and no merge unless the owner asks.
+
+
+## M3.1 completion report — 2026-09-30 (Codex)
+
+Implemented only the frontend corrections in this handoff, starting from a clean `5563b40` after pulling
+`feature/chat-first-redesign`. M4 remains unstarted.
+
+- Receipt labels copy classic `receiptLabel` semantics, including confirmed approve/reject/answer and all delivery
+  states. Recorded actors remain attributed; dashboard actors read “by you”. Denials with a redirect add
+  “· redirected”; the redirect text and receipt fields remain under Details.
+- Refresh revalidates every cached actionable kind outside the newest window when channel waiting decreases or
+  a non-stub outcome arrives. It reads contiguous server pages with a shared maximum of ten `before` requests
+  (including gap recovery). Uncovered history is discarded at the bound, preserving the fetched pages and their
+  cursor so Load earlier still works. No action is cleared or invented in the browser.
+- All layouts put “! Waiting for you · Open in classic dashboard” on a separate line. The strip says exactly
+  “! N waiting for you”, with whitespace before its classic link. A muted rail note uses the actual shown/total
+  session counts when the list is capped. Asset versions are bumped to `3.1`.
+
+**Regressions reproduced before the fix:** the expanded DOM suite ran against the unchanged M3 frontend and
+returned **31/41**. The final 42-test suite also ran against an isolated copy of the untouched `5563b40`
+frontend and returned **31/42**, confirming that the new shared-budget test reproduces the old unbounded walk.
+Failures exposed incorrect confirmed and in-flight labels, missing waiting-line separation,
+incorrect strip wording, missing rail disclosure, unrevalidated skill markers, and an outcome walk of twelve
+pages rather than ten. Final coverage adds eight tests to the original 34, including all four older actionable
+kinds, ten-page cache trimming and continued paging, a shared gap/revalidation budget, and no repeated walk for
+finished-session research when waiting is unchanged. The existing terminal-outcome regression still passes.
+
+**Required verification:**
+
+| Command | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)** on full rerun |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **42/42 passed** (34 existing + 8 new) |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m31` | **42 combinations + 4 regressions passed**, 90 screenshots; no “youOpen” and no phone overflow |
+
+Skipped backend tests (environment gates):
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+The OpenCode integration tests ran. The initial sandbox run could not bind HTTP/Unix sockets and Chromium
+could not launch; both were rerun outside the sandbox. The first outside-sandbox Python run completed 398 tests
+with one documented timing failure: `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish`
+observed `('coder-1', 'idle', 'finished')` instead of `('coder-1', 'working', 'finished')`.
+The full rerun passed all tests (398, skipped=3). No protected code or tests were modified.
+
+**Screenshots reviewed:** `threadTeam-desktop-light`, `threadTeam-desktop-dark`, `threadTeam-phone-light` and
+`threadTeam-phone-dark` under `/tmp/chat-shots-m31`. Waiting markers and links are visibly separated beneath the
+summary/details, and the strip has the required wording in both appearances and sizes.
+
+**Scope and remaining issues:** no deviations from required scope. Only the allowed frontend/test/docs files
+changed; `fixtures.cjs` is additions only. The room remains read-only, uses `/api/thread` and `/api/channels`,
+and has no new endpoint, write control, POST or message storage. The optional Load earlier focus and collapsed
+partial-session count polish remain deferred. The M5 research/skill action-count mismatch remains intentionally
+unresolved. No backend, orchestration, classic UI, API, schema or decision semantics changed; no merge or PR.

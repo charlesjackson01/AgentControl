@@ -55,12 +55,14 @@
     const receiptActor = name=>name === 'You, via dashboard' ? 'you' : name;
     function receiptState(r) {
       if (!r) return '';
-      const label = r.action === 'approve' ? 'Approved' : r.action === 'deny' ? 'Denied' : '';
-      return [label && (label+(r.actor ? ' by '+receiptActor(r.actor) : '')),r.state && r.state.replace(/^./,c=>c.toUpperCase())].filter(Boolean).join(' · ');
+      // Copied from classic app.js receiptLabel(): recorded decisions and delivery states.
+      const label = r.state === 'confirmed' ? (r.action === 'approve' ? 'Approved once' : r.action === 'reject' ? 'Denied' : 'Answered')
+        : ({sent:'Awaiting confirmation',dispatching:'Sending decision',uncertain:'Delivery uncertain',resolved:'Request resolved',failed:'Delivery failed'})[r.state] || r.state;
+      return [label,r.actor && 'by '+receiptActor(r.actor),r.action === 'reject' && r.redirect && 'redirected'].filter(Boolean).join(' · ');
     }
     function body(message, hint) {
       const d = message.detail || {}, action = message.action != null;
-      const decisionLink = action ? '<p class="waiting-state">! Waiting for you</p><a href="/classic">Open in classic dashboard</a>' : '';
+      const decisionLink = action ? '<div class="waiting-line"><span class="waiting-state">! Waiting for you</span> · <a href="/classic">Open in classic dashboard</a></div>' : '';
       let summary = '', detail = '', type = 'line';
       switch (message.kind) {
         case 'goal': case 'note':

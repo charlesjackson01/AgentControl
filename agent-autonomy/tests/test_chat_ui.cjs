@@ -95,7 +95,7 @@ test('every presence state has a symbol and label, Hermes first',async()=>{
   h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);h.document.querySelector('#members-tab').click();assert.match(h.document.querySelector('#context').textContent,/Task 9/);
 });
 test('waiting pointer and disabled composer, no decision controls',async()=>{
-  const h=await harness();assert.match(h.document.querySelector('#waiting').textContent,/1 waiting for you · request/);assert.equal(h.document.querySelector('#waiting a').getAttribute('href'),'/classic');
+  const h=await harness();assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 1 waiting for you');assert.equal(h.document.querySelector('#waiting a').getAttribute('href'),'/classic');
   assert(h.document.querySelector('#composer').hasAttribute('disabled'));assert.match(h.document.querySelector('#composer').getAttribute('placeholder'),/Messaging from this view is coming soon/);
   assert.equal(h.document.querySelectorAll('[id*="approve"], [id*="deny"]').length,0);
   const done=await harness(richCompleted());assert.equal(done.document.querySelector('#waiting').textContent,'');
@@ -133,12 +133,12 @@ test('tokens and isolation guards',()=>{
 test('M3 kinds, progressive detail, roles, receipts and unknown kinds',async()=>{
   const data=fx.threadTeam();data.messages.push(fx.threadMessage('alert:1','alert','Needs attention',{reason:'Check integration'}),fx.threadMessage('unknown:1','future_kind','Recorded future event',{raw:'PRIVATE'}));
   const h=await harness(richActive(),{thread:data});const content=h.timeline.textContent;
-  for(const label of ['turn 1','✕ failed','✓ passed','submission uncertain','Team plan · 2 agents · 2 tasks','Team proposal waiting','coder-2','Approved by you','3 updates','research ·','Python testing','Needs attention','Recorded future event','→ @coder-2','Redirect after denying request p0']) assert(content.includes(label),label);
+  for(const label of ['turn 1','✕ failed','✓ passed','submission uncertain','Team plan · 2 agents · 2 tasks','Team proposal waiting','coder-2','Awaiting confirmation · by you','3 updates','research ·','Python testing','Needs attention','Recorded future event','→ @coder-2','Redirect after denying request p0']) assert(content.includes(label),label);
   assert(!content.includes('PRIVATE'));assert(h.timeline.querySelector('[data-message="unknown:1"] .quiet'));
   const details=h.timeline.querySelector('[data-message="turn:1"] details');assert(!details.open);details.open=true;
   assert(details.textContent.includes('todo.py'));assert(details.textContent.includes('Tests failed'));assert(details.textContent.includes('Inspect in classic'));
   for(const selector of ['[data-message="ev:2"] ol','[data-message="ev:5"] dl','[data-message="turn:r"] dl','[data-message="cap:1"] dl','[data-message="req:permission:p2"] dl'])assert(h.timeline.querySelector(selector),selector);
-  data.messages.find(m=>m.id==='req:permission:p2').detail.receipt.actor='automatic local rule';data.messages.find(m=>m.id==='req:permission:p2').rev++;await h.core.refresh();assert(h.timeline.textContent.includes('Approved by automatic local rule'));
+  data.messages.find(m=>m.id==='req:permission:p2').detail.receipt.actor='automatic local rule';data.messages.find(m=>m.id==='req:permission:p2').rev++;await h.core.refresh();assert(h.timeline.textContent.includes('Awaiting confirmation · by automatic local rule'));
   const single=await harness(richCompleted(),{thread:fx.threadSingle()});assert(single.timeline.textContent.includes('Workspace open'));assert(single.timeline.textContent.includes('apply blocked: Working tree changed'));
 });
 test('M3 actions link once to classic without controls or fingerprints',async()=>{
@@ -162,7 +162,7 @@ test('M3 stub and revision merge keeps unchanged DOM and disclosure',async()=>{
   const oldMessage=h.core.getState().thread.messages['turn:1'];
   h.options.respond=url=>{if(!url.startsWith('/api/thread'))return;return {...data,messages:data.messages.map(m=>m.id==='req:permission:p1' ? {...m,rev:2,action:null,detail:{...m.detail,receipt:{actor:'you',action:'approve',state:'sent'}}} : {id:m.id,rev:m.rev,same:true})};};
   await h.core.refresh();assert.equal(h.timeline.querySelector('[data-message="turn:1"]'),oldNode);assert.equal(h.core.getState().thread.messages['turn:1'],oldMessage);
-  const changed=h.timeline.querySelector('[data-message="req:permission:p1"]');assert.notEqual(changed,request);assert(changed.querySelector('details').open);assert.equal(h.timeline.querySelectorAll('[data-message="req:permission:p1"]').length,1);assert(changed.textContent.includes('Approved by you'));assert(!changed.textContent.includes('Waiting for you'));
+  const changed=h.timeline.querySelector('[data-message="req:permission:p1"]');assert.notEqual(changed,request);assert(changed.querySelector('details').open);assert.equal(h.timeline.querySelectorAll('[data-message="req:permission:p1"]').length,1);assert(changed.textContent.includes('Awaiting confirmation · by you'));assert(!changed.textContent.includes('Waiting for you'));
 });
 test('M3 pure merge preserves server order, aged window and moved requests',()=>{
   const s=fx.threadSession(),page=messages=>fx.threadResponse(messages,[s]);
@@ -228,8 +228,8 @@ test('M3 live phases and pending note hint use thread only',async()=>{
   data.messages.push(fx.threadMessage('later','decision','Recorded decision'));await h.core.refresh();assert(!h.timeline.textContent.includes('Hermes reads this before the next turn'));data.live.session=null;await h.core.refresh();assert(h.timeline.querySelector('#thread-live').hidden);
 });
 test('M3 waiting count is from channels and pointer finds first action',async()=>{
-  const data=fx.threadActive(),h=await harness(richCompleted(),{thread:data,channels:fx.threadChannels(data,2)});assert.match(h.document.querySelector('#waiting').textContent,/2 waiting for you · requests/);h.document.querySelector('#waiting-pointer').click();await tick();assert(h.timeline.querySelector('[data-message="req:permission:p1"]').classList.contains('focused'));
-  h.options.channels.channels[0].waiting=1;await h.core.refresh();assert.match(h.document.querySelector('#waiting').textContent,/1 waiting for you · request/);assert(!h.document.querySelector('#waiting').textContent.includes('requests'));
+  const data=fx.threadActive(),h=await harness(richCompleted(),{thread:data,channels:fx.threadChannels(data,2)});assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 2 waiting for you');h.document.querySelector('#waiting-pointer').click();await tick();assert(h.timeline.querySelector('[data-message="req:permission:p1"]').classList.contains('focused'));
+  h.options.channels.channels[0].waiting=1;await h.core.refresh();assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 1 waiting for you');assert(!h.document.querySelector('#waiting').textContent.includes('requests'));
 });
 test('M3 one change refreshes all three endpoints with known and handles their 401',async()=>{
   const h=await harness(fixture(),{stream:true});const n=h.calls.length;await h.emit('event: change\ndata: {}\n\n');await h.runTimers(0);const calls=h.calls.slice(n);assert.equal(calls.length,3);assert(calls.some(c=>c.url.startsWith('/api/thread?channel=main&limit=200&known=')));assert(calls.some(c=>c.url==='/api/channels'));assert(calls.some(c=>c.url.startsWith('/api/state')));assert(!h.calls.some(c=>c.url.startsWith('/api/agents')));
@@ -267,4 +267,83 @@ test('M3 grouped quiet disclosure survives prepending into its group',async()=>{
   h.options.respond=url=>url.startsWith('/api/thread') ? fx.threadResponse([fx.threadMessage('q1','progress','One')],[s]) : undefined;
   await h.core.loadOlder();assert(h.timeline.querySelector('.updates').open);assert.equal(h.timeline.querySelector('.updates summary').textContent,'3 updates');
 });
+
+test('M3.1 exact receipt decisions, delivery labels, actors and redirect',async()=>{
+  const h=await harness(fixture(),{thread:fx.threadReceipts()});
+  const labels=['Approved once · by you','Denied · by you · redirected','Answered · by you','Awaiting confirmation · by you','Delivery uncertain · by automatic local rule','Delivery failed · by you','Sending decision · by you','Request resolved · by you','recorded custom state · by <local rule>'];
+  const actual=[];
+  for(const [i,label] of labels.entries()){
+    const node=h.timeline.querySelector(`[data-message="receipt:${i}"]`);
+    actual.push(node.querySelectorAll('.message > p')[2].textContent);
+    assert.equal(node.querySelector('.actor').textContent.trim(),'● coder-2');
+  }
+  assert.deepEqual(actual,labels);
+  const denied=h.timeline.querySelector('[data-message="receipt:1"]');
+  const collapsed=[...denied.querySelectorAll('.message > p')].map(p=>p.textContent).join(' ');
+  assert.match(collapsed,/Denied/);assert(!/Approved|Confirmed/.test(collapsed));
+  assert(!collapsed.includes('Use a safe command instead.'));assert(denied.querySelector('details').textContent.includes('Use a safe command instead.'));
+  assert.equal(h.timeline.querySelectorAll('local').length,0);
+});
+test('M3.1 waiting line separates summary, marker and link in every layout',async()=>{
+  const messages=['skill','research','note','request'].map((kind,i)=>fx.threadMessage('layout:'+i,kind,'Summary '+i,{}, {action:{endpoint:'/api/control'}}));
+  const h=await harness(fixture(),{thread:fx.threadResponse(messages,[fx.threadSession()])});
+  for(const [i,type] of ['quiet','line','bubble','request-card'].entries()){
+    const node=h.timeline.querySelector(`[data-message="layout:${i}"] .${type}`),line=node.querySelector(':scope > .waiting-line');
+    assert(line,'separate waiting line in '+type);assert.equal(line.textContent,'! Waiting for you · Open in classic dashboard');
+    assert.equal(line.querySelector('a').getAttribute('href'),'/classic');
+    assert(line.previousElementSibling);assert(!line.previousElementSibling.textContent.includes('Waiting for you'));
+  }
+});
+test('M3.1 rail discloses the real shown and total session counts only when capped',async()=>{
+  const state=fixture();state.runs=Array.from({length:30},(_,i)=>({...state.run,id:'rail:'+i}));
+  const channels=fx.threadChannels(fx.threadActive(),1);channels.channels[0].sessions=47;
+  const h=await harness(state,{channels});assert.equal(h.document.querySelectorAll('#session-list a').length,30);
+  const note=h.document.querySelector('#session-list + .muted');assert(note);assert.equal(note.textContent,'Showing 30 of 47 sessions · older sessions are in the room history');
+  state.runs=state.runs.slice(0,2);await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 2 of 47 sessions · older sessions are in the room history');
+  for(const total of [2,1]){channels.channels[0].sessions=total;await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted'),null);}
+});
+function revalidationPages(kind='skill') {
+  const s=fx.threadSession(), action=fx.threadMessage('stale',kind,'Needs a decision',{state:'proposed'}, {action:{endpoint:'/api/skills/decide'}}), overlap=fx.threadMessage('overlap','decision','Latest recorded update');
+  const initial=fx.threadResponse([action,overlap],[s]);
+  const newest=fx.threadResponse([overlap],[s],'page:1');
+  const retired=fx.threadResponse([{...action,rev:2,action:null}],[s]);
+  return {s,action,overlap,initial,newest,retired};
+}
+test('M3.1 waiting decrease revalidates every older actionable kind from server',async()=>{
+  for(const kind of ['skill','proposal','request','research']){
+    const p=revalidationPages(kind),channels=fx.threadChannels(p.initial,1),h=await harness(fixture(),{thread:p.initial,channels});
+    let reads=0;h.options.respond=url=>{if(!url.startsWith('/api/thread'))return;if(url.includes('&before=')){reads++;return p.retired;}return p.newest;};
+    await h.core.refresh();assert.equal(reads,0);assert(h.core.getState().thread.messages.stale.action);
+    channels.channels[0].waiting=0;await h.core.refresh();assert.equal(reads,1);
+    assert.equal(h.core.getState().thread.messages.stale.action,null);assert.equal(h.core.getState().thread.messages.stale.rev,2);
+    assert.equal(h.timeline.querySelector('[data-message="stale"] .waiting-state'),null);
+    await h.core.refresh();assert.equal(reads,1);
+  }
+});
+for(const kind of ['skill','outcome'])test('M3.1 '+kind+' revalidation caps at ten pages and trims unverifiable history',async()=>{
+  const p=revalidationPages(kind),channels=fx.threadChannels(p.initial,1),h=await harness(fixture(),{thread:p.initial,channels});
+  channels.channels[0].waiting=0;
+  if(kind==='outcome')p.newest.messages.push(fx.threadMessage('new-outcome','outcome','Finished',{status:'completed'}));
+  let reads=0;h.options.respond=url=>{if(!url.startsWith('/api/thread'))return;if(!url.includes('&before='))return p.newest;reads++;return reads===12?p.retired:fx.threadResponse([fx.threadMessage('fetched:'+reads,'decision','Older recorded update')],[p.s],'page:'+(reads+1));};
+  await h.core.refresh();assert.equal(reads,10);
+  const cache=h.core.getState().thread;assert(!cache.ids.includes('stale'));assert.equal(cache.messages.stale,undefined);assert.equal(cache.before,'page:11');
+  assert.deepEqual(Array.from(cache.ids),[...Array.from({length:10},(_,i)=>'fetched:'+(10-i)),...p.newest.messages.map(m=>m.id)]);
+  assert.equal(h.timeline.querySelector('[data-message="stale"]'),null);assert(h.timeline.querySelector('#load-earlier'));
+  await h.core.loadOlder();assert.equal(reads,11);assert.equal(h.core.getState().thread.before,'page:12');
+});
+test('M3.1 gap recovery and action revalidation share the ten-page budget',async()=>{
+  const p=revalidationPages('outcome'),h=await harness(fixture(),{thread:p.initial});
+  const newest=fx.threadResponse([fx.threadMessage('new-outcome','outcome','Finished',{status:'completed'})],[p.s],'page:1');
+  let reads=0;h.options.respond=url=>{
+    if(!url.startsWith('/api/thread'))return;if(!url.includes('&before='))return newest;
+    reads++;return reads===12 ? p.retired : fx.threadResponse([reads===5 ? p.overlap : fx.threadMessage('gap-fetch:'+reads,'decision','Older update')],[p.s],'page:'+(reads+1));
+  };
+  await h.core.refresh();assert.equal(reads,10);assert.equal(h.core.getState().thread.messages.stale,undefined);assert.equal(h.core.getState().thread.before,'page:11');
+});
+test('M3.1 unchanged waiting never walks for an actionable finished-session research item',async()=>{
+  const p=revalidationPages('research'),channels=fx.threadChannels(p.initial,0),h=await harness(fixture(),{thread:p.initial,channels});
+  let reads=0;h.options.respond=url=>{if(!url.startsWith('/api/thread'))return;if(url.includes('&before=')){reads++;return p.retired;}return p.newest;};
+  for(let i=0;i<3;i++)await h.core.refresh();assert.equal(reads,0);assert(h.core.getState().thread.messages.stale.action);
+});
+
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

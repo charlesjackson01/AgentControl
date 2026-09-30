@@ -151,3 +151,20 @@ function threadLong() {
 }
 function threadChannels(thread,waiting=0) {return {project:thread.project,channels:[{id:'main',kind:'project',title:'project',sessions:thread.sessions.length,active_session:thread.live.session,waiting,updated:thread.messages.at(-1)?.at || null}]};}
 Object.assign(module.exports,{threadMessage,threadResponse,threadSession,threadSingle,threadActive,threadTeam,threadLong,threadChannels});
+
+// M3.1 receipts use the recorded engine actions and delivery states.
+function threadReceipts() {
+  const receipts = [
+    {action:'approve',state:'confirmed',actor:'You, via dashboard'},
+    {action:'reject',state:'confirmed',actor:'You, via dashboard',redirect:'Use a safe command instead.'},
+    {action:'answer',state:'confirmed',actor:'You, via dashboard'},
+    {action:'approve',state:'sent',actor:'You, via dashboard'},
+    {action:'reject',state:'uncertain',actor:'automatic local rule'},
+    {action:'answer',state:'failed',actor:'You, via dashboard'},
+    {action:'approve',state:'dispatching',actor:'You, via dashboard'},
+    {action:'answer',state:'resolved',actor:'You, via dashboard'},
+    {action:'reject',state:'recorded custom state',actor:'<local rule>'}
+  ];
+  return threadResponse(receipts.map((receipt,i)=>threadMessage('receipt:'+i,'request','Recorded request '+i,{receipt},{actor:'coder-2'})),[threadSession()]);
+}
+Object.assign(module.exports,{threadReceipts});

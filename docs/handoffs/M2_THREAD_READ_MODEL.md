@@ -398,3 +398,99 @@ projection output):
 Open questions for Opus: none requiring a contract change. The allowed v1 one-session
 materialisation can use memory proportional to that session's public history; a streaming
 large-session projection is a possible future optimisation. M3 has not been started.
+
+
+## Architecture review — 2026-09-30 (Opus)
+
+**Verdict: accepted, with four required corrections before M3.** They are handed off in `docs/handoffs/M2_1_CORRECTIONS.md`.
+There is also one owner decision (D6, an events index) that the fix for finding 4 depends on for full effect. The API
+shape does not change, so the M3 handoff can be written against it now.
+
+Reviewed: `39ffc6b..f314462`, meaning `conversation.py`, `Store.events_page`, the two `app.py` routes and both test files,
+against the architecture contract and this handoff.
+
+### Re-run in the review environment (at `f314462`)
+
+| Suite | Result |
+|---|---|
+| Python | **383 tests, OK (skipped=6)**: the same six environment gates as before (Codex's environment has OpenCode, so 3) |
+| Classic DOM | **82/82** |
+| Chat DOM | **16/16** |
+| Browser | **24 combinations + 4 regressions** |
+
+### Verified
+
+- **Read-only.** `gather()` uses only `Store.runs/get/steps/events_page/reviews/capabilities`, plus
+  `Controller.run_project` and `workspace_status`. `workspace_status` already runs on every classic `/api/state` call.
+  No store writes. The HTTP test snapshots every table, the audit chain and the `/api/state` bytes before and after
+  repeated calls, and they are identical.
+- **No second source of truth.** Nothing is cached or stored, and every message is recomputed from the journal per request.
+- **Journal semantics.** The only journal change is `events_page`: one parameterised SELECT, with kinds bound as parameters. No migration.
+- **Hermes request prompts** are OMIT and are also excluded in SQL. Decision details are whitelisted and exclude
+  `prompt`. A test asserts that no `PRIVATE` marker leaks.
+- **Reasoning and tool output.**
+  - `OpenCode tool`, `OpenCode result`, `verification`, `file changes` and `integration` are folded.
+  - Turns carry no transcript, activity or tool output, only `verification.status` and `exit_code`.
+  - Generic details drop `reasoning`, `transcript`, `activity`, `prompt`, `output`, `raw` and `tool_output` keys, and any `type: reasoning` part.
+- **Bounds.** `text` ≤ 2,000 characters, detail strings ≤ 4,000, `prompt` ≤ 2,000, `result_tail` ≤ 1,000, plan 12 × 300,
+  files ≤ 50, lists and maps ≤ 50, depth ≤ 8. Tested with 50k-character inputs.
+- **Notes that look like JSON** stay verbatim user text, because goal and note details are never decoded (tested).
+- **`submission uncertain` attribution is correct.** `_dispatch` writes the `OpenCode prompt` event, submits and writes
+  `submission uncertain` all inside `Controller.lock`, so "the preceding recorded prompt" is always the same submission,
+  even with parallel coders. A team regression test covers it.
+- **Pagination.** The total order `(session.created, session.id, at, rank, source_seq, id)` is unique. The page is the
+  newest `limit` messages strictly before the cursor, with a one-message lookahead. The test walks 3 sessions and more
+  than 660 messages with equal-second ties, and checks: every message exactly once, globally sorted, repeat calls
+  identical, and an old cursor unaffected by new events.
+- **Project filter.** The filter is the same as `state(scope='current')`, and `session=` reaches other projects (tested).
+- **`rev` and deltas.** `rev` is CRC32 of canonical JSON, `known=` uses `parse_known` (at most 2,000 entries), and stubs work as specified (tested).
+- **Auth and errors:** 401 without the key; 404 for an unknown session; 400 for both parameters, an unknown or empty
+  channel, or a malformed or empty cursor. Security headers are present.
+- **Memory:** peak Python allocation stays under 5 MB, even on a 461 MB journal (measured with `tracemalloc`).
+
+### The intermittent failures Codex recorded: pre-existing timing flakiness, not M1.1 or M2
+
+- M1.1 changed only browser files. M2's code is imported only by `app.py`, inside the two new routes, and by its own tests.
+- I reproduced the failure **on `af4da89`, the pre-redesign backend with no M1, M1.1 or M2 code**, by running three full suites at once:
+  `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish` failed in 2 of 3 runs, with
+  `('coder-1', 'idle', 'finished') != ('coder-1', 'working', 'finished')`.
+- Cause: `Lifecycle` samples changes at most every 0.5 s by design, so under load a short `working` state can fall
+  between samples. The test assumes every intermediate state is recorded. The `test_modes`, `test_paid` and team
+  cases Codex saw use the same fixed 5-second wall-clock waits on background threads.
+- Codex correctly left protected code alone. This is outside the redesign scope; `CURRENT_STATE.md` records it for the owner.
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before M3** (all reproduced with scratch probes against `conversation.py` and a real `Store`):
+
+1. **Decided requests are credited to the wrong agent in team runs.**
+   - Once a request is decided, its message is rebuilt from the review record, which has no `agent`, so the actor
+     defaults to `coder-1`.
+   - Probe: a permission from `coder-2` (session `ses2`) came back with actor `coder-1`. Pending requests are correct,
+     because `_poll_step` stores `agent` on each pending packet.
+   - The recorded `request.sessionID` identifies the agent through `run.session`, `run.specialists` and `run.team.agents`.
+2. **Outcome actions and `rev` depend on the page.**
+   - `actionable_outcome` is "the newest terminal session in *this page*". Probe: `out:old` has `action: null` in a
+     full page, but offers `apply`, `discard_workspace` and `verify` when fetched on its own older page, with a different `rev`.
+   - M3 merges pages by id and rev, so this would make actions flicker and deltas inconsistent.
+   - The wording came from the M2 handoff (§5.9), so the fault is partly in the spec.
+3. **A team proposal produces an empty Hermes message.** The team-planning path records the planner's JSON
+   (`{mode, agents, tasks, reason}`) as `Hermes decision`. It has no `summary`, so the message has `text: ''` and `detail: {plan: []}` (probed).
+4. **`/api/channels` scales with the project's entire event history.**
+   - To find one timestamp, it reads every event of every channel run, including every `OpenCode tool` payload (up to 6 KB each).
+   - `thread()` also scans events twice per session walked, and the `events` table has **no index on `run`**,
+     so every `WHERE run=?` is a full table scan. That is pre-existing; classic `/api/state` does it once per call.
+   - Measured on a 461 MB journal (100 sessions × 1,000 tool events): `/api/channels` 2,408 ms, first `/api/thread` page 2,361 ms.
+     With an `events(run, id)` index (benchmark only): 952 ms and **308 ms**.
+   - M3 will call both endpoints on every coalesced change.
+
+**Optional polish:**
+
+5. `app.py` catches every `KeyError` from the projection as "404 Unknown session", so a projection bug would read as a
+   missing session. Narrow it to the `store.get` lookup.
+6. `test_public_single_and_team_shapes` writes `/tmp/ac-thread-sample.json` on every run. Drop that, or use the test's temp dir.
+7. An outcome whose run has no `ended` field (older journals) gets `at = run.created`, so it sorts right after the
+   session start. Fall back to the session's latest recorded time.
+8. Move `import conversation` in `do_GET` to module level (it is harmless as is).

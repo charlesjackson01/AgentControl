@@ -40,6 +40,7 @@ The priorities, in order:
 | D3 | The new UI is an **isolated frontend** with its own entry and files. It reuses the backend APIs and execution state, and shares **no JavaScript or CSS** with the classic UI. Routes: `/chat` during development, and `/` after parity (M9). The classic UI stays at `/classic`, and at `/` until M9. |
 | D4 | **No theme system** in the new UI: Mac, Terminal and XP are not ported. There is one design language (§9), built on design tokens so theming *could* return later. |
 | D5 | A read-only `/api/thread` (and `/api/channels`) presentation layer over the journal is approved. It changes no orchestration. |
+| D6 | **Pending owner decision (recommended: approve).** Add an index on `events(run, id)`: an additive `journal.py` migration (`_v7`) with no table, column or data change. Every read of events by run currently scans the whole table. Approving it amends invariant 1's "no schema migration" for this one index. See `M2_1_CORRECTIONS.md` Part B. |
 
 ## 3. Invariants (never weakened)
 
@@ -359,3 +360,12 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   - `conversation.MAPPING` (M2 handoff §5.3) is the normative mapping.
   - The chat shell takes members from `/api/state` and does not call `/api/agents` (see `M1_1_CORRECTIONS.md`).
   - Overlays (the scrim) follow the panels actually showing, never a saved preference.
+- 2026-09-30 (M1.1 + M2 review):
+  - M1.1 and M2 accepted; M2.1 corrections required before M3.
+  - Pending M2.1: decided requests are attributed through the recorded session id.
+  - Pending M2.1: the actionable outcome is the channel's newest terminal session, independent of page and view.
+    This replaces M2 handoff §5.9's per-page rule.
+  - Pending M2.1: planner-shaped Hermes decisions use their recorded `reason`/`title`, or are folded, never shown empty.
+  - D6 (the events index) was raised for the owner.
+  - M3 consumes `/api/channels` and `/api/thread` for all room and timeline content; `/api/state` only for members,
+    Connections, the rail session list and the context panel.

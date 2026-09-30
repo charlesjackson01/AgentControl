@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Codex (M1.1 and M2 complete).
+**Last updated:** 2026-09-30, by Opus (M1.1 + M2 architecture review; M2.1 and M3 handoffs).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Complete:** `M1_1_CORRECTIONS.md` and `M2_THREAD_READ_MODEL.md` (completion reports appended; ready for review) |
+| Handoffs | `docs/handoffs/`. **Next:** `M2_1_CORRECTIONS.md`, then `M3_ROOM_TIMELINE.md` (M3 starts only after M2.1 is accepted) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -21,11 +21,14 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Milestone | Status | Owner | Notes |
 |---|---|---|---|
 | Planning: decisions D1–D5 | ✅ done | Opus | recorded in the architecture doc §2 |
+| **D6 events index** | ⚠ **owner decision needed** (recommended: approve) | owner | an additive `events(run, id)` index migration; see architecture §2 and `M2_1_CORRECTIONS.md` Part B. Record the decision here: **D6: pending** |
 | D1 backend merge | ✅ done | Opus | `af4da89`; tree = `967aa85` + redesign docs |
 | **M1 App shell** | ✅ accepted (review 2026-09-30) | Codex | read-only `/chat`, `/classic` alias; completion report and Opus review in `docs/handoffs/M1_APP_SHELL.md` |
-| **M1.1 Shell corrections** | ✅ done | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
-| **M2 Thread read model** | ✅ done; awaiting review | Codex | `conversation.py`, authenticated `/api/channels` and `/api/thread`, `Store.events_page`; 32 new tests, no writable conversation store |
-| M3–M9 | not started | | M3 (room timeline) needs M1.1 + M2; see architecture §12 |
+| **M1.1 Shell corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M1_1_CORRECTIONS.md`: stale links recover with a notice; scrim follows visible panels; DOM and browser regressions pass |
+| **M2 Thread read model** | ✅ accepted, with corrections (review 2026-09-30) | Codex | `conversation.py`, `/api/channels`, `/api/thread`, `Store.events_page`; review in `docs/handoffs/M2_THREAD_READ_MODEL.md` |
+| **M2.1 Read-model corrections** | ⏭ ready; **must land before M3** | Codex | `docs/handoffs/M2_1_CORRECTIONS.md`: decided-request attribution, page-independent outcome actions, no empty planner decisions, cheaper channels/gather (+ the D6 index if approved) |
+| **M3 Room timeline** | ⏭ handoff ready; starts after M2.1 | Codex | `docs/handoffs/M3_ROOM_TIMELINE.md`: renders `/api/thread` in the project room; read-only; decisions still link to classic |
+| M4–M9 | not started | | see architecture §12 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `shell.js`.
 `/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -34,11 +37,11 @@ The new read-only endpoints project the journal with bounded messages, stable id
 The M1 frontend still reads `/api/state`; M3 timeline rendering has not started.
 New backend tests: `tests/test_conversation.py` and `tests/test_thread_api.py`.
 
-## Tests (M2 final tree, verified by Codex 2026-09-30)
+## Tests (at `f314462`; re-verified in the Opus review environment 2026-09-30)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **383 tests, OK (skipped=3)** outside the sandbox (see named gates below) |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **383 tests, OK (skipped=6)** here; 3 skipped in Codex's environment, which has OpenCode (see named gates below) |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
 | Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **16/16 passed** |
 | Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots` | **24 combinations + 4 regressions passed**, 54 temporary screenshots; no horizontal overflow at 390 px |
@@ -82,13 +85,24 @@ Six skipped means none of those are available. Codex's three skips mean the Open
 - Multiple concurrent runs are not supported by the backend (one active run). The chat UI must reflect that honestly.
 - M2 pages all project sessions. V1 materialises one session’s public messages at a time, using 5,000-event
   SELECT batches with no history cutoff; large-session memory use is a future optimisation.
-- Some unchanged backend integration tests failed intermittently during verification, then passed in full
-  reruns. The completion reports name them; no orchestration or test changes were made to address them.
+- **Pre-existing timing-sensitive backend tests (not caused by the redesign).** The review reproduced
+  `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish` failing in 2 of 3 runs on
+  `af4da89` (the pre-redesign backend), with three suites running at once.
+  - The failure: `('coder-1','idle','finished') != ('coder-1','working','finished')`.
+  - Cause: `Lifecycle` samples changes at most every 0.5 s, so a short `working` state can be skipped under load.
+  - `test_modes`, `test_paid` and the team tests Codex saw use the same fixed 5-second waits on background threads.
+  - Rule: rerun and record such failures; never modify protected code or these tests within a redesign milestone.
+    A backend test-robustness fix is the owner's call, outside the redesign.
+- **Performance:** every read of events by run scans the whole `events` table (there is no index on `run`). On a
+  461 MB journal, `/api/thread` and `/api/channels` take about 2.4 s each. M2.1 reduces the scans; D6 (the index)
+  brings the first thread page to about 0.3 s.
 - The M1 review lists optional polish items (401 key handling, autocomplete, `/classic/`, live region, pluralisation,
   tab keys, stream backoff reset). None is required, and they can be folded into later UI milestones.
-- `/api/state` caps runs at 30. The chat shell's session list inherits that until M3 switches to `/api/thread`.
+- `/api/state` caps runs at 30. The rail's session list still inherits that in M3; the timeline itself pages the full history through `/api/thread`.
 
 ## Next step
 
-1. Opus reviews the completed M1.1 and M2, then writes the M3 handoff (room timeline rendering `/api/thread`).
-2. M3–M9 remain unstarted; keep the architecture contract binding.
+1. **The owner decides D6** (the events index). Record it in the progress table above.
+2. Codex executes **`docs/handoffs/M2_1_CORRECTIONS.md`**, including Part B only if D6 is approved.
+3. Opus reviews M2.1. Codex then executes **`docs/handoffs/M3_ROOM_TIMELINE.md`**.
+4. M4–M9 remain unstarted; the architecture contract stays binding.

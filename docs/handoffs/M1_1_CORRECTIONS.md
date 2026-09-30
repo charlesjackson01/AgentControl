@@ -112,3 +112,21 @@ Commands: `python3 -m unittest discover -s agent-autonomy/tests`;
 `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots`.
 
 No scope deviations or unresolved M1.1 issues. Backend and classic UI are unchanged.
+
+
+## Architecture review — 2026-09-30 (Opus)
+
+**Accepted.** Reviewed `83156f8..39ffc6b` against this handoff.
+- The roster request is removed. Members come from `/api/state`'s `agents` for `state.run`. When nothing is focused,
+  that run is the newest in scope. The backend allows only one active run and refuses project switches while one is
+  active, so the active run is always that newest run and no information is lost.
+- A missing session keeps and renders the returned state, clears focus, and uses `location.replace('#/')`, so Back does not loop.
+- The scrim follows `#context`'s rendered visibility and the rail drawer.
+- The tests reproduce both original bugs:
+  - The fresh and subsequent bogus-link cases assert zero `/api/agents` calls and the recovered hash, and would fail on `990f258`.
+  - The browser stub throws on any roster fetch.
+  - Browser Back and centre-point hit testing cover the scrim at 1024 px and 390 px.
+- Re-run here: chat DOM 16/16; browser matrix 24 combinations + 4 regressions.
+
+**Optional polish:** the "not in this project's history" notice uses the error banner, so the next successful refresh
+clears it, not only a dismissal. That is acceptable. Keep it in mind if M3 adds a separate notice area.

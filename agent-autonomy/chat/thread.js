@@ -138,7 +138,7 @@
       // Move only nodes whose order actually changed; unchanged nodes retain focus and identity.
       let cursor=items.firstChild;for(const node of desired){if(node===cursor)cursor=cursor.nextSibling;else items.insertBefore(node,cursor);}
       if(focusedGroup && !host.contains(document.activeElement)){const replacement=[...nodes.values()].find(record=>record.messageIds?.some(id=>focusedGroup.ids.includes(id)));replacement?.node.querySelectorAll('a,button,summary')[focusedGroup.index]?.focus?.({preventScroll:true});}
-      if(!messages.length)items.innerHTML='<div class="empty"><h2>A room for your project</h2><p>Sessions will appear here when work begins.</p><a href="/classic">Start a session in classic</a></div>';
+      if(!messages.length)items.innerHTML='<div class="empty"><h2>A room for your project</h2><p>Write a goal below to start the first session.</p></div>';
       else items.querySelector('.empty')?.remove();
       $('thread-live').textContent=liveLabel(cache.live);$('thread-live').hidden=!liveLabel(cache.live);
       if(initial || modeChanged || follow){bottom();initial=false;}else{

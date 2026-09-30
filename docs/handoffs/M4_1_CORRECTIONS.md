@@ -98,3 +98,102 @@ with **no** classic link. Change `thread.js`'s empty-state line only. Update any
 
 1. Append a completion report to this file: the changes, test commands and counts (with skipped tests named), and the screenshots reviewed.
 2. Set M4.1 to done in `CURRENT_STATE.md`, then push. No PR and no merge unless the owner asks.
+
+---
+
+## M4.1 completion report — Codex, 2026-09-30
+
+### Changes and scope
+
+Verified `/home/charlesjackson/AgentControl` on `feature/chat-first-redesign`, with a clean working tree.
+`git pull --ff-only origin feature/chat-first-redesign` advanced `30e83f2` to the expected `7ee8528`.
+Read `CURRENT_STATE.md`, the architecture contract and this handoff in order, then the M4 review.
+
+Separated remembered preferences, per-session fields and the follow-up overlay in `composer.js`.
+`acx-settings` now stores exactly the eleven keys in §1, with `network:'internet'` excluded; loading rewrites
+legacy storage without title, checks, dirty acknowledgement or other unsupported keys. A session's title
+and checks remain available on a failed start, then clear after a successful start. Title, checks and dirty
+acknowledgement begin empty on entering a follow-up and clear on cancellation or successful creation.
+
+Parent verifier, turn limit and mode stay in the follow-up overlay. Cancel and Escape discard it without
+changing the prior preferences or draft. Successful follow-ups remember only preference values explicitly
+edited in their Settings sheet, including removing a preview; inherited defaults are not remembered.
+The submitted changes are captured before the POST, independently of the subsequent server refresh.
+
+Routing now examines the raw draft's leading token only. A valid active non-orchestrator agent followed by
+whitespace or end of text selects the recipient; only that token and one separator are consumed.
+Everything else is sent unchanged, including later agents, unknown names, package/decorator strings,
+newlines and extra whitespace. The target chip and placeholder use the same rule. Suggestions open only
+for a token at the start and replace that token when chosen. Unknown tokens are ordinary Hermes notes.
+
+Changed only the empty-state line in `thread.js`: “A room for your project” / “Write a goal below to start
+the first session.” It has no classic start link or fabricated message. Added the required architecture
+change-log entry. No backend, API, schema, journal, engine, lifecycle, approval, research, skill, classic UI,
+CSS or endpoint/request-shape change. D7 was unused; M5.0 and M5 remain unstarted.
+
+### Defect reproduction and regressions
+
+Corrected the three M4 assertions that required remembering the title, last-mention routing and an error
+for an unknown mention. All other existing tests are retained. Added ten regressions covering:
+
+- Consecutive starts in one page and after reload without reusing title/checks; exact storage whitelist and legacy cleanup.
+- Draft/title/check retention on a failed start, successful retry and per-session reset.
+- Both follow-up cancellation paths restoring prior preferences and clearing per-session fields/dirty acknowledgement.
+- Unedited follow-ups sending parent defaults without saving them; edited follow-ups remembering only explicit changes.
+- Fresh per-session fields when entering a follow-up.
+- Verbatim package/decorator, middle, unknown and later mentions; leading-only chip/placeholder/routing and whitespace preservation.
+- Suggestions at the start only, and the exact empty-room copy with no classic link or fake messages.
+
+Demonstrated the final tests against a temporary copy of the **unchanged `7ee8528` frontend** under
+`/tmp/ac-m41-baseline`, without replacing repository files. The result was **64/77 passing**: all ten new
+regressions and the three corrected M4 assertions failed. The other 64 passed. Against the corrected
+frontend, **77/77 pass**. Evidence: `/tmp/ac-m41-before-final.log` and `/tmp/ac-m41-chat.log`.
+
+### Required verification
+
+| Command | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)**, 250.564 s; no timing-sensitive failure in this run |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed**, unchanged classic suite |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **77/77 passed** |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m41` | **108 combinations + 4 regressions passed**, 158 temporary screenshots |
+| `git diff --check` | passed |
+
+The environment skips were:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`: container opt-in/runtime/image gate.
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`: desktop display tools gate.
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`: VM opt-in/KVM gate.
+
+The OpenCode trio ran and passed. Python/socket tests and Chromium ran outside the sandbox. Logs are
+`/tmp/ac-python-verified.log`, `/tmp/ac-m41-classic.log`, `/tmp/ac-m41-chat.log` and `/tmp/ac-m41-browser.log`.
+The retained tests verify server-only message appearance, failure drafts, duplicate-send protection,
+in-flight controls, Basic/Advanced behavior, endpoint bodies and M3/M3.1 ordering/disclosure/revalidation.
+
+### Rendering inspected
+
+Added browser cases for literal notes, leading targeted notes, cleaned legacy Settings and restored Settings
+after cancelling a follow-up, across desktop/laptop/phone and light/dark. Existing cases and regressions remain.
+No horizontal overflow or page errors occurred. At **390 × 844**, light and dark:
+
+| State | Footer | Waiting row | Timeline | Viewport retained |
+|---|---:|---:|---:|---:|
+| Idle, no waiting | **57 px** (limit 72) | absent | **683.5 px** | **81.0%** |
+| With waiting | **105 px** (limit 120) | **40 px** | **635.5 px** | **75.3%** |
+
+Inspected actual screenshots in `/tmp/chat-shots-m41`:
+
+- `composerIdle-desktop-light.png` and `composerIdle-phone-dark.png`: corrected copy and compact footer.
+- `composerLiteral-phone-light.png`: intact “Pin @types/node to v20” with the Hermes target.
+- `composerTarget-phone-dark.png`: visible leading `@coder-2` target.
+- `composerRestored-desktop-light.png`: verifier V1 restored after cancelling, empty title/checks, Advanced collapsed.
+- `composerCleanSettings-phone-dark.png`: cleaned legacy fields in the phone bottom sheet.
+
+Measurements are in `/tmp/chat-shots-m41/footer-measurements.json`. Growth limits and the 480 px reduced
+visual-viewport check still pass. Native phone OS keyboard verification remains deferred to M8 as reviewed.
+
+### Deviations and unresolved issues
+
+No deviation or unresolved required M4.1 issue. The optional network-error wording and session-menu closure
+from §5 remain unchanged. M3 accessibility deferrals and the documented research/skill actionability mismatch
+remain unchanged; this task did not implement M5.0, use D7 or begin M5. M4.1 is ready for review.

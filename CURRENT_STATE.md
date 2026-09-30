@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-09-30, by Opus (recorded owner decision D7; M4.1 and M5.0 ready for Codex).
+**Last updated:** 2026-09-30, by Codex (M4.1 completed and verified; awaiting review; M5.0 untouched).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Next:** `M4_1_CORRECTIONS.md` and `M5_0_ACTIONABILITY.md` (independent). The full M5 handoff follows once both are accepted |
+| Handoffs | `docs/handoffs/`. **Next:** review `M4_1_CORRECTIONS.md`; `M5_0_ACTIONABILITY.md` remains ready and unstarted. The full M5 handoff follows once both are accepted |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -30,8 +30,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M2.1 Read-model corrections** | ✅ accepted (review 2026-09-30) | Codex | Parts A + B: recorded-session request attribution, stable outcome actions/revisions, non-empty planner decisions, cheaper reads, and exactly the D6 `_v7` index; 15 new regressions |
 | **M3 Room timeline** | ✅ accepted (with M3.1, review 2026-09-30) | Codex | `thread.js`: read-only project room, keyed updates, paging, session disclosure, deep links and waiting pointers; completion report in `docs/handoffs/M3_ROOM_TIMELINE.md` |
 | **M3.1 Timeline corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M3_1_CORRECTIONS.md`: classic receipt labels, server revalidation capped at ten pages with history reset, separate waiting lines, exact strip wording, real rail cap note; eight new regressions |
-| **M4 Composer** | ✅ reviewed 2026-09-30: architecture, endpoints, failure handling and phone budgets verified; **corrections required (M4.1)** | Codex | measured 57 px idle / 105 px with waiting / ≥ 75.3% conversation at 390 × 844; the native keyboard is unverified (M8) |
-| **M4.1 Composer corrections** | ⏭ ready; **blocking M4 acceptance** | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: no remembered title or goal checks, no follow-up leak, a leading-only `@agent`, empty-room copy |
+| **M4 Composer** | ✅ reviewed 2026-09-30; corrections implemented, **awaiting M4.1 review for acceptance** | Codex | measured 57 px idle / 105 px with waiting / ≥ 75.3% conversation at 390 × 844; the native keyboard is unverified (M8) |
+| **M4.1 Composer corrections** | ✅ done, awaiting review | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: only allowed preferences remembered; title/checks/dirty acknowledgement reset; isolated follow-up overlay; leading-only `@agent`; literal content and empty-room copy corrected |
 | **M5.0 Actionability (M5 prerequisite)** | ⏭ **ready: Parts A and B** (D7 approved) | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: one definition of actionable shared by the thread and `waiting`; `detail.expired`; the two D7 engine guards |
 | M5–M9 | not started | | see architecture §12 |
 
@@ -41,22 +41,26 @@ The room composer starts sessions and follow-ups, sends notes and offers the M4 
 Decision actions remain in classic; `/` and `/classic` serve the unchanged classic UI.
 The new read-only endpoints project the journal with bounded messages, stable ids/revisions and cursor paging.
 The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` still supplies members, Connections, the rail session list and context. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
+M4.1 cleans legacy stored titles/checks, preserves per-session fields on failed starts, and clears them after success
+or follow-up cancellation. Inherited follow-up preferences are remembered only when explicitly edited in Settings.
+Only a valid leading `@agent` routes a note; later, unknown, package and decorator tokens stay literal.
 Backend read-model tests: `tests/test_conversation.py` (34) and `tests/test_thread_api.py` (11); journal tests (7) include v6-to-v7 preservation and index query plans.
 
-## Tests (at `30e83f2`; re-verified in the Opus review environment 2026-09-30)
+## Tests (M4.1 working tree on `7ee8528`; verified by Codex 2026-09-30)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=6)** here (all six gates below); 3 in Codex's environment, where the OpenCode tests ran |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **398 tests, OK (skipped=3)**; OpenCode tests ran; no timing failure in this M4.1 run |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
-| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **67/67 passed** (42 carried forward + 25 M4 regressions) |
-| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m4` | **84 combinations + 4 regressions passed**, 134 temporary screenshots; idle phone footer 57 px, with waiting 105 px, waiting row 40 px; timeline ≥75.3%; waiting text aligned, no overflow or page errors |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **77/77 passed** (67 M4 tests with three defective assertions corrected, plus ten M4.1 regressions); final regressions fail against `7ee8528` (64/77) |
+| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m41` | **108 combinations + 4 regressions passed**, 158 temporary screenshots; idle phone footer 57 px, with waiting 105 px, waiting row 40 px; timeline ≥75.3%; waiting text aligned, no overflow or page errors |
 
 DOM test dependencies (test-only, installed outside the repo):
 `npm install --prefix /tmp/ac-tests --no-save linkedom cssom playwright-core`.
 Chromium was found under `~/.cache/ms-playwright` in this environment; the screenshot script discovers it or accepts `CHROMIUM_PATH`.
-The socket-based backend tests and Chromium ran outside the sandbox. All required M4 suites passed;
-the earlier lifecycle sampling failure remains documented below. Desktop and phone screenshots were inspected.
+The socket-based backend tests and Chromium ran outside the sandbox. All required M4.1 suites passed;
+the earlier lifecycle sampling failure remains documented below. Desktop and phone screenshots were inspected,
+including literal/targeted notes, cleaned legacy Settings and restored Settings after cancelling a follow-up.
 The M4 report records the fake-backed real HTTP/browser start, note, targeting, rename, check,
 pause/resume/stop and follow-up checks. Keyboard viewport shrinkage to 480 px passed in Chromium;
 an actual phone OS keyboard was unavailable. The prior review environment used `/opt/pw-browsers/chromium`.
@@ -129,7 +133,7 @@ ordering, paging, disclosure state, receipt labels and bounded stale-action reva
 
 ## Next step
 
-1. Codex executes **`docs/handoffs/M4_1_CORRECTIONS.md`** and **`docs/handoffs/M5_0_ACTIONABILITY.md`** (Parts A and B;
-   D7 approved, limited to the two guards). They are independent and may run in either order.
-2. Opus reviews both. Once they are accepted, M4 is accepted and Opus writes the full M5 handoff (decision controls).
+1. Opus reviews **M4.1** and its completion report in `docs/handoffs/M4_1_CORRECTIONS.md` for M4 acceptance.
+2. **M5.0 remains unstarted** with a separate ready handoff (Parts A and B; D7 limited to the two guards).
+   After both corrections are accepted, Opus writes the full M5 handoff (decision controls).
 3. M5–M9 remain unstarted; the architecture contract stays binding.

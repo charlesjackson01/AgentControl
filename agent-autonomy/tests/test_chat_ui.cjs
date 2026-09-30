@@ -384,7 +384,7 @@ test('M4 new session sends only goal and remembered/changed settings',async()=>{
   const h=await composerHarness('new');type(h,'Build a local tool');await h.composer.submit();assert.deepEqual(posts(h),[{url:'/api/runs',body:{goal:'Build a local tool'}}]);assert.equal(h.document.querySelector('#composer').value,'');assert.equal(h.document.querySelector('#composer-status').textContent,'Sent · it will appear in the room');assert.equal(h.timeline.querySelectorAll('[data-message]').length,0);
   const configured=await composerHarness('new',{local:{'acx-settings':JSON.stringify({verifier:'python3 -m unittest',max_steps:5,mode:'single'}),'goal':'Never prefill me'}});
   assert.equal(configured.document.querySelector('#composer').value,'');await configured.composer.openSettings();setting(configured,'title','A tool');setting(configured,'run_minutes',15);type(configured,'Goal');await configured.composer.submit();
-  assert.deepEqual(posts(configured).at(-1),{url:'/api/runs',body:{goal:'Goal',verifier:'python3 -m unittest',max_steps:5,mode:'single',title:'A tool',run_minutes:15}});assert.equal(JSON.parse(configured.local.get('acx-settings')).title,'A tool');
+  assert.deepEqual(posts(configured).at(-1),{url:'/api/runs',body:{goal:'Goal',verifier:'python3 -m unittest',max_steps:5,mode:'single',title:'A tool',run_minutes:15}});assert(!Object.hasOwn(JSON.parse(configured.local.get('acx-settings')),'title'));
 });
 test('M4 all finished outcomes offer follow-up and inherit exact parent fields',async()=>{
   for(const status of ['completed','blocked','failed','stopped','limit_reached']){const f=fx.composerFixture('finished');f.thread.messages.find(m=>m.kind==='outcome').detail.status=status;f.thread.sessions[0].status=status;const finished=await harness(f.state,{thread:f.thread,channels:f.channels});assert.equal(finished.timeline.querySelectorAll('[data-reply]').length,1,status+' must offer Reply');}
@@ -395,10 +395,10 @@ test('M4 all finished outcomes offer follow-up and inherit exact parent fields',
   await h.composer.reply('run_test');type(h,'Keep my text');key(h,'Escape');assert.equal(h.document.querySelector('#composer-target').textContent,'New session');assert.equal(h.document.querySelector('#composer').value,'Keep my text');
   const active=await composerHarness('paused');await active.composer.reply('run_test');assert.equal(active.document.querySelector('#composer-target').textContent,'Note → Hermes');assert.equal(posts(active).length,0);
 });
-test('M4 Hermes and last @agent routing use exact bodies with no tokens',async()=>{
+test('M4 Hermes and leading @agent routing use exact bodies and preserve later tokens',async()=>{
   const h=await composerHarness('paused');type(h,'Read the README');await h.composer.submit();assert.deepEqual(posts(h).at(-1),{url:'/api/control',body:{run:'run_test',action:'instruction',text:'Read the README'}});
-  type(h,'@coder-1 @coder-2 Check the CLI');assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');await h.composer.submit();assert.deepEqual(posts(h).at(-1),{url:'/api/control',body:{run:'run_test',action:'instruction',agent:'coder-2',text:'Check the CLI'}});
-  type(h,'@unknown Check this');const n=posts(h).length;await h.composer.submit();assert.equal(posts(h).length,n);assert.equal(h.document.querySelector('#composer-status').textContent,'This session has no agent named unknown');assert.equal(h.document.querySelector('#composer').value,'@unknown Check this');
+  type(h,'@coder-1 @coder-2 Check the CLI');assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-1');await h.composer.submit();assert.deepEqual(posts(h).at(-1),{url:'/api/control',body:{run:'run_test',action:'instruction',agent:'coder-1',text:'@coder-2 Check the CLI'}});
+  type(h,'@unknown Check this');assert.equal(h.document.querySelector('#composer-target').textContent,'Note → Hermes');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{run:'run_test',action:'instruction',text:'@unknown Check this'});
 });
 test('M4 mentions use active-session agents even when the focused session is older',async()=>{
   const f=fx.composerFixture('paused'),h=await harness(f.state,{thread:f.thread,channels:f.channels});
@@ -487,8 +487,8 @@ test('M4 available isolation and all changed Basic/Advanced values send their ex
   h.document.querySelector('#add-goal-check').click();const check=h.document.querySelector('[data-check="0"]');check.value='Persist changes';check.dispatchEvent(new h.window.Event('input',{bubbles:true}));type(h,'A team goal');await h.composer.submit();
   assert.deepEqual(posts(h).at(-1).body,{goal:'A team goal',isolation:'container',network:'none',cpus:2,memory_gb:4,setup:'npm ci',mode:'team',team_size:2,max_steps:4,run_minutes:20,goal_checks:['Persist changes']});
 });
-test('M4 unknown mention Enter reports an error, and goal check rows stay bounded',async()=>{
-  const h=await composerHarness('paused');type(h,'@missing');assert(h.document.querySelector('#composer-options').hidden);key(h,'Enter');await tick();assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer-status').textContent,'This session has no agent named missing');
+test('M4 unknown leading token Enter sends ordinary text, and goal check rows stay bounded',async()=>{
+  const h=await composerHarness('paused');type(h,'@missing');assert(h.document.querySelector('#composer-options').hidden);key(h,'Enter');await tick();assert.deepEqual(posts(h).at(-1).body,{run:'run_test',action:'instruction',text:'@missing'});
   const idle=await composerHarness('new');await idle.composer.openSettings();for(let i=0;i<21;i++)idle.document.querySelector('#add-goal-check').click();assert.equal(idle.document.querySelectorAll('[data-check]').length,20);assert(idle.document.querySelector('#add-goal-check').disabled);
 });
 
@@ -512,6 +512,69 @@ test('M4 an in-flight Auto preview also prevents a concurrent session POST',asyn
   let release;const h=await composerHarness('new',{post:(url)=>url==='/api/mode/preview'?new Promise(resolve=>{release=()=>resolve({mode:'single',reasons:['Small goal']});}):({id:'new'})});await h.composer.openSettings();type(h,'Previewed goal');setting(h,'mode','auto','change');assert(h.document.querySelector('#send-message').disabled);await h.composer.submit();assert.equal(posts(h).filter(c=>c.url==='/api/runs').length,0);release();await tick();h.document.querySelector('#close-settings').click();const sending=h.composer.submit();await tick();
   // Sending re-reads the same preview first, so session creation still waits for it.
   assert.equal(posts(h).filter(c=>c.url==='/api/runs').length,0);release();await sending;assert.equal(posts(h).filter(c=>c.url==='/api/runs').length,1);
+});
+
+
+function addCheck(h,text){h.document.querySelector('#add-goal-check').click();const node=h.document.querySelector('[data-check="0"]');node.value=text;node.dispatchEvent(new h.window.Event('input',{bubbles:true}));}
+const rememberedKeys=['verifier','max_steps','run_minutes','mode','team_size','isolation','network','cpus','memory_gb','setup','preview'];
+function savedSettings(h){return JSON.parse(h.local.get('acx-settings'));}
+test('M4.1 session titles and checks clear after success in the same page and after reload',async()=>{
+  const h=await composerHarness('new');await h.composer.openSettings();setting(h,'title','Todo CLI v1');addCheck(h,'Persist tasks to JSON');setting(h,'verifier','V1');type(h,'Build the CLI');await h.composer.submit();
+  assert.deepEqual(posts(h).at(-1).body,{goal:'Build the CLI',title:'Todo CLI v1',goal_checks:['Persist tasks to JSON'],verifier:'V1'});
+  assert.deepEqual(savedSettings(h),{verifier:'V1'});await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-title').value,'');assert.equal(h.document.querySelectorAll('[data-check]').length,0);
+  type(h,'Add a web UI');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'Add a web UI',verifier:'V1'});
+  const reloaded=await composerHarness('new',{local:{'acx-settings':h.local.get('acx-settings')}});type(reloaded,'Add search');await reloaded.composer.submit();assert.deepEqual(posts(reloaded).at(-1).body,{goal:'Add search',verifier:'V1'});
+});
+test('M4.1 legacy settings are cleaned on load to exactly the permitted preference keys',async()=>{
+  const allowed={verifier:'V1',max_steps:4,run_minutes:20,mode:'team',team_size:2,isolation:'container',network:'none',cpus:2,memory_gb:4,setup:'npm ci',preview:{mode:'static',path:'site'}};
+  const legacy={...allowed,title:'Old title',goal_checks:['Old criterion'],allow_dirty:true,goal:'Old goal',models:{},spend_cap:7,confirm:'approve',watch:true};
+  const h=await composerHarness('new',{local:{'acx-settings':JSON.stringify(legacy)}});assert.deepEqual(savedSettings(h),allowed);assert.deepEqual(Object.keys(savedSettings(h)).sort(),rememberedKeys.slice().sort());
+  await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-title').value,'');assert.equal(h.document.querySelectorAll('[data-check]').length,0);assert(!h.document.querySelector('#allow-dirty').checked);type(h,'Fresh goal');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'Fresh goal',...allowed});
+  const internet=await composerHarness('new',{local:{'acx-settings':JSON.stringify({network:'internet',title:'Leaked'})}});assert.deepEqual(savedSettings(internet),{});
+});
+test('M4.1 failed session creation retains its draft, title and checks until successful retry',async()=>{
+  const h=await composerHarness('new',{post:()=>({error:'Server refused the settings'})});await h.composer.openSettings();setting(h,'title','This session');addCheck(h,'This criterion');type(h,'Retain my goal');await h.composer.submit();
+  assert.equal(h.document.querySelector('#composer').value,'Retain my goal');await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-title').value,'This session');assert.equal(h.document.querySelector('[data-check]').value,'This criterion');
+  h.options.post=()=>({ok:true});await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'Retain my goal',title:'This session',goal_checks:['This criterion']});assert.deepEqual(savedSettings(h),{});await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-title').value,'');assert.equal(h.document.querySelectorAll('[data-check]').length,0);
+});
+test('M4.1 cancelling a follow-up restores preferences and clears per-session fields for both exits',async()=>{
+  for(const exit of ['button','Escape']){
+    const before={verifier:'V1',max_steps:4,mode:'team',team_size:2,run_minutes:15,preview:{mode:'static',path:'old-site'}};
+    const h=await composerHarness('finished',{local:{'acx-settings':JSON.stringify(before)},preflight:{...fx.composerPreflight,dirty_count:2}});
+    await h.composer.reply('run_test');await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-verifier').value,'python3 -m unittest discover -s demo_app');setting(h,'verifier','V3');setting(h,'max_steps',9);setting(h,'title','Follow-up title');addCheck(h,'Follow-up criterion');h.document.querySelector('#allow-dirty').checked=true;type(h,'Unsent follow-up draft');h.composer.closeSettings();
+    if(exit==='button')h.document.querySelector('#cancel-follow-up').click();else key(h,'Escape');
+    assert.equal(h.document.querySelector('#composer-target').textContent,'New session');assert.equal(h.document.querySelector('#composer').value,'Unsent follow-up draft');assert.deepEqual(savedSettings(h),before);await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-verifier').value,'V1');assert.equal(h.document.querySelector('#setting-max_steps').value,'4');assert.equal(h.document.querySelector('#setting-title').value,'');assert.equal(h.document.querySelectorAll('[data-check]').length,0);assert(!h.document.querySelector('#allow-dirty').checked);
+    h.options.preflight=fx.composerPreflight;type(h,'A separate new session');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'A separate new session',...before});
+  }
+});
+test('M4.1 a successful unedited follow-up sends parent defaults without remembering them',async()=>{
+  const before={verifier:'V1',max_steps:4,mode:'single',run_minutes:15};const h=await composerHarness('finished',{local:{'acx-settings':JSON.stringify(before)}});
+  await h.composer.reply('run_test');type(h,'Continue the parent');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'Continue the parent',...before,verifier:'python3 -m unittest discover -s demo_app',max_steps:6,parent_run:'run_test'});assert.deepEqual(savedSettings(h),before);
+  type(h,'Independent goal');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'Independent goal',...before});
+});
+test('M4.1 successful follow-ups remember only explicit Settings changes and clear per-session fields',async()=>{
+  const before={verifier:'V1',max_steps:4,mode:'team',team_size:2,run_minutes:15,preview:{mode:'static',path:'old-site'}};
+  const h=await composerHarness('finished',{local:{'acx-settings':JSON.stringify(before)}});await h.composer.reply('run_test');await h.composer.openSettings();setting(h,'verifier','V3');setting(h,'run_minutes',25);setting(h,'title','New follow-up');addCheck(h,'Only this follow-up');const preview=h.document.querySelector('#preview-mode');preview.value='none';preview.dispatchEvent(new h.window.Event('change',{bubbles:true}));type(h,'Continue with edits');await h.composer.submit();
+  assert.deepEqual(posts(h).at(-1).body,{goal:'Continue with edits',verifier:'V3',max_steps:6,mode:'single',run_minutes:25,title:'New follow-up',goal_checks:['Only this follow-up'],parent_run:'run_test'});
+  const expected={verifier:'V3',max_steps:4,mode:'team',team_size:2,run_minutes:25};assert.deepEqual(savedSettings(h),expected);type(h,'A new team goal');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{goal:'A new team goal',...expected});
+  const reloaded=await composerHarness('new',{local:{'acx-settings':h.local.get('acx-settings')}});type(reloaded,'Reloaded goal');await reloaded.composer.submit();assert.deepEqual(posts(reloaded).at(-1).body,{goal:'Reloaded goal',...expected});
+});
+test('M4.1 entering any follow-up begins with empty title, checks and dirty acknowledgement',async()=>{
+  const h=await composerHarness('finished');await h.composer.openSettings();setting(h,'title','Unsubmitted title');addCheck(h,'Unsubmitted check');h.document.querySelector('#allow-dirty').checked=true;
+  await h.composer.reply('run_test');await h.composer.openSettings();assert.equal(h.document.querySelector('#setting-title').value,'');assert.equal(h.document.querySelectorAll('[data-check]').length,0);assert(!h.document.querySelector('#allow-dirty').checked);
+});
+test('M4.1 literal @ content stays verbatim in the POST and follows the Hermes chip rule',async()=>{
+  const h=await composerHarness('paused');const notes=['Pin @types/node to v20','Use the @pytest.fixture decorator','Ask @coder-2 to sync with @coder-1 on the schema','@nobody hello','@types/node is a package','@pytest.fixture is a decorator','@coder-2/path stays literal','@coder-2.fixture stays literal','@hermes hello',' @coder-2 keep it literal  ','Keep  @coder-2\n@types/node  intact  '];
+  for(const text of notes){type(h,text);assert.equal(h.document.querySelector('#composer-target').textContent,'Note → Hermes');assert.equal(h.document.querySelector('#composer').placeholder,'Message Hermes…');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{run:'run_test',action:'instruction',text});}
+  for(const [text,sent] of [['@coder-2 keep it simple','keep it simple'],['@coder-2  keep @coder-1 and @types/node  ',' keep @coder-1 and @types/node  '],['@coder-2\tUse @pytest.fixture','Use @pytest.fixture'],['@coder-2\nKeep @nobody literal','Keep @nobody literal']]){type(h,text);assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');await h.composer.submit();assert.deepEqual(posts(h).at(-1).body,{run:'run_test',action:'instruction',text:sent,agent:'coder-2'});}
+});
+test('M4.1 suggestions open only for a draft-leading token and selection replaces that token',async()=>{
+  const h=await composerHarness('paused');for(const text of ['Ask @',' @','@types/','@pytest.','Hello\n@']){type(h,text);assert(h.document.querySelector('#composer-options').hidden,text);assert.equal(h.document.querySelector('#composer').getAttribute('aria-expanded'),'false');}
+  type(h,'@cod');assert(!h.document.querySelector('#composer-options').hidden);key(h,'ArrowDown');key(h,'Enter');assert.equal(h.document.querySelector('#composer').value,'@coder-2 ');assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');assert.equal(posts(h).length,0);
+  type(h,'@coder-2 Coordinate with @');assert(h.document.querySelector('#composer-options').hidden);assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');
+});
+test('M4.1 the empty room invites the composer with no classic start link or fake messages',async()=>{
+  const h=await composerHarness('new');const empty=h.timeline.querySelector('.empty');assert.equal(empty.querySelector('h2').textContent,'A room for your project');assert.equal(empty.querySelector('p').textContent,'Write a goal below to start the first session.');assert.equal(empty.querySelectorAll('a').length,0);assert.equal(h.timeline.querySelectorAll('[data-message]').length,0);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

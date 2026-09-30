@@ -403,3 +403,5 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 - 2026-09-30 (owner decision): **D7 approved**, limited exactly to the two M5.0 Part B guards (research approval refused
   for finished or stopping sessions; skill fetch refused for finished sessions; both before any write, audit, download or
   other effect). No broader engine, lifecycle, approval, skill, research, API or schema change is authorised.
+- 2026-09-30: M4.1: only a leading @agent targets a note; other @words are literal. Title,
+  goal checks and allow_dirty are per-session and never remembered.

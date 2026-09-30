@@ -3,7 +3,11 @@
   const terminal = new Set(['completed','blocked','failed','stopped','limit_reached']);
   const limits = {goal:12000,title:120,note:5000,checks:20,check:1000,max_steps:20,run_minutes:120,command:2000,team_size:3};
   const commands = ['pause','resume','stop','check','title','help'], deferred = ['verify','apply','discard','team'];
-  const settingKeys = ['title','verifier','goal_checks','max_steps','run_minutes','mode','team_size','isolation','network','cpus','memory_gb','setup','preview'];
+  const preferenceKeys = ['verifier','max_steps','run_minutes','mode','team_size','isolation','network','cpus','memory_gb','setup','preview'];
+  const settingKeys = ['title','goal_checks',...preferenceKeys];
+  function preferencesOnly(values) {
+    const saved={};for(const key of preferenceKeys)if(values?.[key]!==undefined && !(key==='network' && values[key]==='internet'))saved[key]=values[key];return saved;
+  }
   function composerState(snapshot, follow = null, agent = '') {
     const state = snapshot.state || {}, live = snapshot.thread?.live || {}, channel = snapshot.channels?.channels?.[0];
     const other = (state.runs || []).find(r=>!terminal.has(r.status) && r.project && r.project !== state.project);
@@ -23,12 +27,11 @@
   }
   function parseMention(text, agents = []) {
     const names = new Set(agents.filter(a=>a.type!=='orchestrator' && a.role!=='orchestrator' && a.name!=='hermes').map(a=>a.name));
-    let agent='',error='';
-    const clean=text.replace(/(^|\s)@([\w-]+)/g,(_,space,name)=>{if(!names.has(name))error='This session has no agent named '+name;else agent=name;return space;}).trim();
-    return {text:clean,agent,error};
+    const leading=text.match(/^@([\w-]+)(?:\s|$)/);
+    return leading && names.has(leading[1]) ? {text:text.slice(leading[0].length),agent:leading[1]} : {text,agent:''};
   }
   function noteBody(run, text, agents) {
-    const mention=parseMention(text,agents);if(mention.error)throw Error(mention.error);
+    const mention=parseMention(text,agents);
     return {run,action:'instruction',text:mention.text,...(mention.agent ? {agent:mention.agent} : {})};
   }
   // A verifier stored as argv must round-trip through the server's shlex parser.
@@ -50,8 +53,19 @@
   function mount(host, controls) {
     const {core,model:m}=root.AC, e=m.esc, $=id=>document.getElementById(id);
     const input=$('composer'), status=$('composer-status'), sheet=$('settings-sheet');
-    let snapshot={}, follow=null, settings={}, busy=false, selected=0, popover='', choices=[], preflight=null, sandbox=null, details=null, detailsSource=null, detailsTask=null, settingsGeneration=0, previewTimer=null, statusTimer=null, visiblePreviewKey='', previewTask=null;
-    try {const saved=JSON.parse(core.read('localStorage','acx-settings') || '{}');for(const key of settingKeys)if(saved[key]!==undefined)settings[key]=saved[key];if(settings.network==='internet')delete settings.network;}catch{}
+    let snapshot={}, follow=null, preferences={}, sessionSettings={}, busy=false, selected=0, popover='', choices=[], preflight=null, sandbox=null, details=null, detailsSource=null, detailsTask=null, settingsGeneration=0, previewTimer=null, statusTimer=null, visiblePreviewKey='', previewTask=null;
+    const stored=core.read('localStorage','acx-settings');
+    try {preferences=preferencesOnly(JSON.parse(stored || '{}'));}catch{}
+    if(stored)core.write('localStorage','acx-settings',JSON.stringify(preferences));
+    const currentSettings=()=>({...preferences,...follow?.settings,...sessionSettings});
+    function setSetting(key,value) {
+      if(['title','goal_checks'].includes(key)){sessionSettings[key]=value;return;}
+      if(!preferenceKeys.includes(key))return;
+      if(follow){follow.settings[key]=value;follow.changed.add(key);}
+      else if(value===undefined)delete preferences[key];else preferences[key]=value;
+    }
+    function clearSession() {sessionSettings={};$('allow-dirty').checked=false;visiblePreviewKey='';}
+    function cancelFollowUp() {follow=null;clearSession();closeSettings();render(snapshot);}
     input.value=core.read('sessionStorage','acx-draft') || '';
     const agents=()=>((snapshot.state?.run?.id===view().run ? snapshot.state.agents : details?.run?.id===view().run ? details.agents : snapshot.agentsByRun?.[view().run]) || []).filter(a=>a.name!=='hermes' && a.type!=='orchestrator' && a.role!=='orchestrator');
     const view=()=>{const id=snapshot.thread?.live?.session || snapshot.channels?.channels?.[0]?.active_session;return composerState(id && details?.run?.id===id && snapshot.state?.run?.id!==id ? {...snapshot,state:{...snapshot.state,run:details.run}} : snapshot,follow);};
@@ -71,19 +85,19 @@
     }
     function choose(index) {
       const name=choices[index];if(!name)return;
-      if(popover==='mention')input.value=input.value.replace(/(^|\s)@[\w-]*$/,'$1@'+name+' ');
+      if(popover==='mention')input.value=input.value.replace(/^@[\w-]*/,'@'+name+' ');
       else input.value='/'+name+(['check','title'].includes(name)?' ':'');
       closePopover();draftChanged(false);input.focus();
     }
     function draftChanged(suggest=true) {
       core.write('sessionStorage','acx-draft',input.value || null);resize();render(snapshot);
-      if(suggest){const token=input.value.match(/(?:^|\s)@([\w-]*)$/);if(view().kind==='note' && token)showChoices('mention',agents().map(a=>a.name).filter(name=>name.startsWith(token[1])));
+      if(suggest){const token=input.value.match(/^@([\w-]*)$/);if(view().kind==='note' && token)showChoices('mention',agents().map(a=>a.name).filter(name=>name.startsWith(token[1])));
         else if(/^\/[\w]*$/.test(input.value))showChoices('slash',commands.filter(name=>name.startsWith(input.value.slice(1))));else closePopover();}
-      if(settings.mode==='auto')schedulePreview();
+      if(currentSettings().mode==='auto')schedulePreview();
     }
     function render(next) {
       snapshot=next;
-      if(view().run && follow){follow=null;closeSettings();}
+      if(view().run && follow){follow=null;clearSession();closeSettings();}
       const v=view(), mention=v.kind==='note' ? parseMention(input.value,agents()) : {agent:''};
       $('composer-target').textContent=v.kind==='note' ? 'Note → '+(mention.agent ? '@'+mention.agent : 'Hermes') : v.chip;$('composer-target').title=$('composer-target').textContent;$('composer-target').dataset.kind=v.kind;
       input.placeholder=composerState(snapshot,follow,mention.agent).placeholder;input.disabled=!!v.reason;
@@ -133,17 +147,20 @@
         await request('/api/control',{run,action:slash.command==='check'?'goal_check':'title',text:slash.text},true);return;
       }
       if(v.reason){tell(v.reason);return;}
-      if(v.kind==='note'){try{await request('/api/control',noteBody(v.run,text,agents()),true,draft);}catch(error){tell(error.message);}return;}
+      if(v.kind==='note'){await request('/api/control',noteBody(v.run,draft,agents()),true,draft);return;}
       // Preparation shares the submission lock so repeated Enter cannot start a second session.
       busy=true;render(snapshot);
       try {
         await ensurePreflight(true);
         if(preflight.dirty_count>0 && !$('allow-dirty').checked){tell(preflight.dirty_count+' uncommitted changes. Open Settings and choose “Start anyway with uncommitted changes”.');await openSettings();$('settings-advanced').open=true;return;}
-        if(settings.mode==='auto'){if(visiblePreviewKey!==previewKey()){await openSettings();tell('Auto preview is in Settings. Close Settings when ready to send.');return;}await modePreview();if($('mode-preview').dataset.failed==='true')return;}
+        if(currentSettings().mode==='auto'){if(visiblePreviewKey!==previewKey()){await openSettings();tell('Auto preview is in Settings. Close Settings when ready to send.');return;}await modePreview();if($('mode-preview').dataset.failed==='true')return;}
+        const settings=currentSettings(), changed=follow ? [...follow.changed].map(key=>[key,settings[key]]) : [];
         const body=runBody(text,{...settings,...(preflight.dirty_count>0 && $('allow-dirty').checked?{allow_dirty:true}:{})},follow?.id);
         busy=false;
         if(await request('/api/runs',body,true,draft)){
-          core.write('localStorage','acx-settings',JSON.stringify(settings));follow=null;closeSettings();$('allow-dirty').checked=false;render(snapshot);
+          // Inherited parent defaults never become preferences unless explicitly edited.
+          for(const [key,value] of changed)if(value===undefined)delete preferences[key];else preferences[key]=value;
+          core.write('localStorage','acx-settings',JSON.stringify(preferencesOnly(preferences)));follow=null;clearSession();closeSettings();render(snapshot);
         }
       }catch(error){tell(error.message);}finally{busy=false;render(snapshot);}
     }
@@ -155,29 +172,29 @@
         if(snapshot.state?.project!==project)return;
         if(!run || !terminal.has(run.status) || run.project && run.project!==project)throw Error('That session is not a finished session in this project.');
         if(view().run)throw Error('Finish the active session before starting a follow-up.');
-        settings={...settings,...followUpDefaults(run)};follow={id,title:run.title || run.goal?.split('\n')[0] || id};tell('');render(snapshot);input.focus();
+        clearSession();follow={id,title:run.title || run.goal?.split('\n')[0] || id,settings:followUpDefaults(run),changed:new Set()};closeSettings();tell('');render(snapshot);input.focus();
       }catch(error){tell(error.message);}
     }
     const defaults={title:'',verifier:'',max_steps:8,run_minutes:30,mode:'single',team_size:3,isolation:'host',network:'setup',cpus:4,memory_gb:8,setup:''};
-    function field(key,label,type='text',max) {return `<label>${e(label)}<input data-setting="${key}" id="setting-${key}" type="${type}" value="${e(settings[key] ?? defaults[key])}" ${max ? `maxlength="${max}"` : ''} ${type==='number'?`min="${key==='cpus'?0.5:key==='team_size'?2:1}" step="${key==='cpus'?0.5:1}" max="${key==='memory_gb'?128:key==='cpus'?32:key==='team_size'?3:key==='max_steps'?20:120}"`:''}></label>`;}
-    function select(key,label,values) {return `<label>${label}<select id="setting-${key}" data-setting="${key}">${values.map(value=>`<option value="${value}" ${(settings[key] ?? defaults[key])===value?'selected':''}>${value[0].toUpperCase()+value.slice(1)}</option>`).join('')}</select></label>`;}
+    function field(key,label,type='text',max) {return `<label>${e(label)}<input data-setting="${key}" id="setting-${key}" type="${type}" value="${e(currentSettings()[key] ?? defaults[key])}" ${max ? `maxlength="${max}"` : ''} ${type==='number'?`min="${key==='cpus'?0.5:key==='team_size'?2:1}" step="${key==='cpus'?0.5:1}" max="${key==='memory_gb'?128:key==='cpus'?32:key==='team_size'?3:key==='max_steps'?20:120}"`:''}></label>`;}
+    function select(key,label,values) {return `<label>${label}<select id="setting-${key}" data-setting="${key}">${values.map(value=>`<option value="${value}" ${(currentSettings()[key] ?? defaults[key])===value?'selected':''}>${value[0].toUpperCase()+value.slice(1)}</option>`).join('')}</select></label>`;}
     function fillSheet() {
       const acknowledgement=$('dirty-acknowledgement');acknowledgement.remove();
       sheet.querySelector('#settings-fields').innerHTML=`<section aria-labelledby="settings-basic"><h3 id="settings-basic">Basic</h3>${field('title','Title (optional)','text',limits.title)}${field('verifier','Verification command','text',limits.command)}<fieldset><legend>Goal checks</legend><div id="goal-checks"></div><button type="button" id="add-goal-check">Add goal check</button></fieldset>${select('mode','Mode',['single','team','auto'])}<div id="team-size-field">${field('team_size','Largest team','number')}</div><p id="mode-preview" class="muted" role="status" hidden></p></section><details id="settings-advanced"><summary>Advanced</summary>${field('max_steps','Turn limit','number')}${field('run_minutes','Time limit (minutes)','number')}<fieldset><legend>Isolation</legend><div id="isolation-options"></div></fieldset><div id="isolated-fields">${select('network','Network',['setup','none'])}${field('cpus','CPUs','number')}${field('memory_gb','Memory (GB)','number')}<p>For internet during work, use the <a href="/classic">classic dashboard</a>.</p></div>${field('setup','Setup command','text',limits.command)}<fieldset><legend>Preview</legend><label>Mode<select id="preview-mode"><option value="none">None</option>${(snapshot.state?.capabilities?.preview_modes || []).map(mode=>`<option value="${e(mode)}">${e(mode)}</option>`).join('')}</select></label><div id="preview-fields"></div></fieldset><div id="dirty-folder"></div></details><p>Paid models and the stuck watch: set them in the <a href="/classic">classic dashboard</a></p>`;
       $('settings-advanced').appendChild(acknowledgement);
-      $('preview-mode').value=settings.preview?.mode || 'none';renderChecks();renderIsolation();renderPreviewFields();updateSettingsVisibility();
+      $('preview-mode').value=currentSettings().preview?.mode || 'none';renderChecks();renderIsolation();renderPreviewFields();updateSettingsVisibility();
     }
-    function renderChecks() {$('goal-checks').innerHTML=(settings.goal_checks || []).map((text,i)=>`<div class="check-row"><input aria-label="Goal check ${i+1}" maxlength="1000" data-check="${i}" value="${e(text)}"><button type="button" data-remove-check="${i}" aria-label="Remove goal check ${i+1}">×</button></div>`).join('');$('add-goal-check').disabled=(settings.goal_checks || []).length>=limits.checks;}
+    function renderChecks() {$('goal-checks').innerHTML=(currentSettings().goal_checks || []).map((text,i)=>`<div class="check-row"><input aria-label="Goal check ${i+1}" maxlength="1000" data-check="${i}" value="${e(text)}"><button type="button" data-remove-check="${i}" aria-label="Remove goal check ${i+1}">×</button></div>`).join('');$('add-goal-check').disabled=(currentSettings().goal_checks || []).length>=limits.checks;}
     function renderIsolation() {
       const reason=value=>value==='host' ? '' : (value==='container'?sandbox:snapshot.state?.vm_env)?.unavailable || (!(value==='container'?sandbox:snapshot.state?.vm_env) ? 'Checking availability…' : !preflight?.usable ? preflight?.reason || 'Needs a git project with a first commit.' : !(value==='container'?sandbox:snapshot.state?.vm_env)?.models_configured ? 'Configure the model server in the classic dashboard first.' : '');
-      $('isolation-options').innerHTML=['host','container','vm'].map(value=>{const why=reason(value);return `<div class="isolation-choice ${why?'muted':''}"><label><input type="radio" name="composer-isolation" value="${value}" ${value===(settings.isolation || 'host')?'checked':''} ${why?'disabled':''}> ${value==='vm'?'VM':value[0].toUpperCase()+value.slice(1)}</label>${why?`<details><summary>why?</summary><p>${e(why)}</p></details>`:''}</div>`;}).join('');
+      $('isolation-options').innerHTML=['host','container','vm'].map(value=>{const why=reason(value);return `<div class="isolation-choice ${why?'muted':''}"><label><input type="radio" name="composer-isolation" value="${value}" ${value===(currentSettings().isolation || 'host')?'checked':''} ${why?'disabled':''}> ${value==='vm'?'VM':value[0].toUpperCase()+value.slice(1)}</label>${why?`<details><summary>why?</summary><p>${e(why)}</p></details>`:''}</div>`;}).join('');
       $('dirty-folder').innerHTML=preflight?.dirty_count>0 ? `<p>${e(preflight.dirty_count)} uncommitted changes</p>` : '';
       // The acknowledgement itself is stable and never remembered between sessions.
       $('dirty-acknowledgement').hidden=!(preflight?.dirty_count>0);
     }
-    function updateSettingsVisibility() {if(!sheet.hidden){$('team-size-field').hidden=settings.mode!=='team';$('mode-preview').hidden=settings.mode!=='auto';$('isolated-fields').hidden=!['container','vm'].includes(settings.isolation);}}
+    function updateSettingsVisibility() {if(!sheet.hidden){$('team-size-field').hidden=currentSettings().mode!=='team';$('mode-preview').hidden=currentSettings().mode!=='auto';$('isolated-fields').hidden=!['container','vm'].includes(currentSettings().isolation);}}
     function renderPreviewFields() {
-      const mode=$('preview-mode').value, spec=settings.preview || {};
+      const mode=$('preview-mode').value, spec=currentSettings().preview || {};
       const previewInput=(key,label,fallback='',type='text')=>`<label>${label}<input id="preview-${key}" data-preview="${key}" type="${type}" value="${e(spec[key] ?? fallback)}"></label>`;
       $('preview-fields').innerHTML=mode==='none' ? '' : (mode==='static'?previewInput('path','Path','.'):previewInput('command','Command'))+(mode==='web'?previewInput('port','Port',0,'number'):mode==='cli'?previewInput('args','Arguments'):mode==='desktop'?previewInput('width','Width',1280,'number')+previewInput('height','Height',800,'number'):'');
     }
@@ -190,19 +207,19 @@
       if(mode==='static')spec.path=$('preview-path').value.trim() || '.';
       if(mode==='desktop'){spec.width=Number($('preview-width').value) || 1280;spec.height=Number($('preview-height').value) || 800;}return spec;
     }
-    const previewKey=()=>JSON.stringify({goal:input.value,goal_checks:settings.goal_checks || [],verifier:settings.verifier || '',max_steps:settings.max_steps ?? 8});
+    const previewKey=()=>JSON.stringify({goal:input.value,goal_checks:currentSettings().goal_checks || [],verifier:currentSettings().verifier || '',max_steps:currentSettings().max_steps ?? 8});
     function modePreview() {
       if(previewTask)return previewTask;
       const key=previewKey(), task=performModePreview();previewTask=task;render(snapshot);
-      return task.finally(()=>{if(previewTask===task){previewTask=null;render(snapshot);if(settings.mode==='auto' && key!==previewKey())schedulePreview();}});
+      return task.finally(()=>{if(previewTask===task){previewTask=null;render(snapshot);if(currentSettings().mode==='auto' && key!==previewKey())schedulePreview();}});
     }
     async function performModePreview() {
-      const node=$('mode-preview');if(!node || settings.mode!=='auto')return;
+      const node=$('mode-preview');if(!node || currentSettings().mode!=='auto')return;
       node.hidden=false;if(!input.value.trim()){node.textContent='Write a goal to see what Auto would choose.';return;}
       const goal=input.value, generation=settingsGeneration, key=previewKey();
       try {
-        const data=await core.post('/api/mode/preview',{goal,goal_checks:settings.goal_checks || [],verifier:settings.verifier || '',max_steps:settings.max_steps ?? 8});
-        if(generation!==settingsGeneration || settings.mode!=='auto' || key!==previewKey())return;
+        const data=await core.post('/api/mode/preview',{goal,goal_checks:currentSettings().goal_checks || [],verifier:currentSettings().verifier || '',max_steps:currentSettings().max_steps ?? 8});
+        if(generation!==settingsGeneration || currentSettings().mode!=='auto' || key!==previewKey())return;
         node.textContent='Auto would '+(data.mode==='team'?'ask Hermes for a team plan':'use one agent')+'. '+(data.reasons || []).join(' ');node.dataset.failed='false';if(!sheet.hidden)visiblePreviewKey=previewKey();
       }catch(error){if(generation!==settingsGeneration || key!==previewKey())return;node.textContent=error.message;node.dataset.failed='true';tell(error.message);}
     }
@@ -210,7 +227,7 @@
     async function openSettings() {
       if(view().kind==='note')return;
       const generation=++settingsGeneration;sheet.hidden=false;$('settings-scrim').hidden=false;fillSheet();$('close-settings').focus();
-      try {const [p,s]=await Promise.all([ensurePreflight(),core.api('/api/sandbox')]);if(generation!==settingsGeneration || sheet.hidden)return;sandbox=s;preflight=p;renderIsolation();updateSettingsVisibility();if(settings.mode==='auto')await modePreview();}catch(error){tell(error.message);}
+      try {const [p,s]=await Promise.all([ensurePreflight(),core.api('/api/sandbox')]);if(generation!==settingsGeneration || sheet.hidden)return;sandbox=s;preflight=p;renderIsolation();updateSettingsVisibility();if(currentSettings().mode==='auto')await modePreview();}catch(error){tell(error.message);}
     }
     function closeSettings() {settingsGeneration++;sheet.hidden=true;$('settings-scrim').hidden=true;clearTimeout(previewTimer);}
     input.addEventListener('input',()=>draftChanged());
@@ -221,22 +238,22 @@
         if(event.key==='Enter'){event.preventDefault();choose(selected);return;}
         if(event.key==='Escape'){event.preventDefault();closePopover();return;}
       }
-      if(event.key==='Escape' && follow){event.preventDefault();follow=null;render(snapshot);return;}
+      if(event.key==='Escape' && follow){event.preventDefault();cancelFollowUp();return;}
       if(event.key==='Enter' && !event.shiftKey && (event.ctrlKey || event.metaKey || !root.matchMedia?.('(pointer: coarse)').matches)){event.preventDefault();submit();}
     });
-    host.addEventListener('click',event=>{const choice=event.target.closest('[data-choice]');if(choice){choose(Number(choice.dataset.choice));return;}const id=event.target.closest('button')?.id;if(id==='send-message')submit();if(id==='composer-settings')openSettings();if(id==='cancel-follow-up'){follow=null;render(snapshot);input.focus();}if(id==='resume-session')control('resume');if(id==='check-connections')request('/api/check',{});});
+    host.addEventListener('click',event=>{const choice=event.target.closest('[data-choice]');if(choice){choose(Number(choice.dataset.choice));return;}const id=event.target.closest('button')?.id;if(id==='send-message')submit();if(id==='composer-settings')openSettings();if(id==='cancel-follow-up'){cancelFollowUp();input.focus();}if(id==='resume-session')control('resume');if(id==='check-connections')request('/api/check',{});});
     sheet.addEventListener('input',event=>{
       const node=event.target,key=node.dataset.setting;
-      if(key){settings[key]=node.type==='number'?Number(node.value):node.value;if(key==='mode' && settings.mode==='auto')schedulePreview();updateSettingsVisibility();}
-      if(node.dataset.check!==undefined)settings.goal_checks[Number(node.dataset.check)]=node.value;
-      if(node.dataset.preview)settings.preview=previewSpec();
+      if(key){setSetting(key,node.type==='number'?Number(node.value):node.value);if(key==='mode' && currentSettings().mode==='auto')schedulePreview();updateSettingsVisibility();}
+      if(node.dataset.check!==undefined){const checks=[...currentSettings().goal_checks];checks[Number(node.dataset.check)]=node.value;setSetting('goal_checks',checks);}
+      if(node.dataset.preview)setSetting('preview',previewSpec());
     });
     sheet.addEventListener('change',event=>{
-      const node=event.target;if(node.dataset.setting){settings[node.dataset.setting]=node.type==='number'?Number(node.value):node.value;updateSettingsVisibility();if(node.dataset.setting==='mode' && settings.mode==='auto')modePreview();}
-      if(node.name==='composer-isolation'){settings.isolation=node.value;updateSettingsVisibility();}
-      if(node.id==='preview-mode'){if(node.value==='none')delete settings.preview;else settings.preview={mode:node.value};renderPreviewFields();if(node.value!=='none')settings.preview=previewSpec();}
+      const node=event.target;if(node.dataset.setting){setSetting(node.dataset.setting,node.type==='number'?Number(node.value):node.value);updateSettingsVisibility();if(node.dataset.setting==='mode' && currentSettings().mode==='auto')modePreview();}
+      if(node.name==='composer-isolation'){setSetting('isolation',node.value);updateSettingsVisibility();}
+      if(node.id==='preview-mode'){setSetting('preview',node.value==='none'?undefined:{mode:node.value});renderPreviewFields();if(node.value!=='none')setSetting('preview',previewSpec());}
     });
-    sheet.addEventListener('click',event=>{const node=event.target.closest('button');if(node?.id==='close-settings'){closeSettings();input.focus();}if(node?.id==='add-goal-check' && (settings.goal_checks || []).length<limits.checks){settings.goal_checks=[...(settings.goal_checks || []),''];renderChecks();$('goal-checks').lastElementChild?.querySelector('input').focus();}if(node?.dataset.removeCheck!==undefined){settings.goal_checks.splice(Number(node.dataset.removeCheck),1);renderChecks();}});
+    sheet.addEventListener('click',event=>{const node=event.target.closest('button');if(node?.id==='close-settings'){closeSettings();input.focus();}if(node?.id==='add-goal-check' && (currentSettings().goal_checks || []).length<limits.checks){setSetting('goal_checks',[...(currentSettings().goal_checks || []),'']);renderChecks();$('goal-checks').lastElementChild?.querySelector('input').focus();}if(node?.dataset.removeCheck!==undefined){setSetting('goal_checks',currentSettings().goal_checks.filter((_,i)=>i!==Number(node.dataset.removeCheck)));renderChecks();}});
     $('settings-scrim').addEventListener('click',()=>{closeSettings();input.focus();});
     sheet.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeSettings();input.focus();}if(event.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,input,select,summary,a')].filter(n=>!n.disabled && !n.closest('[hidden]') && (!n.closest('#settings-advanced') || $('settings-advanced').open || n.tagName==='SUMMARY'));const i=nodes.indexOf(document.activeElement);if(event.shiftKey && i===0 || !event.shiftKey && i===nodes.length-1){event.preventDefault();nodes[event.shiftKey?nodes.length-1:0]?.focus();}}});
     if(root.visualViewport){const viewport=()=>{document.documentElement.style.setProperty('--viewport-height',root.visualViewport.height+'px');resize();};root.visualViewport.addEventListener('resize',viewport);root.visualViewport.addEventListener('scroll',viewport);viewport();}

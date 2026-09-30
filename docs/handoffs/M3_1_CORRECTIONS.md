@@ -165,3 +165,63 @@ changed; `fixtures.cjs` is additions only. The room remains read-only, uses `/ap
 and has no new endpoint, write control, POST or message storage. The optional Load earlier focus and collapsed
 partial-session count polish remain deferred. The M5 research/skill action-count mismatch remains intentionally
 unresolved. No backend, orchestration, classic UI, API, schema or decision semantics changed; no merge or PR.
+
+
+## Architecture and UX review — 2026-09-30 (Opus)
+
+**Verdict: M3.1 accepted, and with it M3.** Nothing is blocking, and nothing needs fixing before M4. M4 may start
+(`docs/handoffs/M4_COMPOSER.md`).
+
+Reviewed: `5563b40..71c08d4` (the single commit `71c08d4`), with the suites re-run, the new tests run against the
+pre-M3.1 frontend, and Chromium renders of the receipt and team fixtures at desktop and phone widths.
+
+### Re-run in the review environment (at `71c08d4`)
+
+| Suite | Result |
+|---|---|
+| Python | **398 tests, OK (skipped=6)**: the same six environment gates; 3 in Codex's environment |
+| Classic DOM | **82/82** |
+| Chat DOM | **42/42** |
+| Browser | **42 combinations + 4 regressions**, 90 screenshots; no "youOpen" and no overflow |
+
+No backend, API, schema, classic or orchestration file changed. The M3.1 diff adds no POST, no new endpoint and no
+browser storage. Codex's first full Python run hit
+`test_agents…test_a_turn_records_join_work_approval_and_finish`, the pre-existing lifecycle timing test (reproduced
+earlier on the pre-redesign backend). M3.1 changes no Python, and it was correctly rerun and recorded, not modified.
+
+### Verified
+
+- **Receipts.** The logic is copied from classic `receiptLabel`, with a source comment, and recognises the engine's real
+  `reject` and `answer` actions.
+  - In Chromium at 1440 px and 390 px, the collapsed labels read exactly:
+    - "Approved once · by you"
+    - "Denied · by you · redirected"
+    - "Answered · by you"
+    - "Awaiting confirmation" / "Sending decision" / "Delivery uncertain" / "Request resolved" / "Delivery failed · by …"
+    - an unknown state verbatim ("recorded custom state · by <local rule>", rendered as literal text)
+  - A denied item never says "Approved" or bare "Confirmed". The redirect text stays under "Details".
+- **Revalidation comes from the server and is bounded.**
+  - It is triggered only by a newly received outcome, or by a **decrease** in `channels.waiting` against the previous
+    refresh in the same project. It never compares counts, so finished-session research and skill items cannot cause repeated walks (tested).
+  - Gap recovery and revalidation share **one 10-page budget**. Unverifiable history is dropped at the limit
+    (the cache is trimmed to the fetched pages with their cursor, and "Load earlier" still works).
+  - The client never clears or invents an `action`; markers change only because the server copy changed (tested for skill, proposal, request, research and outcome).
+- **Waiting presentation.**
+  - The waiting state and its classic link are one separated line in quiet, line, bubble and card layouts.
+  - The strip reads exactly "! N waiting for you", which covers requests, proposals, research and skills.
+  - The rail shows "Showing 30 of N sessions · older sessions are in the room history" only when it is capped.
+- **The regression tests reproduce the M3 findings.** Against the pre-M3.1 frontend (`5563b40`), **7 of the 8 new M3.1
+  tests fail**. The one that passes is the intended guard: "unchanged waiting never walks".
+- **The M5 mismatch is deferred, not worked around.** An actionable research item on a finished session keeps its
+  marker, with no client-side reconciliation (the guard test documents this).
+
+### Findings
+
+**Blocking:** none. **Should fix before M4:** none.
+
+**Optional polish** (all folded into the M4 handoff, since M4 rebuilds the footer):
+1. On phones the room footer still takes **about 30% of the viewport**. Measured: 257 of 844 px with the waiting
+   strip, 181 px without. It is made up of the disabled composer, a visible "Project room" label and a second
+   "Open classic dashboard" link.
+2. In the phone waiting strip, the 40 px pointer button and its link sit misaligned vertically.
+3. Still deferred from M3: keeping focus after "Load earlier", the partial-session divider count, and the single-session view not refreshing live.

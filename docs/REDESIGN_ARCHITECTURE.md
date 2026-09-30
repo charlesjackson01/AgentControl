@@ -249,7 +249,8 @@ The composer is the only way to talk to the system. Its target is always visible
 | a run is active in another project | disabled, with the reason | none |
 
 - **Slash commands** are aliases only, with no new capability:
-  `/pause`, `/resume`, `/stop` (asks for confirmation), `/verify`, `/apply`, `/check <text>`, `/title <text>` and `/team approve|single|repropose`.
+  - M4: `/pause`, `/resume`, `/stop` (asks for confirmation), `/check <text>`, `/title <text>` and `/help`.
+  - M5, with the other decision controls: `/verify`, `/apply`, `/discard` and `/team approve|single|repropose`.
 - **`@` suggestions** come from the run's real agent names.
 - A server error is shown inline and the draft is kept.
 - **Hermes does not "reply" to notes.** It reads them at the next turn boundary, and the UI says so.
@@ -387,3 +388,8 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   - M3.1 corrections are required before M4: receipt labels follow classic `receiptLabel` semantics; stale action
     markers are revalidated only by bounded (≤ 10-page) re-reads, never cleared by the client; the waiting line is separate.
   - M5 must reconcile `/api/thread` actions on finished sessions with `/api/channels.waiting`.
+- 2026-09-30 (M3.1 review):
+  - M3 and M3.1 accepted.
+  - For M4: the slash commands are split between M4 (run controls, `/check`, `/title`, `/help`) and M5 (decisions).
+  - The idle composer is a single line. Phone footer budgets at 390 × 844 are ≤ 72 px idle and ≤ 120 px with the waiting row.
+  - Paid models, the stuck watch and internet-during-work stay in classic until a later milestone.

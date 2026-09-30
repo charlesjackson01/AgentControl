@@ -364,10 +364,20 @@ function renderWsTabs(agents) {
       <button class="ws-close" data-ws-close="${esc(name)}" aria-label="Close ${esc(wsAgentLabel(name))}'s workspace (the agent keeps working)" title="Close tab · the agent keeps working">×</button></span>`;
   }).join('');
   setHTML($('ws-tabs'), `<button class="ws-tab ws-home" data-view="mission" title="Back to Mission">Mission</button>${tabs}`);
-  // Keep the active tab visible in a scrolling tab bar without scrolling the page.
-  const bar = $('ws-tabs'), tab = bar.querySelector('.ws-tab.active');
-  if (tab && tab.offsetLeft < bar.scrollLeft) bar.scrollLeft = Math.max(0, tab.offsetLeft);
-  else if (tab && tab.offsetLeft + tab.offsetWidth > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
+  // Keep the active tab visible in a scrolling tab bar without scrolling the page, and start the
+  // strip on a whole tab (never half a label): end padding is added only when that needs room.
+  const bar = $('ws-tabs'), tab = bar.querySelector('.ws-tab.active'), last = bar.lastElementChild;
+  if (last) last.style.marginRight = '';
+  let want = bar.scrollLeft;
+  if (tab && tab.offsetLeft < want) want = tab.offsetLeft;
+  else if (tab && tab.offsetLeft + tab.offsetWidth > want + bar.clientWidth) want = tab.offsetLeft + tab.offsetWidth - bar.clientWidth;
+  if (want > 0) {
+    const start = [...bar.children].filter(e => e.offsetWidth).map(e => e.offsetLeft).find(x => x >= want) ?? want;
+    const room = start - (bar.scrollWidth - bar.clientWidth);
+    if (room > 0 && last) last.style.marginRight = room + 'px';   // (end padding of a scrolling flex row is ignored)
+    want = start;
+  }
+  if (bar.scrollLeft !== want) bar.scrollLeft = want;
   const closed = agents.filter(a => !wsState.open.includes(a.name));
   $('ws-add-new').classList.toggle('hidden', !wsState.fresh.length && !wsState.changed.some(n => !wsState.open.includes(n)));
   setHTML($('ws-menu'), agents.map(a => {

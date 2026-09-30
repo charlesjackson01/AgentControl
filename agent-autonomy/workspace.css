@@ -888,6 +888,10 @@ body.popout .workspace {
 }
 
 @media (max-width:699px) {
+  /* The bottom tab bar already has Mission; the strip keeps its room for agents. */
+  .ws-tabs .ws-home {
+    display:none;
+  }
   /* Things that need you come first, then the output, then the rest. */
   .ws-grid {
     display:flex;

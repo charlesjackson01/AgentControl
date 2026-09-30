@@ -186,5 +186,5 @@ You change it once in a while. → Move it into settings or More (for XP, the Vi
 7. **Sidebar:** "Agents · last check" is now "Connections", since it lists services.
 8. **Layout:**
    - Short pages (Skills, and any other page) no longer start ~110 px down. The cause was `.workspace { margin:auto }`, which also centred pages vertically.
-   - The workspace tab strip scrolls the active tab just into view and snaps to whole tabs, so there are no cut labels ("sion").
+   - The workspace tab strip always starts on a whole tab (no cut labels such as "sion"), and on phones it drops its Mission tab, since the bottom bar already has one.
 

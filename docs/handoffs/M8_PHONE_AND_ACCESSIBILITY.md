@@ -96,9 +96,20 @@ M8 is a **presentation and accessibility milestone**:
 
 - **P1:** the outcome's "Verification (on demand) · ‹status›" line appends the recorded relative time from `ended`
   (or `created` while running).
-- **P2:** the rail's "Showing X of N sessions" is hidden when X = N.
-  - The M3.1 rail test pins the current wording under an owner exception.
-  - Change it only if the owner confirms. Otherwise leave P2 out and say so.
+- **P2: approved by the owner, 2026-10-01.** The rail hides the redundant "Showing X of N sessions" disclosure when
+  every session is listed.
+  - **Hidden** when X = N.
+  - **Shown** when history is incomplete (X < N), with the correct counts: X is the number of sessions the rail lists,
+    and N is `/api/channels`' `sessions` count.
+  - **Scope of the approval: rail presentation only.**
+    - Do not change pagination, "Load earlier sessions", `loadOlder()`, the session union, session-count semantics or
+      the data source.
+  - **The one authorised test rewrite.** Only the assertion in **`M3.1 rail counts use the M6 session union and current
+    count wording`** that pins the old always-shown wording may be rewritten. The replacement must assert both:
+    - no disclosure when X = N
+    - "Showing X of N sessions" with exact counts when X < N, including after paging
+
+    No other rail, paging or count assertion may change.
 - **P3:** a member's state time reads "since 2d ago".
 - **P4:** in the task graph, task-id buttons and plain ids align.
 
@@ -114,7 +125,7 @@ When a permission's `detail.review` has neither `command` nor `file`, the key-fa
 
 ### 3.5 Part A tests
 
-Add one regression per item, each failing on `9b97b51`. P2 is conditional on the owner, as above.
+Add one regression per item, each failing on `9b97b51`. P2 is approved; its regression covers both the hidden case (X = N) and the shown case (X < N).
 
 ## 4. Part B: small-screen and layout pass
 
@@ -329,7 +340,7 @@ It ends with a results table for the owner to fill in. Running it is an M9 sign-
    - the real server check
    - every rewritten assertion
    - deviations
-   - P2's owner outcome
+   - the P2 rewrite (the one authorised assertion, before and after)
 2. Update `CURRENT_STATE.md`. Push to `feature/chat-first-redesign`. No PR and no merge unless the owner asks.
 
 Deferrals that stay recorded:

@@ -59,7 +59,7 @@
   function railSessions(state,cache,total) {
     const byId=new Map(Object.values(cache?.sessions || {}).map(s=>[s.id,{...s,parent_run:s.parent}]));
     for(const r of state.runs || [])byId.set(r.id,{...byId.get(r.id),...r});
-    const sessions=sessionsFromState({runs:[...byId.values()]});return {sessions,note:total!==undefined?'Showing '+sessions.length+' of '+total+' sessions':''};
+    const sessions=sessionsFromState({runs:[...byId.values()]});return {sessions,note:total!==undefined && sessions.length!==total?'Showing '+sessions.length+' of '+total+' sessions':''};
   }
   function connectionsFromState(state) { const health = state.health || {}; return {ready:!!health.ready,label:health.ready ? 'Connections ready' : 'Connections need attention',message:boundText(health.message),items:Object.entries(health.agents || {}).slice(0,50).map(([name,item])=>({name:boundText(name),state:item.state,label:boundText(item.label || item.state || 'Unknown'),status:item.state==='ready'?'✓ Ready':'! Needs attention'}))}; }
   const model = {channelsFromState,sessionsFromState,membersFromState,connectionsFromState,waitingFromState,esc,relTime,timeLabel,projectName,boundText,boundedList,agentLabel,teamFromRun,taskDepths,taskStatus,tasksFromRun,railSessions};

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-01, by Opus (M7 accepted; M8 handoff written; owner approved the M8 rail disclosure change).
+**Last updated:** 2026-10-01, by Codex (M8 Part A verified; Parts B–E pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M8_PHONE_AND_ACCESSIBILITY.md` (ready for implementation) |
+| Handoffs | `docs/handoffs/`. **Current:** `M8_PHONE_AND_ACCESSIBILITY.md` (Part A complete; B–E pending) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -36,7 +36,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M5 Decisions in the room** | ✅ **accepted (Parts A `e6e6ebf` and B `b12e88a`; review 2026-10-01)** | Codex | every room decision uses its existing endpoint with server-authoritative state. Owner authorized only the awaiting-fetch skill Reject endpoint exception. F1 (fast verification reconciliation) is corrected in M6 Part A. The review is in `docs/handoffs/M5_DECISIONS.md` |
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
-| **M8 Phone and accessibility** | 📝 handoff ready | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: Part A closes the scheduled deferrals (Load earlier focus, partial divider counts, live fallback refresh, M6 P1–P4, M7 Q2, M5 O2). Then the small-screen pass (adds tablet and landscape), keyboard and focus, screen readers, tested contrast and motion, and the final matrix. Native phone keyboard → owner device checklist. The owner approved P2, the rail disclosure (see Known issues) |
+| **M8 Phone and accessibility** | Part A complete; B–E pending | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: Part A closes the scheduled deferrals (Load earlier focus, partial divider counts, live fallback refresh, M6 P1–P4, M7 Q2, M5 O2), verified with unchanged Python 423 OK (3 skips), classic 82/82, chat 224/224 and browser 276 + 7. Then the small-screen pass (adds tablet and landscape), keyboard and focus, screen readers, tested contrast and motion, and the final matrix. Native phone keyboard → owner device checklist. The owner approved P2, the rail disclosure (see Known issues) |
 | M9 | not started | | parity and cutover; see architecture §12 |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
@@ -167,32 +167,33 @@ was changed.
 - The M1 review lists optional polish items (401 key handling, autocomplete, `/classic/`, live region, pluralisation,
   tab keys, stream backoff reset). None is required, and they can be folded into later UI milestones.
 - `/api/state` caps runs at 30. M6 unions those entries with loaded thread sessions, so rail paging grows the
-  list using the room cache. The count is “Showing X of N sessions”; no per-session rail fetch is added.
+  list using the room cache. The incomplete-history count is “Showing X of N sessions”; the disclosure is hidden when X = N. No per-session rail fetch is added.
 - **M5.0 accepted (`M5_0_ACTIONABILITY.md`).** Thread actions and `channels.waiting` now use
   the same predicates. Fully paged journals match exactly, including leftover research/skills, stopping sessions,
   missing fingerprints, duplicate packets and proposal history. Exactly the two D7 guards refuse dead research
   decisions and finished-session skill fetches before effects.
 - **Intentionally excluded skill-fetch race (D7 boundary):** a session can finish while a fetch accepted earlier
   is already downloading outside the controller lock. Existing post-fetch behaviour is unchanged; no new guard,
-  cleanup or lifecycle change handles this case in M5.0, M5, M6 or M7.
+  cleanup or lifecycle change handles this case in M5.0 or M5–M8.
 - **M5 F1 corrected in M6 Part A.** The actionable outcome projects recorded `detail.verification {status, created, ended}`, preventing a fast verification from returning to its pre-verification revision. No `decisions.js` change. Successful slash aliases also clear their draft; errors retain it.
 - **M8 rail disclosure approved by the owner (2026-10-01).**
   - The behaviour:
     - "Showing X of N sessions" is hidden when every session is listed (X = N).
     - It is shown with correct counts while history is incomplete (X < N).
   - The scope is the rail presentation only. Pagination, session-count semantics and the data source are unchanged.
-  - The only test change allowed is the assertion in `M3.1 rail counts use the M6 session union and current count
-    wording` that pins the old wording (M8 handoff §3.2, P2).
+  - The named M3.1 assertion now hides the complete-history disclosure. The owner additionally authorized only
+    the M6 paging test and browser `railPaged` complete-history assertions to change from “Showing 35 of 35
+    sessions” to no disclosure. All their other count and paging assertions remain intact; the M8 report records this.
 - **M5 endpoint clarification resolved by the owner:** only Reject on an actionable awaiting-fetch skill may
   use `/api/skills/decide` when its accepted action names `/api/skills/fetch`. Every other decision uses the
   action's named endpoint and choices. No backend or action-shape change was required.
-- Still deferred from the accepted M3/M3.1 reviews: focus after Load earlier, partial-session divider counts,
-  and live refresh of the single-session fallback view. **Scheduled for M8** (phone and accessibility), together with
-  **native phone-keyboard verification** of the composer (M4 verified `visualViewport` emulation only).
+- M8 Part A corrects Load earlier focus/anchor/busy state, partial-session divider counts and single-session live
+  fallback refresh (one known-stub GET per existing cycle while non-terminal). Native phone-keyboard verification
+  remains deferred to the owner device checklist; M4 verified `visualViewport` emulation only.
 
 ## Next step
 
-1. Codex implements `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`, Parts A–E in order, each verified before the next.
+1. Codex implements M8 Parts B–E in order, each verified and committed before the next; Part A is complete.
 2. Opus reviews M8.
 3. M9 (parity and cutover) remains unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge
    into `main`.

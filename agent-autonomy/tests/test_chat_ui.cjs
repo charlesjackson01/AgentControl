@@ -315,7 +315,7 @@ test('M3.1 rail counts use the M6 session union and current count wording',async
   assert(h.document.querySelector('#session-list a[href="#/s/run_test"]'));
   const note=h.document.querySelector('#session-list + .muted');assert(note);assert.equal(note.textContent,'Showing 31 of 47 sessions');
   state.runs=state.runs.slice(0,2);await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of 47 sessions');
-  for(const total of [3,2]){channels.channels[0].sessions=total;await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of '+total+' sessions');}
+  for(const total of [3,2]){channels.channels[0].sessions=total;await h.core.refresh();if(total===3)assert.equal(!!h.document.querySelector('#session-list + .muted'),false);else assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of '+total+' sessions');}
 });
 function revalidationPages(kind='skill') {
   const s=fx.threadSession(), action=fx.threadMessage('stale',kind,'Needs a decision',{state:'proposed'}, {action:{endpoint:'/api/skills/decide'}}), overlap=fx.threadMessage('overlap','decision','Latest recorded update');
@@ -1003,7 +1003,7 @@ test('M6 Connections check is disabled by decisions and composer writes and show
   const h=await membersHarness('connections',{post:async()=>({error:'Check refused by server'})});h.document.querySelector('#rail-check-connections').click();await tick();await tick();assert.equal(h.document.querySelector('#connections-error').textContent,'Check refused by server');assert.equal(posts(h)[0].url,'/api/check');
 });
 test('M6 rail paging grows the shared room cache and reports exact X/N counts',async()=>{
-  const f=fx.membersHistory(),h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url.includes('before=members%3Aolder')?f.older:undefined});assert.equal(h.document.querySelectorAll('#session-list a').length,30);assert.equal(h.document.querySelector('#session-count').textContent,'Showing 30 of 35 sessions');h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(h.document.querySelectorAll('#session-list a').length,35);assert.equal(h.document.querySelector('#session-count').textContent,'Showing 35 of 35 sessions');assert.equal(h.core.getState().thread.sessions['history:34'].id,'history:34');assert.equal(h.document.querySelector('#load-earlier-sessions'),null);assert.equal(posts(h).length,0);
+  const f=fx.membersHistory(),h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url.includes('before=members%3Aolder')?f.older:undefined});assert.equal(h.document.querySelectorAll('#session-list a').length,30);assert.equal(h.document.querySelector('#session-count').textContent,'Showing 30 of 35 sessions');h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(h.document.querySelectorAll('#session-list a').length,35);assert.equal(!!h.document.querySelector('#session-count'),false);assert.equal(h.core.getState().thread.sessions['history:34'].id,'history:34');assert.equal(h.document.querySelector('#load-earlier-sessions'),null);assert.equal(posts(h).length,0);
 });
 test('M6 keyed updates preserve every More link and focus the latest recorded task turn',async()=>{
   const h=await membersHarness();await openMembers(h);const before=[...h.document.querySelectorAll('#more a')].map(a=>a.textContent);assert.equal(before.length,6);
@@ -1194,6 +1194,58 @@ test('M7 D full Workspace material stays out of room/panel/rail and no independe
 
 test('M7 live read that began before opening Workspace still updates its active snapshot',async()=>{
   const h=await turnsHarness();h.options.hold=true;const reading=h.core.refresh();await tick();const count=h.calls.length;await openWorkspace(h);assert.equal(h.calls.length,count);h.f.state.steps[1].transcript.push({type:'text',text:'Recorded output from the in-flight live read'});h.options.hold=false;h.options.release();await reading;assert(wsText(h).includes('Recorded output from the in-flight live read'));assert.equal(posts(h).length,0);
+});
+
+// M8 Part A: deferred corrections, with unchanged data and decision semantics.
+test('M8 A Load earlier focuses the first new message, preserves its old anchor and exposes paging busy state',async()=>{
+  const s=fx.threadSession('run_test',{status:'coding',ended:null}),live={session:s.id,phase:'code',status:s.status};
+  const initial=fx.threadResponse([fx.threadMessage('current','goal','Current goal')],[s],'earlier',live),older=fx.threadResponse([fx.threadMessage('start','session_start',s.title),fx.threadMessage('first:new','goal','Earlier goal')],[s],'earlier:more',live);
+  const h=await harness(fixture(),{thread:initial}),geo=geometry(h);geo.setScroll(100);
+  const anchor=h.timeline.querySelector('[data-message="current"]');anchor.getBoundingClientRect=()=>{const top=(h.timeline.querySelector('[data-message="first:new"]')?300:100)-h.timeline.scrollTop;return {top,bottom:top+100};};
+  let release;h.options.respond=async url=>{if(url.includes('before=earlier'))return new Promise(resolve=>release=()=>resolve(older));};
+  const button=h.document.querySelector('#load-earlier');button.focus();button.click();await tick();
+  assert.equal(h.document.querySelector('#load-earlier').getAttribute('aria-busy'),'true');assert.equal(h.document.querySelector('#load-earlier'),button);
+  release();await tick();await tick();const first=h.timeline.querySelector('[data-message="first:new"]');assert.equal(h.document.activeElement,first);assert.equal(first.tabIndex,-1);assert.equal(anchor.getBoundingClientRect().top,0);assert.equal(h.document.querySelector('#load-earlier').getAttribute('aria-busy'),'false');
+  const unchanged=[...h.core.getState().thread.ids];h.options.respond=url=>{if(url.includes('before='))throw Error('Older read failed');};button.focus();button.click();await tick();await tick();assert.equal(h.document.activeElement,button);assert.deepEqual([...h.core.getState().thread.ids],unchanged);assert.equal(button.getAttribute('aria-busy'),'false');assert.equal(posts(h).length,0);
+});
+test('M8 A partial dividers avoid undercounts and complete dividers pluralise exact counts',async()=>{
+  const pages=fx.threadLong(),h=await harness(richCompleted(),{thread:pages[0]});assert.equal(h.timeline.querySelector('[data-collapse="long-1"]').textContent,'Show messages');
+  h.options.respond=url=>url.includes('before=long%3A250')?pages[1]:url.includes('before=long%3A50')?pages[2]:undefined;await h.core.loadOlder();assert.equal(h.timeline.querySelector('[data-collapse="long-0"]').textContent,'Show messages');await h.core.loadOlder();assert.equal(h.timeline.querySelector('[data-collapse="long-0"]').textContent,'Show 149 messages');
+  const old=fx.threadSession('old'),current=fx.threadSession(),page=fx.threadResponse([fx.threadMessage('run:old','session_start',old.title,{}, {session:old.id}),fx.threadMessage('one:old','goal','One old message',{}, {session:old.id}),fx.threadMessage('run:current','session_start',current.title)],[old,current]);
+  const one=await harness(richCompleted(),{thread:page});assert.equal(one.timeline.querySelector('[data-collapse="old"]').textContent,'Show 1 message');
+  page.before='older';page.messages.unshift(fx.threadMessage('older:old','note','Older boundary',{}, {session:old.id}));await one.core.refresh();assert.equal(one.timeline.querySelector('[data-collapse="old"]').textContent,'Show messages');
+});
+test('M8 A live fallback uses one known-stub read per existing refresh and stops at recorded terminal status',async()=>{
+  const s=fx.threadSession('far',{status:'coding',ended:null}),first=fx.threadMessage('far:first','goal','First fallback goal',{}, {session:s.id}),page=fx.threadResponse([first],[s],null,{session:s.id,phase:'code',status:s.status});
+  const h=await harness(fixture());h.options.respond=url=>new URL(url,'http://test').searchParams.get('session')==='far'?page:undefined;h.core.focus('far',false);await h.core.locateSession('far');
+  const count=h.calls.length,timerDelays=[...h.timers.values()].map(t=>t.delay).sort();page.messages=[{id:first.id,rev:first.rev,same:true},fx.threadMessage('far:next','note','Recorded fallback update',{}, {session:s.id})];await h.core.refresh();
+  const calls=h.calls.slice(count);assert.equal(calls.length,4);const read=calls.filter(c=>c.url.startsWith('/api/thread?session=far'));assert.equal(read.length,1);assert.equal(new URL(read[0].url,'http://test').searchParams.get('known'),first.id+':'+first.rev);assert.equal(h.core.getState().single.messages[first.id].text,first.text);assert(h.timeline.textContent.includes('Recorded fallback update'));assert.deepEqual([...h.timers.values()].map(t=>t.delay).sort(),timerDelays);
+  s.status='completed';page.live={session:null};await h.core.refresh();assert.equal(h.core.getState().single.sessions.far.status,'completed');const terminalCount=h.calls.length;await h.core.refresh();assert.equal(h.calls.length-terminalCount,3);assert.equal(posts(h).length,0);
+});
+test('M8 A recorded outcome verification uses ended time or running created time without changing decisions',async()=>{
+  const h=await decisionHarness('outcome'),message=h.f.thread.messages.find(m=>m.kind==='outcome');
+  for(const status of ['passed','failed','running']){message.detail.verification={status,created:'2026-09-29T12:00:00Z',ended:status==='running'?null:'2026-09-30T12:00:00Z'};message.rev++;await h.core.refresh();const at=message.detail.verification.ended || message.detail.verification.created;assert(decisionCard(h,message.id).textContent.includes('Verification (on demand) · '+status+' · '+h.window.AC.model.relTime(at)));}
+  assert.equal(posts(h).length,0);
+});
+test('M8 A rail disclosure is accurate while incomplete and disappears only at completion including paging',async()=>{
+  const f=fx.membersHistory();f.channels.channels[0].sessions=40;f.older.before='members:last';const sessions=Array.from({length:5},(_,i)=>fx.threadSession('history:'+(35+i),{created:new Date(Date.UTC(2026,8,30,0,0,-35-i)).toISOString()})),last=fx.threadResponse(sessions.map(s=>fx.threadMessage('run:'+s.id,'session_start',s.title,{}, {session:s.id,at:s.created})),sessions);
+  const h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url.includes('before=members%3Aolder')?f.older:url.includes('before=members%3Alast')?last:undefined});assert.equal(h.document.querySelector('#session-count').textContent,'Showing 30 of 40 sessions');
+  h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(h.document.querySelector('#session-count').textContent,'Showing 35 of 40 sessions');assert.equal(h.document.querySelectorAll('#session-list a').length,35);assert.equal(h.core.getState().thread.before,'members:last');
+  h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(!!h.document.querySelector('#session-count'),false);assert.equal(h.document.querySelectorAll('#session-list a').length,40);assert.equal(h.core.getState().channels.channels[0].sessions,40);assert.equal(h.core.getState().thread.before,null);assert.equal(posts(h).length,0);
+});
+test('M8 A member state time is explicitly labelled since and absent when unrecorded',async()=>{
+  const h=await membersHarness(),member=h.f.state.agents.find(a=>a.name==='coder-1');await openMembers(h);assert.equal(h.document.querySelector('#live-members [data-member="coder-1"] small').textContent,'since '+h.window.AC.model.relTime(member.since));delete member.since;await h.core.refresh();assert(!h.document.querySelector('#live-members [data-member="coder-1"]').textContent.includes('since '));
+});
+test('M8 A task button ids and plain ids reserve the same box for alignment',()=>{
+  const {document}=parseHTML(require(path.join(root,'members.js')).panelHTML(fx.membersFixture('teamRunning').state)),sheet=require('cssom').parse(fs.readFileSync(path.join(root,'chat.css'),'utf8'));
+  function box(node){const style={};for(const rule of sheet.cssRules)if(rule.selectorText && !rule.selectorText.includes(':') && node.matches(rule.selectorText))for(let i=0;i<rule.style.length;i++){const key=rule.style[i];style[key]=rule.style.getPropertyValue(key);}return {padding:style.padding || '0px',width:style['min-width'] || 'auto',display:style.display || 'inline',basis:style['flex-basis'] || 'auto'};}
+  const plain=document.querySelector('.task-title .task-id'),button=document.querySelector('.task-title button');assert(plain && button);assert.deepEqual(box(plain),box(button));assert.notEqual(box(plain).width,'auto');
+});
+test('M8 A Workspace sticky context follows the recorded selected agent presence and turn',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);const context=()=>h.document.querySelector('#workspace > header .workspace-context');assert.equal(context().textContent,'coder-1 (API) · ● Working · Turn 2');assert.equal(context().getAttribute('title'),context().textContent);h.document.querySelector('[data-ws-turn="ws-first"]').click();assert.equal(context().textContent,'coder-1 (API) · ● Working · Turn 1');h.f.state.agents.find(a=>a.name==='coder-1').state='paused';await h.core.refresh();assert.equal(context().textContent,'coder-1 (API) · Ⅱ Paused · Turn 1');assert.equal(posts(h).length,0);
+});
+test('M8 A permission key facts use only the first pattern after command and file and never an empty paragraph',async()=>{
+  const h=await decisionHarness('low'),message=h.f.thread.messages.find(m=>m.action);message.detail.review={};message.detail.patterns=['https://example.test/<img src=x onerror=alert(1)>','Second pattern'];message.rev++;await h.core.refresh();const card=decisionCard(h,message.id);assert.equal(card.querySelector('.decision-facts').textContent,message.detail.patterns[0]);assert.equal(card.querySelectorAll('.decision-facts img,.decision-facts a').length,0);message.detail.patterns=[];message.rev++;await h.core.refresh();assert.equal(!!decisionCard(h,message.id).querySelector('.decision-facts'),false);assert.equal(posts(h).length,0);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

@@ -352,3 +352,52 @@ Deferrals that stay recorded:
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
 
 ---
+
+## Implementation report — Part A (2026-10-01)
+
+The standalone commit containing this section completes the nine §3 corrections; Parts B–E remain pending.
+Load earlier retains its control during paging, exposes `aria-busy`, focuses the first new message with
+`preventScroll`, preserves the old visible anchor and retains button focus after a failed read. Partial dividers
+use “Show messages”; complete dividers show the exact pluralised count. A visible non-terminal single-session
+fallback adds one known-stub GET to the existing refresh and merges recorded messages with `mergeNewest`.
+Existing bounded decision recovery remains intact; no timer or other request pattern changes.
+
+The outcome uses recorded verification times; member times say “since”; task ids reserve the same box whether
+linked or plain. The sticky Workspace line uses recorded agent presence and selected turn. O2 adds only the
+first-pattern fallback and removes empty key-fact paragraphs. The fully loaded rail hides its disclosure without
+changing counts, union, data sources or pagination.
+
+Verification:
+
+- `NODE_PATH=/tmp/ac-tests/node_modules node …/test_chat_ui.cjs`: **224/224**. All **nine new Part A tests fail
+  on 9b97b51**; that archived baseline reports **213/224**, with the other two failures being the explicitly
+  superseded M3.1 and M6 complete-history assertions. Logs: `/tmp/ac-m8a-before-9b97b51.log`,
+  `/tmp/ac-m8a-chat.log`. An initial baseline attempt exhausted memory while formatting a failed DOM-object
+  assertion; equivalent boolean absence checks bounded its diagnostics and the completed baseline proves all
+  nine failures. This changes no protected expectation.
+- `python3 -m unittest discover -s agent-autonomy/tests`: **423, OK (skipped=3)**, **265.611 s**, unchanged suite.
+  Skips: `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+  `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`,
+  `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`. OpenCode tests ran. Log: `/tmp/ac-m8a-python.log`.
+- Classic `test_ui.cjs`: **82/82**; chat `chat_screenshots.cjs /tmp/chat-shots-m8a`: **276 combinations + seven
+  regressions**, **441 screenshots**. Existing privacy, delivery, waiting invariants and footer budgets pass.
+- Inspected `teamRunning-desktop-light-tasks.png`, `railPaged-desktop-dark.png`,
+  `workspaceLive-phone-light-error.png`, `workspaceLive-compact-desktop-dark.png` in `/tmp/chat-shots-m8a`.
+  Linked/plain ids align, the complete rail disclosure is absent, and the Workspace sticky line reflects the
+  recorded agent/status/turn. The narrow desktop room remains for Part B’s explicitly scheduled layout correction.
+
+Earlier assertion changes, limited to the owner’s authorization:
+
+1. `M3.1 rail counts use the M6 session union and current count wording`: the old X=N always-shown assertion
+   becomes disclosure absence. Its incomplete count assertions remain; the new M8 regression checks initial
+   **30/40**, paged **35/40** and complete **40/40** with no disclosure, unchanged total and null final cursor.
+2. `M6 rail paging grows the shared room cache and reports exact X/N counts`: only its post-paging
+   “Showing 35 of 35 sessions” assertion becomes disclosure absence. Initial 30/35, all 35 rows, the shared
+   cached session, removal of the paging control and zero POSTs remain asserted.
+3. Browser `railPaged`: only “Showing 35 of 35 sessions” becomes absence; scrolling targets the last rail row
+   because the removed disclosure cannot be scrolled. Paging and 35-row assertions are preserved. The owner
+   explicitly approved these two additional P2 exceptions in the session.
+
+Only §8 client/test/documentation files changed. No Python, classic, backend, decision-state or engine changes.
+The D7 in-flight skill-fetch race, interactive surfaces and persistent bots remain out of scope. Native device
+keyboard checks remain unverified; Parts B–E and the final real-server/accessibility matrix still need completion.

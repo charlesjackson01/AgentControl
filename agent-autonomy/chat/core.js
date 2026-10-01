@@ -70,9 +70,10 @@
       if (generation !== epoch) return;
       threadCache = t.mergeNewest(threadCache || cached,page,revalidate && uncovered() || t.findGap(cached,page) || !page.messages.length || cached.project && cached.project !== page.project);channels = channelResult;
       readIds=page.messages.map(m=>m.id);
-      // A decision from M3's single-session fallback needs an authoritative read too.
-      // This is targeted recovery, not an unbounded history/live-refresh loop.
-      if(single && requested===focused && targets.some(id=>single.messages[id])) {
+      // The visible live fallback shares this refresh; terminal history only needs
+      // the existing targeted decision recovery, with no additional polling.
+      const fallbackLive=single?.sessions[requested] && !['completed','blocked','failed','stopped','limit_reached'].includes(single.sessions[requested].status);
+      if(single && requested===focused && (fallbackLive || targets.some(id=>single.messages[id]))) {
         const knownSingle=single.ids.slice(-2000).map(id=>id+':'+single.messages[id].rev).join(',');
         let detailPage=await api('/api/thread?session='+encodeURIComponent(requested)+'&limit=200&known='+encodeURIComponent(knownSingle));
         while(targets.some(id=>!detailPage.messages.some(m=>m.id===id)) && detailPage.before && walks<10) {

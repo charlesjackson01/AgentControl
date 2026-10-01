@@ -89,7 +89,7 @@
         }
         case 'skill':type='quiet';summary=d.expired ? '<p class="plain">'+[...[message.text,d.agent].filter(Boolean).map(e),'<span class="muted">Not decided before the session ended</span>'].join(' · ')+'</p>' : text([message.text,d.agent,d.state].filter(Boolean).join(' · '));detail=fields(d,['source','reasons'])+risk(d.risk);break;
         case 'alert':type='warning';summary=text('! '+message.text);detail=fields(d,['title','reason','summary','status','error']);break;
-        case 'outcome':type='outcome';summary=text(statusText(d.status))+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '')+(d.verification?.status ? text('Verification (on demand) · '+(Object.hasOwn(verificationStatus,d.verification.status) ? verificationStatus[d.verification.status] : d.verification.status),'muted') : '');detail=text(message.text);break;
+        case 'outcome':type='outcome';summary=text(statusText(d.status))+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '')+(d.verification?.status ? text('Verification (on demand) · '+(Object.hasOwn(verificationStatus,d.verification.status) ? verificationStatus[d.verification.status] : d.verification.status)+((d.verification.status==='running'?d.verification.created:d.verification.ended) ? ' · '+m.relTime(d.verification.status==='running'?d.verification.created:d.verification.ended) : ''),'muted') : '');detail=text(message.text);break;
         case 'system':type='quiet';summary=text(publicText(message));break;
         default:type='quiet';summary=text(message.text);
       }
@@ -114,7 +114,9 @@
       if(cache.ids.length && next.ids[0]!==cache.ids[0] && next.ids.includes(cache.ids[0]) && next.windowIds.join(',')===cache.windowIds.join(','))follow=false;
       cache=next;mode=viewMode;
       $('thread-mode').innerHTML=mode ? '<strong>Viewing one session</strong> <a href="#/">Back to room</a>' : '';
-      $('thread-history').innerHTML=cache.before ? '<button id="load-earlier" '+(paging ? 'disabled' : '')+'>Load earlier</button>' : "<p class=\"muted\">Beginning of this project's history</p>";
+      const history=$('thread-history');
+      if(cache.before){if(!history.querySelector('#load-earlier'))history.innerHTML='<button id="load-earlier">Load earlier</button>';const button=history.querySelector('#load-earlier');button.disabled=paging;button.setAttribute('aria-busy',String(paging));}
+      else history.innerHTML="<p class=\"muted\">Beginning of this project's history</p>";
       const messages=cache.ids.map(id=>cache.messages[id]), newest=messages.at(-1)?.session, desired=[];let day='', session='';
       function keyed(id,key,html,messageIds=[]) {
         let record=nodes.get(id);
@@ -132,7 +134,9 @@
         const message=group.items[0], s=cache.sessions[message.session];if(!s)continue;
         const collapsed=sessionCollapsed(s,newest,cache.live,expanded);
         if(session!==s.id){session=s.id;const parent=cache.sessions[s.parent], count=messages.filter(msg=>msg.session===s.id && msg.kind!=='session_start').length;
-          const node=keyed('divider:'+s.id,JSON.stringify(s)+collapsed+count+(parent?.title || ''),`<div class="session-divider" data-session="${e(s.id)}"><a class="session-title" href="#/s/${e(encodeURIComponent(s.id))}">${e(s.title)}</a><span>${status(s.status)} · ${time(s.created)} ${s.mode === 'team' ? '<span class="badge">team</span>' : ''}</span>${s.parent ? `<small>continues <a href="#/s/${e(encodeURIComponent(s.parent))}">${e(parent?.title || s.parent)}</a></small>` : ''}<button data-collapse="${e(s.id)}" aria-expanded="${!collapsed}">${collapsed ? 'Show '+count+' messages' : 'Collapse session'}</button></div>`);node.hidden=false;
+          const partial=!messages.some(msg=>msg.session===s.id && msg.kind==='session_start') || cache.before && messages[0]?.session===s.id && messages[0]?.kind!=='session_start';
+          const label=partial?'Show messages':'Show '+count+' message'+(count===1?'':'s');
+          const node=keyed('divider:'+s.id,JSON.stringify(s)+collapsed+label+(parent?.title || ''),`<div class="session-divider" data-session="${e(s.id)}"><a class="session-title" href="#/s/${e(encodeURIComponent(s.id))}">${e(s.title)}</a><span>${status(s.status)} · ${time(s.created)} ${s.mode === 'team' ? '<span class="badge">team</span>' : ''}</span>${s.parent ? `<small>continues <a href="#/s/${e(encodeURIComponent(s.parent))}">${e(parent?.title || s.parent)}</a></small>` : ''}<button data-collapse="${e(s.id)}" aria-expanded="${!collapsed}">${collapsed ? label : 'Collapse session'}</button></div>`);node.hidden=false;
         }
         const localDay=new Date(message.at).toLocaleDateString();if(localDay!==day){day=localDay;const node=keyed('day:'+message.id,localDay,`<p class="day-separator">${e(localDay)}</p>`);node.hidden=collapsed;}
         if(message.kind==='session_start')continue;
@@ -157,7 +161,13 @@
     }
     host.addEventListener('click',async event=>{
       const toggle=event.target.closest('[data-collapse]');if(toggle){const id=toggle.dataset.collapse;expanded[id]=toggle.getAttribute('aria-expanded')==='true';render(cache,mode);}
-      if(event.target.closest('#load-earlier')){paging=true;render(cache,mode);try{await controls.older();}catch{}finally{paging=false;render(cache,mode);}}
+      const button=event.target.closest('#load-earlier');
+      if(button && !paging){const previous=new Set(cache.ids);paging=true;render(cache,mode);try{await controls.older();}catch{}finally{
+        paging=false;render(cache,mode);
+        const first=cache.ids.find(id=>!previous.has(id) && cache.messages[id].kind!=='session_start'),record=first && [...nodes.values()].find(record=>record.messageIds?.includes(first));
+        if(record){if(record.node.hidden){expanded[cache.messages[first].session]=false;render(cache,mode);}record.node.focus?.({preventScroll:true});}
+        else $('load-earlier')?.focus?.({preventScroll:true});
+      }}
     });
     function reveal(id) {
       const node=nodes.get('divider:'+id)?.node || nodes.get(id)?.node;if(!node)return false;

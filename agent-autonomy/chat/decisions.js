@@ -129,7 +129,7 @@
   }
   function keyFacts(message) {
     const d=message.detail || {};
-    if(message.kind==='request' && d.kind==='permission')return '<p class="plain decision-facts">'+plain(d.review?.command || d.review?.file || '')+'</p>';
+    if(message.kind==='request' && d.kind==='permission'){const fact=d.review?.command || d.review?.file || d.patterns?.[0];return fact?'<p class="plain decision-facts">'+plain(fact)+'</p>':'';}
     if(message.kind==='proposal' && supportedProposal(d.proposal))return '<p>'+escape(proposalAgents(d.proposal).length+' agents · '+d.proposal.tasks.length+' tasks')+'</p><dl class="proposal-agents">'+proposalAgents(d.proposal).map(a=>'<dt>'+plain(a.name || a.id)+' · '+plain(a.role)+'</dt><dd class="plain">'+[a.responsibility || a.task,a.model,Array.isArray(a.skills)?a.skills.join(', '):a.skills].filter(Boolean).map(plain).join(' · ')+'</dd>').join('')+'</dl>';
     if(message.kind==='research')return '<p class="plain">'+plain(d.request?.question)+'</p>';
     if(message.kind==='skill')return '<p class="muted">'+(typeof d.risk==='string' ? 'Risk · '+plain(d.risk) : [d.risk?.level,d.risk?.label].filter(Boolean).map(plain).join(' · '))+'</p><p class="plain muted">'+plain(typeof d.source==='string' ? d.source : d.source?.url || d.source?.folder)+'</p>';

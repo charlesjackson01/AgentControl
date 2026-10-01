@@ -153,7 +153,9 @@
       const oldTerminal=host.querySelector('#workspace-terminal'),scroll=oldTerminal?.scrollTop || 0;
       const open=new Map([...host.querySelectorAll('details[id]')].map(node=>[node.id,{open:node.open,status:node.dataset.outputStatus}]));
       const step=member?selectedTurn(turnsFor(data.steps,route.agent),pinned):null,turn=step?.id || '';
-      root.AC.members.patch(host,`<header><a class="room-link" data-back-room href="${e(back)}">Back to room</a><span class="muted">Workspace</span></header><div id="workspace-content">${body}</div>`);
+      const presence=member && data?.run?.id===route.run && belongsToProject(data,snapshot)?m.membersFromState(data).find(a=>a.name===route.agent):null;
+      const context=presence?presence.displayName+' · '+presence.symbol+' '+presence.stateLabel+(step?' · Turn '+step.number:''):'Workspace';
+      root.AC.members.patch(host,`<header><a class="room-link" data-back-room href="${e(back)}">Back to room</a><span class="muted workspace-context" title="${e(context)}">${e(context)}</span></header><div id="workspace-content">${body}</div>`);
       host.querySelectorAll('details[id]').forEach(node=>{const previous=open.get(node.id);if(previous && (previous.open || previous.status===node.dataset.outputStatus || !['running','error'].includes(node.dataset.outputStatus)))node.open=previous.open;});
       const terminal=host.querySelector('#workspace-terminal');
       if(terminal){terminal.scrollTop=!pinned && follow?terminal.scrollHeight:shown===turn?scroll:0;shown=turn;}

@@ -227,8 +227,8 @@ select { font: inherit; color: var(--text); background: var(--bg); border: var(-
 .task-group h3 { color: var(--muted); font-size: var(--type-xs); font-weight: 500; }
 .task-title { display: flex; align-items: baseline; gap: var(--s2); min-width: 0; }
 .task-title strong { min-width: 0; overflow-wrap: anywhere; font-size: var(--type-sm); }
-.task-title button, .task-id { font-family: var(--mono); font-size: var(--type-xs); flex-shrink: 0; }
-.task-title button { background: var(--transparent); border: 0; color: var(--accent); padding: var(--s1); }
+.task-title button, .task-id { font-family: var(--mono); font-size: var(--type-xs); flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; min-width: var(--target); min-height: var(--target); flex-basis: var(--target); padding: 0; }
+.task-title button { background: var(--transparent); border: 0; color: var(--accent); }
 .room-link { display: inline-flex; align-items: center; min-height: var(--target); font-size: var(--type-sm); }
 #connections ul { list-style: none; padding: 0; margin: var(--s2) 0; }
 #connections li { padding: var(--s2) 0; overflow-wrap: anywhere; }
@@ -242,6 +242,8 @@ select { font: inherit; color: var(--text); background: var(--bg); border: var(-
 /* M7: read-only Workspace, beside the room on desktop and a sheet on phones. */
 #workspace { min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg); border-left: var(--line) solid var(--border); padding: var(--s4); overflow-wrap: anywhere; }
 #workspace > header { position: sticky; top: calc(var(--s4) * -1); background: var(--bg); margin: calc(var(--s4) * -1) calc(var(--s4) * -1) var(--s3); padding: var(--s4); z-index: 1; }
+.workspace-context { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#workspace > header [data-back-room] { flex-shrink: 0; }
 #workspace-content { min-width: 0; }
 #workspace pre { white-space: pre; overflow-wrap: normal; overflow-x: auto; max-width: 100%; }
 #workspace summary { min-height: var(--target); }

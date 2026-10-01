@@ -314,3 +314,86 @@ The diff is limited to `conversation.py`, the expired-label lines in `chat/threa
 `CURRENT_STATE.md` and this handoff. No endpoint or schema change, classic UI change, or other lifecycle/engine
 change is included. `git diff --stat`, `git diff --name-only` and `git diff --check` were inspected before committing.
 Delivery is only to `feature/chat-first-redesign`; no PR or merge into `main`. Opus review precedes the M5 handoff.
+
+
+## Architecture and correctness review — 2026-10-01 (Opus)
+
+**Verdict: M5.0 accepted (Parts A and B).** Nothing is blocking, and nothing needs fixing before M5. The full M5 handoff
+is `docs/handoffs/M5_DECISIONS.md`.
+
+Reviewed: `a60589d..f1115cd` (the single commit `f1115cd`), with the suites re-run and the new tests run against the pre-M5.0 code.
+
+### Re-run in the review environment (at `f1115cd`)
+
+| Suite | Result |
+|---|---|
+| Python | **408 tests, OK (skipped=6)**: the same six environment gates; 3 in Codex's environment |
+| Classic DOM | **82/82** |
+| Chat DOM | **79/79** |
+| Browser | **108 combinations + 4 regressions** |
+
+No change to `journal.py`, `app.py`, the classic UI, or the M4 composer and shell.
+
+### Part A: verified
+
+- **One shared definition.** `accepts_decisions`, `research_actionable`, `skill_actionable`, `proposal_actionable`,
+  `pending_packets` and `request_actionable` drive both the thread's actions and `channels.waiting`.
+  - Active sessions: research, skills, the newest proposal, and fingerprinted pending requests are actionable.
+  - Stopping or finished sessions: none of them are.
+  - Outcomes are unchanged (the M2.1 tests pass unmodified).
+- **Expired items.** Research and skills that are waiting by recorded state, in a session that no longer accepts
+  decisions, carry `detail.expired: true` and `action: null`. Recorded `status` and `state` are **not rewritten**:
+  this is a projection, and no engine history is touched.
+  - In `thread.js` they show the muted "Not decided before the session ended", with no waiting line and no classic decision link.
+- **The invariant.** The paged walk over five journal shapes (all active; finished leftovers next to an active session;
+  stopping; no active session; proposal only), in two project views, plus the HTTP walk, asserts that **`waiting` equals
+  the number of actionable non-outcome messages**.
+- **Read-only.** Reads leave every row and the audit chain unchanged (tested).
+
+### Part B (D7): verified exactly within its boundary
+
+- **Six added lines in `engine.py`, nothing else:**
+  - `decide_research` reads the run inside the existing lock, after the ownership check and **before** the fingerprint
+    check or any update, audit entry or event.
+  - `fetch_capability` reads the run **before** the state check and `_fetch_into` (the network fetch).
+  - Fetch is refused only for **finished** sessions, so stopping sessions are still allowed, as D7 specifies.
+- **Nothing else changed:** no `app.py` change (`ValueError` already maps to 400), and no change to `decide_capability`,
+  `review`, `_team_decision`, `_end`, `_retire_skills`, locking, the schema or the API.
+- **The in-flight fetch race was not attempted:** no post-fetch completion check, cleanup or lifecycle hook.
+- **Tests:** an HTTP 400 for every terminal status and for stopping (research, including stale fingerprints), and for
+  every terminal status (skill fetch), with full table, row and audit snapshots and spies showing no update, event, audit
+  entry or download. A boundary test shows fetch still works in active and stopping sessions.
+
+### The regression tests reproduce the pre-M5.0 mismatch
+
+Run against the pre-M5.0 `conversation.py`, `engine.py` and `thread.js` (`a60589d`), the new Python tests give
+**58 subtest failures and 2 errors**:
+- every finished and stopping research and skill case
+- the stopping proposal
+- the invariant walk for the leftovers, stopping, no-active and proposal journals (only the all-active case passes, as it should)
+- every D7 refusal case
+
+Both new DOM tests fail too (77/79).
+
+### Findings
+
+**Blocking:** none. **Should fix before M5:** none.
+
+**Optional notes:**
+1. A pending request **without a fingerprint** (only from journals written before fingerprints existed) is no longer
+   counted in `waiting`, because it is not actionable in the thread (`refresh_needed`). That is consistent with the
+   invariant, and the thread still shows it with "Request needs refresh in classic".
+2. The UI is deliberately stricter than the engine: skill fetch is hidden while a session is stopping (the projection
+   rule), but D7 refuses it only once the session is finished. That is consistent with M5.0's definition.
+
+### Foundation for interactive decisions
+
+Together, M4, M4.1 and M5.0 give M5 a safe base:
+- writes go only through existing endpoints, with server-authoritative appearance and single-flight
+- one definition of actionable, with the `waiting` invariant tested by full paging
+- dead decisions are refused by the engine (D7)
+- stale markers are revalidated from server data (M3.1)
+- the receipt states are truthful (M3.1)
+
+One gap remains, and it is assigned to M5 Part A: the thread does not yet carry the material a person must inspect before
+deciding. That means the tool input or diff for permissions, a fetched skill's contents, and the branch summary for Apply. Classic shows all of these.

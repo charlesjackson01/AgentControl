@@ -417,3 +417,9 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   Items waiting by state in a session that no longer accepts decisions carry `detail.expired`. D7 adds exactly
   the two pre-effect refusals in `decide_research` and `fetch_capability`; the in-flight skill-fetch race remains
   outside its scope. M5 decision controls have not begun.
+- 2026-10-01 (M5.0 review):
+  - M5.0 accepted (Parts A and B; D7 within its boundary).
+  - The full M5 handoff is `docs/handoffs/M5_DECISIONS.md`. Its Part A extends the read-only projection with bounded
+    review material for actionable items (the same fields classic shows) and `review_truncated`. Truncated items can be
+    refused, but not approved, in the room.
+  - Decision state is shown only from recorded server state. The only browser state is a transient per-card status, tied to message id and `rev`.

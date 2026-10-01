@@ -449,3 +449,16 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   The owner authorized exactly the awaiting-fetch skill Reject exception from `/api/skills/fetch` to
   `/api/skills/decide`; the accepted read-model action shape is unchanged. D7 is unchanged, and the in-flight
   skill-fetch race remains intentionally out of scope.
+- 2026-10-01 (M5 review):
+  - M5 accepted (Parts A and B). D7 is unchanged, and the skill-Reject endpoint exception is confined to its five
+    conditions.
+  - **Rule clarified:** the card's new-`rev` rule requires every recorded decision to produce a `rev` the room has not
+    seen. The read model must guarantee it. On-demand verification did not (finding F1). M6 Part A adds bounded
+    `detail.verification {status, created, ended}` to the actionable outcome.
+  - The next milestone is **M6, Members and team** (`docs/handoffs/M6_MEMBERS_AND_TEAM.md`).
+    - Its scope is unchanged from §12.
+    - It shows the live roster from `state.agents`, and the proposed roster from `run.team.proposal`, never as live
+      members.
+    - It adds the team-plan states, the task graph, Connections detail and rail sessions (the union of `state.runs`
+      and the loaded thread sessions).
+    - It adds no decision controls: team decisions stay on the room card (§10). It adds no API, schema or engine change.

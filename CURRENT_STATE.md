@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-01, by Codex (M5 complete and verified; awaiting architecture review).
+**Last updated:** 2026-10-01, by Opus (M5 accepted; M6 handoff written).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M5_DECISIONS.md` (complete and verified; awaiting review) |
+| Handoffs | `docs/handoffs/`. **Current:** `M6_MEMBERS_AND_TEAM.md` (ready for implementation; Part A is the M5 carry-over) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -33,8 +33,9 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M4 Composer** | ✅ accepted (with M4.1, review 2026-09-30) | Codex | measured 57 px idle / 105 px with waiting / ≥ 75.3% conversation at 390 × 844; the native keyboard is unverified (M8) |
 | **M4.1 Composer corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: only allowed preferences remembered; title/checks/dirty acknowledgement reset; isolated follow-up overlay; leading-only `@agent`; literal content and empty-room copy corrected |
 | **M5.0 Actionability (M5 prerequisite)** | ✅ **accepted (Parts A and B; review 2026-10-01)** | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: shared action predicates and exact paged-thread waiting count; expired research/skill label; exactly the two D7 guards; in-flight fetch race excluded |
-| **M5 Decisions in the room** | ✅ **implemented and verified; awaiting review** | Codex | Part A committed separately as `e6e6ebf`; bounded review and all documented room decisions, confirmations, delivery recovery and aliases complete. Owner authorized only the awaiting-fetch skill Reject endpoint exception; completion report in `docs/handoffs/M5_DECISIONS.md` |
-| M6–M9 | not started | | see architecture §12 |
+| **M5 Decisions in the room** | ✅ **accepted (Parts A `e6e6ebf` and B `b12e88a`; review 2026-10-01)** | Codex | every room decision uses its existing endpoint with server-authoritative state. Owner authorized only the awaiting-fetch skill Reject endpoint exception. One should-fix (F1: a fast on-demand verification can show "Not recorded yet.") is M6 Part A. The review is in `docs/handoffs/M5_DECISIONS.md` |
+| **M6 Members and team** | 📝 handoff ready | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: Part A = the M5 carry-over (F1 read-model fix, O1 alias draft); then roster, team-plan states, task graph, Connections detail and rail sessions, all from recorded state with no new controls or APIs |
+| M7–M9 | not started | | see architecture §12 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `shell.js`.
 `/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -149,6 +150,11 @@ logs are in the M5 completion report; no protected tests, runtime configuration 
 - **Intentionally excluded skill-fetch race (D7 boundary):** a session can finish while a fetch accepted earlier
   is already downloading outside the controller lock. Existing post-fetch behaviour is unchanged; no new guard,
   cleanup or lifecycle change handles this case in M5.0 or M5.
+- **M5 accepted, with one carry-over (F1).**
+  - The outcome's `rev` returns to its earlier value after an on-demand verification ends, so a fast verifier can
+    leave the card at "Not recorded yet." even though the result was recorded.
+  - The status is never falsely positive, and re-verifying is harmless.
+  - M6 Part A fixes it in the read model with `detail.verification {status, created, ended}`, with no `decisions.js` change.
 - **M5 endpoint clarification resolved by the owner:** only Reject on an actionable awaiting-fetch skill may
   use `/api/skills/decide` when its accepted action names `/api/skills/fetch`. Every other decision uses the
   action's named endpoint and choices. No backend or action-shape change was required.
@@ -158,6 +164,6 @@ logs are in the M5 completion report; no protected tests, runtime configuration 
 
 ## Next step
 
-1. Opus reviews M5 and its separate Part A (`e6e6ebf`) and Part B commits on `feature/chat-first-redesign`.
-2. After acceptance, Opus writes the M6 handoff (members, presence and team).
-3. M6–M9 remain unstarted; all redesign work stays on `feature/chat-first-redesign`, with no merge into `main`.
+1. Codex implements `docs/handoffs/M6_MEMBERS_AND_TEAM.md`, with **Part A (the M5 carry-over) as its own first commit**.
+2. Opus reviews M6.
+3. M7–M9 remain unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge into `main`.

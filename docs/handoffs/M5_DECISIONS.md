@@ -497,3 +497,260 @@ guard, cancellation, cleanup or lifecycle change. D7 remains exactly its two acc
 The final diff is limited to §7's projection/tests (Part A), isolated chat files/tests and the three status/contract
 documents. No API, schema, engine, permission, journal or classic production file changes. Required status,
 stat, name-only and whitespace inspections are performed before each commit. M6–M9 remain unstarted.
+
+## Architecture, correctness, security and UX review — 2026-10-01 (Opus)
+
+**Verdict: M5 accepted (Part A `e6e6ebf` and Part B `b12e88a`).** Nothing is blocking.
+
+- **One finding should be fixed before M6 work starts.** On-demand verification can show "Not recorded yet." after it
+  was recorded (F1 below). The fix is a small read-model change and is **Part A of `docs/handoffs/M6_MEMBERS_AND_TEAM.md`**.
+- Optional polish is listed at the end.
+
+Reviewed: `38dd629..b12e88a`. I reviewed the two commits separately first, then their integration.
+
+### Re-run in the review environment (at `b12e88a`)
+
+| Suite | Result |
+|---|---|
+| Python, full | **420 tests, OK (skipped=6)**, 124 s. These are the same six environment gates as in the M5.0 review (3 in Codex's environment) |
+| `test_conversation` + `test_thread_api` | **67, OK** |
+| Classic DOM | **82/82** |
+| Chat DOM | **139/139** |
+| Browser matrix | **156 combinations + 6 regressions, 220 screenshots**; every phone footer and conversation budget assertion passes |
+
+`git diff 38dd629..b12e88a` is empty for `engine.py`, `app.py`, `journal.py`, `permissions.py` and `capabilities.py`.
+
+- **D7 is unchanged:** exactly the two accepted pre-effect refusals.
+- **The in-flight skill-fetch race is untouched** and stays documented as out of scope.
+- No classic file changed.
+
+### New tests against the code they protect
+
+**Part A tests against the pre-Part A projection.** I ran them with `conversation.py` from `38dd629` and the tests from
+`b12e88a`.
+- All 12 new Part A test methods fail: 30 subtest failures and errors in total.
+- Every pre-existing projection and M5.0 test still passes.
+
+**Part B tests against the Part A chat files.** I ran them with the `e6e6ebf` chat files and a stub `decisions.js`
+(the stub only exists so the harness loads).
+- 61 of 139 fail: 58 of the 60 new M5 tests, plus 3 of the 4 rewritten assertions.
+- The 2 new tests that pass are absence guards: "no controls on historical, expired, decided or unsupported actions"
+  and "in-flight server receipts forbid second decisions". They pass trivially when no controls exist, which is
+  correct for regression guards.
+- All 76 untouched earlier tests pass on both sides.
+
+### The rewritten pre-M5 assertions: genuinely superseded
+
+I checked each rewrite line by line against §8.9.
+
+1. **`no decision controls` → `controls only on actionable messages`.**
+   - The blanket absence check became: exactly one `approve` control, and zero `[data-decision]` outside cards that
+     carry the server's waiting marker.
+   - The waiting, composer and finished-room checks are unchanged.
+2. **M3 classic link.**
+   - The decision-word prohibition became: every control belongs to a message whose server `action` is set, and
+     there is no control outside waiting cards.
+   - The single classic link, the hidden fingerprints and the read-only initial traffic are still asserted.
+   - This test passes on both sides, as expected for a scope check.
+3. **M4 pure helpers.** Only the four "not available here" errors became valid alias parses. The body, privacy and
+   settings assertions are untouched.
+4. **M4 slash suggestions.**
+   - The four suggestions were added.
+   - The old classic-pointer check for deferred commands was removed, because those commands no longer exist.
+   - Absent targets, invalid commands and extra arguments still send nothing and keep the draft.
+
+None of the four is weakened beyond what M5's new behaviour requires. The harness additions are acceptable: loading
+`decisions.js`, reflecting `details.open`, and holding preflight.
+
+### Part A: verified
+
+- **Same evidence as classic.**
+  - `permission_review` follows the precedence of classic `requestText()` and `permissionHTML()` exactly:
+    `input.command || metadata.command`, `filePath`/`path`, `metadata.diff || input.diff`, and
+    `oldString`/`newString`/`content`.
+  - The scope (classic's first fallback, `patterns`) is already in the message text and in `detail.patterns`.
+  - Classic's raw "Full OpenCode request" disclosure is deliberately not reproduced. That follows §3's "only these
+    keys" privacy rule.
+  - Skills carry description, files (≤ 50), size and `SKILL.md`. Proposals keep their 300-character, 8-agent and
+    20-task bounds, now with `review_truncated`. Research is checked against the same bounds its `detail.request` uses.
+  - The outcome workspace gains `branch`, `base_branch`, `shortstat` and an integer `commits`, and only when it is
+    actionable.
+- **Privacy.**
+  - `PRIVATE_FIELDS` (including `output`, `reasoning` and `tool_output`) stays in force.
+  - Review values are explicitly selected strings. A non-string value is dropped and marks the item truncated.
+  - Tests with `PRIVATE` sentinels pass.
+  - My real-server probe confirmed that the recorded `verification (on demand)` event reaches `/api/thread` with
+    `status`, `exit_code`, `argv` and times, and **never `output`**.
+- **Truncated or unsupported evidence never permits approval.**
+  - `review_truncated` is set by the review bounds, and for requests also by any message truncation.
+  - Every approving control is disabled when it is set: Approve once, Answer, Approve team, Allow research, Install
+    and Apply.
+  - So is any control whose required material is missing or not of the supported shape: a non-object review,
+    unsupported questions or proposals, missing research limits, missing skill files or size, or a missing
+    `commits`/`shortstat`/branch.
+  - Refusals stay available.
+- **Scope.** Review material exists only while `action` is set, and disappears after a decision (tested over HTTP).
+  `workspace_status` is still called at most once per request.
+
+### Part B: every decision path
+
+The bodies are built only by `reviewBody`, `controlBody`, `researchBody` and `skillBody`, from `action.fields` plus
+whitelisted inputs. I re-probed the pure helpers.
+
+- **Permissions.**
+  - Approve sends `{…fields, action:'approve'}`. It adds `remember:true` only when `risk.remember_allowed` is set
+    and the box is ticked.
+  - A critical request opens a typed-confirm dialog. The typed text is compared with the server's `confirm_word`
+    using the server's own `strip().lower()` rule, and sent verbatim. Approval is disabled when the server supplies
+    no word.
+  - Deny opens the redirection dialog. `redirect` is omitted when empty and limited to 1–5,000 characters.
+  - The server also returns the previous review for an identical retry (`engine.review`). A resend after network
+    uncertainty is therefore idempotent on the server, not only blocked in the browser.
+- **Questions.**
+  - Radio or checkbox inputs follow `multiple`. The free-text option is offered unless `custom === false`.
+  - The hints mirror `validate_answers`: one list per question, nonempty, no duplicates, ≤ 5,000 characters, and
+    options only when custom answers are not allowed.
+  - Dismiss sends `reject`.
+- **Team.**
+  - `approve_team` and `single_agent` send one click each. That matches classic, and the server refuses decisions
+    on a stale state.
+  - `repropose` requires a 1–2,000-character note. Server 400 messages, the three-proposal limit included, are shown
+    verbatim (DOM test).
+- **Research.** `{run, step, fingerprint, action:'approve', confirm}` always goes through the typed dialog. Decline
+  sends `reject`.
+- **Skills.**
+  - Fetch sends `{id}` to `/api/skills/fetch`.
+  - Install and Reject send `{id, action}` to `/api/skills/decide`.
+  - The "skill changed" 400 shows the server text, and the re-read material requires a fresh review.
+- **Outcome.**
+  - Apply and Discard use Cancel-first dialogs with §4.6's exact wording.
+  - The 400 "Your branch is unchanged…" text is shown verbatim.
+  - Verify sends with no confirmation.
+- **Slash commands.**
+  - `/verify`, `/apply`, `/discard` and `/team approve|single|repropose <text>` find the current actionable item
+    through the **same** `controlsFor`, and open the same dialogs.
+  - A missing target, a choice the server restricts, or a truncated item sends nothing and shows an inline error.
+  - `/team` validates its argument shape before anything else.
+
+**The skill-Reject exception (owner-authorised).** `allowedEndpoint` remaps to `/api/skills/decide` only when every
+one of these holds:
+- the choice is `reject`
+- the message kind is `skill`
+- the state is `awaiting_fetch`
+- the action's endpoint is exactly `/api/skills/fetch`
+- the server's choices, if any, include `reject`
+
+I probed eight boundary cases: approve or fetch on an awaiting skill, reject through the fetch endpoint on a proposed
+skill, choices that exclude reject, a request carrying that endpoint, an unknown endpoint, and no action.
+- None of them is remapped.
+- An unknown endpoint, or no action, yields no endpoint at all.
+- Any other choice fails `requireControl` before a body exists.
+
+The real server (my probe) returned 200 and recorded `rejected`, and the next read showed `action: null`. Codex's
+real-server case also records the `skill rejected` audit. No action metadata or backend validation changed.
+
+### Server authority: verified
+
+- **No local receipts or decrements.** After a 2xx, only the transient `sent` status changes. The waiting marker,
+  `channels.waiting` and the receipt change only through fresh reads. The DOM test holds the thread read to prove it.
+  Nothing renders "Approved" or "Installed" from a click.
+- **Delivery state is distinct from recorded state.**
+  - The transient phases are `sending`, `sent`, `not-recorded`, `checking` and `recovering`.
+  - Server receipts in flight (`dispatching`, `sent`, `uncertain`) remove every control, through `controlsFor` and
+    again in `send`.
+- **Network uncertainty is never shown as success.** A network failure hides the controls with the exact "may or may
+  not have been recorded" text. They return only after a fresh read that includes the card shows it still actionable
+  with no receipt in flight.
+- **Stale and racing decisions.**
+  - A new `rev` resets the card.
+  - A dialog that is open when its item changes or is decided elsewhere closes, with the §5 notices.
+  - A 409 or 400 keeps the controls disabled until a fresh read, and clears only the typed confirmation.
+  - A 401 discards all inputs.
+  - A result arriving during a held POST wins over the later 2xx.
+- **Duplicates.**
+  - One shared write lock (`core.beginWrite`) covers decisions, composer requests, start preparation, Auto preview
+    and slash aliases.
+  - A card leaves `idle` only through a fresh read, so double clicks and repeated Enter send once.
+- **Targeted recovery.**
+  - `refreshNow(id)` revalidates the target even on an older page, within the shared ten-page budget.
+  - In the single-session fallback, a targeted session read covers it.
+  - `readSerial`/`readIds` make "three refresh cycles" mean three completed reads **that include the card**.
+
+### Integration
+
+- `thread.js` hands every rendered message to `decisions.attach`.
+  - It removes duplicate detail from actionable request, proposal and research cards, because the review host shows
+    it.
+  - The rest of the M3 rendering is unchanged.
+- `shell.js` mounts decisions before the timeline, and calls `decisions.update` first in every render.
+- The waiting pointer now prefers the first actionable non-outcome. That matches `channels.waiting`.
+- The M5.0 invariant holds in Codex's paged real-server cases and in the unchanged M5.0 tests: waiting equals the
+  actionable non-outcomes, and the rendered actionable cards equal that number plus zero or one outcome.
+
+### Rendered UI (inspected)
+
+I inspected these renders myself:
+
+| Render | What it shows |
+|---|---|
+| `decisionCritical-desktop-light-review` | Critical review open by default: command, description, diff, pattern, impact; R3 in the warning tone with a text label |
+| `decisionCritical-phone-dark-review` | Full-width 40 px buttons; the waiting marker stays on the card |
+| `decisionResearch-phone-light-review` | Question, why, toolsets and limits; Allow research… and Decline |
+| `decisionInstall-phone-light` | Description, size, files and `SKILL.md`, with risk and source |
+| `decisionApply-phone-dark` | Bottom sheet with Cancel first, exact merge wording, destructive styling |
+| `decisionSent-phone-dark` | Controls hidden; "Sent · waiting for AgentControl to record it"; waiting marker and count unchanged |
+| `decision409-phone-light` | The server's message, controls disabled until the fresh read |
+| `decisionCommandError-phone-light` | The inline error sits above the waiting row without growing the footer |
+| `decisionTeam-desktop-dark` | Agents and tasks inline with three controls |
+
+The phone footer stays at 57 px idle and 105 px with the waiting row, and the conversation takes at least 75.3% of
+the screen. **The M4 budgets have not regressed.**
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before the next milestone**
+
+- **F1 — On-demand verification can be falsely reported as "Not recorded yet."**
+  - **Cause.** The outcome message carries no verification state.
+    - While a verification runs, `verify` leaves the choices, so the `rev` changes.
+    - When the verification ends, the choices, and therefore the `rev`, return to **exactly** their earlier value.
+  - **Effect.** The card's first read can land after a fast verifier has already finished. The card then never sees
+    a new `rev`: it stays "Sent · waiting…", turns to **"Not recorded yet."** after three reads or 15 s, and offers
+    Refresh. Meanwhile the recorded "Verification (on demand) · passed" sits just below it.
+  - **Reproduced.**
+    - Projection: the outcome `rev` before = after (1755582343) and differs only while running.
+    - Real HTTP server: `POST /api/control {run, action:'verify'}` returned 200 with the verifier `true`. 1.5 s later
+      the outcome `rev` was identical (3549141406), and the system messages were "Verify now requested." and
+      "passed".
+  - **Impact.** The status is false in the safe direction: it never claims success. A Refresh then re-enables Verify,
+    which only re-runs a harmless check. It still contradicts §5's purpose, because recorded work is displayed as
+    unrecorded.
+  - **Root cause in the spec.** My §5 rule ("the card changes only on a new `rev`") assumed that every recorded
+    decision produces a `rev` the card has never seen. Verify is the one decision whose recorded effect can return to
+    an earlier `rev`.
+  - **Fix.** The read model must make each verification observable. M6 Part A specifies it: the actionable outcome
+    carries bounded `detail.verification {status, created, ended}`, and the card shows it.
+
+**Optional polish** (fold into M6 if convenient; none is required):
+
+- **O1.** A slash alias that hands off successfully (opens its dialog or sends) leaves `/verify` and the like in the
+  composer.
+  - Once the card returns to idle, pressing Enter again re-sends.
+  - Clear the draft only after a successful hand-off, and keep it on every error. M6 Part A includes this because
+    it touches the same path.
+- **O2.** A permission whose review has none of the seven fields (for example a URL-only tool) shows an empty
+  key-fact line. Fall back to the first pattern, which is classic `requestText()`'s next fallback.
+- **O3.** `publicText()` recognises on-demand verification by its shape (`argv` + `ended` + status). Today only that
+  event carries `argv`, so the check is correct. A future read-model label would be sturdier. No action is needed now.
+
+### Next milestone
+
+M6, Members and team: see `docs/handoffs/M6_MEMBERS_AND_TEAM.md`. I chose it from architecture §12, re-read against
+the change log.
+- Nothing in the log changed M6's scope or dependencies (M1, richer after M3).
+- M7 depends only on M3, but M8 needs both M5 and M7. M6 is next by number.
+- M6 is also the milestone the M3 review assigned the rail's session source to.
+
+Delivery is documentation only, on `feature/chat-first-redesign`. There is no PR and no merge into `main`.

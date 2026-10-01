@@ -128,6 +128,61 @@ class ThreadAPITests(unittest.TestCase):
         self.assertTrue(any(m['kind'] == 'outcome' and m['action'] is not None for m in messages))
         self.assertEqual(self.journal_snapshot(), before_rows)
 
+    def test_permission_review_http_is_bounded_private_and_retires_after_decision(self):
+        p = packet(context={'input': {'command': 'npm test', 'path': 'a.py', 'oldString': 'old',
+            'newString': 'new', 'content': 'x' * 8001, 'output': 'PRIVATE', 'reasoning': 'PRIVATE'}},
+            metadata={'description': 'Run tests', 'diff': '+ new', 'output': 'PRIVATE'})
+        self.save_run(pending=[p])
+        before = self.journal_snapshot()
+        msg = next(m for m in self.get('/api/thread')['messages'] if m['kind'] == 'request')
+        self.assertEqual(msg['detail']['review']['command'], 'npm test')
+        self.assertEqual(msg['detail']['review']['old_text'], 'old')
+        self.assertEqual(msg['detail']['review']['new_text'], 'new')
+        self.assertEqual(msg['detail']['review']['diff'], '+ new')
+        self.assertEqual(msg['detail']['review']['description'], 'Run tests')
+        self.assertEqual(msg['detail']['review']['file'], 'a.py')
+        self.assertEqual(len(msg['detail']['review']['content']), 8000)
+        self.assertTrue(msg['detail']['review_truncated'])
+        self.assertNotIn('PRIVATE', json.dumps(msg))
+        self.assertEqual(self.journal_snapshot(), before)
+        self.store.update('runs', 'single', pending=[])
+        self.store.save_review(receipt(run='single', request=p, state='confirmed'))
+        decided = next(m for m in self.get('/api/thread')['messages'] if m['kind'] == 'request')
+        self.assertNotIn('review', decided['detail'])
+        self.assertNotIn('review_truncated', decided['detail'])
+        self.assertIsNone(decided['action'])
+
+    def test_question_and_skill_review_http(self):
+        self.save_run(pending=[packet(kind='question', questions=[{'header': 'Q', 'question': 'Choose',
+            'multiple': True, 'custom': False, 'options': [{'label': 'A'}]}])])
+        self.store.put_capability({'id': 'docs', 'run': 'single', 'created': run()['created'], 'state': 'proposed',
+            'name': 'Docs', 'description': 'Documentation', 'files': [{'path': 'SKILL.md'}], 'size': 42,
+            'skill_md': '# Docs', 'output': 'PRIVATE'})
+        messages = self.get('/api/thread')['messages']
+        question = next(m for m in messages if m['kind'] == 'request')['detail']['questions'][0]
+        self.assertTrue(question['multiple']);self.assertFalse(question['custom'])
+        skill = next(m for m in messages if m['kind'] == 'skill')
+        self.assertEqual(skill['detail']['review'], {'description': 'Documentation', 'files': ['SKILL.md'],
+                                                    'size': 42, 'skill_md': '# Docs'})
+        self.assertNotIn('PRIVATE', json.dumps(messages))
+        self.store.put_capability({**self.store.capability('docs'), 'state': 'installed'})
+        installed = next(m for m in self.get('/api/thread')['messages'] if m['kind'] == 'skill')
+        self.assertNotIn('review', installed['detail'])
+
+    def test_actionable_outcome_review_http_reads_workspace_once(self):
+        for ident, created in [('old', '2026-09-29'), ('new', '2026-09-30')]:
+            self.save_run(ident, status='completed', created=created, ended=created,
+                workspace={'toplevel': self.project, 'integration': {'branch': 'agent/' + ident}, 'base_branch': 'main'})
+        with patch.object(self.controller, 'workspace_status', return_value={'state': 'open', 'commits': 2,
+                'shortstat': '1 file changed', 'output': 'PRIVATE'}) as workspace:
+            outcomes = [m for m in self.get('/api/thread')['messages'] if m['kind'] == 'outcome']
+            workspace.assert_called_once()
+            self.assertNotIn('PRIVATE', json.dumps(outcomes))
+            self.assertNotIn('branch', outcomes[0]['detail']['workspace'])
+            self.assertEqual(outcomes[1]['detail']['workspace']['branch'], 'agent/new')
+            self.assertEqual(outcomes[1]['detail']['workspace']['base_branch'], 'main')
+            self.assertEqual(outcomes[1]['detail']['workspace']['commits'], 2)
+
     def test_research_refusals_precede_fingerprints_and_all_side_effects(self):
         states = [*({'status': status} for status in sorted(cv.TERMINAL)), {'stop': True}]
         for fields in states:

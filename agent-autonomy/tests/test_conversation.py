@@ -212,6 +212,120 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(proposal[-1]['kind'], 'proposal')
         self.assertEqual(cv.position(r, proposal[-1])[3], 3)
 
+    def test_permission_review_uses_only_classic_input_fields_and_precedence(self):
+        cases = [({'command': 'npm test'}, {'command': 'fallback', 'description': 'Run tests'},
+                  {'command': 'npm test', 'description': 'Run tests'}),
+                 ({}, {'command': 'npm lint'}, {'command': 'npm lint'}),
+                 ({'filePath': 'a.py', 'path': 'other.py', 'oldString': 'old', 'newString': 'new'}, {},
+                  {'file': 'a.py', 'old_text': 'old', 'new_text': 'new'}),
+                 ({'path': 'b.py', 'content': 'hello'}, {}, {'file': 'b.py', 'content': 'hello'}),
+                 ({'diff': 'input diff'}, {'diff': 'metadata diff'}, {'diff': 'metadata diff'})]
+        for inputs, metadata, expected in cases:
+            with self.subTest(expected=expected):
+                p = packet(context={'input': {**inputs, 'output': 'PRIVATE', 'reasoning': 'PRIVATE'}},
+                           metadata={**metadata, 'output': 'PRIVATE', 'error': 'PRIVATE', 'prompt': 'PRIVATE'})
+                before = copy.deepcopy(p)
+                msg = self.find(cv.project_session(run(pending=[p])), 'request')
+                self.assertEqual(msg['detail']['review'], expected)
+                self.assertNotIn('review_truncated', msg['detail'])
+                self.assertNotIn('PRIVATE', json.dumps(msg))
+                self.assertEqual(p, before)
+
+    def test_permission_review_exact_bounds_and_unsupported_material(self):
+        for key, location, source_key, limit in [('command', 'input', 'command', 4000),
+                ('file', 'input', 'path', 4000), ('description', 'metadata', 'description', 4000),
+                ('diff', 'metadata', 'diff', 8000), ('old_text', 'input', 'oldString', 8000),
+                ('new_text', 'input', 'newString', 8000), ('content', 'input', 'content', 8000)]:
+            for extra in (0, 1):
+                with self.subTest(key=key, extra=extra):
+                    data = {source_key: 'x' * (limit + extra)}
+                    p = packet(context={'input': data if location == 'input' else {}},
+                               metadata=data if location == 'metadata' else {})
+                    msg = self.find(cv.project_session(run(pending=[p])), 'request')
+                    self.assertEqual(len(msg['detail']['review'][key]), limit)
+                    self.assertEqual(msg['detail'].get('review_truncated', False), bool(extra))
+        p = packet(context={'input': {'command': {'type': 'reasoning', 'text': 'PRIVATE'}}})
+        msg = self.find(cv.project_session(run(pending=[p])), 'request')
+        self.assertEqual(msg['detail']['review'], {})
+        self.assertTrue(msg['detail']['review_truncated'])
+        self.assertNotIn('PRIVATE', json.dumps(msg))
+
+    def test_permission_review_disappears_after_decision_and_when_not_actionable(self):
+        p = packet(context={'input': {'command': 'npm test'}})
+        original = self.find(cv.project_session(run(pending=[p])), 'request')
+        self.assertIn('review', original['detail'])
+        for r, rec in [(run(), receipt(request=p, state='confirmed')), (run(), receipt(request=p)),
+                       (run(pending=[{**p, 'fingerprint': ''}]), None)]:
+            msg = self.find(cv.project_session(r, reviews=[rec] if rec else []), 'request')
+            self.assertIsNone(msg['action'])
+            self.assertNotIn('review', msg['detail'])
+            self.assertNotIn('review_truncated', msg['detail'])
+
+    def test_question_flags_and_review_truncation_preserve_existing_bounds(self):
+        q = {'header': 'Database', 'question': 'Choose', 'multiple': True, 'custom': False,
+             'options': [{'label': 'SQLite', 'description': 'Local', 'output': 'PRIVATE'}]}
+        msg = self.find(cv.project_session(run(pending=[packet(kind='question', questions=[q])])), 'request')
+        self.assertTrue(msg['detail']['questions'][0]['multiple'])
+        self.assertFalse(msg['detail']['questions'][0]['custom'])
+        self.assertNotIn('PRIVATE', json.dumps(msg))
+        for questions in ([{**q, 'question': 'x' * 4001}], [q] * 11,
+                          [{**q, 'options': [{'label': str(i)} for i in range(11)]}]):
+            msg = self.find(cv.project_session(run(pending=[packet(kind='question', questions=questions)])), 'request')
+            self.assertTrue(msg['detail']['review_truncated'])
+            self.assertLessEqual(len(msg['detail']['questions']), 10)
+            self.assertLessEqual(len(msg['detail']['questions'][0]['options']), 10)
+
+    def test_skill_review_is_only_for_actionable_proposed_items(self):
+        item = {'id': 'docs', 'created': run()['created'], 'name': 'Docs', 'state': 'proposed',
+                'description': 'Public docs', 'files': [{'path': 'SKILL.md', 'size': 12, 'output': 'PRIVATE'}],
+                'size': 12, 'skill_md': '# Docs', 'output': 'PRIVATE', 'reasoning': 'PRIVATE'}
+        msg = self.find(cv.project_session(run(), capabilities=[item]), 'skill')
+        self.assertEqual(msg['detail']['review'], {'description': 'Public docs', 'files': ['SKILL.md'],
+                                                  'size': 12, 'skill_md': '# Docs'})
+        self.assertNotIn('PRIVATE', json.dumps(msg))
+        for fields, state in [({}, 'awaiting_fetch'), ({}, 'installed'), ({}, 'rejected'), ({}, 'failed'),
+                              ({'stop': True}, 'proposed'), ({'status': 'completed'}, 'proposed')]:
+            msg = self.find(cv.project_session(run(**fields), capabilities=[{**item, 'state': state}]), 'skill')
+            self.assertNotIn('review', msg['detail'])
+            self.assertNotIn('review_truncated', msg['detail'])
+
+    def test_skill_and_proposal_review_truncation(self):
+        item = {'id': 'docs', 'created': run()['created'], 'state': 'proposed', 'description': 'x' * 4001,
+                'files': [{'path': 'p' * 4001}] * 51, 'skill_md': 'x' * 8001}
+        msg = self.find(cv.project_session(run(), capabilities=[item]), 'skill')
+        self.assertTrue(msg['detail']['review_truncated'])
+        self.assertEqual(len(msg['detail']['review']['description']), 4000)
+        self.assertEqual(len(msg['detail']['review']['skill_md']), 8000)
+        self.assertEqual(len(msg['detail']['review']['files']), 50)
+        self.assertTrue(all(len(path) == 4000 for path in msg['detail']['review']['files']))
+        for proposal in ({'agents': [{'name': 'coder'}] * 9}, {'tasks': [{'title': 'Task'}] * 21},
+                         {'agents': [{'task': 'x' * 301}]}):
+            msg = self.find(cv.project_session(run(team={'state': 'proposed', 'proposal': proposal}),
+                                               events=[event(1, 'team proposal', 'Plan')]), 'proposal')
+            self.assertTrue(msg['detail']['review_truncated'])
+
+    def test_actionable_research_marks_truncated_review_without_changing_history(self):
+        s = step(agent='researcher-1', status='awaiting_approval',
+                 request={'question': 'x' * 4001, 'toolsets': ['web'], 'fingerprint': 'fp'})
+        msg = self.find(cv.project_session(run(), steps=[s]), 'research')
+        self.assertTrue(msg['detail']['review_truncated'])
+        self.assertEqual(len(msg['detail']['request']['question']), 4000)
+        msg = self.find(cv.project_session(run(status='completed'), steps=[s]), 'research')
+        self.assertNotIn('review_truncated', msg['detail'])
+
+    def test_outcome_review_summary_only_when_actionable_and_bounded(self):
+        r = run(status='completed', workspace={'integration': {'branch': 'agent/work'}, 'base_branch': 'main'})
+        ws = {'state': 'open', 'commits': 2, 'shortstat': '1 file changed', 'output': 'PRIVATE'}
+        msg = self.find(cv.project_session(r, workspace=ws, actionable_outcome=True), 'outcome')
+        self.assertEqual(msg['detail']['workspace'], {'state': 'open', 'branch': 'agent/work', 'base_branch': 'main',
+                                                      'commits': 2, 'shortstat': '1 file changed'})
+        self.assertNotIn('PRIVATE', json.dumps(msg))
+        old = self.find(cv.project_session(r, workspace=ws), 'outcome')
+        self.assertEqual(old['detail']['workspace'], {'state': 'open'})
+        large = self.find(cv.project_session(r, workspace={**ws, 'shortstat': 'x' * 4001}, actionable_outcome=True), 'outcome')
+        self.assertTrue(large['detail']['review_truncated'])
+        self.assertEqual(len(large['detail']['workspace']['shortstat']), 4000)
+
     def test_old_request_needs_refresh_and_alias_ids(self):
         for field in ('id', 'requestID'):
             p = packet();p.pop('request_id');p.pop('fingerprint');p[field] = 'p1'
@@ -389,6 +503,25 @@ class ReaderTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_outcome_review_uses_the_existing_single_workspace_read(self):
+        for ident, created in [('old', '2026-09-29'), ('new', '2026-09-30')]:
+            self.store.put('runs', run(ident, created=created, status='completed', ended=created,
+                workspace={'integration': {'branch': 'agent/' + ident}, 'base_branch': 'main'}))
+        calls = []
+        def workspace(r):
+            calls.append(r['id'])
+            return {'state': 'open', 'commits': 2, 'shortstat': '1 file changed'}
+        self.controller.workspace_status = workspace
+        for fields in ({}, {'limit': 1}, {'session_id': 'new'}, {'session_id': 'old'}):
+            calls.clear()
+            messages = cv.thread(self.controller, **fields)['messages']
+            self.assertLessEqual(len(calls), 1)
+            for msg in messages:
+                if msg['kind'] == 'outcome':
+                    self.assertEqual('branch' in msg['detail']['workspace'], msg['session'] == 'new')
+                    if msg['session'] == 'new':
+                        self.assertEqual(msg['detail']['workspace']['commits'], 2)
 
     def test_expiry_changes_revisions_once_and_revalidates_known_messages(self):
         seed_waiting_session(self.store, 'single')

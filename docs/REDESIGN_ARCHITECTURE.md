@@ -222,6 +222,11 @@ Actionable = the session accepts decisions (not finished, not stopping), except 
 in a session that no longer accepts decisions carry `detail.expired`. Research and skill items retain their
 recorded status/state and show "Not decided before the session ended" in place of the waiting status.
 
+M5 actionable messages carry bounded review material (`detail.review`) and `review_truncated`; truncated items
+can be refused, but not approved, in the room. Review inputs are limited to the M5 handoff's explicit fields,
+and disappear when an item is no longer actionable. Question and proposal bounds remain unchanged; file lists
+have at most 50 paths. The actionable outcome alone gains its bounded branch and change summary.
+
 | Source | `kind` | `actor` | Notes |
 |---|---|---|---|
 | run created | `session_start` | agentcontrol | the session divider; carries title, mode, parent |
@@ -423,3 +428,7 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
     review material for actionable items (the same fields classic shows) and `review_truncated`. Truncated items can be
     refused, but not approved, in the room.
   - Decision state is shown only from recorded server state. The only browser state is a transient per-card status, tied to message id and `rev`.
+- 2026-10-01 (M5 Part A): the read-only projection adds the handoff's bounded permission and proposed-skill review
+  inputs, actionable outcome branch summary, and `review_truncated`. Historical messages and the accepted M5.0
+  actionability predicates are unchanged. Part B must refuse room approvals when review material is truncated
+  or unsupported, preserving the classic fallback and safe refusal paths.

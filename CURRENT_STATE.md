@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-01, by Opus (M5.0 review: accepted; full M5 handoff written).
+**Last updated:** 2026-10-01, by Codex (M5 Part A verified; Part B pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Next:** `M5_DECISIONS.md` (ready; Part A read model, then Part B UI) |
+| Handoffs | `docs/handoffs/`. **Current:** `M5_DECISIONS.md` (Part A verified; Part B UI next) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -33,7 +33,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M4 Composer** | ✅ accepted (with M4.1, review 2026-09-30) | Codex | measured 57 px idle / 105 px with waiting / ≥ 75.3% conversation at 390 × 844; the native keyboard is unverified (M8) |
 | **M4.1 Composer corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: only allowed preferences remembered; title/checks/dirty acknowledgement reset; isolated follow-up overlay; leading-only `@agent`; literal content and empty-room copy corrected |
 | **M5.0 Actionability (M5 prerequisite)** | ✅ **accepted (Parts A and B; review 2026-10-01)** | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: shared action predicates and exact paged-thread waiting count; expired research/skill label; exactly the two D7 guards; in-flight fetch race excluded |
-| **M5 Decisions in the room** | ⏭ **ready to start** | Codex | `docs/handoffs/M5_DECISIONS.md`: bounded review material in `/api/thread` (Part A); in-room decisions for requests, questions, team plans, research, skills and outcomes through the existing endpoints, server-authoritative, with no optimistic state (Part B) |
+| **M5 Decisions in the room** | 🚧 **Part A verified; Part B pending** | Codex | `docs/handoffs/M5_DECISIONS.md`: actionable permission/skill review inputs, truncation flags and outcome branch summary implemented; UI has not started. Endpoint conflict for awaiting-fetch skill Reject awaits owner clarification |
 | M6–M9 | not started | | see architecture §12 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `composer.js`, `shell.js`.
@@ -48,17 +48,20 @@ Only a valid leading `@agent` routes a note; later, unknown, package and decorat
 M5.0 removes research, skill and proposal actions from finished/stopping sessions, derives `detail.expired` for
 leftover waiting research/skills, and counts waiting from the same item predicates. Requests and M2.1 outcomes
 retain their existing rules. The two D7 refusals precede effects; skill fetches in stopping sessions stay allowed.
-Backend read-model tests: `tests/test_conversation.py` (40) and `tests/test_thread_api.py` (15); journal tests (7) include v6-to-v7 preservation and index query plans.
+M5 Part A adds only bounded, explicitly selected review inputs on actionable permissions and proposed skills,
+plus the actionable outcome's branch/change summary. Unsupported or truncated review material sets
+`review_truncated`; historical messages, privacy filters, action predicates and existing bounds are preserved.
+Backend read-model tests: `tests/test_conversation.py` (49) and `tests/test_thread_api.py` (18); journal tests (7) include v6-to-v7 preservation and index query plans.
 
-## Tests (at `f1115cd`; re-verified in the Opus review environment 2026-10-01)
+## Tests (M5 Part A, based on `38dd629`; verified 2026-10-01)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests -v` | **408 tests, OK (skipped=6)** here (all six gates below); 3 in Codex's environment, where the OpenCode tests ran |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests -v` | **420 tests, OK (skipped=3)**; OpenCode tests ran |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
 | Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **79/79 passed**, including expired labels and disclosure-preserving server expiry |
-| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m50-resumed` | **108 combinations + 4 regressions passed**, 158 temporary screenshots; phone footer budgets, waiting alignment, overflow and page-error checks passed |
-| M5.0 projection + HTTP | From `agent-autonomy/tests`: `python3 -m unittest -v test_conversation test_thread_api` | **55 tests, OK**; includes 10 new regressions, complete paging invariant, all terminal statuses and D7 refusals without side effects |
+| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m5a` | **108 combinations + 4 regressions passed**, 158 temporary screenshots; phone footer budgets, waiting alignment, overflow and page-error checks passed |
+| Projection + HTTP | From `agent-autonomy/tests`: `python3 -m unittest -v test_conversation test_thread_api` | **67 tests, OK**; 12 new Part A regressions; all existing projection and M5.0 invariant/guard tests unchanged |
 
 DOM test dependencies (test-only, installed outside the repo):
 `npm install --prefix /tmp/ac-tests --no-save linkedom cssom playwright-core`.
@@ -86,6 +89,9 @@ The three skipped tests were `ContainerRunE2E.test_agent_works_in_a_locked_down_
 The M3.1 real `app.py` HTTP test journal passed history, live SSE update, three older pages to the beginning,
 classic decision links and zero frontend writes (673 cached records). M4 preserves the room's read model,
 ordering, paging, disclosure state, receipt labels and bounded stale-action revalidation.
+Part A's first full Python run overlapped browser/HTTP verification and hit five unchanged workflow timeouts;
+all five passed in an isolated rerun, and the subsequent sequential full suite passed. Names and evidence are
+recorded in the M5 Part A completion report. No protected test or engine code was changed.
 
 ## The app today (classic UI)
 
@@ -125,20 +131,23 @@ ordering, paging, disclosure state, receipt labels and bounded stale-action reva
 - `/api/state` caps runs at 30. The rail's session list still inherits that in M3; the timeline itself pages the full history through `/api/thread`.
   Reviewed and acceptable: older sessions stay reachable through paging, deep links and "continues" links. M3.1 now shows a
   "Showing 30 of N sessions · older sessions are in the room history" note using the actual counts; M6 replaces the rail's data source.
-- **M5.0 completed (`M5_0_ACTIONABILITY.md`), awaiting review.** Thread actions and `channels.waiting` now use
+- **M5.0 accepted (`M5_0_ACTIONABILITY.md`).** Thread actions and `channels.waiting` now use
   the same predicates. Fully paged journals match exactly, including leftover research/skills, stopping sessions,
   missing fingerprints, duplicate packets and proposal history. Exactly the two D7 guards refuse dead research
   decisions and finished-session skill fetches before effects.
 - **Intentionally excluded skill-fetch race (D7 boundary):** a session can finish while a fetch accepted earlier
   is already downloading outside the controller lock. Existing post-fetch behaviour is unchanged; no new guard,
   cleanup or lifecycle change handles this case in M5.0.
+- **M5 endpoint conflict, clarification requested:** §2.2 permits only a message's `action.endpoint`, but §4.5
+  requires awaiting-fetch skill Reject to use `/api/skills/decide` while its action names `/api/skills/fetch`.
+  Part A does not change that accepted action shape. No exception has been assumed.
 - Still deferred from the accepted M3/M3.1 reviews: focus after Load earlier, partial-session divider counts,
   and live refresh of the single-session fallback view. **Scheduled for M8** (phone and accessibility), together with
   **native phone-keyboard verification** of the composer (M4 verified `visualViewport` emulation only).
 
 ## Next step
 
-1. Codex executes **`docs/handoffs/M5_DECISIONS.md`**: Part A (the read model: bounded review material and
-   `review_truncated`) as its own commit, then Part B (the decision controls).
+1. Commit the verified M5 Part A read model separately, then implement Part B. Resolve the documented
+   awaiting-fetch skill Reject endpoint conflict before implementing that control.
 2. Opus reviews M5, then writes the M6 handoff (members, presence and team).
 3. M6–M9 remain unstarted; all redesign work stays on `feature/chat-first-redesign`, with no merge into `main`.

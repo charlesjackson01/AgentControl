@@ -293,3 +293,50 @@ permission, `FakeManager`) and a git project fixture. Record:
 2. Update `CURRENT_STATE.md`. Push to `feature/chat-first-redesign`. No PR and no merge unless the owner asks.
 
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
+
+---
+
+## M5 Part A completion report — Codex, 2026-10-01
+
+Part A was implemented on the clean, freshly pulled `38dd629` branch. No Part B UI changes were made before
+this separate commit. The read-only projection is the only production server file changed.
+
+- Permission review copies only the documented classic input fields, retaining command/input and diff/metadata
+  precedence. Structured or unsupported values are omitted and require classic re-review.
+- Proposed, actionable skills expose description, at most 50 file paths, size and `SKILL.md`; other states do not
+  acquire review material. Question `multiple` and `custom` remain intact.
+- Strings retain the 4,000/8,000 bounds; existing question and proposal bounds are not expanded. Relevant
+  truncation is flagged on actionable items. Output, errors and private reasoning are not copied.
+- Only the actionable outcome gains branch, base branch, commits and shortstat, using the existing single
+  workspace-status read. Historical messages, outcome choices and all accepted M5.0 predicates are unchanged.
+- Twelve new projection/HTTP regressions cover those fields, privacy, bounds, input immutability, retirement of
+  review material and workspace read counts. Every pre-existing Python test remains unmodified.
+
+Verification, all run afresh:
+
+| Check | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests -v` | 420 tests, OK, 3 environment skips; sequential final run, 255.049 s |
+| From `agent-autonomy/tests`: `python3 -m unittest -v test_conversation test_thread_api` | 67 tests, OK, including the unchanged complete paging invariant and D7 side-effect guards |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | 82/82 |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | 79/79, unchanged |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m5a` | 108 combinations + 4 regressions; 158 screenshots, budgets/overflow/waiting alignment passed |
+
+Skipped: `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`, and
+`test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`. The OpenCode trio ran and passed.
+
+The first full run overlapped browser/HTTP checks and hit the protected workflow tests' fixed five-second waits:
+`test_stale_denial_cannot_add_a_redirection`, `test_step_limit_is_enforced`,
+`test_step_records_transcript_and_planning_context`, `test_stop_aborts_only_managed_session`, and
+`test_three_failed_steps_stop_even_if_model_calls_them_new_tasks`. All five passed in an isolated rerun
+(3.524 s), then the full sequential run passed. No protected tests or engine code were adjusted.
+
+Open clarification for Part B: §2.2 permits POST only to `action.endpoint`, but §4.5 requires Reject for an
+awaiting-fetch skill to POST `/api/skills/decide` although its accepted action names `/api/skills/fetch`.
+The owner has been asked whether to authorize that single documented exception; no exception or alternate
+action metadata has been implemented. This does not affect Part A.
+
+The accepted D7 boundary is preserved. A skill fetch accepted before its session finishes may already be
+downloading outside the controller lock; this in-flight race remains intentionally excluded from M5.
+Part B verification, rendered screenshot inspection and fake-backed real-server decisions remain to be done.

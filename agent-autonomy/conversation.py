@@ -200,6 +200,68 @@ def agent_for_session(run, session_id):
     return None
 
 
+def review_strings(values, bounds):
+    """Only public, explicitly selected string inputs can be reviewed in the room."""
+    result = {}
+    for key, value in values.items():
+        if not isinstance(value, str):
+            bounds.truncated = True  # Unsupported material needs classic re-review.
+            continue
+        result[key] = bounds.text(value, 8000 if key in ('diff', 'content', 'old_text', 'new_text', 'skill_md') else 4000)
+    return result
+
+
+def permission_review(packet, bounds):
+    context = packet.get('context') or {}
+    inputs = (context.get('input') or {}) if isinstance(context, dict) else {}
+    metadata = packet.get('metadata') or {}
+    if not isinstance(context, dict) or not isinstance(inputs, dict) or not isinstance(metadata, dict):
+        bounds.truncated = True
+    inputs = inputs if isinstance(inputs, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    values = {}
+    # Copied from classic requestText()/permissionHTML(): command/input and diff/metadata precedence.
+    for name, candidates in (
+        ('command', ((inputs, 'command'), (metadata, 'command'))),
+        ('file', ((inputs, 'filePath'), (inputs, 'path'))),
+        ('description', ((metadata, 'description'),)),
+        ('diff', ((metadata, 'diff'), (inputs, 'diff'))),
+        ('old_text', ((inputs, 'oldString'),)), ('new_text', ((inputs, 'newString'),)),
+        ('content', ((inputs, 'content'),)),
+    ):
+        for source, key in candidates:
+            if key in source:
+                values[name] = source[key]
+                if source[key]:
+                    break
+    return review_strings(values, bounds)
+
+
+def skill_review(item, bounds):
+    review = review_strings({key: item[key] for key in ('description', 'skill_md') if key in item}, bounds)
+    if 'size' in item:
+        if isinstance(item['size'], (int, float)) and not isinstance(item['size'], bool):
+            review['size'] = item['size']
+        else:
+            bounds.truncated = True
+    if 'files' in item:
+        files = item['files']
+        if not isinstance(files, list):
+            bounds.truncated = True
+            files = []
+        if len(files) > 50:
+            bounds.truncated = True
+        paths = []
+        for entry in files[:50]:
+            path = entry.get('path') if isinstance(entry, dict) else entry
+            if isinstance(path, str):
+                paths.append(bounds.text(path))
+            else:
+                bounds.truncated = True
+        review['files'] = paths
+    return review
+
+
 def request_message(run, packet, receipt, at, pending):
     b = Bounds()
     ident = packet.get('request_id') or packet.get('id') or packet.get('requestID') or ''
@@ -220,6 +282,13 @@ def request_message(run, packet, receipt, at, pending):
             action = {'endpoint': '/api/review', 'fields': {'run': run['id'], 'kind': kind, 'request_id': ident, 'fingerprint': packet['fingerprint']}}
         else:
             detail['refresh_needed'] = True
+    if action is not None:
+        review_bounds = Bounds()
+        if kind == 'permission':
+            detail['review'] = permission_review(packet, review_bounds)
+        if review_bounds.truncated or b.truncated:
+            detail['review_truncated'] = True
+        b.truncated = b.truncated or review_bounds.truncated
     return message(run, f'req:{kind}:{ident}', at, packet.get('agent') or agent_for_session(run, packet.get('sessionID')) or 'coder-1', 'request', text, detail, action=action, bounds=b)
 
 
@@ -299,9 +368,13 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
         team = run.get('team') or {}
         if kind == 'proposal' and proposal_actionable(run, event['id'], newest_proposal):
             proposal = team.get('proposal') or {}
-            detail['proposal'] = {'agents': b.value(proposal.get('agents', []), limit=300, count=8),
-                                  'tasks': b.value(proposal.get('tasks', []), limit=300, count=20)}
-            detail['warnings'] = b.value(team.get('warnings', []), limit=300, count=20)
+            review_bounds = Bounds()
+            detail['proposal'] = {'agents': review_bounds.value(proposal.get('agents', []), limit=300, count=8),
+                                  'tasks': review_bounds.value(proposal.get('tasks', []), limit=300, count=20)}
+            detail['warnings'] = review_bounds.value(team.get('warnings', []), limit=300, count=20)
+            if review_bounds.truncated:
+                detail['review_truncated'] = True
+                b.truncated = True
             action = {'endpoint': '/api/control', 'fields': {'run': run['id']}, 'choices': ['approve_team', 'single_agent', 'repropose']}
         messages.append(message(run, 'ev:' + str(event['id']), event['created'], actor, kind, text, detail,
                                 {'event': event['id']}, action, b))
@@ -350,6 +423,10 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
             if research_actionable(run, step):
                 action = {'endpoint': '/api/research/decide', 'fields': {'run': run['id'], 'step': step['id'], 'fingerprint': request.get('fingerprint', '')},
                           'choices': ['approve', 'reject'], 'confirm_required': True}
+                review_bounds = Bounds()
+                review_bounds.fields(request, ('question', 'why', 'toolsets', 'max_turns', 'seconds'))
+                if review_bounds.truncated:
+                    detail['review_truncated'] = True
         messages.append(message(run, 'turn:' + step['id'], step.get('created'), actor, kind, step.get('title', ''), detail,
                                 {'step': step['id'], 'agent': actor}, action, b))
     receipts = {(r['kind'], r['request_id']): r for r in reviews}
@@ -395,6 +472,11 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
             action = {'endpoint': '/api/skills/fetch', 'fields': {'id': item['id']}}
         elif skill_actionable(run, item) and item.get('state') == 'proposed':
             action = {'endpoint': '/api/skills/decide', 'fields': {'id': item['id']}, 'choices': ['approve', 'reject']}
+            review_bounds = Bounds()
+            detail['review'] = skill_review(item, review_bounds)
+            if review_bounds.truncated or b.truncated:
+                detail['review_truncated'] = True
+                b.truncated = True
         messages.append(message(run, 'cap:' + item['id'], item.get('created'), 'agentcontrol', 'skill', item.get('name', ''), detail, action=action, bounds=b))
     if terminal:
         b = Bounds()
@@ -412,6 +494,20 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
             if run.get('verifier') and (run.get('manual_verification') or {}).get('status') != 'running':
                 choices.append('verify')
         action = {'endpoint': '/api/control', 'fields': {'run': run['id']}, 'choices': choices} if choices else None
+        if action is not None and ws:
+            review_bounds = Bounds()
+            integration = ws.get('integration') or {}
+            values = {key: source[key] for key, source in (('branch', integration), ('base_branch', ws),
+                       ('shortstat', workspace or {})) if key in source}
+            detail['workspace'].update(review_strings(values, review_bounds))
+            if workspace is not None and 'commits' in workspace:
+                if isinstance(workspace['commits'], int) and not isinstance(workspace['commits'], bool):
+                    detail['workspace']['commits'] = workspace['commits']
+                else:
+                    review_bounds.truncated = True
+            if review_bounds.truncated:
+                detail['review_truncated'] = True
+                b.truncated = True
         messages.append(message(run, 'out:' + run['id'], run.get('ended'), 'agentcontrol', 'outcome', run.get('summary', ''), detail, action=action, bounds=b))
     return sorted(messages, key=lambda m: position(run, m))
 

@@ -567,3 +567,195 @@ The required status/stat/name/whitespace inspections cover only §9's permitted 
   focus/accessibility follow-ups remain deferred. Chromium checks include emulated viewport shrinkage and phone sizes.
 - The three environment-gated Python skips are named in Part A above; OpenCode tests run in this environment.
 - There is no M7 work, PR or merge into `main`. Push is only to `feature/chat-first-redesign`.
+
+## Architecture, correctness, integration and UX review — 2026-10-01 (Opus)
+
+**Verdict: M6 accepted (Part A `813fd9f` and the remaining M6 `7134ada`).** Nothing is blocking.
+
+- **One small client-only finding should be fixed before M7 work starts** (S1). It is **Part A of
+  `docs/handoffs/M7_WORKSPACES.md`**.
+- Optional polish is listed at the end.
+
+Reviewed: `af4b9ef..7134ada`. I reviewed Part A and the rest of M6 separately, then their integration.
+
+### Re-run in the review environment (at `7134ada`)
+
+| Suite | Result |
+|---|---|
+| Python, full | **423 tests, OK (skipped=6)**, 138 s. These are the same six environment gates as in the earlier reviews (3 in Codex's environment) |
+| Classic DOM | **82/82** |
+| Chat DOM | **167/167** |
+| Browser matrix | **210 combinations + 6 regressions, 290 screenshots**; every footer, overflow and target assertion passes |
+
+`git diff af4b9ef..7134ada` is empty for `engine.py`, `app.py`, `journal.py`, `agents.py`, `planner.py`,
+`permissions.py`, `capabilities.py`, `decisions.js` and the classic files.
+- D7 is unchanged.
+- The in-flight skill-fetch race and native phone-keyboard testing remain deferred, as recorded.
+
+**New tests against the code they protect:**
+
+| Tests | Run against | Result |
+|---|---|---|
+| Part A Python (3) | `conversation.py` from accepted M5 `b12e88a` | all 3 fail |
+| Part A DOM tests | the `b12e88a` chat files | fail, together with the O1 line and the M6 tests |
+| M6 tests | the Part A chat files (`813fd9f`), with a no-op `members.js` stub | **142/167 pass**. The 25 failures are 24 of the 25 new M6 tests plus the owner-authorised M3.1 rail rewrite. The one that passes is the privacy absence guard, as expected. This matches Codex's report exactly |
+
+### Part A: verification acknowledgement (verified)
+
+- **Read model.** `conversation.py` gains exactly two lines.
+  - The actionable outcome carries `detail.verification` with only `status`, `created` and `ended`, taken from the
+    recorded `run.manual_verification`.
+  - `output`, `argv` and `exit_code` are never copied (tested).
+- **Real-server probe** (the same one that reproduced F1). On the review harness, `POST /api/control {run,
+  action:'verify'}` with the verifier `true`, then a read 1.5 s later:
+  - the outcome `rev` changed, **3549141406 → 3293334193**
+  - `verification` was `{status:'passed', created, ended}`
+  - the recorded system message was present
+
+  So the M5 card's existing new-`rev` rule now reconciles. Codex's browser probe also shows the card idle, with no
+  "Not recorded yet." after three further reads.
+- **Delivery semantics unchanged.** `decisions.js` is untouched.
+  - "Sent", "Not recorded yet." with Refresh, the network "may or may not" state, 409/400/401 handling, receipts in
+    flight and the shared lock all behave as accepted in M5.
+  - The new outcome line shows **recorded** status only. It never replaces or implies delivery status, so a
+    verification that was not recorded can never look successful.
+- **Edge case accepted.** When an outcome's only choice is `verify` (the work already applied or discarded), the
+  outcome has no action while the verification runs, so the field and the "running" line are absent until it ends.
+  The `rev` still changes at both transitions, so reconciliation is correct.
+- **O1.**
+  - A successful alias hand-off clears the draft and `acx-draft`. Every error path keeps them (tested).
+  - The one rewritten line in the M5 alias test asserts the empty draft and keeps its single-POST check.
+
+### Rest of M6: verified against the handoff
+
+- **Live members come only from recorded state.**
+  - Both the rail and the panel pass the server's explicit `agents` array. An empty or missing roster renders no
+    member; the old pure-helper default applies only to an absent snapshot and is never used by the UI.
+  - Real-server evidence: AgentControl records Hermes and coder-1 when it creates the team run. coder-2 appeared as a
+    live member **only after** AgentControl recorded its join, following the M5 room Approve team.
+- **Proposed agents are distinct from live ones.**
+  - Proposed agents render only under "Proposed team · not running yet", in a separate list with no presence. They
+    never appear in the rail or the live list (DOM and real-server tests).
+  - Repropose (`proposing`) and Run as one agent (`single`) remove the proposed list (helper probe).
+  - Finished sessions use the expired wording — but see S1 for stopping sessions and the expired roster.
+- **Classic wording.** `teamFromRun` reproduces classic `renderTeam()` and `autoNote()` wording state by state:
+  `proposing`, `proposed`, `unusable` (with recorded problems), `single`, `approved`/`running` ("Team · k of n tasks
+  done") and `review`.
+- **Task graph.**
+  - Depths match classic `taskDepths()`. I probed a cycle, a missing dependency and a chain; all are finite and
+    identical to classic.
+  - Depths are computed over the full recorded graph before the 50-row display limit.
+  - Statuses have symbols and labels. Attempts and failure or block reasons are shown.
+- **Task links.** A task's button targets `turn:<last recorded step id>`, the projection's actual message id. Codex's
+  real-server phone run focused the exact turn after closing the sheet.
+  - All room links (proposal, member waiting item, task turn) page existing history within one shared ten-read budget,
+    then fall back to the session deep link. **They never POST.**
+- **Connections.**
+  - Each service shows its symbol, label and the server's own text, plus `health.message`.
+  - The only POST is `/api/check {}`, under `beginWrite('connections')`. The real server returned 202, made one fake
+    health call, and displayed only the re-read health. No activity is invented.
+- **Rail sessions.**
+  - The rail is the union, by id, of `state.runs` (which wins for live status) and the loaded thread sessions, newest
+    first, with the X/N note.
+  - "Load earlier sessions" uses the room's own `loadOlder()`.
+  - My helper probe confirmed dedupe, live precedence and order. Identity and links stay id-based, and keyed patching
+    preserves focus and scroll.
+- **The selected-session read.**
+  - It is one memory-only, single-flight GET per selection, with a generation guard. It refetches only when the
+    session's status changes, is discarded on 401, and Retry is a GET.
+  - The Session tab now also takes the full run from this read, so historical sessions keep their full goal, mode and
+    verifier.
+- **The core.js change.** The live `/api/state` read now follows the **active** session, instead of whichever session
+  is focused.
+  - This is what stops historical sessions being polled, and it is reviewed and accepted.
+  - The server's default for an empty `run` is the project's newest run.
+  - A transition (a new session starting, a project switch) can show the previous session's live state for one
+    refresh cycle, until the next read. It heals itself, and it is read-only.
+  - M4's finished-focused `/check` and `/title` tests and every M5 test pass unchanged.
+- **Privacy.** `members.js` and `model.js` read only `agents` (task title and stats counts), `run.team`, `health` and
+  session summaries. The three step sentinels (transcript, result, prompt) never reach the DOM.
+- **Not a second decision surface.** The panel has no `[data-decision]`, and no POST other than `/api/check`. Team
+  approval and repropose remain only on the M5 room card (DOM and real-server tests).
+- **Earlier assertions.** Exactly two were changed:
+  - the O1 line, authorised by the handoff
+  - the M3.1 rail-count test, under the owner's explicit "Allow only this M3.1 rail-test exception". This resolves a
+    real conflict between §6.3 and §8 of the handoff. The replacement asserts the union, the actual count and the
+    wording.
+
+### Integration: verified
+
+- **M3:** ordering, keyed rendering and paging are unchanged. The rail and room links share the existing paging and
+  budget.
+- **M4 and M4.1:**
+  - The composer is unchanged apart from O1. User content stays literal. Allowed preferences and the draft rules are
+    untouched.
+  - **Footer:** 57 px idle and 105 px with the waiting row, and the conversation takes at least 70.1% of the screen
+    with the session header. The M4 limits are 72 px, 120 px and 65%.
+- **M5.0 and M5:**
+  - The projection's actionability and the waiting count are unchanged. The real paged invariant held: 1 waiting,
+    1 actionable, 1 card, then 0/0/0 after approval.
+  - Decision controls and receipts are untouched. **D7 is unchanged.**
+
+### Rendered UI (inspected)
+
+I inspected these renders myself:
+
+| Render | What it shows |
+|---|---|
+| `teamProposed-phone-light` | The Team sheet: live Hermes only, then "Proposed team · not running yet" with coder-1 (API) and coder-2 (Tests), responsibilities, warning, "Proposal 2", "Decide in the room" |
+| `teamRunning-desktop-light-tasks` | Live roster in the rail; vertical groups ("Can start now", "After step 1", "After step 2") with ✓ Done, ● Running, ✕ Failed · 2 tries plus reason, and ! Blocked plus reason |
+| `teamRunning-phone-dark-tasks` | The same graph on a phone, with no horizontal scroll |
+| `teamFinished-desktop-light` | Every member ✓ Finished, with activity counts |
+| `connections-phone-light` | Per-service ✓ Ready and ! Needs attention with the server text, and Check connections |
+| `railPaged-desktop-dark` | 35 sessions after paging, "Showing 35 of 35 sessions" |
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before M7**
+
+- **S1 — The team plan ignores "stopping", and an expired plan's roster is unlabelled.**
+  - **Cause.** `teamFromRun` decides `pending` and `expired` from terminal status only. M5.0's definition of a session
+    that accepts decisions is **not terminal and not `run.stop`**.
+  - **Stopping session.** While a session is stopping with a `proposed` plan, the panel still says "Proposed team ·
+    not running yet", offers "Decide in the room", and the rail shows "Team plan pending". The room card correctly has
+    no controls, because the server will not accept the decision. (Helper probe: `{status:'awaiting_approval',
+    stop:true}` → `pending:true`.)
+  - **Stopped or finished session.** `panelHTML` still renders the never-approved roster, but **without any
+    "proposed" label**, directly under "Not decided before the session ended". Rendered text: "Team plan · Not decided
+    before the session ended · coder-1 (API) Build API · coder-2 (T) Tests · Proposal 1". An agent that never existed
+    (coder-2) can therefore read as a team member.
+  - **Impact.** No wrong POST and no data change. But it is exactly the proposed-versus-running distinction this
+    milestone exists to keep. The fix is small and client-only, and is specified in M7 Part A.
+
+**Optional polish**
+
+- **P1.** The outcome's verification line has no time. While a new Verify is uncertain on the network, an older
+  "passed" could be read as the new result. Append the recorded relative time ("· passed · 2 min ago").
+- **P2.** The rail note shows "Showing 1 of 1 sessions" even when nothing is capped. The owner-approved wording allows
+  it; hiding it when X = N would be quieter.
+- **P3.** A member's `since` renders as a bare "2d ago". "since 2d ago" reads better.
+- **P4.** In the task graph, task-id buttons (tasks with turns) and plain ids are indented differently.
+- M5's O2 and O3 remain optional.
+
+### Next milestone
+
+M7, Workspaces: see `docs/handoffs/M7_WORKSPACES.md`.
+- **Dependencies.** M7 depends on M3, and M8 needs both M5 and M7, so M7 is next.
+- **Scope.** I took it from §12 and the binding routes and conventions (§5.2: `(later) workspace.js`, `#/w/<runId>/<agent>`; §1: Workspaces are
+  "opened from the room and never instead of it").
+- **The backend contract** was checked in this review. Everything a native read-only workspace needs is already in
+  `/api/state`:
+  - **`steps[].transcript`**, written as the turn runs: `verify.transcript()` keeps only text and tool parts, so
+    reasoning is never stored
+  - **`steps[].evidence.diff` and `file_stats`**
+  - **`verification`**
+  - **`agents`**, **`workspace`**, **`surfaces`**
+  - **the `known=` step-revision stubs**
+- **Bounded by one architect's decision, recorded in the change log.** Interactive surfaces (the preview iframe with
+  its origin ticket, terminal input, VM and desktop frames and input) stay on §12's own interim: a link to classic's
+  standalone pop-out `/?popout=<agent>&run=<id>`, which fetches for itself when no main window relays to it. A
+  native surface viewer needs its own handoff before M9.
+
+Delivery is documentation only, on `feature/chat-first-redesign`. There is no PR and no merge into `main`.

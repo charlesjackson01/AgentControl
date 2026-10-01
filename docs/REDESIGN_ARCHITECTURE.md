@@ -484,3 +484,20 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   No backend execution, API, schema, classic or M5 decision semantics changed. The owner authorized only the
   superseded M3.1 rail-test rewrite required by the session union and new count wording, in addition to Part A O1.
   D7 and the intentionally excluded in-flight skill-fetch race remain unchanged.
+- 2026-10-01 (M6 review):
+  - M6 accepted (Part A and the rest). No backend, API, schema, `decisions.js` or classic change. D7 is unchanged.
+  - **Rule clarified:** every team-plan or panel notion of "pending" uses M5.0's `accepts_decisions` (not terminal
+    **and** not `run.stop`). A roster that was never approved is always labelled as proposed. This is finding S1,
+    fixed in M7 Part A.
+  - The live `/api/state` read follows the active session. Historical sessions use the one guarded selected-session
+    read. This is accepted.
+  - The next milestone is **M7, Workspaces** (`docs/handoffs/M7_WORKSPACES.md`).
+    - **Scope decision (architect):** M7 delivers a native, read-only and POST-free Workspace: turns, classic stages,
+      the terminal transcript, changes and verification, and the Hermes and researcher logs.
+    - Its data is the existing `/api/state`: live for the active session, and the shared M6 selected-session read for
+      others. It adds no new reads.
+    - Surfaces use §12's interim, the classic pop-out link (`/?popout=<agent>&run=<id>`). Native surface viewing and
+      input (the preview ticket and iframe, program input, VM, desktop and generic frames, input POSTs) need their own
+      handoff before M9.
+    - Step material (transcripts, tool output, diffs, verification output, prompts) may render only inside a
+      Workspace. Reasoning is never rendered anywhere.

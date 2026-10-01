@@ -144,7 +144,11 @@
       if(slash){
         if(slash.error){tell(slash.error,false,decisionCommands.includes(slash.command));return;}
         if(slash.command==='help'){tell('');showChoices('slash',commands);return;}
-        if(decisionCommands.includes(slash.command)){tell(controls.decision(slash.command,slash.text),false,true);closePopover();return;}
+        if(decisionCommands.includes(slash.command)){
+          const error=controls.decision(slash.command,slash.text);tell(error,false,true);
+          if(error===''){input.value='';core.write('sessionStorage','acx-draft',null);resize();render(snapshot);}
+          closePopover();return;
+        }
         const run=slash.command==='title' ? v.run || snapshot.focused : v.run;
         if(!run || v.reason && v.reason!=='Connections are not ready'){tell(v.reason || 'There is no active session.');return;}
         if(slash.command==='stop'){controls.stop({id:run,title:activeTitle()},true);return;}

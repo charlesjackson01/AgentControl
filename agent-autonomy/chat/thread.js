@@ -53,6 +53,7 @@
     const fields = (obj,keys)=>`<dl>${keys.filter(k=>obj?.[k] !== undefined && obj[k] !== null).map(k=>`<dt>${e(k.replace(/_/g,' '))}</dt><dd class="plain">${e(Array.isArray(obj[k]) ? obj[k].join(', ') : typeof obj[k] === 'object' ? '' : obj[k])}</dd>`).join('')}</dl>`;
     const risk = value=>value ? fields(value,['level','label','class','reasons']) : '';
     const receiptActor = name=>name === 'You, via dashboard' ? 'you' : name;
+    const verificationStatus = {running:'running',passed:'passed',failed:'failed'};
     function publicText(message) {const d=message.detail || {};return message.kind==='system' && Array.isArray(d.argv) && d.ended && ['passed','failed'].includes(d.status) ? 'Verification (on demand) · '+d.status : message.text;}
     function receiptState(r) {
       if (!r) return '';
@@ -88,7 +89,7 @@
         }
         case 'skill':type='quiet';summary=d.expired ? '<p class="plain">'+[...[message.text,d.agent].filter(Boolean).map(e),'<span class="muted">Not decided before the session ended</span>'].join(' · ')+'</p>' : text([message.text,d.agent,d.state].filter(Boolean).join(' · '));detail=fields(d,['source','reasons'])+risk(d.risk);break;
         case 'alert':type='warning';summary=text('! '+message.text);detail=fields(d,['title','reason','summary','status','error']);break;
-        case 'outcome':type='outcome';summary=text(statusText(d.status))+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '');detail=text(message.text);break;
+        case 'outcome':type='outcome';summary=text(statusText(d.status))+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '')+(d.verification?.status ? text('Verification (on demand) · '+(Object.hasOwn(verificationStatus,d.verification.status) ? verificationStatus[d.verification.status] : d.verification.status),'muted') : '');detail=text(message.text);break;
         case 'system':type='quiet';summary=text(publicText(message));break;
         default:type='quiet';summary=text(message.text);
       }

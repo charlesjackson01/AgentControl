@@ -494,6 +494,8 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
             if run.get('verifier') and (run.get('manual_verification') or {}).get('status') != 'running':
                 choices.append('verify')
         action = {'endpoint': '/api/control', 'fields': {'run': run['id']}, 'choices': choices} if choices else None
+        if action is not None and isinstance(run.get('manual_verification'), dict):
+            detail['verification'] = b.fields(run['manual_verification'], ('status', 'created', 'ended'))
         if action is not None and ws:
             review_bounds = Bounds()
             integration = ws.get('integration') or {}

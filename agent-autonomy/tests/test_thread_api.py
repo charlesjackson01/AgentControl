@@ -183,6 +183,32 @@ class ThreadAPITests(unittest.TestCase):
             self.assertEqual(outcomes[1]['detail']['workspace']['base_branch'], 'main')
             self.assertEqual(outcomes[1]['detail']['workspace']['commits'], 2)
 
+    def test_fast_verification_http_changes_revision_with_one_workspace_read(self):
+        old = self.save_run('old', status='completed', created='2026-09-29', verifier=['true'],
+            manual_verification={'status': 'passed', 'created': '2026-09-29', 'output': 'PRIVATE'})
+        r = self.save_run('new', status='completed', verifier=['true'], workspace={'toplevel': self.project})
+        def read():
+            with patch.object(self.controller, 'workspace_status', return_value={'state': 'open'}) as workspace:
+                messages = self.get('/api/thread')['messages']
+                workspace.assert_called_once()
+            self.assertNotIn('verification', next(m for m in messages if m['session'] == old['id'] and m['kind'] == 'outcome')['detail'])
+            self.assertNotIn('PRIVATE', json.dumps(messages))
+            return next(m for m in messages if m['session'] == r['id'] and m['kind'] == 'outcome')
+        before = read()
+        r['manual_verification'] = {'status': 'running', 'created': '2026-10-01T00:00:00+00:00'}
+        self.store.put('runs', r)
+        running = read()
+        r['manual_verification'].update(status='passed', ended='2026-10-01T00:00:00.001+00:00',
+                                        output='PRIVATE', argv=['true'], exit_code=0)
+        self.store.put('runs', r)
+        finished = read()
+        self.assertEqual(before['action']['choices'], finished['action']['choices'])
+        self.assertEqual(len({m['rev'] for m in (before, running, finished)}), 3)
+        self.assertEqual(finished['detail']['verification'], {
+            'status': 'passed', 'created': '2026-10-01T00:00:00+00:00',
+            'ended': '2026-10-01T00:00:00.001+00:00'})
+        self.assertEqual(self.get('/api/channels')['channels'][0]['waiting'], 0)
+
     def test_research_refusals_precede_fingerprints_and_all_side_effects(self):
         states = [*({'status': status} for status in sorted(cv.TERMINAL)), {'stop': True}]
         for fields in states:

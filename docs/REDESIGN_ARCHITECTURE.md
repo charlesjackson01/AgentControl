@@ -226,6 +226,8 @@ M5 actionable messages carry bounded review material (`detail.review`) and `revi
 can be refused, but not approved, in the room. Review inputs are limited to the M5 handoff's explicit fields,
 and disappear when an item is no longer actionable. Question and proposal bounds remain unchanged; file lists
 have at most 50 paths. The actionable outcome alone gains its bounded branch and change summary.
+The actionable outcome carries bounded `detail.verification {status, created, ended}`, so each on-demand
+verification changes its `rev`. No verification output, command or exit code is included in this field.
 
 | Source | `kind` | `actor` | Notes |
 |---|---|---|---|
@@ -462,3 +464,6 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
     - It adds the team-plan states, the task graph, Connections detail and rail sessions (the union of `state.runs`
       and the loaded thread sessions).
     - It adds no decision controls: team decisions stay on the room card (§10). It adds no API, schema or engine change.
+- 2026-10-01 (M6 Part A): the actionable outcome projects only bounded verification status and times, making fast
+  on-demand verification observable through the existing new-`rev` reconciliation. Successful decision aliases
+  clear the composer draft; errors retain it. Decision semantics and D7 are unchanged.

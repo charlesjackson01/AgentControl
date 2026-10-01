@@ -818,7 +818,7 @@ test('M5 slash aliases use the exact same controls and confirmations',async()=>{
     const h=await decisionHarness(name,{post:async()=>({ok:true})});type(h,text);await h.composer.submit();await tick();
     const dialog=h.document.querySelector('#decision-dialog');if(dialog.hasAttribute('open')){assert.equal(posts(h).length,0);if(note)assert.equal(dialog.querySelector('[name="text"]').value,note);await confirmDecision(h);}
     assert.deepEqual(posts(h).map(p=>p.body),[{run:name==='outcome'?'run_done':'run_test',action:choice,...(note?{text:note}:{})}],text);
-    await h.composer.submit();assert.equal(posts(h).length,1,text);
+    assert.equal(h.document.querySelector('#composer').value,'',text);assert.equal(h.session.has('acx-draft'),false,text);await h.composer.submit();assert.equal(posts(h).length,1,text);
   }
 });
 test('M5 missing slash targets, extra commands, choice restrictions and truncation never send',async()=>{
@@ -870,6 +870,33 @@ test('M5 unsupported or unavailable review material cannot be approved',async()=
   for(const [name,mutate,safe] of [['low',m=>m.detail.review={diff:{reasoning:'PRIVATE'}},'reject'],['question',m=>m.detail.questions=[{question:{reasoning:'PRIVATE'},options:[]}],'reject'],['proposal',m=>m.detail.proposal={agents:[],tasks:[]},'single_agent'],['research',m=>m.detail.request={question:'Only a fragment'},'reject'],['skillInstall',m=>m.detail.review={description:'Missing SKILL.md',files:[],size:0},'reject']]) {
     const f=fx.decisionFixture(name),message=f.thread.messages.find(m=>m.action);mutate(message);const h=await harness(f.state,{thread:f.thread,channels:f.channels,post:async()=>({ok:true})});const approval=h.timeline.querySelector('[data-decision="'+(name==='proposal'?'approve_team':name==='question'?'answer':'approve')+'"]');assert(approval.disabled,name);assert(!button(h,safe).disabled,name);approval.click();await tick();assert.equal(posts(h).length,0);assert(h.timeline.textContent.includes('Cannot review this approval here'));assert(!h.timeline.textContent.includes('PRIVATE'));assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,f.channels.channels[0].waiting);
   }
+});
+test('M6 recorded verification statuses render independently of delivery state',async()=>{
+  for(const status of ['running','passed','failed','future-status','constructor']) {
+    const f=fx.decisionFixture('outcome'),message=f.thread.messages.find(m=>m.action);
+    message.detail.verification={status,created:'2026-10-01T00:00:00Z',output:'PRIVATE',argv:['PRIVATE'],exit_code:0};message.rev++;
+    const h=await harness(f.state,{thread:f.thread,channels:f.channels});
+    assert(decisionCard(h,message.id).textContent.includes('Verification (on demand) · '+status));assert(!h.timeline.textContent.includes('PRIVATE'));assert.equal(posts(h).length,0);
+  }
+});
+test('M6 a recorded verification revision reconciles Sent without a false timeout',async()=>{
+  for(const status of ['running','passed']) {
+    const h=await decisionHarness('outcome',{post:async()=>({ok:true})});await clickDecision(h,'verify');
+    assert(h.timeline.textContent.includes('Sent · waiting for AgentControl to record it'));assert(!h.timeline.textContent.includes('Verification (on demand)'));
+    const message=h.f.thread.messages.find(m=>m.action);message.rev++;message.detail.verification={status,created:'2026-10-01T00:00:00Z',...(status==='passed'?{ended:'2026-10-01T00:00:00.001Z'}:{})};
+    if(status==='running')message.action.choices=message.action.choices.filter(c=>c!=='verify');
+    await h.core.refresh();assert(!h.timeline.textContent.includes('Sent · waiting'));assert(h.timeline.textContent.includes('Verification (on demand) · '+status));
+    for(let i=0;i<3;i++)await h.core.refresh();await h.runTimers(15000);
+    assert(!h.timeline.textContent.includes('Not recorded yet.'));assert.equal(posts(h).length,1);assert.equal(h.core.getState().channels.channels[0].waiting,0);
+  }
+});
+test('M6 alias errors preserve drafts and a successful dialog hand-off clears before confirmation',async()=>{
+  for(const [name,text,mutate] of [['low','/verify'],['outcome','/apply',m=>m.detail.review_truncated=true],['outcome','/discard',m=>m.action.choices=['verify']]]) {
+    const f=fx.decisionFixture(name);if(mutate)mutate(f.thread.messages.find(m=>m.action));const h=await harness(f.state,{thread:f.thread,channels:f.channels});type(h,text);await h.composer.submit();
+    assert.equal(h.document.querySelector('#composer').value,text);assert.equal(h.session.get('acx-draft'),text);assert.equal(posts(h).length,0);
+  }
+  const sent=await decisionHarness('outcome',{post:async()=>({ok:true})});type(sent,'/verify');await sent.composer.submit();await tick();type(sent,'/verify');await sent.composer.submit();assert.equal(sent.document.querySelector('#composer').value,'/verify');assert.equal(sent.session.get('acx-draft'),'/verify');assert.equal(posts(sent).length,1);
+  const h=await decisionHarness('outcome');type(h,'/apply');await h.composer.submit();assert(h.document.querySelector('#decision-dialog').hasAttribute('open'));assert.equal(h.document.querySelector('#composer').value,'');assert.equal(h.session.has('acx-draft'),false);assert.equal(posts(h).length,0);
 });
 test('M5 typed confirmation mirrors the server case/space rule and preserves the supplied body',()=>{
   const c=fx.decisionMessages(),permissions={confirm_word:'server-word'};

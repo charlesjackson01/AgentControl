@@ -457,6 +457,41 @@ class ProjectionTests(unittest.TestCase):
         self.assertIsNone(self.find(cv.project_session(r, workspace={'state': 'applied'}, actionable_outcome=True), 'outcome')['action'])
         self.assertIsNone(self.find(cv.project_session(r, workspace={'state': 'open'}), 'outcome')['action'])
 
+    def test_on_demand_verification_never_returns_to_the_pre_verification_revision(self):
+        r = run(status='completed', verifier=['true'], workspace={'toplevel': '/project'})
+        def outcome():
+            return cv.revision(self.find(cv.project_session(r, workspace={'state': 'open'},
+                                                           actionable_outcome=True), 'outcome'))
+        before = outcome()
+        r['manual_verification'] = {'status': 'running', 'created': '2026-10-01T00:00:00+00:00'}
+        running = outcome()
+        r['manual_verification'].update(status='passed', ended='2026-10-01T00:00:00.001+00:00',
+                                        output='PRIVATE', argv=['true'], exit_code=0)
+        finished = outcome()
+        self.assertEqual(before['action']['choices'], finished['action']['choices'])
+        self.assertEqual(len({m['rev'] for m in (before, running, finished)}), 3)
+        self.assertEqual(finished['detail']['verification'], {
+            'status': 'passed', 'created': '2026-10-01T00:00:00+00:00',
+            'ended': '2026-10-01T00:00:00.001+00:00'})
+        r['manual_verification']['created'] = '2026-10-01T00:01:00+00:00'
+        self.assertNotEqual(finished['rev'], outcome()['rev'])
+
+    def test_outcome_verification_is_bounded_present_keys_only_and_actionable_only(self):
+        r = run(status='completed', verifier=['true'], manual_verification={
+            'status': 'x' * 4001, 'created': '2026-10-01', 'output': 'PRIVATE',
+            'argv': ['PRIVATE'], 'exit_code': 0})
+        active = self.find(cv.project_session(r, actionable_outcome=True), 'outcome')
+        self.assertEqual(set(active['detail']['verification']), {'status', 'created'})
+        self.assertEqual(len(active['detail']['verification']['status']), 4000)
+        self.assertTrue(active['detail']['truncated'])
+        self.assertNotIn('PRIVATE', json.dumps(active))
+        old = self.find(cv.project_session(r), 'outcome')
+        self.assertNotIn('verification', old['detail'])
+        for verification in (None, 'unsupported', []):
+            r['manual_verification'] = verification
+            r['verifier'] = []
+            self.assertNotIn('verification', self.find(cv.project_session(r, actionable_outcome=True), 'outcome')['detail'])
+
     def test_bounds_on_strings_and_lists(self):
         huge = 'x'*50000
         r = run(status='completed', summary=huge, title=huge)

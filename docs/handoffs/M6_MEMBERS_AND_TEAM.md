@@ -389,3 +389,52 @@ permitted edit there.
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
 
 ---
+
+## Part A completion — 2026-10-01 (Codex)
+
+F1 projects only bounded `status`, `created` and `ended` from recorded on-demand verification on an actionable
+outcome. The existing revision reconciliation now observes fast completion even when the choices return to their
+previous value. The outcome shows the recorded status separately from delivery status and recorded system events.
+No decision reconciliation or backend execution semantics changed.
+
+O1 clears the draft and `acx-draft` when a decision alias successfully opens its dialog or sends. Missing,
+unsupported, restricted, truncated and still-unresolved targets retain their drafts. O2 and O3 were left out.
+
+Regression proof against accepted M5 `b12e88a`, in an isolated git archive with the new test files:
+- All three new Python regressions fail: two revision-collision failures and one missing-field error.
+- Chat: 138/142 pass; the three new tests and the one authorized O1 rewrite fail.
+- After the fix: projection/API 70/70, classic 82/82 and chat 142/142 pass.
+
+The sole rewritten earlier assertion is in **M5 slash aliases use the exact same controls and confirmations**:
+the repeated-submit line now first asserts an empty composer and absent `acx-draft`, retaining its one-POST check.
+Every other earlier assertion is unchanged.
+
+Browser verification: 156 state/viewport/appearance combinations plus six regressions passed, 220 screenshots.
+The real `app.py` probe used the existing workflow fakes and verifier `true`. After one `/api/control` Verify POST,
+a first read 1.5 seconds later changed the outcome revision **648751757 → 2457344973**, with identical choices and
+recorded `passed` status/times. The card returned to idle and stayed out of “Not recorded yet.” after three further
+reads. Inspected `/tmp/ac-m6a-fast-verification-phone.png`.
+
+The first full Python run reached 423 tests in 259.633 s with one unchanged failure:
+`test_vm.VMRunTests.test_console_input_is_checked_and_audited` observed a background `push` interleaved between
+console operations. Its isolated rerun passed (1 test, 1.203 s). No VM, engine or protected test was changed.
+Full-suite rerun result and standalone commit are recorded below before Parts B–D begin.
+
+D7 remains exactly the two accepted guards. The intentionally excluded race where a skill fetch has begun and
+its session finishes during the download remains outside scope.
+
+Final Part A full-suite rerun: **423 tests, OK (skipped=3), 260.527 s**. Commands:
+`python3 -m unittest discover -s agent-autonomy/tests`;
+`PYTHONPATH=agent-autonomy:agent-autonomy/tests python3 -m unittest -v test_conversation test_thread_api`;
+`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`;
+`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`;
+`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m6a`;
+`NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m6a-real-check.cjs`.
+
+Skipped tests (environment gates):
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+Part A is committed independently after the status/stat/name/whitespace scope inspection. Its hash will be
+recorded in the final M6 report. Parts B–D have not been implemented in this commit.

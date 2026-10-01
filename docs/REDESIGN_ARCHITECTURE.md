@@ -361,16 +361,24 @@ real work, and the content comes first.
 
 - **Widths:**
   - at 1200 px and wider: three columns
-  - from 768 to 1199 px: rail + room, with the context panel as an overlay
+  - from 768 to 1199 px: room with a rail drawer and a centred context overlay, at most 560 px wide (M8)
   - below 768 px: the room only, with the rail as a drawer and the context panel as a bottom sheet
 
-  There is no horizontal scrolling at 390 px.
+  There is no page-level horizontal scrolling at desktop, laptop, tablet, portrait/landscape phone or 320 px.
+  Every interactive touch target is at least 40 × 40 px on tablet and phone sizes. Dialogs and sheets are
+  centred cards at 768–1199 px; portrait-phone decision sheets retain their bottom-sheet presentation.
 - **Workspace (`#/w/<runId>/<agent>`):** at ≥ 1200 px, a right pane in the context slot, widened to
-  `min(960px, 60vw)`, with the room visible and usable alongside. From 768–1199 px it is a room overlay;
+  `min(960px, 100vw − rail − 420px)`, with at least 420 px for the room alongside. At normal text size,
+  the waiting strip stays on one line and the composer chip remains untruncated at 1200 and 1440 px. From 768–1199 px it is a room overlay;
   below 768 px it is a full-screen sheet and the room footer is hidden. Back to room and Escape restore the
   prior room route and opening focus. No page overflow at 390 or 320 px; long lines scroll within their `<pre>`.
   M4's footer budgets hold when the sheet is closed. Workspace has no decisions or input; waiting links return
   to the authoritative room cards.
+- **M8 reflow:** the existing type-token ratios follow root text zoom; at a doubled root font size, views
+  reflow without page overflow or clipped controls and the composer remains reachable. At 844 × 390, the
+  idle footer is ≤ 72 px, waiting footer ≤ 112 px and conversation ≥ 45%. Portrait budgets remain unchanged.
+  Phone footers, sheets and Workspace navigation respect safe-area insets. Native OS keyboard behaviour is
+  still owner-run device verification, not a browser-emulation claim.
 - **One place per control:**
   - An approval appears **once** in the room, plus one pinned "waiting" pointer above the composer.
   - Pause, Resume and Stop live in the active session's header menu, and are also available as slash commands.

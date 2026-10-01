@@ -401,3 +401,53 @@ Earlier assertion changes, limited to the owner’s authorization:
 Only §8 client/test/documentation files changed. No Python, classic, backend, decision-state or engine changes.
 The D7 in-flight skill-fetch race, interactive surfaces and persistent bots remain out of scope. Native device
 keyboard checks remain unverified; Parts B–E and the final real-server/accessibility matrix still need completion.
+
+## Implementation report — Part B (2026-10-01)
+
+Part A is **68c7cab**. The standalone commit containing this section completes Part B; C–E remain pending.
+The room keeps 420 px beside a desktop Workspace, whose width matches `min(960px, viewport − rail − 420px)`.
+Normal-size waiting controls stay on one line and the chip remains untruncated at 1200/1440. Tablet and
+landscape use a rail drawer and centred cards bounded to 560 px. Context navigation stays visible while
+scrolling. Small-screen controls, including radio/checkbox inputs, have 40 × 40 px targets.
+
+Existing type-token ratios now follow root text zoom without modifying the type tokens. Full server titles are
+escaped in tooltips while display labels retain their existing bounds. There is no page overflow with long titles
+or branches. Code/diffs retain internal scrolling. Safe-area padding is applied to footer, sheets and Workspace
+navigation; a test-only 20 px substitution verifies the insets without claiming native-device testing. §10's
+layout contract is updated according to §9.
+
+Verification:
+
+- Chat DOM: **225/225** (215 accepted + nine A + one B). The new full-title/escaping test fails on Part A,
+  **224/225**; log `/tmp/ac-m8b-before-68c7cab.log`. Browser layout regressions fail on Part A with
+  “M8 tablet/landscape rail is a drawer”, `/tmp/ac-m8b-before-browser.log`. Actual geometry and actual doubled
+  text are asserted by Chromium, rather than assertions about implementation strings.
+- Classic DOM: **82/82**, `/tmp/ac-m8b-classic.log`.
+- Final full browser run: **672 combinations + seven regressions**, **1,095 screenshots**,
+  `/tmp/ac-m8b-browser-complete.log`, `/tmp/chat-shots-m8b-complete`. This is all 46 earlier states plus two
+  long-content states, seven viewports and both appearances, plus 96 real text-zoom renders and inset checks.
+  Every visible interactive element is enumerated. Targets are ≥ 40 × 40 px where required.
+- Portrait footer: **57 px idle / 105 px waiting**, waiting row **40 px**, conversation **≥ 70.0829%**.
+  Landscape: **57 / 105 px**, row **40 px**, conversation **≥ 58.3333%**. Both appearances match. Detailed
+  per-state measurements are in `footer-measurements.json` in that screenshot directory; the final report will
+  include the final matrix measurements.
+- Python full suite, unchanged: **423, OK (skipped=3)**, **256.479 s**, `/tmp/ac-m8b-python.log`. The same
+  three environment-gated skips named in Part A remain; OpenCode ran. First attempt: 423 in 428.652 s, six
+  unchanged timing failures (`/tmp/ac-m8b-python-attempt1.log`). All six passed in isolation in **13.365 s**
+  (`/tmp/ac-m8b-python-isolated.log`), then the full suite passed. Failures were
+  `test_vm.VMRunTests.test_console_input_is_checked_and_audited` and these `test_workflow.WorkflowTests`:
+  `test_permission_approve_once_and_workflow_resumes`, `test_permission_rejection_is_recorded`,
+  `test_permission_scope_cannot_be_widened_by_api`, `test_question_answer_can_be_sent_from_dashboard`,
+  `test_removed_or_foreign_request_is_rejected`. No protected code, waits, environment gates or skips changed.
+
+Inspected renders: `decisionCritical-phone-landscape-light.png`,
+`teamRunning-phone-landscape-dark-tasks.png`, `workspaceLive-phone-landscape-light-error.png`,
+`teamRunning-tablet-light.png`, `workspaceLive-desktop-workspace-light.png`,
+`workspaceLive-text-zoom-light.png`, `decisionCritical-phone-light.png`. Inspection found the landscape
+context header needed to remain visible; its final sticky navigation is checked in the full matrix.
+
+No earlier expectation was rewritten for B. The Part A CSSOM test uses a compatibility translation of
+unsupported container-rule syntax before parsing; all its equality/alignment expectations remain, and the
+browser still checks actual task geometry. The browser's rail-opening setup now opens the drawer at tablet
+widths; its accepted assertions are unchanged. No request, timer, decision, API, classic or backend changes.
+Native keyboards, interactive surfaces, the in-flight skill-fetch race and persistent bots remain deferred.

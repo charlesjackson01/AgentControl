@@ -1237,7 +1237,7 @@ test('M8 A member state time is explicitly labelled since and absent when unreco
   const h=await membersHarness(),member=h.f.state.agents.find(a=>a.name==='coder-1');await openMembers(h);assert.equal(h.document.querySelector('#live-members [data-member="coder-1"] small').textContent,'since '+h.window.AC.model.relTime(member.since));delete member.since;await h.core.refresh();assert(!h.document.querySelector('#live-members [data-member="coder-1"]').textContent.includes('since '));
 });
 test('M8 A task button ids and plain ids reserve the same box for alignment',()=>{
-  const {document}=parseHTML(require(path.join(root,'members.js')).panelHTML(fx.membersFixture('teamRunning').state)),sheet=require('cssom').parse(fs.readFileSync(path.join(root,'chat.css'),'utf8'));
+  const {document}=parseHTML(require(path.join(root,'members.js')).panelHTML(fx.membersFixture('teamRunning').state)),sheet=require('cssom').parse(fs.readFileSync(path.join(root,'chat.css'),'utf8').replace(/@container\s*\([^)]*\)/g,'@media all')); // CSSOM predates container rules; browser checks their computed geometry.
   function box(node){const style={};for(const rule of sheet.cssRules)if(rule.selectorText && !rule.selectorText.includes(':') && node.matches(rule.selectorText))for(let i=0;i<rule.style.length;i++){const key=rule.style[i];style[key]=rule.style.getPropertyValue(key);}return {padding:style.padding || '0px',width:style['min-width'] || 'auto',display:style.display || 'inline',basis:style['flex-basis'] || 'auto'};}
   const plain=document.querySelector('.task-title .task-id'),button=document.querySelector('.task-title button');assert(plain && button);assert.deepEqual(box(plain),box(button));assert.notEqual(box(plain).width,'auto');
 });
@@ -1246,6 +1246,16 @@ test('M8 A Workspace sticky context follows the recorded selected agent presence
 });
 test('M8 A permission key facts use only the first pattern after command and file and never an empty paragraph',async()=>{
   const h=await decisionHarness('low'),message=h.f.thread.messages.find(m=>m.action);message.detail.review={};message.detail.patterns=['https://example.test/<img src=x onerror=alert(1)>','Second pattern'];message.rev++;await h.core.refresh();const card=decisionCard(h,message.id);assert.equal(card.querySelector('.decision-facts').textContent,message.detail.patterns[0]);assert.equal(card.querySelectorAll('.decision-facts img,.decision-facts a').length,0);message.detail.patterns=[];message.rev++;await h.core.refresh();assert.equal(!!decisionCard(h,message.id).querySelector('.decision-facts'),false);assert.equal(posts(h).length,0);
+});
+
+// M8 Part B: responsive contracts, independent of server state.
+test('M8 B truncated room and rail titles retain the full server value',async()=>{
+  const f=fx.composerFixture('active'),title='Long title '+('wide-title-'.repeat(100))+'<img src=x>';
+  f.thread.sessions[0].title=title;f.state.run.title=title;f.state.runs[0].title=title;
+  const channels=fx.threadChannels(f.thread,1);channels.channels[0].title=title;
+  const h=await harness(f.state,{thread:f.thread,channels});
+  assert.equal(h.document.querySelector('#room-header h1').title,title);assert.equal(h.document.querySelector('#room-header .heading p').title,title);
+  assert.equal(h.document.querySelector('#session-list .truncate').title,title);assert.equal(h.document.querySelectorAll('#room-header img,#session-list img').length,0);assert.equal(posts(h).length,0);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

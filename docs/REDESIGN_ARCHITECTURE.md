@@ -298,6 +298,8 @@ the same card can offer another decision, as specified in the M5 handoff.
   The Team/Members tab shows the live roster from `state.agents`, the proposed roster from `run.team.proposal`
   (never as live members), team-state wording from classic `renderTeam()`, and the task graph from `run.team.tasks`.
   The panel has no decision controls; team decisions stay on the room card.
+  A team plan is pending only while the session accepts decisions (not terminal and not stopping).
+  Never-approved agents stay under a proposed-team heading even after the session stops or finishes.
   Active details use the live state snapshot. A selected historical session has one guarded memory-only read per
   selection, refetched only when its recorded status changes. Room links share the ten-page locate budget.
   The rail's session list is the union of `state.runs` and the sessions in the loaded thread cache; live run status
@@ -501,3 +503,6 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
       handoff before M9.
     - Step material (transcripts, tool output, diffs, verification output, prompts) may render only inside a
       Workspace. Reasoning is never rendered anywhere.
+- 2026-10-01 (M7 Part A): S1 aligns team-panel pending state with M5.0's not-terminal/not-stopping predicate.
+  Stopping plans show their recorded lifecycle state, and every never-approved roster remains explicitly proposed.
+  No backend or room decision semantics changed; optional M6 polish is deferred.

@@ -400,3 +400,39 @@ Two deferrals remain out of scope and must stay recorded:
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
 
 ---
+
+## Part A completion — 2026-10-01 (Codex)
+
+S1 is implemented independently before any Workspace work. Team plans are pending only when their session is
+not terminal and not stopping. Undecided stopping plans show “Not decided · the session is stopping”; terminal
+plans retain “Not decided before the session ended”. Never-approved rosters always remain in the separate
+proposed list under “Proposed team · never approved”, with no room decision link or rail pending marker.
+No live member is manufactured and no backend, room action or waiting-count behavior changes. P1–P4 are deferred.
+
+Regression proof against an isolated archive of **7134ada**: **168/173** chat tests pass. Three new stopping-helper
+cases and both new roster DOM checks fail; the existing terminal predicate guard passes before and after.
+After the fix, **173/173** pass. No earlier assertion was rewritten for Part A.
+
+Verification:
+- `python3 -m unittest discover -s agent-autonomy/tests`: **423, OK (skipped=3)**, 256.079 s.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`: **82/82**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`: **173/173**.
+- `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m7a`:
+  **222 combinations + 6 regressions**, **306 screenshots**; both new plan states, desktop/laptop/phone,
+  light/dark and 320 px checks. Footer, overflow, privacy and target assertions pass.
+
+Actual renders inspected: `/tmp/chat-shots-m7a/teamStopping-phone-light.png` and
+`/tmp/chat-shots-m7a/teamExpired-desktop-dark.png`. Proposed agents remain clearly labelled and separate.
+
+Environment skips (OpenCode tests ran):
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+The owner authorized exactly two additional earlier-test exceptions for Part B: the superseded M3
+“Inspect in classic” assertion and the isolation assertion that currently also rejects `/chat/workspace.js`.
+Those assertions are unchanged in Part A. They will be listed with their exact test names in the final report.
+The in-flight skill-fetch race and native phone-keyboard testing remain deferred.
+
+The standalone Part A commit contains this report and is titled `Align team plans with accepted decision state`.
+Its hash will be recorded in the final M7 report. Parts B–D begin only after this verified commit.

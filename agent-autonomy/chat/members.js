@@ -12,7 +12,7 @@
     let html=`<section><h3>Members</h3><ul id="live-members" class="members">${rosterHTML(members,true,run.id)}</ul>${members.length?'': '<p class="muted">No recorded members</p>'}${omitted(Math.max(0,members.length-50))}</section>`;
     if(run.mode!=='team')return html;
     const auto=plan.auto?`<p class="auto-note"><strong>Auto mode:</strong> ${e(plan.auto.outcome)}.</p>${lines(plan.auto.reasons,'muted')}`:'';
-    const summary=plan.state==='proposed' && !plan.expired?`<h3>${e(plan.summary)}</h3>`:`<p class="${plan.expired?'muted':''}">${e(plan.summary)}</p>`;
+    const summary=plan.state==='proposed' && plan.pending?`<h3>${e(plan.summary)}</h3>`:`<p class="${plan.expired?'muted':''}">${e(plan.summary)}</p>`+(plan.state==='proposed'?'<h3>Proposed team · never approved</h3>':'');
     html+=`<section><h3>Team plan</h3>${auto}${plan.state==='single' && plan.auto?'':summary}`;
     if(plan.state==='proposed')html+=`<ul class="proposed-members">${plan.proposed.items.map(a=>`<li data-proposed="${e(a.name)}"><strong>${e(a.name)}</strong>${a.label?` <span class="muted">(${e(a.label)})</span>`:''}<p>${e(a.responsibility)}</p></li>`).join('')}</ul>${omitted(plan.proposed.omitted)}${lines(plan.warnings,'warning')}${plan.proposals!==undefined?`<p class="muted">Proposal ${e(plan.proposals)}</p>`:''}`;
     if(plan.state==='unusable')html+=lines(plan.problems);

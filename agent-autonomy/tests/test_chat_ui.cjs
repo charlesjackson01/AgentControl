@@ -1016,4 +1016,24 @@ test('M6 step transcripts, results and prompts never appear anywhere in the DOM'
   for(const kind of ['teamProposing','teamProposed','teamUnusable','teamRunning','teamReview','teamFinished','singleMembers','connections']){const h=await membersHarness(kind);await openMembers(h);for(const sentinel of ['TRANSCRIPT-SENTINEL','RESULT-SENTINEL','PROMPT-SENTINEL'])assert(!h.document.toString().includes(sentinel),kind+sentinel);}
 });
 
+// M7 Part A: S1 must match the accepted server actionability predicate.
+for(const state of ['proposed','proposing','unusable'])test('M7 S1 '+state+' is not pending in a stopping session',()=>{
+  const plan=memberModel().teamFromRun({status:'awaiting_approval',stop:true,team:{state}});
+  assert.equal(plan.pending,false);assert.equal(plan.expired,false);assert.equal(plan.summary,'Not decided · the session is stopping');
+});
+test('M7 S1 terminal proposed plans stay expired',()=>{
+  for(const status of ['completed','blocked','failed','stopped','limit_reached']){const plan=memberModel().teamFromRun({status,team:{state:'proposed'}});assert.equal(plan.expired,true);assert.equal(plan.pending,false);assert.equal(plan.summary,'Not decided before the session ended');}
+});
+for(const kind of ['teamStopping','teamExpired'])test('M7 S1 '+kind+' labels never-approved agents and offers no room decision link',async()=>{
+  const f=fx.endedPlan(kind),h=await harness(f.state,{thread:f.thread,channels:f.channels});await openMembers(h);
+  assert(contextText(h).includes('Proposed team · never approved'));
+  assert(contextText(h).includes(kind==='teamStopping'?'Not decided · the session is stopping':'Not decided before the session ended'));
+  assert.equal(h.document.querySelector('[data-room-link="proposal"]'),null);
+  assert(!h.document.querySelector('#rail').textContent.includes('Team plan pending'));
+  assert.equal(h.document.querySelectorAll('#live-members [data-member]').length,1);
+  assert.equal(h.document.querySelectorAll('.proposed-members [data-proposed]').length,2);
+  assert(!h.document.querySelector('#live-members').textContent.includes('coder-2'));
+  assert.equal(h.document.querySelectorAll('[data-decision]').length,0);assert.equal(posts(h).length,0);
+});
+
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

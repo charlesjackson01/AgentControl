@@ -260,3 +260,16 @@ function membersHistory() {
   return {...f,older};
 }
 Object.assign(module.exports,{membersFixture,membersHistory});
+
+// M7 Part A: plans remain proposed after decisions stop being accepted.
+function endedPlan(kind='teamStopping') {
+  const f=membersFixture('teamProposed');
+  f.state.run.status=kind==='teamStopping'?'awaiting_approval':'stopped';
+  f.state.run.stop=kind==='teamStopping';f.state.runs=[{...f.state.run}];
+  f.thread.sessions[0].status=f.state.run.status;
+  f.thread.messages.forEach(message=>message.action=null);
+  f.thread.live.session=kind==='teamStopping'?'run_test':null;
+  f.channels=threadChannels(f.thread,0);
+  return f;
+}
+Object.assign(module.exports,{endedPlan});

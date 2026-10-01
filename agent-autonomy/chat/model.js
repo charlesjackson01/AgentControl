@@ -34,11 +34,11 @@
   function boundedList(list) {return {items:(list || []).slice(0,50),omitted:Math.max(0,(list || []).length-50)};}
   function teamFromRun(run={}) {
     run=run || {};
-    const team=run.team || {},state=team.state,expired=terminal.has(run.status) && ['proposing','proposed','unusable'].includes(state);
+    const team=run.team || {},state=team.state,undecided=['proposing','proposed','unusable'].includes(state),expired=terminal.has(run.status) && undecided,stopping=!!run.stop && !terminal.has(run.status) && undecided;
     const tasks=team.tasks || [],done=tasks.filter(t=>t.status==='done').length;
     const summaries={proposing:'Hermes is proposing a team. Nothing runs until you approve it.',proposed:'Proposed team · not running yet',unusable:'Hermes could not produce a usable team plan:',single:'Running with one agent, as chosen',approved:`Team · ${done} of ${tasks.length} tasks done`,running:`Team · ${done} of ${tasks.length} tasks done`,review:`Team · ${done} of ${tasks.length} tasks done · Hermes reviews the merged result`};
     const source=team.proposal?.agents || {},roster=Array.isArray(source)?source.map(a=>[a.name || a.id,a]):Object.entries(source),proposed=boundedList(roster);
-    return {state,expired,pending:!terminal.has(run.status) && ['proposing','proposed','unusable'].includes(state),summary:expired?'Not decided before the session ended':Object.hasOwn(summaries,state)?summaries[state]:boundText(state || ''),
+    return {state,expired,pending:!terminal.has(run.status) && !run.stop && undecided,summary:expired?'Not decided before the session ended':stopping?'Not decided · the session is stopping':Object.hasOwn(summaries,state)?summaries[state]:boundText(state || ''),
       proposed:{...proposed,items:proposed.items.map(([name,a])=>({name:boundText(name),label:boundText(a.label),responsibility:boundText(a.responsibility)}))},
       warnings:boundedList(team.warnings),problems:boundedList(team.problems),proposals:team.proposals,
       auto:run.auto?{outcome:run.mode==='single'?'one agent':state==='single'?'one agent after Hermes’s review':'a team plan for your approval',reasons:boundedList(run.auto.reasons)}:null};

@@ -169,11 +169,11 @@
         else $('load-earlier')?.focus?.({preventScroll:true});
       }}
     });
-    function reveal(id) {
+    function reveal(id, focus=false) {
       const node=nodes.get('divider:'+id)?.node || nodes.get(id)?.node;if(!node)return false;
       const session=node.dataset.sessionId || node.querySelector('[data-session]')?.dataset.session;
       if(session){expanded[session]=false;render(cache,mode);}
-      const target=nodes.get('divider:'+id)?.node || nodes.get(id)?.node;follow=false;target.scrollIntoView?.({block:'start'});target.classList.add('focused');setTimeout(()=>target.classList.remove('focused'),1600);return true;
+      const target=nodes.get('divider:'+id)?.node || nodes.get(id)?.node;follow=false;target.scrollIntoView?.({block:'start'});if(focus)target.focus?.({preventScroll:true});target.classList.add('focused');setTimeout(()=>target.classList.remove('focused'),1600);return true;
     }
     return {render,reveal,bottom,getCache:()=>cache};
   }

@@ -193,7 +193,7 @@ was changed.
 
 ## Next step
 
-1. Codex implements M8 Parts C–E in order, each verified and committed before the next; Parts A–B are complete (Part A `68c7cab`).
+1. Codex implements M8 Parts D–E in order, each verified and committed before the next; Parts A–C are complete (Part A `68c7cab`, Part B `fddf9eb`).
 2. Opus reviews M8.
 3. M9 (parity and cutover) remains unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge
    into `main`.

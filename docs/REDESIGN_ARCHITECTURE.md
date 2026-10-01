@@ -338,7 +338,10 @@ real work, and the content comes first.
   context panel. A secondary control lives in a menu, not on the surface.
 - **Accessibility:**
   - landmarks (`nav`, `main`, `aside`)
-  - visible focus, and a keyboard path to every action
+  - visible inset focus rings in both appearances, and a keyboard path to every action
+  - a first-focusable skip link to the conversation; roving arrow-key context tabs and Workspace turn toolbar
+  - modal dialogs/drawers/sheets trap focus, make the background inert, start on Cancel/Close and restore the opener
+  - the read-only terminal supports arrow/Page/Home/End scrolling and reachable Jump to latest
   - WCAG AA contrast in both appearances
   - touch targets of at least 40 px on phones
 

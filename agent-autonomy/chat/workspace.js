@@ -114,7 +114,7 @@
   }
   function turnsHTML(data,agent,snapshot,pinned,follow){
     const steps=turnsFor(data.steps,agent),step=selectedTurn(steps,pinned);
-    const picker=`<nav id="workspace-turns" aria-label="Agent turns">${steps.map(turn=>`<button id="ws-turn-${e(encodeURIComponent(turn.id))}" data-ws-turn="${e(turn.id)}" title="${e(turn.title || '')}" aria-pressed="${pinned===turn.id}">#${e(turn.number)}</button>`).join('')}<button id="ws-latest" data-ws-latest aria-pressed="${!pinned}">Latest</button></nav>`;
+    const picker=`<nav id="workspace-turns" role="toolbar" aria-label="Agent turns">${steps.map(turn=>`<button id="ws-turn-${e(encodeURIComponent(turn.id))}" data-ws-turn="${e(turn.id)}" title="${e(turn.title || '')}" aria-pressed="${pinned===turn.id}">#${e(turn.number)}</button>`).join('')}<button id="ws-latest" data-ws-latest aria-pressed="${!pinned}">Latest</button></nav>`;
     if(!step)return picker+'<p>No turns yet.</p>';
     const pending=pendingFor(snapshot,data.run.id,agent),isLast=step===steps.at(-1),next=!pinned && planningNext(data.run,steps);
     const states=stageStates(data.run,step,isLast,pending,next),code=stageStates(data.run,step,isLast,pending,false).code;
@@ -129,21 +129,29 @@
     return `${picker}<h3>Turn ${e(step.number)} · ${e(step.title || '')}</h3>${next?'<p class="muted">Planning the next turn · showing the latest recorded turn below.</p>':''}<ol class="workspace-stages">${stages}</ol><section id="workspace-terminal-section"><div class="workspace-terminal-heading"><h3>Terminal</h3><button id="ws-jump" data-ws-jump ${follow || pinned?'hidden':''}>Jump to latest</button></div><p id="workspace-turn-status" role="status">Turn ${e(step.number)} · ${e(state)}</p><div id="workspace-terminal" role="log" aria-live="off" tabindex="0" aria-label="Recorded terminal output">${step.transcript_omitted>0?`<p id="ws-omitted" class="muted">${e(step.transcript_omitted)} earlier entries were not kept</p>`:''}${entries.map((entry,index)=>entryHTML(step,entry,index)).join('') || '<p>No output yet.</p>'}</div></section>${changesHTML(data.run,step)}`;
   }
   function mount(host){
-    let current=null,selection='',pinned='',follow=true,shown='';
-    function clear(){host.hidden=true;host.replaceChildren();current=null;selection='';pinned='';follow=true;shown='';}
+    let current=null,selection='',pinned='',follow=true,shown='',turnFocus='';
+    function clear(){host.hidden=true;host.replaceChildren();current=null;selection='';pinned='';follow=true;shown='';turnFocus='';}
     host.addEventListener('click',event=>{
       const turn=event.target.closest('[data-ws-turn]');
       if(turn){pinned=turn.dataset.wsTurn;follow=false;rerender();}
       else if(event.target.closest('[data-ws-latest],[data-ws-jump]')){pinned='';follow=true;rerender();}
     });
-    host.addEventListener('scroll',event=>{
-      const terminal=event.target;if(terminal.id!=='workspace-terminal' || pinned)return;
+    host.addEventListener('keydown',event=>{
+      const picker=event.target.closest('#workspace-turns');
+      if(picker && ['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const nodes=[...picker.querySelectorAll('button')],index=nodes.indexOf(event.target),next=event.key==='Home'?0:event.key==='End'?nodes.length-1:(index+(event.key==='ArrowRight'?1:-1)+nodes.length)%nodes.length;turnFocus=nodes[next].id;for(const node of nodes)node.tabIndex=node.id===turnFocus?0:-1;nodes[next].focus();return;}
+      const terminal=event.target;if(terminal.id!=='workspace-terminal')return;
+      const line=parseFloat(root.getComputedStyle?.(terminal).lineHeight) || 22.5,values={ArrowUp:terminal.scrollTop-line,ArrowDown:terminal.scrollTop+line,PageUp:terminal.scrollTop-terminal.clientHeight,PageDown:terminal.scrollTop+terminal.clientHeight,Home:0,End:terminal.scrollHeight-terminal.clientHeight};
+      if(Object.hasOwn(values,event.key)){event.preventDefault();terminal.scrollTop=Math.max(0,Math.min(terminal.scrollHeight-terminal.clientHeight,values[event.key]));scrolled(terminal);}
+    });
+    function scrolled(terminal){
+      if(terminal.id!=='workspace-terminal' || pinned)return;
       if(terminal.scrollHeight-terminal.scrollTop-terminal.clientHeight>24){follow=false;const jump=host.querySelector('#ws-jump');if(jump)jump.hidden=false;}
-    },true);
+    }
+    host.addEventListener('scroll',event=>scrolled(event.target),true);
     function rerender(){if(current)render(...current);}
     function render(snapshot,route,detail,back){
       if(!route || !snapshot.authenticated){clear();return;}
-      const identity=route.run+'\0'+route.agent;if(selection!==identity){selection=identity;pinned='';follow=true;shown='';host.replaceChildren();}
+      const identity=route.run+'\0'+route.agent;if(selection!==identity){selection=identity;pinned='';follow=true;shown='';turnFocus='';host.replaceChildren();}
       current=[snapshot,route,detail,back];
       host.hidden=false;
       const data=detail.data,member=data?.agents?.find(a=>a.name===route.agent);
@@ -157,6 +165,7 @@
       const context=presence?presence.displayName+' · '+presence.symbol+' '+presence.stateLabel+(step?' · Turn '+step.number:''):'Workspace';
       root.AC.members.patch(host,`<header><a class="room-link" data-back-room href="${e(back)}">Back to room</a><span class="muted workspace-context" title="${e(context)}">${e(context)}</span></header><div id="workspace-content">${body}</div>`);
       host.querySelectorAll('details[id]').forEach(node=>{const previous=open.get(node.id);if(previous && (previous.open || previous.status===node.dataset.outputStatus || !['running','error'].includes(node.dataset.outputStatus)))node.open=previous.open;});
+      const buttons=[...host.querySelectorAll('#workspace-turns button')],focusId=buttons.some(n=>n.id===turnFocus)?turnFocus:pinned?'ws-turn-'+encodeURIComponent(pinned):'ws-latest';for(const node of buttons)node.tabIndex=node.id===focusId?0:-1;
       const terminal=host.querySelector('#workspace-terminal');
       if(terminal){terminal.scrollTop=!pinned && follow?terminal.scrollHeight:shown===turn?scroll:0;shown=turn;}
     }

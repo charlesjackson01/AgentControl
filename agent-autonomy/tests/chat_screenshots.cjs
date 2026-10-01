@@ -13,8 +13,62 @@ const executablePath = process.env.CHROMIUM_PATH || candidates.find(p=>fs.exists
 const matrixViewports={desktop:[1440,900],'desktop-workspace':[1200,800],laptop:[1024,768],tablet:[768,1024],phone:[390,844],'phone-landscape':[844,390],narrow:[320,640]};
 const viewportFilter=process.argv.find(arg=>arg.startsWith('--viewport='))?.slice(11);
 if(viewportFilter)assert(Object.hasOwn(matrixViewports,viewportFilter),'Unknown focused-test viewport');
-const viewports=viewportFilter?{[viewportFilter]:matrixViewports[viewportFilter]}:matrixViewports;
+const keyboardOnly=process.argv.includes('--keyboard-only');
+const viewports=keyboardOnly?{}:viewportFilter?{[viewportFilter]:matrixViewports[viewportFilter]}:matrixViewports;
+const focusMeasurements=[];
+async function focusCheck(page,name,size){
+ await page.evaluate(()=>{window.__focusAudit={original:document.activeElement,scrolls:[...document.querySelectorAll('*')].map(n=>[n,n.scrollTop,n.scrollLeft])};});
+ await page.keyboard.press('Tab');
+ const result=await page.evaluate(()=>{
+  const {original,scrolls}=window.__focusAudit;delete window.__focusAudit;let count=0,outlineMinimum=Infinity,insetMinimum=Infinity;const errors=[];
+  for(const node of document.querySelectorAll('a[href],button,input,textarea,select,summary,[tabindex]')){
+   if(node.disabled || node.closest('[hidden],[inert]') || !node.getClientRects().length || getComputedStyle(node).visibility==='hidden')continue;
+   node.scrollIntoView({block:'nearest',inline:'nearest'});node.focus({preventScroll:true});
+   if(document.activeElement!==node)continue;
+   count++;const style=getComputedStyle(node),width=parseFloat(style.outlineWidth),offset=parseFloat(style.outlineOffset);
+   outlineMinimum=Math.min(outlineMinimum,width);insetMinimum=Math.min(insetMinimum,-offset);
+   if(width<2 || style.outlineStyle==='none' || offset>-width)errors.push((node.id || node.getAttribute('aria-label') || node.tagName)+' missing an inset focus ring');
+  }
+  original?.focus({preventScroll:true});for(const [node,top,left] of scrolls){node.scrollTop=top;node.scrollLeft=left;}
+  return {count,errors,outlineMinimum,insetMinimum};
+ });
+ assert.deepEqual(result.errors,[],`${name}/${size} focus visibility`);assert(result.count>0);focusMeasurements.push({name,size,count:result.count,outline:result.outlineMinimum,inset:result.insetMinimum});
+}
+async function keyboardFocus(page,selector,reverse=false){
+ for(let i=0;i<160;i++){if(await page.evaluate(s=>document.activeElement?.matches(s),selector))return;await page.keyboard.press(reverse?'Shift+Tab':'Tab');}
+ throw Error('Keyboard could not reach '+selector);
+}
+async function keyboardPaths(browser,out){
+ const failures=[],shots=[];let cases=0;
+ for(const name of ['start','note','question','typed-approve','deny-redirect','workspace','history','context-tabs'])for(const width of [1440,390])for(const colorScheme of ['light','dark']){
+  cases++;const f=name==='history'?{state:fx.richCompleted(),thread:fx.threadLong()[0],pages:fx.threadLong()}:['question','typed-approve','deny-redirect'].includes(name)?fx.decisionFixture(name==='question'?'question':'critical'):['workspace','context-tabs'].includes(name)?fx.workspaceDetails():fx.composerFixture(name==='start'?'new':'active');f.channels ||= fx.threadChannels(f.thread,f.thread.messages.filter(m=>m.action && m.kind!=='outcome').length);
+  const posted=[],errors=[],page=await browser.newPage({viewport:{width,height:844},colorScheme});page.on('pageerror',e=>errors.push(e.message));
+  try{
+   await page.route('**/*',async route=>{const u=new URL(route.request().url());if(u.pathname.startsWith('/api/')){assert.equal(route.request().headers().authorization,'Bearer test-key');if(route.request().method()==='POST'){posted.push({path:u.pathname,body:route.request().postDataJSON()});return route.fulfill({contentType:'application/json',body:JSON.stringify(u.pathname==='/api/runs'?{id:'keyboard-new'}:{ok:true})});}const body=u.pathname==='/api/channels'?f.channels:u.pathname==='/api/thread'?f.pages && u.searchParams.get('before')==='long:250'?f.pages[1]:f.thread:u.pathname==='/api/workspace/preflight'?fx.composerPreflight:u.pathname==='/api/sandbox'?f.state.sandbox || {}:f.state;return route.fulfill({status:u.pathname==='/api/events'?503:200,contentType:'application/json',body:JSON.stringify(body)});}const file=u.pathname==='/chat'?'index.html':u.pathname.slice('/chat/'.length);return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
+   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#room-header h1').waitFor();await page.evaluate(()=>AC.core.stop());
+   assert.equal(await page.locator('#skip-conversation').count(),1,'Keyboard workflow requires the conversation skip link');await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement.id),'skip-conversation');await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>document.activeElement.id),'timeline');
+   if(name==='start'||name==='note'){await keyboardFocus(page,'#composer');await page.keyboard.type(name==='start'?'Keyboard goal':'Keyboard note');await page.keyboard.press('Control+Enter');await page.waitForFunction(()=>document.getElementById('composer').value==='');assert.deepEqual(posted,[{path:name==='start'?'/api/runs':'/api/control',body:name==='start'?{goal:'Keyboard goal'}:{run:'run_test',action:'instruction',text:'Keyboard note'}}]);}
+   if(name==='question'){await keyboardFocus(page,'.decision-question input[value="JSON"]');await page.keyboard.press('Space');await keyboardFocus(page,'[data-decision="answer"]');await page.keyboard.press('Enter');await page.waitForFunction(()=>document.querySelector('.decision-status').textContent.startsWith('Sent'));assert.deepEqual(posted,[{path:'/api/review',body:{...f.thread.messages.find(m=>m.action).action.fields,action:'answer',answers:[['JSON']]}}]);}
+   if(name==='typed-approve'||name==='deny-redirect'){
+    await keyboardFocus(page,'[data-decision="'+(name==='typed-approve'?'approve':'reject')+'"]');await page.keyboard.press('Enter');await page.locator('#decision-dialog[open]').waitFor();assert(await page.evaluate(()=>document.activeElement.hasAttribute('data-cancel-decision')));assert(await page.locator('#room').evaluate(n=>n.inert));
+    await keyboardFocus(page,'#decision-dialog [name="'+(name==='typed-approve'?'confirm':'redirect')+'"]');await page.keyboard.type(name==='typed-approve'?'CONFIRM-TEST':'Use a safer approach');await keyboardFocus(page,'[data-confirm-decision]');await page.keyboard.press('Enter');await page.waitForFunction(()=>!document.getElementById('decision-dialog').open);await page.waitForFunction(()=>document.querySelector('.decision-status').textContent.startsWith('Sent'));
+    assert.deepEqual(posted,[{path:'/api/review',body:{...f.thread.messages.find(m=>m.action).action.fields,action:name==='typed-approve'?'approve':'reject',...(name==='typed-approve'?{confirm:'CONFIRM-TEST'}:{redirect:'Use a safer approach'})}}]);assert.equal(await page.locator('#waiting-pointer').textContent(),'! 1 waiting for you');assert.equal(await page.locator('[data-actionable]').count(),1,'Keyboard click cannot manufacture a recorded decision');
+   }
+   if(name==='history'){await keyboardFocus(page,'#load-earlier');await page.keyboard.press('Enter');await page.waitForFunction(id=>document.activeElement?.dataset.message===id,f.pages[1].messages.find(m=>m.kind!=='session_start').id);assert.equal(posted.length,0);}
+   if(name==='workspace'||name==='context-tabs'){
+    if(width<1200){await keyboardFocus(page,'#open-rail',true);await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>document.activeElement.id),'close-rail');}
+    await keyboardFocus(page,'#session-list a[href="#/s/run_test"]');await page.keyboard.press('Enter');await page.locator('#context:not([hidden])').waitFor();await keyboardFocus(page,'#session-tab',width<1200);await page.keyboard.press('ArrowRight');assert.equal(await page.evaluate(()=>document.activeElement.id),'members-tab');assert.equal(await page.locator('#members-tab').getAttribute('aria-selected'),'true');
+    if(name==='context-tabs'){await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.id),'session-tab');await page.keyboard.press('End');assert.equal(await page.evaluate(()=>document.activeElement.id),'members-tab');}
+    else{await keyboardFocus(page,'#live-members [data-member="coder-1"] [data-workspace-link]');await page.keyboard.press('Enter');await page.locator('#workspace-terminal').waitFor();assert(await page.evaluate(()=>document.activeElement.hasAttribute('data-back-room')));await keyboardFocus(page,'#ws-latest');await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.dataset.wsTurn),'ws-first');await page.keyboard.press('Enter');assert((await page.locator('#workspace-terminal').textContent()).includes('Earlier recorded turn'));await page.keyboard.press('End');await page.keyboard.press('Enter');await keyboardFocus(page,'#workspace-terminal');await page.keyboard.press('Home');assert.equal(await page.locator('#workspace-terminal').evaluate(n=>n.scrollTop),0);await keyboardFocus(page,'#ws-jump',true);await page.keyboard.press('Enter');await page.keyboard.press('Escape');await page.waitForFunction(()=>document.getElementById('workspace').hidden);assert(await page.evaluate(()=>document.activeElement.matches('[data-workspace-link]')));}
+    assert.equal(posted.length,0);
+   }
+   await focusCheck(page,'keyboard-'+name,String(width));assert.deepEqual(errors,[]);const file=`keyboard-${name}-${width}-${colorScheme}.png`;await page.screenshot({animations:'disabled',path:path.join(out,file)});shots.push(file);
+  }catch(e){failures.push({name,width,colorScheme,error:e.message});}finally{await page.close();}
+ }
+ fs.writeFileSync(path.join(out,'keyboard-results.json'),JSON.stringify({cases,failures},null,2));assert.equal(failures.length,0,JSON.stringify(failures));return {cases,screenshots:shots.length};
+}
 async function layoutCheck(page,name,size,width){
+ await focusCheck(page,name,size);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name}/${size}: page overflow`);
  if(width<1200){
   const targets=await page.locator('a[href],button,input,textarea,select,summary,[role="tab"],[tabindex="0"]').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length && getComputedStyle(n).visibility!=='hidden').map(n=>({name:n.id || n.getAttribute('aria-label') || n.textContent.slice(0,50),width:n.getBoundingClientRect().width,height:n.getBoundingClientRect().height})));
@@ -42,6 +96,7 @@ async function zoomCheck(page,name,colorScheme,out){
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,name+' zoom overflow');
  if(await page.locator('#room-footer').isVisible()){const b=await page.locator('#composer').boundingBox();assert(b.y+b.height<=800 && b.height>=40,`${name} M8 zoom composer reachable: ${JSON.stringify(b)}`);}
  for(const box of await page.locator('button,summary,select,input:not([type="checkbox"]):not([type="radio"])').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length).map(n=>({name:n.id || n.textContent.slice(0,30),scroll:n.scrollWidth,width:n.clientWidth}))))assert(box.scroll<=box.width+1,name+' zoom clipped control '+box.name);
+ await focusCheck(page,name,'text-zoom');
  await page.screenshot({animations:'disabled',path:path.join(out,`${name}-text-zoom-${colorScheme}.png`)});
  await page.evaluate(()=>document.documentElement.style.fontSize='');await page.setViewportSize(viewport);
 }
@@ -57,8 +112,8 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  const longTitle='Long project '+('wide-title-' .repeat(80))+'<img src=x>';
  const longRoom=fx.composerFixture('active');longRoom.state.run.title=longTitle;longRoom.thread.sessions[0].title=longTitle;longRoom.channels=fx.threadChannels(longRoom.thread,1);longRoom.channels.channels[0].title=longTitle;composerCases.longRoom=longRoom;
  const longWorkspace=fx.workspaceDetails('workspaceHistorical');longWorkspace.state.run.title=longTitle;longWorkspace.thread.sessions[0].title=longTitle;longWorkspace.state.run.workspace.agents['coder-1'].branch='agent/'+('branch/'.repeat(100));longWorkspace.state.agents.find(a=>a.name==='coder-1').task=longTitle;workspaceCases.workspaceLong=longWorkspace;
- const measurements=[];
- try {for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
+ const measurements=[];let keyboardCases=0;
+ try {const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
   combinations++;
   const pages=workspaceCases[name]?[workspaceCases[name].thread]:membersCases[name] ? [membersCases[name].thread,...(membersCases[name].older?[membersCases[name].older]:[])] : decisionCases[name] ? [decisionCases[name].thread] : composerCases[name] ? [composerCases[name].thread] : name==='threadLong' ? fx.threadLong() : [name==='empty' ? fx.threadResponse([],[]) : name==='threadTeam'||name==='team' ? fx.threadTeam() : name==='completed' ? fx.threadSingle() : fx.threadActive()];
   const page=await browser.newPage({viewport:{width,height},colorScheme,...(width<1200?{hasTouch:true,...(width<768 || size==='phone-landscape'?{isMobile:true}:{})}:{})});const errors=[];page.on('pageerror',err=>errors.push(err.message));
@@ -208,6 +263,7 @@ await page.locator('#composer').fill(Array.from({length:10},()=>"A full line of 
   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#thread-items article').first().waitFor();await page.evaluate(()=>AC.core.stop());
   hold=true;await page.evaluate(()=>{window.pendingLiveRead=AC.core.refresh();});await held;const before=stateReads;await page.evaluate(()=>{location.hash='#/w/run_test/coder-1';AC.shell.route();});await page.locator('#workspace-terminal').waitFor();assert.equal(stateReads,before,'Opening during a live read must not add a read');f.state.steps[1].transcript.push({type:'text',text:'BROWSER-RACE-RECORDED-OUTPUT'});hold=false;release();await page.evaluate(()=>pendingLiveRead);assert((await page.locator('#workspace-terminal').textContent()).includes('BROWSER-RACE-RECORDED-OUTPUT'));await page.screenshot({path:path.join(out,'regression-workspace-live-focus-phone.png')});count++;await page.close();
  }
+ fs.writeFileSync(path.join(out,'focus-measurements.json'),JSON.stringify(focusMeasurements,null,2));
  fs.writeFileSync(path.join(out,'footer-measurements.json'),JSON.stringify(measurements,null,2));
- }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and 7 regression cases passed`);
+ }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${7+keyboardCases} regression cases passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

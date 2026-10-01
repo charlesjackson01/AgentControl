@@ -451,3 +451,43 @@ unsupported container-rule syntax before parsing; all its equality/alignment exp
 browser still checks actual task geometry. The browser's rail-opening setup now opens the drawer at tablet
 widths; its accepted assertions are unchanged. No request, timer, decision, API, classic or backend changes.
 Native keyboards, interactive surfaces, the in-flight skill-fetch race and persistent bots remain deferred.
+
+## Implementation report — Part C (2026-10-01)
+
+Part A is **68c7cab**, Part B **fddf9eb**. The standalone commit containing this section completes keyboard and
+focus; D–E remain pending. The skip link is the first focusable control and focuses the timeline without changing
+the route or issuing a read. Context tabs and the Workspace toolbar use roving arrow/Home/End navigation.
+The read-only terminal supports arrow/Page/Home/End scrolling; Jump to latest remains reachable.
+
+A shared presentation helper traps focus in decision/Stop/Settings dialogs and small-screen rail/context/Workspace
+sheets, isolates their background with inert and aria-hidden, starts on Cancel/Close/Back, and restores the opener.
+Nested panels restore their previous surface; vanished Workspace links fall back to the recorded session divider.
+This helper leaves decisions.js and all decision requests, confirmation words and delivery reconciliation unchanged.
+All focus outlines use the existing accent and width tokens with an inset offset to avoid clipping.
+
+Verification:
+
+- Chat DOM: **233/233**, eight new C tests. All eight fail on Part B **fddf9eb**, **225/233**,
+  `/tmp/ac-m8c-before-fddf9eb.log`; current `/tmp/ac-m8c-chat.log`.
+- All eight keyboard-only workflows run using real Tab/arrow/Enter/Space/typing events, at desktop and phone in
+  both appearances: **32/32**. They check exact request shapes and preserve server-authoritative waiting and
+  delivery. All **32** fail on Part B, `/tmp/ac-m8c-before-browser.log`; the passing focused run is
+  `/tmp/ac-m8c-keyboard.log`, `/tmp/chat-shots-m8c-keyboard/keyboard-results.json`.
+- Classic DOM: **82/82**, `/tmp/ac-m8c-classic.log`.
+- Full browser: **672 combinations + 39 regressions**, **1,127 screenshots**, `/tmp/ac-m8c-browser.log`,
+  `/tmp/chat-shots-m8c`. **1,612 audits / 38,906 control checks** report a ring and inset of at least **2 px**, including actual 200%
+  text-zoom renders; measurements are in `focus-measurements.json`. Footer and target budgets remain unchanged.
+- Python, unchanged: **423, OK (skipped=3)**; the three named Part A skips remain and OpenCode ran.
+  **326.767 s**, `/tmp/ac-m8c-python.log`.
+- Inspected `keyboard-context-tabs-390-light.png`, `keyboard-history-390-dark.png`,
+  `keyboard-workspace-1440-light.png`: visible selected-tab/control focus, preserved scroll anchor and return to
+  the Workspace opener.
+
+No earlier assertion changed. The DOM harness now reflects native tabIndex and focusin behaviour. Failed
+baseline diagnostics use boolean identity to avoid serialising cyclic DOM objects. The matrix focus audit saves
+focus and scroll before establishing keyboard modality, then restores both; an initial audit moved the timeline
+before taking its snapshot and failed the unchanged newest-message visibility assertion. The corrected audit
+preserves that assertion and measures every focusable control, including doubled-text views.
+
+No new requests, timers, APIs, private material or decision semantics. Native keyboard behaviour, interactive
+surfaces, persistent bots and the D7 in-flight skill-fetch race remain excluded.

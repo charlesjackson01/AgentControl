@@ -215,3 +215,48 @@ function decisionFixture(name='all') {
   return {state,thread,channels:threadChannels(thread,messages.filter(m=>m.action && m.kind!=='outcome').length)};
 }
 Object.assign(module.exports,{decisionMessages,decisionFixture});
+
+// M6: server-recorded live agents are distinct from the proposed plan.
+function membersFixture(kind='teamRunning') {
+  const state=fixture();state.run.title='Task storage';state.run.mode=kind==='singleMembers'?'single':'team';state.run.status='coding';state.inbox=[];
+  const labels={'coder-1':{label:'API'},'coder-2':{label:'Tests'},'reviewer-1':{label:'Review'}};
+  const tasks=[
+    {id:'t1',title:'Define storage',agent:'coder-1',depends_on:[],status:'done',attempts:1,steps:['storage']},
+    {id:'t2',title:'Add API',agent:'coder-1',depends_on:['t1'],status:'running',attempts:1,steps:['api-old','api-new']},
+    {id:'t3',title:'Add tests',agent:'coder-2',depends_on:['t1'],status:'failed',attempts:2,steps:['tests'],reason:'A recorded test failed'},
+    {id:'t4',title:'Review integration',agent:'reviewer-1',depends_on:['t2','t3'],status:'blocked',attempts:1,steps:[],reason:'Waiting for the failed task'},
+    {id:'t5',title:'Document usage',agent:'coder-2',depends_on:[],status:'waiting',attempts:0,steps:[]}
+  ];
+  state.run.team={state:'running',agents:labels,tasks,proposals:2,proposal:{agents:{'coder-1':{role:'coder',label:'API',responsibility:'Build the API'},'coder-2':{role:'tester',label:'Tests',responsibility:'Test the storage'}},tasks:tasks.map(t=>({...t,files:['storage.py']}))},warnings:['Tasks share storage.py'],problems:['Missing task owner']};
+  state.agents=[{name:'coder-2',role:'tester',state:'waiting_on_you',task:'Add tests',since:'2026-09-28T16:02:00Z',stats:{turns:1,tool_calls:1}},
+    {name:'hermes',role:'orchestrator',state:'idle',stats:{turns:3,tool_calls:0}},
+    {name:'coder-1',role:'coder',state:'working',task:'Add API',since:'2026-09-28T16:03:00Z',stats:{turns:3,tool_calls:12}},
+    {name:'reviewer-1',role:'reviewer',state:'blocked',task:'Review integration',stats:{turns:0,tool_calls:0}}];
+  if(['teamProposing','teamProposed','teamUnusable'].includes(kind)) {
+    state.run.team.state=({teamProposing:'proposing',teamProposed:'proposed',teamUnusable:'unusable'})[kind];state.run.team.tasks=[];state.run.team.agents={};state.agents=state.agents.filter(a=>a.name==='hermes');
+  }
+  if(kind==='teamReview')state.run.team.state='review';
+  if(kind==='teamFinished'){state.run.status='completed';state.run.ended='2026-09-28T16:20:00Z';state.agents.forEach(a=>a.state='finished');}
+  if(kind==='singleMembers')delete state.run.team;
+  if(kind==='connections'){state.health.ready=false;state.health.agents.opencode={state:'unreachable',label:'OpenCode did not answer'};state.health.message='A recorded connection needs attention';}
+  state.runs=[{...state.run,prompt_count:4}];
+  state.steps=[{id:'private-step',transcript:[{text:'TRANSCRIPT-SENTINEL'}],result:'RESULT-SENTINEL',prompt:'PROMPT-SENTINEL'}];
+  const session=threadSession('run_test',{title:state.run.title,mode:state.run.mode,status:state.run.status,ended:state.run.ended || null});
+  const messages=[threadMessage('run:run_test','session_start',state.run.title)];
+  if(['teamProposed','teamUnusable'].includes(kind)){const proposal=decisionMessages().proposal;proposal.detail.proposal=clone(state.run.team.proposal);messages.push(proposal);}
+  if(!['teamProposing','teamProposed','teamUnusable'].includes(kind)){
+    const waiting=decisionMessages().question;messages.push(waiting);
+    for(const task of tasks)for(const id of task.steps)messages.push(threadMessage('turn:'+id,'turn',task.title,{number:1,status:'completed',files:[],verification:{status:'passed'}},{actor:task.agent}));
+  }
+  if(kind==='teamFinished'){for(const m of messages)m.action=null;messages.push(threadMessage('out:run_test','outcome','Recorded team result',{status:'completed'}));}
+  const thread=threadResponse(messages,[session],null,{session:kind==='teamFinished'?null:'run_test',phase:'code',status:state.run.status});
+  return {state,thread,channels:threadChannels(thread,messages.filter(m=>m.action && m.kind!=='outcome').length)};
+}
+function membersHistory() {
+  const f=membersFixture('teamRunning');f.state.runs=Array.from({length:30},(_,i)=>({id:i?'history:'+i:'run_test',title:'Session '+i,created:new Date(Date.UTC(2026,8,30,0,0,-i)).toISOString(),status:i?'completed':'coding',mode:i?'single':'team'}));
+  f.thread.sessions[0]={...f.thread.sessions[0],...f.state.runs[0]};f.thread.before='members:older';f.channels.channels[0].sessions=35;
+  const sessions=Array.from({length:5},(_,i)=>threadSession('history:'+(30+i),{title:'Older session '+(30+i),created:new Date(Date.UTC(2026,8,30,0,0,-30-i)).toISOString()}));
+  const older=threadResponse(sessions.map(s=>threadMessage('run:'+s.id,'session_start',s.title,{}, {session:s.id,at:s.created})),sessions);
+  return {...f,older};
+}
+Object.assign(module.exports,{membersFixture,membersHistory});

@@ -40,8 +40,11 @@
     try {
       const t = root.AC.thread, cached = threadCache || t.emptyCache();
       const known = cached.windowIds.slice(-2000).map(id=>id+':'+cached.messages[id].rev).join(',');
+      // Keep the live snapshot on the active session. M6 reads a selected historical
+      // session once through its guarded detail loader, rather than polling it here.
+      const activeId=channels?.channels?.[0]?.active_session || state?.runs?.find(r=>!['completed','blocked','failed','stopped','limit_reached'].includes(r.status))?.id || '';
       const [stateResult,channelResult,newest] = await Promise.all([
-        api('/api/state?scope=current&run='+encodeURIComponent(requested)), api('/api/channels'),
+        api('/api/state?scope=current&run='+encodeURIComponent(activeId)), api('/api/channels'),
         api('/api/thread?channel=main&limit=200'+(known ? '&known='+encodeURIComponent(known) : ''))
       ]);
       if (generation !== epoch) return;
@@ -122,12 +125,12 @@
       single=root.AC.thread.mergeNewest(root.AC.thread.emptyCache(),page);emit();
     }catch(exception){if(exception.status===404 && focused===id && generation===epoch){focused='';single=null;error="That session is not in this project's history.";root.location.replace('#/');emit();}}
   }
-  async function locateWaiting() {
+  async function locateWaiting(budget=10) {
     single=null;
-    for(let page=0;page<=10;page++){
+    for(let page=0;page<=budget;page++){
       const id=threadCache?.ids.find(id=>threadCache.messages[id].action != null && threadCache.messages[id].kind!=='outcome');
       if(id){emit();return id;}
-      if(page===10 || !threadCache?.before)break;
+      if(page===budget || !threadCache?.before)break;
       await loadOlder();
     }
     return null;

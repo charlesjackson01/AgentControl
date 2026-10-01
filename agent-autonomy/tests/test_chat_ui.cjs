@@ -50,7 +50,7 @@ async function harness(state = fixture(), options = {}) {
       if (options.hold && url.startsWith('/api/state')) await new Promise(resolve=>{options.release=resolve;});
       return {ok:true,status:200,json:async()=>{const result=clone(state);if(url.endsWith('run=bogus')) result.run=null;return result;}};
     }});
-  for (const file of ['core.js','model.js','thread.js','decisions.js','composer.js','shell.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
+  for (const file of ['core.js','model.js','thread.js','decisions.js','composer.js','members.js','shell.js'].filter(file=>fs.existsSync(path.join(root,file)))) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   await tick();await tick();
   async function runTimers(delay) {const pending=[...timers].filter(([,t])=>t.delay===delay);for(const [id,t] of pending){timers.delete(id);t.fn();}await tick();}
   return {window,document,composer:window.AC.shell.composer,core:window.AC.core,shell:window.AC.shell,local,session,timers,calls,runTimers,options,publicThread,timeline:document.querySelector('#timeline'),emit:async text=>{streamWake({done:false,value:new TextEncoder().encode(text)});await tick();},drop:async()=>{streamWake({done:true});await tick();}};
@@ -308,13 +308,14 @@ test('M3.1 waiting line separates summary, marker and link in every layout',asyn
     assert(line.previousElementSibling);assert(!line.previousElementSibling.textContent.includes('Waiting for you'));
   }
 });
-test('M3.1 rail discloses the real shown and total session counts only when capped',async()=>{
+test('M3.1 rail counts use the M6 session union and current count wording',async()=>{
   const state=fixture();state.runs=Array.from({length:30},(_,i)=>({...state.run,id:'rail:'+i}));
   const channels=fx.threadChannels(fx.threadActive(),1);channels.channels[0].sessions=47;
-  const h=await harness(state,{channels});assert.equal(h.document.querySelectorAll('#session-list a').length,30);
-  const note=h.document.querySelector('#session-list + .muted');assert(note);assert.equal(note.textContent,'Showing 30 of 47 sessions · older sessions are in the room history');
-  state.runs=state.runs.slice(0,2);await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 2 of 47 sessions · older sessions are in the room history');
-  for(const total of [2,1]){channels.channels[0].sessions=total;await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted'),null);}
+  const h=await harness(state,{channels});assert.equal(h.document.querySelectorAll('#session-list a').length,31);
+  assert(h.document.querySelector('#session-list a[href="#/s/run_test"]'));
+  const note=h.document.querySelector('#session-list + .muted');assert(note);assert.equal(note.textContent,'Showing 31 of 47 sessions');
+  state.runs=state.runs.slice(0,2);await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of 47 sessions');
+  for(const total of [3,2]){channels.channels[0].sessions=total;await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of '+total+' sessions');}
 });
 function revalidationPages(kind='skill') {
   const s=fx.threadSession(), action=fx.threadMessage('stale',kind,'Needs a decision',{state:'proposed'}, {action:{endpoint:'/api/skills/decide'}}), overlap=fx.threadMessage('overlap','decision','Latest recorded update');
@@ -907,6 +908,112 @@ test('M5 a decision in the single-session fallback gets its own fresh server rea
   const far=fx.threadResponse([fx.threadMessage('run:far','session_start','Far active session',{}, {session:'far'}),message],[fx.threadSession('far',{status:'waiting',ended:null})]);
   const h=await harness(fx.decisionFixture('low').state,{hash:'#/s/far',thread:current,channels:fx.threadChannels(current,1),post:async()=>({throws:'offline'}),respond:url=>{if(url.startsWith('/api/thread'))return new URL(url,'http://test').searchParams.get('session')==='far'?far:current;}});
   assert(h.core.getState().single);await clickDecision(h,'approve',message.id);await tick();assert(h.calls.some(c=>c.url.includes('session=far') && c.url.includes('known=')));assert(!button(h,'approve',message.id).disabled);assert.equal(h.core.getState().single.messages[message.id].action.fields.run,'far');assert.equal(posts(h).length,1);
+});
+
+const memberModel=()=>require(path.join(root,'model.js'));
+async function membersHarness(kind='teamRunning',options={}) {const f=fx.membersFixture(kind),h=await harness(f.state,{thread:f.thread,channels:f.channels,...options});h.f=f;return h;}
+async function openMembers(h,id='run_test') {h.window.location.hash='#/s/'+id;h.shell.route();await h.runTimers(0);await tick();await tick();h.document.querySelector('#members-tab').click();await tick();}
+const contextText=h=>h.document.querySelector('#context-content').textContent;
+const detailCalls=(h,id)=>h.calls.filter(c=>c.url==='/api/state?scope=current&run='+id);
+test('M6 roster helpers preserve join order, labels, raw unknown states and activity',()=>{
+  const f=fx.membersFixture(),before=JSON.stringify(f.state);f.state.agents[0].state='future_state';
+  const list=memberModel().membersFromState(f.state);assert.deepEqual(list.map(a=>a.name),['hermes','coder-2','coder-1','reviewer-1']);assert.equal(list[0].displayName,'Hermes');assert.equal(list[1].displayName,'coder-2 (Tests)');assert.equal(list[1].stateLabel,'future_state');assert.equal(list[1].symbol,'◌');assert.equal(list[0].activity,'3 decisions');assert.equal(list[1].activity,'1 turn · 1 tool call');assert.equal(list[2].activity,'3 turns · 12 tool calls');
+  assert.deepEqual(memberModel().membersFromState({agents:[]}),[]);f.state.agents[0].state='waiting_on_you';assert.equal(JSON.stringify(f.state),before);
+});
+test('M6 team-state helpers match classic wording, Auto, expiry and recorded counts',()=>{
+  const m=memberModel(),f=fx.membersFixture('teamProposed');
+  for(const [state,text] of [['proposing','Hermes is proposing a team. Nothing runs until you approve it.'],['proposed','Proposed team · not running yet'],['unusable','Hermes could not produce a usable team plan:'],['single','Running with one agent, as chosen'],['approved','Team · 0 of 0 tasks done'],['running','Team · 0 of 0 tasks done'],['review','Hermes reviews the merged result']]) {f.state.run.team.state=state;const plan=m.teamFromRun(f.state.run);assert(JSON.stringify(plan).includes(text),state);assert.equal(plan.pending,['proposing','proposed','unusable'].includes(state));}
+  for(const state of ['proposing','proposed','unusable']){f.state.run.team.state=state;f.state.run.status='completed';assert.equal(m.teamFromRun(f.state.run).summary,'Not decided before the session ended');assert(!m.teamFromRun(f.state.run).pending);}
+  f.state.run.auto={reasons:['A small goal','Recorded reason']};f.state.run.team.state='single';assert.equal(m.teamFromRun(f.state.run).auto.outcome,'one agent after Hermes’s review');f.state.run.mode='single';assert.equal(m.teamFromRun(f.state.run).auto.outcome,'one agent');f.state.run.mode='team';f.state.run.team.state='proposed';assert.equal(m.teamFromRun(f.state.run).auto.outcome,'a team plan for your approval');
+});
+test('M6 task helpers match classic depths and explicit statuses, counts and bounds',()=>{
+  const m=memberModel(),tasks=fx.membersFixture().state.run.team.tasks;assert.deepEqual(m.taskDepths(tasks),{t1:0,t2:1,t3:1,t4:2,t5:0});assert.deepEqual(m.taskDepths([{id:'a',depends_on:[]},{id:'b',depends_on:['a']},{id:'c',depends_on:['b']}]),{a:0,b:1,c:2});assert.equal(m.taskDepths([{id:'missing',depends_on:['absent']}]).missing,1);assert(Object.values(m.taskDepths([{id:'a',depends_on:['b']},{id:'b',depends_on:['a']}])).every(Number.isFinite));
+  for(const [state,label,symbol] of [['waiting','Waiting','◌'],['running','Running','●'],['done','Done','✓'],['failed','Failed','✕'],['blocked','Blocked','!'],['future_state','future_state','◌']])assert.deepEqual(m.taskStatus(state),{label,symbol});
+  const run=fx.membersFixture().state.run;run.team.tasks=Array.from({length:53},(_,i)=>({id:'task'+i,title:'x'.repeat(500),status:i<3?'done':'waiting'}));run.team.tasks[0].depends_on=['task51'];run.team.tasks[51].depends_on=['task52'];const graph=m.tasksFromRun(run);assert.equal(graph.done,3);assert.equal(graph.total,53);assert.equal(graph.omitted,3);assert.equal(graph.groups.flatMap(g=>g.tasks).length,50);assert(graph.groups.flatMap(g=>g.tasks).every(t=>t.title.length<=300));assert(graph.groups.find(g=>g.depth===2)?.tasks.some(t=>t.id==='task0'),'hidden tasks still contribute their recorded dependency depth');
+});
+test('M6 rail union dedupes with live precedence, orders history and counts actual entries',()=>{
+  const m=memberModel(),state={runs:[{id:'a',title:'Live title',created:'2026-10-01',status:'coding'}]},cache={sessions:{a:{id:'a',title:'Old title',created:'2026-09-01',status:'completed'},b:{id:'b',title:'Older',created:'2026-09-30',status:'completed'}}};const rail=m.railSessions(state,cache,5);assert.deepEqual(rail.sessions.map(s=>s.id),['a','b']);assert.equal(rail.sessions[0].status,'coding');assert.equal(rail.note,'Showing 2 of 5 sessions');
+});
+test('M6 proposed agents never become live members and the panel has no decisions',async()=>{
+  const h=await membersHarness('teamProposed');await openMembers(h);assert.equal(h.document.querySelector('#members-tab').textContent,'Team');assert.equal(h.document.querySelectorAll('#live-members [data-member]').length,1);assert(!h.document.querySelector('#rail .members').textContent.includes('coder-'));assert(h.document.querySelector('#rail').textContent.includes('Team plan pending'));assert(contextText(h).includes('Proposed team · not running yet'));assert(contextText(h).includes('Build the API'));assert(contextText(h).includes('Proposal 2'));assert.equal(h.document.querySelectorAll('#context [data-decision]').length,0);assert(!/Approve team|Run as one agent|Ask for another plan/.test(contextText(h)));assert.equal(posts(h).length,0);
+});
+test('M6 every team-plan state, finished expiry and Auto render from recorded state',async()=>{
+  for(const [kind,text] of [['teamProposing','Hermes is proposing a team'],['teamProposed','Proposed team · not running yet'],['teamUnusable','Missing task owner'],['teamRunning','Team · 1 of 5 tasks done'],['teamReview','Hermes reviews the merged result'],['teamFinished','Team · 1 of 5 tasks done'],['singleMembers','Members']]) {const h=await membersHarness(kind);await openMembers(h);assert(contextText(h).includes(text),kind);assert.equal(h.document.querySelector('#members-tab').textContent,kind==='singleMembers'?'Members':'Team');}
+  for(const state of ['proposing','proposed','unusable']){const f=fx.membersFixture('teamFinished');f.state.run.team.state=state;const h=await harness(f.state,{thread:f.thread,channels:f.channels});await openMembers(h);assert(contextText(h).includes('Not decided before the session ended'));assert.equal(h.document.querySelector('[data-room-link="proposal"]'),null);}
+  const h=await membersHarness('teamProposed');h.f.state.run.auto={reasons:['Recorded small goal']};await h.core.refresh();await openMembers(h);assert(contextText(h).includes('Auto mode:'));assert(contextText(h).includes('a team plan for your approval'));assert(contextText(h).includes('Recorded small goal'));
+});
+test('M6 member details and vertical tasks show statuses, attempts, reasons and labels',async()=>{
+  const h=await membersHarness();await openMembers(h);for(const value of ['Hermes','coder-1 (API)','coder-2 (Tests)','3 decisions','3 turns · 12 tool calls','Tasks · 1 of 5 done','Can start now','After step 1','After step 2','✓ Done','● Running','✕ Failed','! Blocked','◌ Waiting','2 tries','A recorded test failed','After t2, t3'])assert(contextText(h).includes(value),value);
+  assert.equal(h.document.querySelectorAll('.task-group').length,3);for(const list of h.document.querySelectorAll('.task-group ul'))assert(list.getAttribute('aria-labelledby'));assert.equal(h.document.querySelector('[data-room-link="turn"][data-message-id="turn:api-new"]').getAttribute('aria-label'),'Show the latest turn of task t2: Add API');
+});
+test('M6 lists bound 50 entries and 300 characters with omitted counts',async()=>{
+  const f=fx.membersFixture('teamProposed');f.state.run.team.proposal.agents=Object.fromEntries(Array.from({length:53},(_,i)=>['coder-'+i,{label:'x'.repeat(500),responsibility:'x'.repeat(500)}]));f.state.run.team.warnings=Array.from({length:53},()=> 'w'.repeat(500));const h=await harness(f.state,{thread:f.thread,channels:f.channels});await openMembers(h);assert.equal(h.document.querySelectorAll('[data-proposed]').length,50);assert(contextText(h).includes('…and 3 more'));assert(!contextText(h).includes('x'.repeat(301)));
+  const tasks=await membersHarness();tasks.f.state.run.team.tasks=Array.from({length:53},(_,i)=>({id:'t'+i,title:'x'.repeat(500),agent:'coder-1',status:'waiting',steps:[]}));await tasks.core.refresh();await openMembers(tasks);assert.equal(tasks.document.querySelectorAll('[data-task]').length,50);assert(contextText(tasks).includes('…and 3 more'));
+});
+test('M6 loaded proposal and latest-turn links focus server messages without POSTs',async()=>{
+  const proposal=await membersHarness('teamProposed');await openMembers(proposal);proposal.document.querySelector('[data-room-link="proposal"]').click();await tick();await tick();assert(proposal.timeline.querySelector('[data-message="m5:proposal"]').classList.contains('focused'));
+  const task=await membersHarness();await openMembers(task);task.document.querySelector('[data-message-id="turn:api-new"]').click();await tick();await tick();assert(task.timeline.querySelector('[data-message="turn:api-new"]').classList.contains('focused'));assert.equal(posts(proposal).length+posts(task).length,0);
+});
+test('M6 member waiting link selects that actor before the general waiting item',async()=>{
+  const h=await membersHarness();const first=clone(fx.decisionMessages().low);first.id='first-other';h.f.thread.messages.splice(1,0,first);h.f.channels.channels[0].waiting=2;await h.core.refresh();await openMembers(h);h.document.querySelector('[data-room-link="waiting"][data-actor="coder-2"]').click();await tick();await tick();assert(h.timeline.querySelector('[data-message="m5:question"]').classList.contains('focused'));assert.equal(posts(h).length,0);
+});
+test('M6 absent actor waiting item uses the existing waiting pointer fallback',async()=>{
+  const h=await membersHarness();h.f.thread.messages.find(m=>m.action).actor='coder-1';await h.core.refresh();await openMembers(h);h.document.querySelector('[data-room-link="waiting"]').click();await tick();await tick();assert(h.timeline.querySelector('[data-message="m5:question"]').classList.contains('focused'));
+});
+test('M6 phone links close the sheet before revealing proposal and task turns',async()=>{
+  for(const [kind,selector,id] of [['teamProposed','[data-room-link="proposal"]','m5:proposal'],['teamRunning','[data-message-id="turn:api-new"]','turn:api-new']]) {const h=await membersHarness(kind,{coarse:true});await openMembers(h);assert(!h.document.querySelector('#context').hidden);h.document.querySelector(selector).click();assert(h.document.querySelector('#context').hidden);await tick();await tick();assert(h.timeline.querySelector('[data-message="'+id+'"]').classList.contains('focused'));}
+});
+test('M6 room links page existing history within ten reads and fall back to a session',async()=>{
+  for(const kind of ['proposal','turn']){
+    const f=fx.membersFixture(kind==='proposal'?'teamProposed':'teamRunning'),old=clone(f.thread),target=kind==='proposal'?'m5:proposal':'turn:api-new';f.thread.messages=f.thread.messages.filter(m=>m.id!==target);f.thread.before='target-page';let reads=0;
+    const h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>{if(url.includes('before=target-page')){reads++;return old;}}});await openMembers(h);h.document.querySelector('[data-room-link="'+kind+'"]'+(kind==='turn'?'[data-message-id="'+target+'"]':'')).click();await tick();await tick();assert.equal(reads,1);assert(h.timeline.querySelector('[data-message="'+target+'"]').classList.contains('focused'));assert.equal(posts(h).length,0);
+  }
+  const f=fx.membersFixture('teamProposed');f.thread.messages=f.thread.messages.filter(m=>!m.action);f.thread.before='endless';let reads=0;const h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>{if(url.includes('before=')){reads++;return {...f.thread,before:'endless:'+reads};}}});await openMembers(h);h.document.querySelector('[data-room-link="proposal"]').click();for(let i=0;i<15;i++)await tick();assert.equal(reads,10);assert.equal(h.window.location.hash,'#/s/run_test');assert.equal(posts(h).length,0);
+  const waiting=fx.membersFixture();waiting.thread.messages=waiting.thread.messages.filter(m=>!m.action);waiting.thread.before='waiting:older';let waitingReads=0;const w=await harness(waiting.state,{thread:waiting.thread,channels:waiting.channels,respond:url=>{if(url.includes('before=')){waitingReads++;return {...waiting.thread,before:'waiting:older:'+waitingReads};}}});await openMembers(w);const load=w.core.loadOlder;let first=true;w.core.loadOlder=async()=>{const result=await load();if(first){first=false;return false;}return result;};w.document.querySelector('[data-room-link="waiting"]').click();for(let i=0;i<15;i++)await tick();assert.equal(waitingReads,10,'a superseded paging attempt consumes the shared ten-read budget');assert.equal(posts(w).length,0);
+});
+test('M6 selected-session loader reads once, never polls and refetches only changed status',async()=>{
+  const h=await membersHarness(),old=fx.membersFixture('teamFinished');old.state.run.id='older';old.state.agents=[{name:'old-agent',role:'coder',state:'finished'}];h.f.state.runs.push({id:'older',status:'completed',created:'2026-09-01',title:'Older team'});h.f.thread.sessions.push({...old.thread.sessions[0],id:'older'});h.f.thread.messages.unshift(fx.threadMessage('run:older','session_start','Older team',{}, {session:'older'}));h.options.respond=url=>url==='/api/state?scope=current&run=older'?old.state:undefined;
+  await h.core.refresh();await openMembers(h,'older');assert.equal(detailCalls(h,'older').length,1);assert(contextText(h).includes('old-agent'));assert(!h.document.querySelector('#live-members').textContent.includes('coder-2 (Tests)'));
+  for(let i=0;i<3;i++)await h.core.refresh();assert.equal(detailCalls(h,'older').length,1);h.f.state.runs.find(r=>r.id==='older').status='failed';await h.core.refresh();await tick();assert.equal(detailCalls(h,'older').length,2);await h.core.refresh();assert.equal(detailCalls(h,'older').length,2);
+  h.window.location.hash='#/';h.shell.route();await openMembers(h,'older');assert.equal(detailCalls(h,'older').length,3);
+});
+test('M6 active session uses live data without another detail read',async()=>{
+  const h=await membersHarness();await openMembers(h);const count=h.calls.filter(c=>c.url.startsWith('/api/state')).length;h.document.querySelector('#session-tab').click();h.document.querySelector('#members-tab').click();h.shell.render(h.core.getState());assert.equal(h.calls.filter(c=>c.url.startsWith('/api/state')).length,count);assert(contextText(h).includes('coder-1 (API)'));
+});
+test('M6 stale selected responses are dropped and reads stay single flight',async()=>{
+  const h=await membersHarness(),responses={};let pending=0,max=0;
+  for(const id of ['old-a','old-b']){h.f.state.runs.push({id,status:'completed',title:id,created:'2026-09-01'});h.f.thread.sessions.push(fx.threadSession(id,{mode:'team'}));h.f.thread.messages.unshift(fx.threadMessage('run:'+id,'session_start',id,{}, {session:id}));}
+  h.options.respond=async url=>{const id=new URL(url,'http://test').searchParams.get('run');if(['old-a','old-b'].includes(id)){pending++;max=Math.max(max,pending);const result=await new Promise(resolve=>responses[id]=()=>resolve({...h.f.state,run:{id,mode:'team',team:{state:'single'}},agents:[{name:id,role:'coder',state:'finished'}]}));pending--;return result;}};
+  await h.core.refresh();h.window.location.hash='#/s/old-a';h.shell.route();h.document.querySelector('#members-tab').click();await tick();assert(contextText(h).includes('Loading team…'));assert.equal(h.document.querySelector('#members-tab').textContent,'Team');h.window.location.hash='#/s/old-b';h.shell.route();await tick();assert.equal(detailCalls(h,'old-b').length,0);responses['old-a']();await tick();await tick();assert(!contextText(h).includes('old-a'));assert.equal(detailCalls(h,'old-b').length,1);responses['old-b']();await tick();await tick();h.document.querySelector('#members-tab').click();assert(contextText(h).includes('old-b'));assert.equal(max,1);
+});
+test('M6 selected read errors show server text and Retry is a GET',async()=>{
+  const h=await membersHarness();h.f.state.runs.push({id:'older',status:'completed',title:'Older',created:'2026-09-01'});h.f.thread.sessions.push(fx.threadSession('older'));h.f.thread.messages.unshift(fx.threadMessage('run:older','session_start','Older',{}, {session:'older'}));let fail=true;h.options.respond=url=>url==='/api/state?scope=current&run=older'?(fail?{error:'Recorded detail unavailable'}:{...h.f.state,run:{id:'older',mode:'single'},agents:[{name:'history-agent',state:'finished'}]}):undefined;await h.core.refresh();await openMembers(h,'older');assert(contextText(h).includes('Recorded detail unavailable'));fail=false;h.document.querySelector('#retry-team').click();await tick();await tick();assert(contextText(h).includes('history-agent'));assert.equal(detailCalls(h,'older').length,2);assert.equal(posts(h).length,0);
+});
+test('M6 selected 401 discards memory and returns to sign-in',async()=>{
+  const h=await membersHarness();h.f.state.runs.push({id:'older',status:'completed',title:'Older',created:'2026-09-01'});await h.core.refresh();h.options.unauthorizedPath='/api/state?scope=current&run=older';h.window.location.hash='#/s/older';h.shell.route();await tick();await tick();assert(!h.core.getState().authenticated);assert.equal(h.shell.members.getState().data,null);assert.equal(h.local.has('ac-dashboard-key'),false);
+});
+test('M6 keyed panel and rail items retain focus and scroll through recorded updates',async()=>{
+  const h=await membersHarness();await openMembers(h);const link=h.document.querySelector('[data-message-id="turn:api-new"]'),context=h.document.querySelector('#context'),rail=h.document.querySelector('#rail');link.focus();context.scrollTop=140;rail.scrollTop=70;h.f.state.run.team.tasks[1].status='done';h.f.state.agents.find(a=>a.name==='coder-1').task='Next recorded task';await h.core.refresh();assert.equal(h.document.activeElement,link);assert.equal(h.document.querySelector('[data-message-id="turn:api-new"]'),link);assert.equal(context.scrollTop,140);assert.equal(rail.scrollTop,70);const summary=h.document.querySelector('#connections > summary');summary.focus();await h.core.refresh();assert.equal(h.document.activeElement,summary);
+});
+test('M6 Connections display per-service symbols, labels and exact shared-lock check',async()=>{
+  let release;const h=await membersHarness('connections',{post:async()=>new Promise(resolve=>release=()=>resolve({ok:true}))});const c=h.document.querySelector('#connections');for(const value of ['✓ Ready','! Needs attention','OpenCode did not answer','A recorded connection needs attention'])assert(c.textContent.includes(value));c.open=true;h.document.querySelector('#rail-check-connections').click();await tick();assert.equal(h.core.getState().writeOwner,'connections');assert(h.document.querySelector('#send-message').disabled);assert([...h.timeline.querySelectorAll('[data-decision]')].every(n=>n.disabled));h.document.querySelector('#rail-check-connections').click();assert.deepEqual(posts(h),[{url:'/api/check',body:{}}]);release();await tick();await tick();assert.equal(h.core.getState().writeOwner,'');assert(c.open);
+});
+test('M6 Connections check is disabled by decisions and composer writes and shows errors',async()=>{
+  for(const owner of ['decision','composer']){let release;const h=await membersHarness('teamProposed',{post:async()=>new Promise(resolve=>release=()=>resolve({ok:true}))});if(owner==='decision'){h.timeline.querySelector('[data-decision="approve_team"]').click();}else{type(h,'A note');h.composer.submit();}await tick();assert(h.document.querySelector('#rail-check-connections').disabled);h.document.querySelector('#rail-check-connections').click();assert.equal(posts(h).length,1);release();await tick();await tick();}
+  const h=await membersHarness('connections',{post:async()=>({error:'Check refused by server'})});h.document.querySelector('#rail-check-connections').click();await tick();await tick();assert.equal(h.document.querySelector('#connections-error').textContent,'Check refused by server');assert.equal(posts(h)[0].url,'/api/check');
+});
+test('M6 rail paging grows the shared room cache and reports exact X/N counts',async()=>{
+  const f=fx.membersHistory(),h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url.includes('before=members%3Aolder')?f.older:undefined});assert.equal(h.document.querySelectorAll('#session-list a').length,30);assert.equal(h.document.querySelector('#session-count').textContent,'Showing 30 of 35 sessions');h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(h.document.querySelectorAll('#session-list a').length,35);assert.equal(h.document.querySelector('#session-count').textContent,'Showing 35 of 35 sessions');assert.equal(h.core.getState().thread.sessions['history:34'].id,'history:34');assert.equal(h.document.querySelector('#load-earlier-sessions'),null);assert.equal(posts(h).length,0);
+});
+test('M6 keyed updates preserve every More link and focus the latest recorded task turn',async()=>{
+  const h=await membersHarness();await openMembers(h);const before=[...h.document.querySelectorAll('#more a')].map(a=>a.textContent);assert.equal(before.length,6);
+  const button=h.document.querySelector('[data-message-id="turn:api-new"]');button.focus();h.f.state.run.team.tasks[1].steps.push('api-last');h.f.state.run.team.tasks[1].depends_on=[];h.f.thread.messages.push(fx.threadMessage('turn:api-last','turn','Recorded retry',{number:2,status:'running',files:[]}));await h.core.refresh();assert.deepEqual([...h.document.querySelectorAll('#more a')].map(a=>a.textContent),before);assert.equal(h.document.activeElement,h.document.querySelector('[data-message-id="turn:api-last"]'));
+});
+test('M6 explicit empty or missing server agents never create live members',async()=>{
+  for(const absent of [false,true]){const f=fx.membersFixture('teamProposed');if(absent)delete f.state.agents;else f.state.agents=[];const h=await harness(f.state,{thread:f.thread,channels:f.channels});await openMembers(h);assert.equal(h.document.querySelectorAll('#live-members [data-member]').length,0);assert.equal(h.document.querySelectorAll('#rail .members [data-member]').length,0);assert(contextText(h).includes('No recorded members'));assert.equal(h.document.querySelectorAll('[data-proposed]').length,2);}
+});
+test('M6 step transcripts, results and prompts never appear anywhere in the DOM',async()=>{
+  for(const kind of ['teamProposing','teamProposed','teamUnusable','teamRunning','teamReview','teamFinished','singleMembers','connections']){const h=await membersHarness(kind);await openMembers(h);for(const sentinel of ['TRANSCRIPT-SENTINEL','RESULT-SENTINEL','PROMPT-SENTINEL'])assert(!h.document.toString().includes(sentinel),kind+sentinel);}
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

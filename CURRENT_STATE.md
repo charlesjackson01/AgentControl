@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M6_MEMBERS_AND_TEAM.md` (Part A complete; members/team implementation next) |
+| Handoffs | `docs/handoffs/`. **Current:** `M6_MEMBERS_AND_TEAM.md` (implemented and verified; awaiting review) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -34,16 +34,16 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M4.1 Composer corrections** | ✅ accepted (review 2026-09-30) | Codex | `docs/handoffs/M4_1_CORRECTIONS.md`: only allowed preferences remembered; title/checks/dirty acknowledgement reset; isolated follow-up overlay; leading-only `@agent`; literal content and empty-room copy corrected |
 | **M5.0 Actionability (M5 prerequisite)** | ✅ **accepted (Parts A and B; review 2026-10-01)** | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: shared action predicates and exact paged-thread waiting count; expired research/skill label; exactly the two D7 guards; in-flight fetch race excluded |
 | **M5 Decisions in the room** | ✅ **accepted (Parts A `e6e6ebf` and B `b12e88a`; review 2026-10-01)** | Codex | every room decision uses its existing endpoint with server-authoritative state. Owner authorized only the awaiting-fetch skill Reject endpoint exception. F1 (fast verification reconciliation) is corrected in M6 Part A. The review is in `docs/handoffs/M5_DECISIONS.md` |
-| **M6 Members and team** | Part A complete; Parts B–D next | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: Part A = the M5 carry-over (F1 read-model fix, O1 alias draft); then roster, team-plan states, task graph, Connections detail and rail sessions, all from recorded state with no new controls or APIs |
+| **M6 Members and team** | Implemented and verified; awaiting review | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions |
 | M7–M9 | not started | | see architecture §12 |
 
-The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `shell.js`.
+The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `shell.js`.
 `/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
 The room composer starts sessions and follow-ups, sends notes and offers the M4 controls through existing endpoints.
 Actionable cards now expose the M5 permission, question, team, research, skill and outcome decisions in the room.
 Classic remains the fallback for truncated or unsupported review; `/` and `/classic` serve the unchanged classic UI.
 The new read-only endpoints project the journal with bounded messages, stable ids/revisions and cursor paging.
-The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` still supplies members, Connections, the rail session list and context. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
+The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` supplies live members and Connections; a guarded historical read supplies selected team details. The rail combines live runs with loaded thread sessions. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
 M4.1 cleans legacy stored titles/checks, preserves per-session fields on failed starts, and clears them after success
 or follow-up cancellation. Inherited follow-up preferences are remembered only when explicitly edited in Settings.
 Only a valid leading `@agent` routes a note; later, unknown, package and decorator tokens stay literal.
@@ -59,26 +59,27 @@ markers and counts change through fresh server reads. Shared write locking, stal
 uncertainty and three-refresh/15-second Refresh recovery are covered. Critical, research and skill evidence is
 expanded by default; phone dialogs are full-width bottom sheets with Cancel focus and 40 px targets.
 M6 Part A projects bounded recorded verification status/times on actionable outcomes and clears successful decision-alias drafts. It preserves the existing revision reconciliation and server authority.
+M6 adds recorded member labels/presence/activity, classic team-plan wording, vertical dependency groups and latest-turn links. Proposed agents remain separate from recorded members, and panel links only focus room cards. Historical details are read once per selection and again only on a status change. Connections checks share the existing write lock. Rail history and room history share paging; keyed updates preserve focus and scroll. Step transcripts, results and prompts never enter this panel.
 Backend read-model tests: `tests/test_conversation.py` (51) and `tests/test_thread_api.py` (19); journal tests (7) include v6-to-v7 preservation and index query plans.
 
-## Tests (M6 Part A, based on `af4b9ef`; verification 2026-10-01)
+## Tests (M6, based on `af4b9ef`; verification 2026-10-01)
 
 | Suite | Command | Result |
 |---|---|---|
-| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests -v` | **423 tests, OK (skipped=3)**; final sequential run, 260.527 s; OpenCode trio ran |
+| Backend (Python) | `python3 -m unittest discover -s agent-autonomy/tests` | **423 tests, OK (skipped=3)**; final rerun, 256.332 s; OpenCode trio ran |
 | Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
-| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **142/142 passed** (139 accepted M5 + 3 M6 Part A); exact requests, server authority, races, uncertainty, paging invariants and aliases |
-| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m6a` | **156 combinations + 6 regressions passed**, 220 screenshots; footer budgets, tap targets, bottom sheets, waiting pointer, overflow and page errors checked |
-| Projection + HTTP | From `agent-autonomy/tests`: `python3 -m unittest -v test_conversation test_thread_api` | **70 tests, OK**; three new M6 Part A regressions; all earlier projection and M5.0 invariant/guard tests unchanged |
-| Real server + Chromium | `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m6a-real-check.cjs` | **Passed** against real `app.py` and workflow fakes; verifier `true`, first read after 1.5 s, new outcome revision and idle card after three more reads |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **167/167 passed** (139 accepted M5 + 3 Part A + 25 M6); exact requests, server authority, races, uncertainty, paging invariants and aliases |
+| Chat browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m6` | **210 combinations + 6 regressions passed**, 290 screenshots, including 320 px phones; footer budgets, tap targets, bottom sheets, waiting pointer, overflow and page errors checked |
+| Projection + HTTP | `PYTHONPATH=agent-autonomy:agent-autonomy/tests python3 -m unittest -v test_conversation test_thread_api` | **70 tests, OK**, 14.427 s; three new M6 Part A regressions; all earlier projection and M5.0 invariant/guard tests unchanged |
+| Real server + Chromium | `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m6a-real-check.cjs` | **Passed**: fast verifier `true`, changed revision and idle card; separate `/tmp/ac-m6-real-check.cjs` verifies recorded proposing/proposed/live members, M5 approval, latest-turn focus and one `/api/check {}` (202), followed by server health |
 
 DOM test dependencies (test-only, installed outside the repo):
 `npm install --prefix /tmp/ac-tests --no-save linkedom cssom playwright-core`.
 Chromium was found under `~/.cache/ms-playwright` in this environment; the screenshot script discovers it or accepts `CHROMIUM_PATH`.
 The socket-based backend tests and Chromium ran outside the sandbox after their socket setup was refused inside it.
 M5's room decision checks and screenshots use fresh runs. Desktop and phone renders were inspected for critical
-review, research, skill install, questions, team, Apply and delivery/error states. The measured phone footer is
-57 px idle / 105 px waiting, with at least 75.3% conversation. Earlier composer verification included literal/targeted notes,
+review, research, skill install, questions, team, Apply and delivery/error states. The M6 phone footer is
+57 px idle / 105 px waiting, with at least 70.1% conversation when a selected-session header is present (75.3% in the earlier unselected M5 cases). Earlier composer verification included literal/targeted notes,
 cleaned legacy Settings and restored Settings after cancelling a follow-up.
 The M4 report records the fake-backed real HTTP/browser start, note, targeting, rename, check,
 pause/resume/stop and follow-up checks. Keyboard viewport shrinkage to 480 px passed in Chromium;
@@ -105,6 +106,9 @@ recorded in the M5 Part A completion report. No protected test or engine code wa
 Part B's first full run hit three host Podman image-inspection errors and two unchanged container-fixture waits.
 All four distinct tests passed in isolation (6.889 s), then the full verbose suite passed. Exact names and
 logs are in the M5 completion report; no protected tests, runtime configuration or engine code was changed.
+M6's first final full run hit the unchanged lifecycle sampling assertion and two fixed-timeout team waits.
+All three passed together in isolation (5.992 s), then the full 423-test rerun passed (256.332 s).
+Exact names and results are recorded in the M6 completion report; no protected test or backend was changed.
 
 ## The app today (classic UI)
 
@@ -141,16 +145,15 @@ logs are in the M5 completion report; no protected tests, runtime configuration 
   1,777.6/3,072.0 ms to **12.9/91.9 ms**. Part A and index-only timings are in the completion report.
 - The M1 review lists optional polish items (401 key handling, autocomplete, `/classic/`, live region, pluralisation,
   tab keys, stream backoff reset). None is required, and they can be folded into later UI milestones.
-- `/api/state` caps runs at 30. The rail's session list still inherits that in M3; the timeline itself pages the full history through `/api/thread`.
-  Reviewed and acceptable: older sessions stay reachable through paging, deep links and "continues" links. M3.1 now shows a
-  "Showing 30 of N sessions · older sessions are in the room history" note using the actual counts; M6 replaces the rail's data source.
+- `/api/state` caps runs at 30. M6 unions those entries with loaded thread sessions, so rail paging grows the
+  list using the room cache. The count is “Showing X of N sessions”; no per-session rail fetch is added.
 - **M5.0 accepted (`M5_0_ACTIONABILITY.md`).** Thread actions and `channels.waiting` now use
   the same predicates. Fully paged journals match exactly, including leftover research/skills, stopping sessions,
   missing fingerprints, duplicate packets and proposal history. Exactly the two D7 guards refuse dead research
   decisions and finished-session skill fetches before effects.
 - **Intentionally excluded skill-fetch race (D7 boundary):** a session can finish while a fetch accepted earlier
   is already downloading outside the controller lock. Existing post-fetch behaviour is unchanged; no new guard,
-  cleanup or lifecycle change handles this case in M5.0 or M5.
+  cleanup or lifecycle change handles this case in M5.0, M5 or M6.
 - **M5 F1 corrected in M6 Part A.** The actionable outcome projects recorded `detail.verification {status, created, ended}`, preventing a fast verification from returning to its pre-verification revision. No `decisions.js` change. Successful slash aliases also clear their draft; errors retain it.
 - **M5 endpoint clarification resolved by the owner:** only Reject on an actionable awaiting-fetch skill may
   use `/api/skills/decide` when its accepted action names `/api/skills/fetch`. Every other decision uses the
@@ -161,6 +164,5 @@ logs are in the M5 completion report; no protected tests, runtime configuration 
 
 ## Next step
 
-1. Codex completes M6 Parts B–D after the verified standalone Part A commit.
-2. Opus reviews M6.
-3. M7–M9 remain unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge into `main`.
+1. Opus reviews M6; implementation and verification are complete, with standalone Part A `813fd9f`.
+2. M7–M9 remain unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge into `main`.

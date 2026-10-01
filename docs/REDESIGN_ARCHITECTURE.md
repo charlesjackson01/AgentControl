@@ -126,8 +126,12 @@ agent-autonomy/chat/
   core.js         AC.core: key storage, api(), live stream (SSE via fetch) + polling fallback, store
   model.js        AC.model: pure view-model adapters (channels, sessions, members, presence)
                   members come from /api/state `agents` (the selected run); no separate /api/agents call
+  thread.js       AC.thread: server-projected timeline, keyed cards and history cache
+  decisions.js    AC.decisions: M5 room decisions and server-authoritative reconciliation
+  composer.js     AC.composer: M4 composer and decision aliases
+  members.js      AC.members: recorded team panel, guarded selected-session read, keyed rendering
   shell.js        AC.shell: rendering of the rail, room, context panel; hash router; boot
-  (later) thread.js, composer.js, cards.js, members.js, workspace.js
+  (later) workspace.js
 ```
 
 **Conventions**, chosen so the existing DOM-test style works (`tests/test_ui.cjs` runs scripts in `node:vm` with linkedom):
@@ -291,7 +295,14 @@ the same card can offer another decision, as specified in the M5 handoff.
   - the Hermes team proposal (`run.team`, the `team proposal` event)
   - the decision via `/api/control`
 
-  The room shows the proposal as a card. The Members panel shows the proposed roster before approval and the live roster after it.
+  The Team/Members tab shows the live roster from `state.agents`, the proposed roster from `run.team.proposal`
+  (never as live members), team-state wording from classic `renderTeam()`, and the task graph from `run.team.tasks`.
+  The panel has no decision controls; team decisions stay on the room card.
+  Active details use the live state snapshot. A selected historical session has one guarded memory-only read per
+  selection, refetched only when its recorded status changes. Room links share the ten-page locate budget.
+  The rail's session list is the union of `state.runs` and the sessions in the loaded thread cache; live run status
+  wins on duplicate ids. Rail paging loads the room's existing cache, and the note reports “Showing X of N sessions”.
+  Connections shows per-service recorded health and uses the existing `/api/check` under the shared write lock.
 
 ## 9. Design language (single, token-based)
 
@@ -467,3 +478,9 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 - 2026-10-01 (M6 Part A): the actionable outcome projects only bounded verification status and times, making fast
   on-demand verification observable through the existing new-`rev` reconciliation. Successful decision aliases
   clear the composer draft; errors retain it. Decision semantics and D7 are unchanged.
+- 2026-10-01 (M6): recorded members, separate proposed roster, classic team-plan wording, vertical task groups and
+  latest-turn links are implemented. Historical details are guarded reads; the live snapshot stays on the active
+  session. Connections checks share write locking. The rail grows with loaded history and retains keyed focus.
+  No backend execution, API, schema, classic or M5 decision semantics changed. The owner authorized only the
+  superseded M3.1 rail-test rewrite required by the session union and new count wording, in addition to Part A O1.
+  D7 and the intentionally excluded in-flight skill-fetch race remain unchanged.

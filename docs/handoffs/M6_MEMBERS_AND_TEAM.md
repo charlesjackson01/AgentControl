@@ -438,3 +438,132 @@ Skipped tests (environment gates):
 
 Part A is committed independently after the status/stat/name/whitespace scope inspection. Its hash will be
 recorded in the final M6 report. Parts B–D have not been implemented in this commit.
+
+## M6 completion report — 2026-10-01 (Codex)
+
+**Part A commit:** `813fd9f0f5979147368e09c355f90361e86a34e1` — `Make recorded verification observable for M6 Part A`.
+All its required checks completed before that commit and before Parts B–D implementation began. Evidence is above.
+
+**Remaining M6 commit:** the commit containing this completion report, titled `Show recorded members and team plans for M6`.
+The final hash is reported separately from Part A when pushing `feature/chat-first-redesign`.
+
+### Recorded members and team
+
+`model.js` exposes pure roster, team-state, task-depth/status and rail-union helpers. `members.js` renders the
+Team/Members panel and reconciles keyed rows and controls in place, preserving focus and scroll. Hermes comes
+first, followed by the server's join order. Labels, roles, presence symbols, current task, relative state time and
+pluralised activity come from recorded state. Neither an empty nor a missing server roster creates a live member.
+The earlier pure helper's absent-snapshot default remains for compatibility; both UI surfaces require the actual
+server `agents` field.
+
+The proposed roster is a separate list, with classic state wording, warnings, proposal number and the room link.
+Finished pending plans show the expired wording. Auto outcomes use classic `autoNote()` wording and recorded
+reasons. Lists show at most 50 items and strings at most 300 characters, with omitted-list counts.
+
+Tasks appear in labelled vertical dependency groups with recorded status, attempts and failure/block reasons.
+Latest-turn controls retain their identity as a recorded retry changes their destination. Proposal, member-waiting
+and task links use existing history paging and share a ten-page budget, including the waiting-pointer fallback.
+Phone links close the sheet before focusing; an absent target falls back to its session link.
+
+The live state read stays on the active session. Selected historical details have one memory-only, single-flight
+read per selection, with a generation guard, status-only refetch, 401 disposal and GET Retry. This small client
+`core.js` query change is needed to avoid polling the historical session through the existing refresh loop.
+It changes no endpoint or backend semantics. The composer's existing details read remains independent.
+
+Connections displays each service's recorded symbol/label and server detail. Its only POST is `/api/check {}`
+under `core.beginWrite('connections')`, followed by a server refresh; errors remain inline. The rail unions live
+runs and loaded thread sessions, preserves live status on duplicate ids, and shares paging with the room.
+There are no team decisions in the panel and no use of step transcripts, results, prompts or raw tool output.
+
+### Regressions and permitted earlier-test changes
+
+Final test files run against an isolated archive of **pre-M6 UI `813fd9f`**: **142/167 pass, 25 fail**.
+Those failures are 24 of the 25 new M6 tests, plus the owner-authorized rail rewrite. The privacy absence guard
+passes before and after, as expected. After implementation, **167/167 pass**. New tests cover helper semantics,
+all plan states, pending/live separation, bounds, room links/paging/fallback, phone close-before-focus,
+selected-reader races/status/refetch/401/Retry, shared write locks, error text, rail growth, keyed focus and the
+three private step sentinels across the entire DOM.
+
+Final-review regressions also reproduced two M6 helper/link defects before their fixes: a displayed task depending
+on tasks beyond the 50-row display limit lost its depth, and a superseded paging attempt followed by the waiting
+fallback made 11 reads. Each run had **166/167 passing**, with only its new assertion failing. Depth now uses the
+full recorded graph before limiting displayed rows; every attempted page consumes the shared ten-read budget.
+The final chat run passes all **167/167**.
+
+Exactly two earlier tests are changed across M6:
+1. Part A **M5 slash aliases use the exact same controls and confirmations**: the handoff-authorized O1 line
+   asserts the empty draft and absent `acx-draft`, retaining the one-POST assertion.
+2. **M3.1 rail discloses the real shown and total session counts only when capped**, renamed to
+   **M3.1 rail counts use the M6 session union and current count wording**: the old count excludes a loaded
+   thread session and its text requires the superseded cap note. M6 §6.3 and §8 conflicted on this test.
+   The owner explicitly answered **“Allow only this M3.1 rail-test exception”**. The replacement asserts the
+   loaded-session union, actual listed count, and “Showing X of N sessions”, including completed paging.
+
+No other earlier assertion is rewritten, no unrelated test is weakened, and no classic test changes.
+
+### Verification
+
+| Suite | Command | Result |
+|---|---|---|
+| Full Python | `python3 -m unittest discover -s agent-autonomy/tests` | **423, OK (skipped=3)**, 256.332 s; OpenCode trio ran |
+| Projection/API | `PYTHONPATH=agent-autonomy:agent-autonomy/tests python3 -m unittest -v test_conversation test_thread_api` | **70, OK**, 14.427 s; unchanged actionability, workspace-read and D7 regressions included |
+| Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82** |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **167/167**: 139 accepted M5 + 3 Part A + 25 remaining M6 |
+| Browser | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m6` | **210 combinations + 6 regressions**, **290 screenshots**; desktop/laptop/phone, light/dark, 320 px checks, targets, overflow and footer budgets |
+| Real M6 server/browser | `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m6-real-check.cjs` | **Passed**, actual `app.py`/Controller, disposable git project, existing team/workflow fakes |
+| Final F1 probe | `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m6a-real-check.cjs` | **Passed** after integration; `true`, first read after 1.5 s, outcome rev **2670561505 → 2724684457**, recorded `passed`, idle card and no false timeout after three more reads |
+
+The first final Python run reached **423 tests in 360.311 s**, with these three unchanged timing failures:
+- `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish`: sampled idle-to-finished
+  instead of the short working state.
+- `test_team.TeamRunTests.test_approvals_from_any_agent_reach_you_and_go_back_to_that_agent`: fixed wait timeout.
+- `test_team.TeamRunTests.test_conflicting_tasks_are_retried_with_a_resolution_prompt`: fixed wait timeout.
+
+The exact three-test isolated rerun passed in **5.992 s**, then the full suite passed in **256.332 s**. Evidence:
+`/tmp/ac-m6-python-first.log`, `/tmp/ac-m6-timing-rerun.log`, `/tmp/ac-python-verified.log`.
+No protected test, lifecycle or engine code was changed. The three skips remain the environment-gated tests named
+in Part A above.
+
+The browser's phone measurements remain **57 px idle / 105 px waiting**, waiting row **40 px**, with at least
+**70.1% conversation** even when a selected-session header is present. The M4 limits are 72/120 px and 65%.
+No footer component was added or changed. All matrix page-error assertions pass.
+
+Actual images inspected under `/tmp/chat-shots-m6` include:
+- `teamProposed-phone-light.png`, `teamProposed-narrow-phone-light.png`
+- `teamRunning-phone-dark.png`, `teamRunning-phone-dark-tasks.png`, `teamRunning-phone-dark-task-end.png`
+- `teamRunning-desktop-light.png`, `teamRunning-desktop-light-tasks.png`
+- `singleMembers-phone-light.png`, `connections-phone-light.png`, `railPaged-desktop-dark.png`
+- `teamProposing-phone-light.png`, `teamReview-desktop-dark.png`, `teamFinished-desktop-light.png`,
+  `teamRunning-narrow-phone-light.png`
+Additional real-server renders are included in the same probe.
+
+### Real-server evidence
+
+The gated existing team fake held Hermes while the recorded plan was `proposing`, then released the real planner
+into `proposed`. AgentControl already records **Hermes and coder-1** when creating this run; both panel and rail
+matched that server roster in both states. The two-agent proposed roster remained separate, and **coder-2 did not
+appear as a live member** until AgentControl recorded its join after the existing M5 **Approve team** room action.
+The only approval POST was `/api/control {run, action:'approve_team'}`; the panel rendered no decision controls.
+
+The resulting live roster was Hermes, coder-1 and coder-2. The real task graph recorded t1/t2 `running` and t3
+`waiting`. A latest-turn button closed the phone sheet and focused the exact `turn:<recorded step id>` message.
+One Connections POST sent `/api/check {}`, received the existing **202 `{ok:true}`**, performed exactly one fake
+health call, and then displayed the health read back from AgentControl. No successful health state was invented.
+The complete paged thread's actionable-card/waiting invariant held: **1 waiting / 1 actionable item / 1 card**
+before approval, then **0 / 0 / 0** afterward. JSON evidence is in `/tmp/ac-m6-real-results.json`;
+real proposing, proposed, running-task and Connections screenshots are in `/tmp/ac-m6-real-*-phone.png`.
+
+### Scope and remaining limitations
+
+Parts B–D are client-only. The only backend change in all M6 is Part A's two-line, read-only verification projection.
+`engine.py`, `app.py`, `journal.py`, `agents.py`, `planner.py`, `permissions.py`, `capabilities.py`, `decisions.js` and
+classic files are unchanged from the starting branch. No API, schema or lifecycle change is included.
+The required status/stat/name/whitespace inspections cover only §9's permitted files.
+
+- D7 remains exactly its two accepted pre-effect refusals. **The intentionally excluded in-flight skill-fetch race
+  remains out of scope**: a session can finish after an accepted fetch has begun downloading. No additional guard,
+  cleanup or lifecycle change handles it.
+- Optional M5 O2/O3 are not implemented. Native phone keyboard/device verification and the accepted M8 history
+  focus/accessibility follow-ups remain deferred. Chromium checks include emulated viewport shrinkage and phone sizes.
+- The three environment-gated Python skips are named in Part A above; OpenCode tests run in this environment.
+- There is no M7 work, PR or merge into `main`. Push is only to `feature/chat-first-redesign`.

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-01, by Codex (M7 complete; awaiting review).
+**Last updated:** 2026-10-01, by Opus (M7 accepted; M8 handoff written).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M7_WORKSPACES.md` (complete; awaiting review) |
+| Handoffs | `docs/handoffs/`. **Current:** `M8_PHONE_AND_ACCESSIBILITY.md` (ready for implementation) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -35,8 +35,10 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M5.0 Actionability (M5 prerequisite)** | ✅ **accepted (Parts A and B; review 2026-10-01)** | Codex | `docs/handoffs/M5_0_ACTIONABILITY.md`: shared action predicates and exact paged-thread waiting count; expired research/skill label; exactly the two D7 guards; in-flight fetch race excluded |
 | **M5 Decisions in the room** | ✅ **accepted (Parts A `e6e6ebf` and B `b12e88a`; review 2026-10-01)** | Codex | every room decision uses its existing endpoint with server-authoritative state. Owner authorized only the awaiting-fetch skill Reject endpoint exception. F1 (fast verification reconciliation) is corrected in M6 Part A. The review is in `docs/handoffs/M5_DECISIONS.md` |
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
-| **M7 Workspaces** | ✅ complete; awaiting review | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
-| M8–M9 | not started | | see architecture §12 |
+| **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
+| **M8 Phone and accessibility** | 📝 handoff ready | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: Part A closes the scheduled deferrals (Load earlier focus, partial divider counts, live fallback refresh, M6 P1–P4, M7 Q2, M5 O2). Then the small-screen pass (adds tablet and landscape), keyboard and focus, screen readers, tested contrast and motion, and the final matrix. Native phone keyboard → owner device checklist |
+| M9 | not started | | parity and cutover; see architecture §12 |
+| R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
 `/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -183,7 +185,15 @@ was changed.
 
 ## Next step
 
-1. Opus reviews M7, including standalone S1 Part A `fb8c90f` and the final Workspace commit containing its report.
-2. M8–M9 remain unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge into `main`.
-   Still deferred: the in-flight skill-fetch race (D7), native phone-keyboard testing (M8), and native surface
-   viewing/input (a separate handoff before M9). M6 P1–P4 and optional M5 polish are untouched.
+1. Codex implements `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`, Parts A–E in order, each verified before the next.
+2. Opus reviews M8.
+3. M9 (parity and cutover) remains unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge
+   into `main`.
+
+Still deferred:
+- native surface viewing and input (its own handoff before M9)
+- native phone-keyboard testing (the owner device checklist, an M9 input)
+- the in-flight skill-fetch race (the D7 boundary)
+- R1 persistent bots (the roadmap)
+
+Separately, for the owner: the timing-sensitive backend tests needed five full runs during M7 (see the M7 review).

@@ -637,3 +637,182 @@ need a separate handoff before M9. Native phone OS keyboard testing remains M8. 
 were not implemented. The **intentionally excluded in-flight skill-fetch race** is unchanged: a fetch accepted
 earlier can finish downloading after its session becomes finished; no post-fetch guard, cleanup or lifecycle
 change was added. D7 still authorizes exactly its two pre-effect guards. M8/M9 and a main merge remain unstarted.
+
+## Architecture, correctness, security and UX review — 2026-10-01 (Opus)
+
+**Verdict: M7 accepted (Part A `fb8c90f` and Parts B–D `9b97b51`).**
+- Nothing is blocking, and nothing must be fixed before M8.
+- The optional polish below is folded into the M8 handoff (`docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`).
+
+Reviewed: `0878af1..9b97b51`. I reviewed Part A and Parts B–D separately, then their integration.
+
+### Re-run in the review environment (at `9b97b51`)
+
+| Suite | Result |
+|---|---|
+| Python, full | **423 tests, OK (skipped=6)**, 142 s. These are the same six environment gates as in the earlier reviews (3 in Codex's environment); **no Python file changed** |
+| Classic DOM | **82/82** |
+| Chat DOM | **215/215** |
+| Browser matrix | **276 combinations + 7 regressions, 441 screenshots**. Footer measurements with the Workspace closed: **57 px idle, 105 px with the waiting row (40 px)** |
+
+`git diff 0878af1..9b97b51` touches **no** `*.py` file, and not `decisions.js`, `composer.js`, `tokens.css` or any
+classic file (`app.js`, `workspace.js`, `index.html`). D7 is unchanged.
+
+**New tests against the code they protect:**
+
+| Tests | Run against | Result |
+|---|---|---|
+| Part A | the `7134ada` chat files | **168/173**. The five failures are exactly the three stopping-helper tests and the two roster DOM tests |
+| Parts B–D | the `fb8c90f` chat files, with an inert `workspace.js` stub | **173/215**. 42 Workspace tests fail. Codex measured 172 with the superseded turn-link assertion included; the one-test difference comes from the stub |
+
+**The documented retries.** Codex needed five full Python runs to get a clean one.
+- Every failure was in an unchanged backend test with fixed waits, or the Podman image-inspect timeout:
+  `test_specialists`, `test_paid`, `test_modes`, `test_workflow`, `test_capabilities`, `test_vm` and `test_agents`
+  (the known sampling case).
+- Each passed in isolation, and the fifth full run passed. My single full run passed first time.
+- These are the pre-existing timing hazards already listed in `CURRENT_STATE.md`. M7 changed no Python and no
+  backend file, so they cannot be M7 regressions.
+- The volume of retries is worth the owner's attention as **backend test robustness**, outside the redesign.
+
+**Changed earlier assertions.** Part A rewrote none. Two were changed under the owner's explicit authorisation, and
+both are genuinely superseded:
+1. **The M3 turn link.** "Inspect in classic" became "Open workspace", with the exact recorded href. The public
+   prompt, file and result-tail checks are kept.
+2. **The isolation guard.** It now admits the new `/chat/workspace.js`, and still rejects every classic asset.
+
+### Part A: verified
+
+- **The predicate.** `teamFromRun` now treats a plan as pending only when the session is **not terminal and not
+  `run.stop`**, which is M5.0's `accepts_decisions`.
+  - A stopping session reads "Not decided · the session is stopping".
+  - A terminal session keeps "Not decided before the session ended".
+- **The roster.**
+  - A never-approved roster is always under **"Proposed team · never approved"**, in the separate `proposed-members`
+    list. It is never in the live list or the rail.
+  - "Decide in the room" and the rail's "Team plan pending" appear only when pending.
+- **Renders inspected.** `teamStopping-phone-light` shows the live Hermes, the stopping wording, then the labelled
+  proposed list with no link.
+- **Team-decision semantics unchanged.** The diff is two lines in `model.js` and `members.js`. The room card, the
+  endpoints and the waiting count are untouched.
+
+### Parts B–D: verified
+
+- **Routing.**
+  - `parseRoute` accepts only `#/w/<run>/<agent>` with decodable values that contain no slash or control character.
+  - Back and Escape restore the previous room route and its opener. Decision and stop dialogs keep Escape priority,
+    because their handlers check `defaultPrevented`.
+  - **A session from another project is refused.** The server's `/api/state` opens any run by id, so the client's
+    `belongsToProject` refuses it with "That session is not in this project's history."
+  - An unknown agent gets the handoff's exact message.
+  - Sign-out or 401 clears the Workspace and its rendered material.
+- **Data and freshness.**
+  - The active session uses the live snapshot, with zero extra requests. Codex's real server confirmed that only the
+    established three GETs ran while the transcript grew across reads.
+  - Historical sessions use the M6 reader, which moved to `core.selectedSession` and is shared by the panel and the
+    Workspace: exactly one GET, no polling, refetch only when the status changes, and Retry.
+  - `core.js` also drops the stale `requested === focused` guard on the live snapshot. M6 already made that read
+    follow the active session, so the guard could only discard a valid read; a regression proves it.
+  - Opening a Workspace calls `core.focus(id, false)`, so no refresh is triggered.
+- **Records are faithful.**
+  - Turns are `steps` filtered by agent (`coder-1` by default) in number order.
+  - Latest follows new turns, and picking a turn pins it.
+  - `stageStates`, `planningNext`, `STAGES`, `stageHead`, `TOOL_SYMBOL`, `transcriptOf`, `verificationLabel`,
+    `SURFACE_LABEL` and the surface filter are copied from classic, and each copy is marked with its source.
+  - The prompt is bounded to 8,000 characters.
+  - Files are bounded to 50, and `partial` is shown.
+  - The diff keeps its line prefixes, and the truncation notice is shown.
+  - Verification shows its label, exit code and collapsed output.
+  - Researchers get summaries bounded to 2,000 characters and up to 8 plain-text sources.
+  - Hermes gets the newest 40 decisions and JSON repairs, with only the parsed `action`, `title` and `summary`.
+    `Hermes request` is never shown. Engine check: `Hermes decision` stores `run_json`'s parsed object, and the
+    repair event is a one-line notice.
+- **Revisions.** The Workspace is re-rendered through M6's keyed `patch`:
+  - tool entries are keyed by `id`, text entries by index, files by path, and disclosures by id
+  - new entries append, and changed ones update in place
+  - if the server trims the head of a transcript, index-keyed text rows update their content rather than duplicating
+  - open disclosures, focus and pinned scroll survive (tested)
+- **Links.**
+  - Room turns link to `#/w/<session>/<refs.agent || actor>`.
+  - Member rows link to their Workspace ("Open log" for Hermes). Proposed agents have no link.
+  - Task rows link only when the task's agent is a live member.
+  - Links from the Workspace into the room ("Go to waiting item") close the Workspace first, then use M6's locate
+    path.
+- **Missing or unavailable data is shown honestly:** "Loading Workspace…", the server error with Retry, "No turns
+  yet.", "No output yet.", "Changes appear when the turn ends.", "No captured text changes", "Not verified yet" and
+  "No surfaces for this agent."
+
+### Privacy and security: verified
+
+- **No reasoning.** `terminalEntries` keeps only `text` and `tool` entries, and `tool_results` is never read. The
+  store itself never contains reasoning: `verify.transcript()` keeps only text and tool parts.
+- **Escaping.**
+  - Every recorded string reaches the DOM through `esc()` in a template that `patch` parses, and diff lines are
+    escaped one by one.
+  - Nothing becomes a link, and no `img`, `iframe` or input exists.
+  - I checked the renders: the `<img src=x onerror=…>` payload shows as literal text in the terminal, the file list
+    and the diff (`workspaceLive-desktop-light`, `workspaceHistorical-phone-dark`).
+- **The sentinel tests genuinely cross the boundary.** The fixtures put these into real `state.steps` and
+  `state.events`:
+  - `REASONING-SENTINEL` and `UNKNOWN-SENTINEL` transcript entries
+  - `TOOLRESULTS-SENTINEL`
+  - another agent's transcript, prompt and surfaces
+  - `HERMES-REQUEST-SENTINEL`
+  - attack strings in the prompt, the output, file paths, the diff, the task, the branch and surface notes
+
+  The tests assert:
+  - none of these reach `#timeline`, `#context` or `#rail` while the Workspace is open
+  - the Workspace excludes reasoning, unknown entries, `tool_results` and other agents' material
+  - no `img` element is created
+  - closing the Workspace empties it
+- **Read-only.**
+  - `workspace.js` contains no `post` call and no `[data-decision]`.
+  - Surfaces are metadata plus one `target="_blank" rel="noopener noreferrer"` link to `/?popout=<agent>&run=<id>`.
+  - Codex's real server recorded **zero POSTs**, and the pop-out URL returned 200.
+  - Interactive preview, program, VM and desktop input remain in the classic pop-out, as decided.
+
+### Integration: verified
+
+- **M3:** paging, keyed rendering and deep links are unchanged. Locating a session is suspended while the Workspace
+  is open.
+- **M4 and M4.1:** the composer is untouched. Content stays literal. The footer is 57/105 px, and the conversation
+  takes at least 70.1% of the screen.
+- **M5.0 and M5:** decisions, receipts and reconciliation are untouched. Real-server invariant: waiting equals
+  actionable non-outcomes, and cards equal actions plus outcomes.
+- **M6:** members, the proposed/live distinction, the task graph, Connections and the rail are unchanged apart from
+  the added links. The reader moved without behaviour change, and every M6 test passes.
+
+### Rendered UI (inspected)
+
+| Render | What it shows |
+|---|---|
+| `workspaceLive-desktop-light` | The room stays usable on the left with the Workspace pane on the right: stages, the terminal with "5 earlier entries were not kept", a running tool with open output, the literal attack text, internal horizontal scroll, Jump to latest, empty changes |
+| `workspaceLive-phone-light` | A full-screen sheet with a sticky Back; the terminal scrolls internally |
+| `workspaceHistorical-phone-dark` | Changed files including the escaped path, (partial), "Preview truncated", the prefixed diff, "Verification failed · Exit code 1", collapsed output, surfaces |
+| `teamStopping-phone-light` | As described under Part A |
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before M8:** none.
+
+**Optional polish** (scheduled in the M8 handoff):
+
+- **Q1.** At 1440 px with a Workspace open, the room column narrows to about 320 px.
+  - The waiting strip wraps onto two lines, and the composer's target chip truncates ("Note → Herm…").
+  - The room is still usable, but this is M8's small-screen and layout pass.
+- **Q2.** The Workspace header (agent, stages) scrolls away; only Back is sticky. A compact sticky line
+  ("coder-1 (API) · ● Working · Turn 2") would help on phones.
+- **M6's P1–P4 and M5's O2** remain open, and are folded into M8.
+
+### Next milestone
+
+**M8, Phone and accessibility:** see `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`. I took the scope from §12
+("small-screen layout pass, keyboard, contrast, rendered screenshot matrix"), plus every item earlier reviews
+scheduled for M8.
+
+- **Native phone-keyboard testing stays deferred**, as the owner instructed. M8 writes a device checklist for the
+  owner instead of requiring it.
+- **Persistent bots** are recorded as a long-term roadmap item (architecture §13). M8 does not touch them.
+
+Delivery is documentation only, on `feature/chat-first-redesign`. There is no PR and no merge into `main`.

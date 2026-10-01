@@ -409,6 +409,41 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 | **M8** | Phone and accessibility | small-screen layout pass, keyboard, contrast, rendered screenshot matrix | M5, M7 |
 | **M9** | Parity and cutover | parity checklist vs classic; `/` → chat, `/classic` → classic; README | all; owner sign-off |
 
+### 12.1 Beyond M9: long-term roadmap (recorded, not authorised)
+
+**R1: Persistent bots** (the owner's direction, recorded 2026-10-01).
+
+**The goal.** Bots become persistent, first-class entities that are:
+- created, configured, reused and organised independently of projects and execution backends
+- configured with a role or type, a model, instructions and skills, and default permissions
+- usable across sessions and projects
+- groupable (for example, into teams)
+- runnable on more than one runtime (OpenCode, Hermes, future adapters)
+
+**Today.** An agent exists only inside a run:
+- `store.agents(run)` holds rows `{id: "<run>:<name>", run, name, type, model, created}`
+- the types come from `agents.py`
+- team plans create per-run agents
+- OpenCode sessions are per run and agent
+
+**What R1 needs** (each part needs its own owner decision; none is authorised by M1–M9):
+- a persistent bot entity and schema (a new decision beyond D6)
+- an engine binding of a bot to a run (a per-run instance that records `bot_id`)
+- CRUD APIs
+- a runtime-agnostic adapter interface
+- journal attribution by bot
+- a read-only mapping of historical per-run agents to anonymous bots
+
+**Invariants that still apply.** Invariant 6 still holds: no client or bot may act as the person. Approvals stay the
+person's.
+
+**Guardrails for M8 and M9, so that R1 stays possible:**
+- the UI derives agent identity only through the model helpers (`agentLabel`, members); it never hard-codes names
+  beyond the existing `coder-1` fallback
+- `#/w/<run>/<agent>` stays meaningful as "a bot's instance in a session"
+- `#/b/…` is reserved for a future bot page
+- the vocabulary (§11) defers the choice between "bot" and "agent" to R1
+
 **Change log of this contract**
 - 2026-09-30: created with decisions D1–D5 (Opus planning session).
 - 2026-09-30 (M1 review):
@@ -531,3 +566,20 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   need their own handoff before M9; M8 and M9 remain unstarted. Backend, schema, classic, M5 decisions and D7
   are unchanged. The owner authorized exactly the superseded M3 turn-link assertion and the isolation assertion
   that also rejected the new `/chat/workspace.js` asset; no other earlier assertion was rewritten.
+- 2026-10-01 (M7 review):
+  - M7 accepted (Part A S1 and the read-only Workspaces). No Python, API, schema, classic or `decisions.js` change.
+    D7 is unchanged.
+  - Workspaces are POST-free. Step material renders only inside them, reasoning is never rendered, and interactive
+    surfaces stay in the classic pop-out.
+  - The next milestone is **M8, Phone and accessibility** (`docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`). It
+    covers:
+    - the scheduled M3 deferrals: focus after Load earlier, partial-session divider counts, and live refresh of the
+      fallback view
+    - M6 P1–P4, M7 Q1–Q2 and M5 O2
+    - the small-screen pass, adding tablet and landscape viewports
+    - keyboard and focus
+    - screen readers, tested contrast, and motion
+    - the final matrix
+  - **Native phone-keyboard testing stays deferred.** It becomes an owner-run device checklist
+    (`docs/DEVICE_CHECKLIST.md`) as an M9 sign-off input.
+  - Added §12.1, the long-term roadmap: **R1 persistent bots**, recorded and not authorised. It is not part of M8.

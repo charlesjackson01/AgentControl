@@ -3,15 +3,17 @@
   const {core,model:m} = root.AC, e = m.esc, $ = id=>document.getElementById(id);
   let focused = '', tab = 'session', locating = false, located = '';
   let contextOpen = core.read('localStorage','acx-context-open') === 'true';
-  const timeline = root.AC.thread.mount($('timeline'),{older:()=>core.loadOlder()});
+  const decisions=root.AC.decisions.mount($('timeline'),$('decision-dialog'));
+  const timeline = root.AC.thread.mount($('timeline'),{older:()=>core.loadOlder(),decisions});
   let menuError='', stopTarget=null, stopDraft=false, stopFocus=null;
-  const composer = root.AC.composer.mount($('composer-host'),{bottom:()=>timeline.bottom(),stop:openStop,error:value=>{menuError=value;const node=$('control-error');if(node){node.textContent=value;node.hidden=!value;}},busy:controlBusy,stateChanged:()=>render(core.getState())});
+  const composer = root.AC.composer.mount($('composer-host'),{bottom:()=>timeline.bottom(),stop:openStop,decision:(command,text)=>decisions.command(command,text),error:value=>{menuError=value;const node=$('control-error');if(node){node.textContent=value;node.hidden=!value;}},busy:controlBusy,stateChanged:()=>render(core.getState())});
   function controlBusy(value) {document.querySelectorAll('[data-session-control],#confirm-stop').forEach(node=>node.disabled=value);}
   const sessionHref = id=>'#/s/'+encodeURIComponent(id);
   function setContext(open) { contextOpen = open; core.write('localStorage','acx-context-open',String(open)); render(core.getState()); }
   function panels() { $('scrim').hidden = !$('app').classList.contains('rail-open') && $('context').hidden; }
   function memberList(members, full = false) { return members.map(member=>`<li><span class="member-name">${e(member.name)}</span><span class="muted">${e(member.role)}</span><span>${e(member.symbol)} ${e(member.stateLabel)}</span>${full && member.task ? `<p>${e(member.task)}</p>` : ''}${full && member.since ? `<small>Since ${e(m.timeLabel(member.since))}</small>` : ''}</li>`).join(''); }
   function render(snapshot) {
+    decisions.update(snapshot);
     $('sign-in').hidden = snapshot.authenticated; $('app').hidden = !snapshot.authenticated;
     $('sign-in-error').textContent = snapshot.authError;
     $('banner').hidden = !snapshot.error; $('banner-text').textContent = snapshot.error;
@@ -81,6 +83,6 @@
   document.addEventListener('keydown',event=>{if(event.defaultPrevented)return;if(event.key==='Escape' && $('stop-dialog').hasAttribute('open')){event.preventDefault();closeStop();return;}if (event.key === 'Escape') {$('app').classList.remove('rail-open');setContext(false);}});
   root.addEventListener('hashchange',route);
   core.subscribe(render); route(); core.start();
-  const shell = {render,route,setContext,composer}; root.AC.shell = shell;
+  const shell = {render,route,setContext,composer,decisions}; root.AC.shell = shell;
   if (typeof module !== 'undefined' && module.exports) module.exports = shell;
 })(window);

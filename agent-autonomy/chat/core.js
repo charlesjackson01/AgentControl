@@ -6,17 +6,21 @@
   let key = read('localStorage',storageKey) || read('sessionStorage',storageKey) || '';
   let state = null, focused = '', refreshing = false, again = false, scheduled = null, poll = null, retry = null, abort = null, epoch = 0, failures = 0;
   let channels = null, threadCache = null, single = null, olderTask = null;
+  let writeOwner = '', readSerial = 0, readIds = [];
+  const refreshTargets = new Set();
   let live = 'Reconnecting…', error = '', authError = '';
   const agentsByRun = {}, listeners = new Set();
   const emit = () => listeners.forEach(fn=>fn(getState()));
-  function getState() { return {state,channels,thread:threadCache,single,agentsByRun,focused,live,error,authError,authenticated:!!key}; }
+  function getState() { return {state,channels,thread:threadCache,single,agentsByRun,focused,live,error,authError,authenticated:!!key,writeOwner,readSerial,readIds}; }
+  function beginWrite(owner) { if (writeOwner || !key) return false; writeOwner=owner;emit();return true; }
+  function endWrite(owner) { if (writeOwner===owner) {writeOwner='';emit();} }
   function stop() { epoch++; abort?.abort(); abort = null; [poll,retry,scheduled].forEach(clearTimeout); poll = retry = scheduled = null; }
-  function rejectKey(message) { stop(); key = ''; state = null; channels = threadCache = single = null; Object.keys(agentsByRun).forEach(id=>delete agentsByRun[id]); write('localStorage',storageKey,null); write('sessionStorage',storageKey,null); authError = message; emit(); }
+  function rejectKey(message) { stop(); key = ''; state = null; channels = threadCache = single = null; writeOwner='';refreshTargets.clear();readIds=[];Object.keys(agentsByRun).forEach(id=>delete agentsByRun[id]); write('localStorage',storageKey,null); write('sessionStorage',storageKey,null); authError = message; emit(); }
   async function api(path, method = 'GET', body) {
     try {
       const response = await fetch(path,{method,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},cache:'no-store',...(body === undefined ? {} : {body:JSON.stringify(body)})});
       const result = await response.json();
-      if (response.status === 401) { rejectKey(result.error || 'Please connect again.'); throw Error(result.error || 'Please connect again.'); }
+      if (response.status === 401) { rejectKey(result.error || 'Please connect again.'); throw Object.assign(Error(result.error || 'Please connect again.'),{status:401}); }
       if (!response.ok) throw Object.assign(Error(result.error || 'Request failed ('+response.status+')'),{status:response.status});
       return result;
     } catch (exception) { if (key) { error = exception.message; emit(); } throw exception; }
@@ -32,7 +36,7 @@
     if (!key) return;
     if (refreshing) { again = true; return; }
     refreshing = true;
-    const requested = focused, generation = epoch;
+    const requested = focused, generation = epoch, targets = [...refreshTargets];
     try {
       const t = root.AC.thread, cached = threadCache || t.emptyCache();
       const known = cached.windowIds.slice(-2000).map(id=>id+':'+cached.messages[id].rev).join(',');
@@ -45,7 +49,7 @@
       const newestIds = new Set(page.newestIds);
       const stale = cached.ids.filter(id=>cached.messages[id].action != null && !newestIds.has(id));
       const previousWaiting = channels?.project === channelResult.project ? channels.channels?.[0]?.waiting : undefined;
-      const revalidate = newest.messages.some(m=>!m.same && m.kind==='outcome') ||
+      const revalidate = targets.length>0 || newest.messages.some(m=>!m.same && m.kind==='outcome') ||
         previousWaiting !== undefined && channelResult.channels?.[0]?.waiting < previousWaiting;
       while (t.findGap(cached,page) && page.before && walks < 5) {
         const older = await api('/api/thread?channel=main&limit=200&before='+encodeURIComponent(page.before));
@@ -54,7 +58,7 @@
       }
       // Decisions outside the newest window must be re-read from the server. Share the
       // ten-page budget with gap recovery; discard unverifiable history at the bound.
-      const uncovered = ()=>stale.some(id=>!page.messages.some(m=>m.id===id));
+      const uncovered = ()=>[...stale,...targets].some(id=>!page.messages.some(m=>m.id===id));
       while (revalidate && uncovered() && page.before && walks < 10) {
         const older = await api('/api/thread?channel=main&limit=200&before='+encodeURIComponent(page.before));
         page = {...page,messages:[...older.messages,...page.messages],sessions:[...older.sessions,...page.sessions],before:older.before};walks++;
@@ -62,6 +66,21 @@
       }
       if (generation !== epoch) return;
       threadCache = t.mergeNewest(threadCache || cached,page,revalidate && uncovered() || t.findGap(cached,page) || !page.messages.length || cached.project && cached.project !== page.project);channels = channelResult;
+      readIds=page.messages.map(m=>m.id);
+      // A decision from M3's single-session fallback needs an authoritative read too.
+      // This is targeted recovery, not an unbounded history/live-refresh loop.
+      if(single && requested===focused && targets.some(id=>single.messages[id])) {
+        const knownSingle=single.ids.slice(-2000).map(id=>id+':'+single.messages[id].rev).join(',');
+        let detailPage=await api('/api/thread?session='+encodeURIComponent(requested)+'&limit=200&known='+encodeURIComponent(knownSingle));
+        while(targets.some(id=>!detailPage.messages.some(m=>m.id===id)) && detailPage.before && walks<10) {
+          const older=await api('/api/thread?session='+encodeURIComponent(requested)+'&limit=200&before='+encodeURIComponent(detailPage.before));walks++;
+          detailPage={...detailPage,messages:[...older.messages,...detailPage.messages],sessions:[...older.sessions,...detailPage.sessions],before:older.before};
+        }
+        if(generation!==epoch || requested!==focused)return;
+        single=t.mergeNewest(single,detailPage,targets.some(id=>!detailPage.messages.some(m=>m.id===id)));
+        readIds=[...readIds,...detailPage.messages.map(m=>m.id)];
+      }
+      targets.forEach(id=>refreshTargets.delete(id));readSerial++;
       if (requested === focused) {
         if (stateResult.run?.id) agentsByRun[stateResult.run.id] = stateResult.agents || [];
         state = stateResult;
@@ -106,7 +125,7 @@
   async function locateWaiting() {
     single=null;
     for(let page=0;page<=10;page++){
-      const id=threadCache?.ids.find(id=>threadCache.messages[id].action != null);
+      const id=threadCache?.ids.find(id=>threadCache.messages[id].action != null && threadCache.messages[id].kind!=='outcome');
       if(id){emit();return id;}
       if(page===10 || !threadCache?.before)break;
       await loadOlder();
@@ -140,8 +159,8 @@
   function connect(value, remember) { stop(); key = value.trim(); authError = ''; write('localStorage',storageKey,remember ? key : null); write('sessionStorage',storageKey,remember ? null : key); emit(); start(); }
   function focus(id) { if (id !== focused) { focused = id; single = null; scheduleRefresh(); } }
   function post(path,body) { return api(path,'POST',body); }
-  function refreshNow() { clearTimeout(scheduled);scheduled=null;return refresh(); }
-  const core = {api,post,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
+  function refreshNow(messageId) { if(messageId)refreshTargets.add(messageId);clearTimeout(scheduled);scheduled=null;return refresh(); }
+  const core = {api,post,beginWrite,endWrite,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
   root.AC = root.AC || {}; root.AC.core = core;
   if (typeof module !== 'undefined' && module.exports) module.exports = core;
 })(typeof window !== 'undefined' ? window : globalThis);

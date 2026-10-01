@@ -247,7 +247,7 @@ have at most 50 paths. The actionable outcome alone gains its bounded branch and
 Any event kind not listed maps to a quiet `system` message and is **never silently dropped**. A unit test
 collects every `store.event(<run>, '<kind>', …)` literal in `agent-autonomy/*.py` and fails if a kind has no mapping.
 
-## 7. Composer semantics (M4)
+## 7. Composer semantics (M4 and M5)
 
 The composer is the only way to talk to the system. Its target is always visible in the placeholder and on every sent item.
 
@@ -261,10 +261,20 @@ The composer is the only way to talk to the system. Its target is always visible
 
 - **Slash commands** are aliases only, with no new capability:
   - M4: `/pause`, `/resume`, `/stop` (asks for confirmation), `/check <text>`, `/title <text>` and `/help`.
-  - M5, with the other decision controls: `/verify`, `/apply`, `/discard` and `/team approve|single|repropose`.
+  - Available in M5, with the other decision controls: `/verify`, `/apply`, `/discard`, `/team approve`,
+    `/team single` and `/team repropose <text>`, acting on the room's current actionable item through the same controls
+    and confirmations. A missing item produces an inline error and no write.
 - **`@` suggestions** come from the run's real agent names.
 - A server error is shown inline and the draft is kept.
 - **Hermes does not "reply" to notes.** It reads them at the next turn boundary, and the UI says so.
+
+M5 decisions use the action's allow-listed existing endpoint, fields and choices. The sole owner-authorized
+endpoint exception is Reject for an actionable awaiting-fetch skill: its `/api/skills/fetch` action permits
+`/api/skills/decide {id, action:'reject'}`. No other endpoint substitution is authorized.
+The only decision-related browser state is a transient card status tied to message id and `rev`. Clicking
+does not change messages, receipts, markers or waiting counts; recorded server revisions supply those changes.
+Decisions and composer writes share one flight lock. Delivery uncertainty requires a fresh server read before
+the same card can offer another decision, as specified in the M5 handoff.
 
 ## 8. Presence and team formation
 
@@ -432,3 +442,10 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   inputs, actionable outcome branch summary, and `review_truncated`. Historical messages and the accepted M5.0
   actionability predicates are unchanged. Part B must refuse room approvals when review material is truncated
   or unsupported, preserving the classic fallback and safe refusal paths.
+- 2026-10-01 (M5 Part B): room cards expose the handoff's permission, question, team, research, skill and outcome
+  decisions using existing endpoints. `/verify`, `/apply`, `/discard` and `/team` act on current actionable items.
+  Only transient delivery status is browser state; decisions, receipts and waiting counts remain server-authoritative.
+  Truncated or unsupported review prevents approval and preserves classic review and safe refusals.
+  The owner authorized exactly the awaiting-fetch skill Reject exception from `/api/skills/fetch` to
+  `/api/skills/decide`; the accepted read-model action shape is unchanged. D7 is unchanged, and the in-flight
+  skill-fetch race remains intentionally out of scope.

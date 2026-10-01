@@ -44,6 +44,9 @@ The classic dashboard stays available as a secondary path, and is the **only** p
    - If anything else seems needed, stop and report it.
 2. **Endpoint allow-list.** The client may POST only to the endpoint named in a message's `action.endpoint`, and only if
    it is one of the five above. Any other value renders the classic link only. For actions that carry `choices`, only those choices are offered.
+   - **Owner-authorized exception, 2026-10-01:** only Reject for an actionable `skill` in `awaiting_fetch`, whose
+     action names `/api/skills/fetch`, may POST `/api/skills/decide {id, action:'reject'}` as required by §4.5.
+     The action's choices still constrain it. No other endpoint substitution is authorized.
 3. **No local decision state.** The only browser state allowed is a **transient card status** (§5), tied to the
    message id and `rev`, and dropped when a new `rev` arrives. It never alters the message, the cache, the waiting count or receipts.
 4. **One decision in flight across the room, sharing the composer's single-flight lock.** While any decision or composer
@@ -332,11 +335,165 @@ The first full run overlapped browser/HTTP checks and hit the protected workflow
 `test_three_failed_steps_stop_even_if_model_calls_them_new_tasks`. All five passed in an isolated rerun
 (3.524 s), then the full sequential run passed. No protected tests or engine code were adjusted.
 
-Open clarification for Part B: §2.2 permits POST only to `action.endpoint`, but §4.5 requires Reject for an
+Clarification raised before Part B: §2.2 permits POST only to `action.endpoint`, but §4.5 requires Reject for an
 awaiting-fetch skill to POST `/api/skills/decide` although its accepted action names `/api/skills/fetch`.
-The owner has been asked whether to authorize that single documented exception; no exception or alternate
-action metadata has been implemented. This does not affect Part A.
+The owner subsequently authorized only that skill-Reject endpoint exception (recorded in §2.2). Part A did
+not implement an exception or change the accepted action shape.
 
 The accepted D7 boundary is preserved. A skill fetch accepted before its session finishes may already be
 downloading outside the controller lock; this in-flight race remains intentionally excluded from M5.
-Part B verification, rendered screenshot inspection and fake-backed real-server decisions remain to be done.
+Part B verification, rendered screenshot inspection and fake-backed real-server decisions are recorded below.
+
+## M5 completion report — Codex, 2026-10-01
+
+- **Starting point:** verified `/home/charlesjackson/AgentControl`, `feature/chat-first-redesign`; fast-forward
+  pull left a clean tree at `38dd629`. M5.0 and D7 were already accepted.
+- **Part A commit:** `e6e6ebf` — `Add bounded review material for M5 Part A`. Its full verification and commit
+  preceded every Part B implementation change; the separate report above records its checks.
+- **Part B commit:** the commit containing this report, `Complete M5 room decisions`, parent `e6e6ebf`.
+  Both commits are delivered only on `feature/chat-first-redesign`; no PR, main merge or next milestone.
+
+The room now offers exactly §4's decisions and slash aliases on server-actionable messages. Review disclosures
+show only the selected public inputs. Truncated, missing or unsupported required material disables approval,
+preserving refusal and the quiet classic fallback. Server-provided risk, choices and confirm words govern the
+controls. Apply and Discard retain the exact branch wording and Cancel-first dialogs.
+
+Clicks change only transient delivery status tied to id and revision. A held thread read preserves the original
+message, receipt, waiting marker and waiting count after 2xx. Recorded revisions determine the next state.
+One shared write lock covers decisions, composer requests, start preparation and Auto preview. Same-card
+delivery cannot be replayed until the required fresh read. Regressions cover three successful refreshes,
+15 seconds, explicit Refresh, 409 re-review, 400 verbatim errors and input retention, 401 input disposal,
+network ambiguity, receipts in flight and decisions made elsewhere while a dialog is open.
+
+Decision recovery revalidates the target even when it is on an older page and the waiting count is unchanged,
+using the existing shared ten-page history budget. A decision in the single-session fallback receives a
+targeted server read; the broader M8 fallback live-refresh work remains deferred. The waiting pointer selects
+the first actionable non-outcome. Recorded on-demand verification is labelled consistently in individual
+and grouped system updates; no tool output or locally manufactured verification result is added.
+
+### Verification
+
+All final checks were started afresh against the completed code; browser/real-server checks and the full
+Python suite ran sequentially to avoid the protected background-thread tests' timing sensitivity.
+
+| Command | Result |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests -v` | 420 tests, OK, 3 environment skips, 265.875 s; final sequential run; OpenCode trio ran |
+| `PYTHONPATH=agent-autonomy:agent-autonomy/tests python3 -m unittest -v test_conversation test_thread_api` | 67 tests, OK, 19.833 s; all pre-M5 Python tests and M5.0 predicates, D7 side-effect guards and complete paging invariants unchanged |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | 82/82 |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | 139/139: 79 earlier tests + 60 M5 regressions |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m5b-final` | 156 combinations + 6 regressions, 220 screenshots; final tap-target and waiting-pointer rerun passed |
+| `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m5-real-check.cjs` | 21/21 real-server/browser cases; exact POST bodies, recorded results and complete paged waiting/card invariants |
+
+Final logs: `/tmp/ac-python-verified.log`, `/tmp/ac-m5b-focused-final.log`, `/tmp/ac-m5b-classic-final.log`,
+`/tmp/ac-m5b-chat-final.log`, `/tmp/ac-m5b-browser-final.log`, `/tmp/ac-m5-real-check.log`.
+Test-only DOM/Chromium packages remain in `/tmp/ac-tests`; no runtime dependency was added.
+
+Skipped by name: `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`, and
+`test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`. The three OpenCode integration tests ran and passed.
+
+The first Part B full Python run completed 420 tests in 849.098 s with two failures, three errors and the
+same three environment skips. Three errors were host `podman image inspect agentcontrol-agent:1` timeouts
+in `test_team.TeamRunTests.test_approvals_from_any_agent_reach_you_and_go_back_to_that_agent` (loaded twice)
+and `test_surfaces.ControllerSurfaceTests.test_state_lists_surfaces_and_describing_starts_nothing`.
+The two eight-second fixture waits were `test_sandbox.ContainerRunTests.test_a_run_works_inside_its_container_and_is_cleaned_up`
+and `test_sandbox.ContainerRunTests.test_setup_gets_network_which_is_cut_before_the_first_prompt`.
+All four distinct tests passed together in an isolated rerun (6.889 s). The full verbose rerun is recorded
+in the final result above. Evidence: `/tmp/ac-m5b-python-first.log`, `/tmp/ac-m5b-python-recheck.log`.
+No test, runtime configuration or protected backend code was changed to obtain that rerun.
+
+The phone measurements are 57 px idle, 105 px with the 40 px waiting row, and at least 75.3% conversation.
+The matrix checks 40 px full-width decision buttons, answer/remember tap labels, full-width bottom sheets
+ending at the phone bottom without covering the header, Cancel focus, default-open critical/research/install
+review, object labels, overflow, page errors and the waiting pointer. Missing slash targets keep an inline
+error above the composer without increasing the footer.
+The error stays above the waiting row; the browser explicitly clicks the unobstructed pointer afterward.
+
+Actual rendered images inspected under `/tmp/chat-shots-m5b-final`: `decisionCritical-desktop-light-review.png`,
+`decisionCritical-phone-dark.png`, `decisionResearch-desktop-dark.png`, `decisionInstall-phone-light.png`,
+`decisionQuestion-desktop-light.png`, `decisionQuestion-phone-light.png`, `decisionApply-phone-dark.png`, `decisionTeam-desktop-dark.png`,
+`decisionSent-phone-dark.png`, `decision409-phone-light.png`, and `decisionCommandError-phone-light.png`.
+The three viewport sizes and both appearances passed automated rendered checks; native phone-keyboard
+verification remains the previously documented M8 task.
+
+### Recorded real-server decisions
+
+The temporary fixture uses the real `app.handler`, HTTP server, `Controller`, SQLite journal and disposable git
+projects. Permission and workspace runs use `test_workflow.FakeAPI` and `FakeManager`; team and research use
+the existing team/specialist fakes. Skills use a disposable local git source and library through the existing
+quarantine/install code. Every browser POST was captured and compared with the exact server action fields;
+results were read from the journal, capabilities, audits, workspace status and refreshed thread.
+The runner and fixtures are `/tmp/ac-m5-real-check.cjs` and `/tmp/ac-m5-real-server.py`; all 21 results and
+before/after invariant counts are in `/tmp/ac-m5-real-results.json`.
+
+In the bodies below, `R` means the displayed `{run, kind, request_id, fingerprint}` and `Q` means the displayed
+`{run, step, fingerprint}`. `server_word` was read from `/api/state` (the real fixture returned `approve`).
+Remember is additionally covered by the exact-body DOM regression and is included only when allowed and selected.
+
+| Decision | Endpoint and exact body | Recorded server result |
+|---|---|---|
+| Permission Approve once | `/api/review {…R, action:'approve'}`; optional `remember:true` only when allowed/selected | 200; confirmed `approve` review, `permission approve` audit, fake agent received approve |
+| Critical permission approval | `/api/review {…R, action:'approve', confirm:server_word}` | 200; confirmed approve review after typed confirmation |
+| Deny | `/api/review {…R, action:'reject'}` | 200; confirmed reject review, agent received reject |
+| Deny with redirection | `/api/review {…R, action:'reject', redirect:'Use a local test instead.'}` | 200; confirmed reject review and recorded redirection instruction |
+| Single answer | `/api/review {…R, action:'answer', answers:[['JSON']]}` (`kind:'question'`) | 200; confirmed answer review and matching agent answer |
+| Custom answer | `/api/review {…R, action:'answer', answers:[['Custom storage']]}` | 200; confirmed answer and matching recorded answers |
+| Multiple answers | `/api/review {…R, action:'answer', answers:[['JSON','SQLite']]}` | 200; confirmed answer with both options |
+| Dismiss question | `/api/review {…R, action:'reject'}` (`kind:'question'`) | 200; confirmed reject review and matching agent decision |
+| Approve team | `/api/control {run, action:'approve_team'}` | 200; `team approved` audit |
+| Run as one agent | `/api/control {run, action:'single_agent'}` | 200; `team declined: single agent` audit |
+| Ask for another plan | `/api/control {run, action:'repropose', text:'Use two small tasks.'}` | 200; `team plan sent back` audit |
+| Allow research | `/api/research/decide {…Q, action:'approve', confirm:server_word}` | 200; `research approve` audit, researcher `researching` |
+| Decline research | `/api/research/decide {…Q, action:'reject'}` | 200; `research reject` audit, step `rejected` |
+| Fetch for review | `/api/skills/fetch {id}` | 200; capability `proposed`, `skill fetched for review` audit |
+| Reject before fetch | `/api/skills/decide {id, action:'reject'}` (sole authorized endpoint exception) | 200; awaiting-fetch capability `rejected`, `skill rejected` audit |
+| Install | `/api/skills/decide {id, action:'approve'}` | 200; capability `installed`, `skill installed` audit |
+| Reject proposed skill | `/api/skills/decide {id, action:'reject'}` | 200; capability `rejected`, `skill rejected` audit |
+| Apply | `/api/control {run, action:'apply'}` | 200; workspace `applied`, `applied to branch` audit, fixture file present on its base branch |
+| Discard | `/api/control {run, action:'discard_workspace'}` | 200; workspace `discarded`, `branch discarded` audit |
+| Verify now | `/api/control {run, action:'verify'}` | 200; recorded manual verification `passed`, refreshed room shows `Verification (on demand) · passed` |
+
+The additional stale-fingerprint case changed the real pending permission packet after rendering: its old displayed fingerprint
+returned 409 with `The requested action changed. Close this window and review the updated request.` The
+fresh thread supplied the replacement fingerprint; no automatic resend occurred. Throughout every case,
+`before:null` proved the complete thread was paged, `waiting` equalled actionable non-outcomes, and rendered
+actionable cards equalled that count plus the zero-or-one actionable outcome. Fetch correctly kept waiting
+at one while becoming a reviewable proposed skill. Outcome cards remained outside waiting after Apply,
+Discard and Verify, according to the unchanged M2.1 outcome choices. An in-flight delivery hides its controls
+without subtracting its server-actionable card or adjusting waiting.
+
+### Explicitly superseded pre-M5 assertions
+
+Only these four earlier chat tests were changed for §8.9's exception:
+
+1. `waiting pointer and room composer, no decision controls`: replaced the absence assertion with controls
+   restricted to actionable messages; waiting, composer and finished-room assertions remain.
+2. `M3 actions link once to classic without controls or fingerprints`: replaced the prohibition on
+   decision-named controls with server-action scope checks; one classic link, hidden fingerprints and initial
+   read-only traffic remain checked.
+3. `M4 pure helpers whitelist bodies and round-trip parent settings`: replaced only the four deferred-command
+   errors with valid M5 alias parsing. Body/privacy/settings assertions are unchanged.
+4. `M4 slash suggestions/help are local and deferred decisions never send`: added the four authorized M5
+   suggestions and replaced the obsolete classic-only pointer assertion. Help remains local; absent targets,
+   invalid commands and extra arguments still preserve the draft and send nothing.
+
+The harness additionally loads `decisions.js`, reflects native `details.open` for linkedom, and can hold
+preflight reads for the shared-lock regression. Existing fixtures gain only the public Part A review inputs.
+No other earlier test assertions, Python tests, classic tests or engine code were weakened or changed.
+
+### Scope and owner clarification
+
+The §2.2/§4.5 conflict was raised before implementing its control. The owner explicitly selected
+“Allow only this skill-Reject endpoint exception.” It is guarded by message kind, actionable action,
+`awaiting_fetch` state, named `/api/skills/fetch` endpoint, Reject choice and any server choice restriction.
+All other decisions use their named allow-listed endpoint. A dedicated pure regression, exact-body DOM case
+and real-server case cover this exception; no action metadata, endpoint or backend validation was changed.
+
+**Intentionally excluded in-flight skill-fetch race:** an accepted fetch can already be downloading outside
+the controller lock when its session finishes. M5 retains the accepted post-fetch behaviour, with no added
+guard, cancellation, cleanup or lifecycle change. D7 remains exactly its two accepted pre-effect refusals.
+
+The final diff is limited to §7's projection/tests (Part A), isolated chat files/tests and the three status/contract
+documents. No API, schema, engine, permission, journal or classic production file changes. Required status,
+stat, name-only and whitespace inspections are performed before each commit. M6–M9 remain unstarted.

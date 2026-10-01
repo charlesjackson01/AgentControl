@@ -18,6 +18,8 @@ async function harness(state = fixture(), options = {}) {
   // linkedom's select.value has no setter; mirror the browser for dynamic Settings forms.
   Object.defineProperty(window.HTMLSelectElement.prototype,'value',{configurable:true,get(){return (this.querySelector('option[selected]') || this.querySelector('option'))?.value || '';},set(value){for(const option of this.querySelectorAll('option')){if(option.value===String(value))option.setAttribute('selected','');else option.removeAttribute('selected');}}});
   let activeElement=null;Object.defineProperty(document,'activeElement',{get:()=>activeElement,configurable:true});window.HTMLElement.prototype.focus=function(){activeElement=this;};
+  // Reflect disclosure state, like the browser (linkedom lacks details.open).
+  Object.defineProperty(Object.getPrototypeOf(document.createElement('details')),'open',{configurable:true,get(){return this.hasAttribute('open');},set(value){if(value)this.setAttribute('open','');else this.removeAttribute('open');}});
   const storage = map=>({getItem:k=>map.get(k),setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)});
   Object.defineProperty(window,'localStorage',{value:storage(local),writable:true,configurable:true}); Object.defineProperty(window,'sessionStorage',{value:storage(session),writable:true,configurable:true});
   if(options.storageDenied) for(const name of ['localStorage','sessionStorage']) Object.defineProperty(window,name,{configurable:true,get(){throw Error('Storage denied');}});
@@ -32,7 +34,7 @@ async function harness(state = fixture(), options = {}) {
     fetch:async(url,request)=>{
       calls.push({url,request}); assert.equal(request.headers.Authorization,'Bearer test-key');
       if(request.method==='POST' && options.post){const result=await options.post(url,JSON.parse(request.body));if(result?.throws)throw Error(result.throws);return {ok:!result?.error,status:result?.status || (result?.error?400:200),json:async()=>clone(result || {ok:true})};}
-      if(url==='/api/workspace/preflight')return {ok:true,status:200,json:async()=>clone(options.preflight || fx.composerPreflight)};
+      if(url==='/api/workspace/preflight') {if(options.holdPreflight)await new Promise(resolve=>{options.releasePreflight=resolve;});return {ok:true,status:200,json:async()=>clone(options.preflight || fx.composerPreflight)};}
       if(url==='/api/sandbox')return {ok:true,status:200,json:async()=>clone(state.sandbox || {unavailable:'No runtime',models_configured:false})};
       if(url==='/api/mode/preview')return {ok:true,status:200,json:async()=>({mode:'single',reasons:['Small goal']})};
       if (url === '/api/events') {
@@ -48,7 +50,7 @@ async function harness(state = fixture(), options = {}) {
       if (options.hold && url.startsWith('/api/state')) await new Promise(resolve=>{options.release=resolve;});
       return {ok:true,status:200,json:async()=>{const result=clone(state);if(url.endsWith('run=bogus')) result.run=null;return result;}};
     }});
-  for (const file of ['core.js','model.js','thread.js','composer.js','shell.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
+  for (const file of ['core.js','model.js','thread.js','decisions.js','composer.js','shell.js']) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   await tick();await tick();
   async function runTimers(delay) {const pending=[...timers].filter(([,t])=>t.delay===delay);for(const [id,t] of pending){timers.delete(id);t.fn();}await tick();}
   return {window,document,composer:window.AC.shell.composer,core:window.AC.core,shell:window.AC.shell,local,session,timers,calls,runTimers,options,publicThread,timeline:document.querySelector('#timeline'),emit:async text=>{streamWake({done:false,value:new TextEncoder().encode(text)});await tick();},drop:async()=>{streamWake({done:true});await tick();}};
@@ -104,10 +106,11 @@ test('every presence state has a symbol and label, Hermes first',async()=>{
   const h=await harness(state);const members=model.membersFromState(state);assert.equal(members[0].name,'hermes');for(const member of members){assert(member.symbol);assert.match(h.document.querySelector('#rail').textContent,new RegExp(member.stateLabel));}
   h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);h.document.querySelector('#members-tab').click();assert.match(h.document.querySelector('#context').textContent,/Task 9/);
 });
-test('waiting pointer and room composer, no decision controls',async()=>{
+test('waiting pointer and room composer, controls only on actionable messages',async()=>{
   const h=await harness();assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 1 waiting for you');assert.equal(h.document.querySelector('#waiting a').getAttribute('href'),'/classic');
   assert(!h.document.querySelector('#composer').hasAttribute('disabled'));assert.match(h.document.querySelector('#composer').getAttribute('placeholder'),/Message Hermes/);
-  assert.equal(h.document.querySelectorAll('[id*="approve"], [id*="deny"]').length,0);
+  assert.equal(h.document.querySelectorAll('[data-decision="approve"]').length,1);
+  assert.equal(h.document.querySelectorAll('[data-message]:not(:has(.waiting-state)) [data-decision]').length,0);
   const done=await harness(richCompleted());assert.equal(done.document.querySelector('#waiting').textContent,'');
 });
 test('API strings cannot inject markup',async()=>{
@@ -151,11 +154,12 @@ test('M3 kinds, progressive detail, roles, receipts and unknown kinds',async()=>
   data.messages.find(m=>m.id==='req:permission:p2').detail.receipt.actor='automatic local rule';data.messages.find(m=>m.id==='req:permission:p2').rev++;await h.core.refresh();assert(h.timeline.textContent.includes('Awaiting confirmation · by automatic local rule'));
   const single=await harness(richCompleted(),{thread:fx.threadSingle()});assert(single.timeline.textContent.includes('Workspace open'));assert(single.timeline.textContent.includes('apply blocked: Working tree changed'));
 });
-test('M3 actions link once to classic without controls or fingerprints',async()=>{
+test('M3 actions link once to classic; M5 controls are scoped and hide fingerprints',async()=>{
   for(const data of [fx.threadSingle(),fx.threadActive(),fx.threadTeam()]){
     const h=await harness(fixture(),{thread:data});
     for(const message of data.messages.filter(m=>m.action)){const node=h.timeline.querySelector(`[data-message="${message.id}"]`);assert.equal(node.querySelectorAll('a[href="/classic"]').length,1);assert(node.textContent.includes('Waiting for you'));}
-    for(const node of h.timeline.querySelectorAll('button,a'))assert(!/\b(?:Approve|Deny|Apply|Discard|Verify|Reject|Answer)\b/i.test(node.textContent),node.textContent);
+    for(const node of h.timeline.querySelectorAll('[data-decision]'))assert(data.messages.find(m=>m.id===node.closest('[data-message]').dataset.message)?.action);
+    assert.equal(h.timeline.querySelectorAll('[data-message]:not(:has(.waiting-state)) [data-decision]').length,0);
     assert(!h.document.toString().includes('NEVER-SHOW-FINGERPRINT'));assert(h.calls.every(c=>c.request.method==='GET' || c.url==='/api/events'));
   }
 });
@@ -403,7 +407,7 @@ test('M4 pure helpers whitelist bodies and round-trip parent settings',()=>{
   assert.deepEqual(composerHelpers.runBody('Goal',{models:{},spend_cap:8,confirm:'approve',watch:true,max_steps:5,network:'none',cpus:2},{id:'bad'}).models,undefined);
   assert.throws(()=>composerHelpers.runBody('Goal',{isolation:'vm',network:'internet'}),/classic/);
   assert.deepEqual(composerHelpers.followUpDefaults({verifier:['python','folder with space',"a'b"],max_steps:4,mode:'team'}),{verifier:"python 'folder with space' 'a'\\''b'",max_steps:4,mode:'team'});
-  for(const command of ['verify','apply','discard','team'])assert.match(composerHelpers.parseSlash('/'+command).error,/not available here/);
+  for(const command of ['verify','apply','discard','team approve','team single','team repropose Smaller plan'])assert.equal(composerHelpers.parseSlash('/'+command).error,'');
 });
 test('M4 new session sends only goal and remembered/changed settings',async()=>{
   const h=await composerHarness('new');type(h,'Build a local tool');await h.composer.submit();assert.deepEqual(posts(h),[{url:'/api/runs',body:{goal:'Build a local tool'}}]);assert.equal(h.document.querySelector('#composer').value,'');assert.equal(h.document.querySelector('#composer-status').textContent,'Sent · it will appear in the room');assert.equal(h.timeline.querySelectorAll('[data-message]').length,0);
@@ -465,10 +469,10 @@ test('M4 /check and /title route active and finished-focused sessions exactly',a
   const done=await composerHarness('finished');done.core.focus('run_test');await done.runTimers(0);type(done,'/title New name');await done.composer.submit();assert.deepEqual(posts(done).at(-1).body,{run:'run_test',action:'title',text:'New name'});
   type(done,'/check Not active');const n=posts(done).length;await done.composer.submit();assert.equal(posts(done).length,n);assert.match(done.document.querySelector('#composer-status').textContent,/no active session/);
 });
-test('M4 slash suggestions/help are local and deferred decisions never send',async()=>{
-  const h=await composerHarness('paused');type(h,'/');assert(!h.document.querySelector('#composer-options').hidden);assert.deepEqual([...h.document.querySelectorAll('#composer-options button')].map(n=>n.textContent),['/pause','/resume','/stop','/check','/title','/help']);
+test('M4 slash suggestions/help are local; M5 aliases need an actionable item',async()=>{
+  const h=await composerHarness('paused');type(h,'/');assert(!h.document.querySelector('#composer-options').hidden);assert.deepEqual([...h.document.querySelectorAll('#composer-options button')].map(n=>n.textContent),['/pause','/resume','/stop','/check','/title','/help','/verify','/apply','/discard','/team']);
   type(h,'/help');await h.composer.submit();assert.equal(posts(h).length,0);assert(!h.document.querySelector('#composer-options').hidden);
-  for(const text of ['/mystery','/verify','/apply','/discard','/team approve','/check','/pause extra']){type(h,text);await h.composer.submit();assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer').value,text);assert(h.document.querySelector('#composer-status').textContent);if(/verify|apply|discard|team/.test(text))assert(!h.document.querySelector('#composer-classic').hidden);}
+  for(const text of ['/mystery','/verify','/apply','/discard','/team approve','/check','/pause extra']){type(h,text);await h.composer.submit();assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#composer').value,text);assert(h.document.querySelector('#composer-status').textContent);}
 });
 test('M4 mention list supports arrows, Enter and Escape with active-descendant',async()=>{
   const h=await composerHarness('paused');type(h,'@');const list=h.document.querySelector('#composer-options');assert(!list.hidden);assert(!list.textContent.includes('hermes'));assert.equal(h.document.querySelector('#composer').getAttribute('aria-activedescendant'),'composer-option-0');key(h,'ArrowDown');assert.equal(h.document.querySelector('#composer').getAttribute('aria-activedescendant'),'composer-option-1');key(h,'Enter');assert.equal(h.document.querySelector('#composer').value,'@coder-2 ');assert(list.hidden);assert.equal(h.document.querySelector('#composer-target').textContent,'Note → @coder-2');assert.equal(posts(h).length,0);
@@ -600,6 +604,282 @@ test('M4.1 suggestions open only for a draft-leading token and selection replace
 });
 test('M4.1 the empty room invites the composer with no classic start link or fake messages',async()=>{
   const h=await composerHarness('new');const empty=h.timeline.querySelector('.empty');assert.equal(empty.querySelector('h2').textContent,'A room for your project');assert.equal(empty.querySelector('p').textContent,'Write a goal below to start the first session.');assert.equal(empty.querySelectorAll('a').length,0);assert.equal(h.timeline.querySelectorAll('[data-message]').length,0);
+});
+
+const decisionHelpers=require(path.join(root,'decisions.js'));
+async function decisionHarness(name='all',options={}) {const f=fx.decisionFixture(name),h=await harness(f.state,{thread:f.thread,channels:f.channels,...options});return {...h,f};}
+const decisionCard=(h,id)=>h.timeline.querySelector('[data-message="'+id+'"]');
+const button=(h,choice,id)=> (id ? decisionCard(h,id) : h.timeline).querySelector('[data-decision="'+choice+'"]');
+async function clickDecision(h,choice,id) {const node=button(h,choice,id);assert(node,choice);node.click();await tick();}
+async function confirmDecision(h,values={}) {
+  const dialog=h.document.querySelector('#decision-dialog');assert(dialog.hasAttribute('open'));
+  for(const [name,value] of Object.entries(values)){const input=dialog.querySelector('[name="'+name+'"]');assert(input,name);if(input.type==='checkbox')input.checked=value;else input.value=value;}
+  dialog.querySelector('form').dispatchEvent(new h.window.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
+}
+function recordedDecision(f,message,choice) {
+  message.rev++;
+  if(message.kind==='request') {message.action=null;message.detail.receipt={action:choice,state:'confirmed',actor:'You, via dashboard'};delete message.detail.review;}
+  if(message.kind==='proposal')message.action=null;
+  if(message.kind==='research') {message.action=null;message.detail.status=choice==='approve'?'running':'skipped';}
+  if(message.kind==='skill') {
+    message.detail.state=choice==='fetch'?'proposed':choice==='approve'?'installed':'rejected';
+    message.action=choice==='fetch' ? {endpoint:'/api/skills/decide',fields:{id:'fetch'},choices:['approve','reject']} : null;
+    if(choice==='fetch')message.detail.review={description:'Testing',files:['SKILL.md'],size:12,skill_md:'# Tests'};
+  }
+  if(message.kind==='outcome') {message.detail.workspace.state=choice==='apply'?'applied':choice==='discard_workspace'?'discarded':'open';message.action=choice==='verify'?{...message.action,choices:['apply','discard_workspace']}:{...message.action,choices:['verify']};}
+  if(choice==='verify')f.thread.messages.push(fx.threadMessage('m5:verified','system','verification (on demand) · passed',{}, {session:message.session}));
+  f.channels.channels[0].waiting=f.thread.messages.filter(m=>m.action && m.kind!=='outcome').length;
+}
+test('M5 pure catalogue allows only server actions, choices and known endpoints',()=>{
+  const catalogue=fx.decisionMessages();
+  for(const message of Object.values(catalogue)) {
+    const before=JSON.stringify(message), controls=decisionHelpers.controlsFor(message,{confirm_word:'server-word'});assert(controls.length,message.id);
+    assert.deepEqual(decisionHelpers.controlsFor({...message,action:null}),[]);
+    assert.deepEqual(decisionHelpers.controlsFor({...message,action:{...message.action,endpoint:'/api/arbitrary'}}),[]);
+    assert.equal(decisionHelpers.allowedEndpoint({...message,action:null}),null);assert.equal(JSON.stringify(message),before);
+  }
+  const proposal=catalogue.proposal;assert.deepEqual(decisionHelpers.controlsFor({...proposal,action:{...proposal.action,choices:['single_agent']}}).map(c=>c.choice),['single_agent']);
+  for(const state of ['dispatching','sent','uncertain'])assert.deepEqual(decisionHelpers.controlsFor({...catalogue.low,detail:{...catalogue.low.detail,receipt:{state}}}),[]);
+  assert(decisionHelpers.controlsFor(catalogue.critical,{}).find(c=>c.choice==='approve').disabled);
+});
+test('M5 answer hints mirror single, multiple, custom, duplicate and size rules',()=>{
+  const q=fx.decisionMessages().question.detail.questions, multi=fx.decisionMessages().multiple.detail.questions;
+  assert.deepEqual(decisionHelpers.answersFrom(q,[['custom answer']]),[['custom answer']]);assert.deepEqual(decisionHelpers.answersFrom(multi,[['JSON','SQLite']]),[['JSON','SQLite']]);
+  for(const [questions,answers,error] of [[q,[],/every question/],[q,[[]],/nonempty/],[q,[['   ']],/nonempty/],[q,[['x'.repeat(5001)]],/5,000/],[q,[['JSON','JSON']],/Duplicate/],[q,[['JSON','SQLite']],/one answer/],[multi,[['custom']],/supplied/]])assert.throws(()=>decisionHelpers.answersFrom(questions,answers),error);
+  assert.deepEqual(decisionHelpers.answersFrom(q,[['x'.repeat(5000)]]),[['x'.repeat(5000)]]);
+});
+test('M5 only awaiting-fetch skill Reject can use the authorized endpoint exception',()=>{
+  const skill=fx.decisionMessages().skillFetch;
+  assert.equal(decisionHelpers.allowedEndpoint(skill,'reject'),'/api/skills/decide');
+  assert.equal(decisionHelpers.allowedEndpoint(skill),'/api/skills/fetch');
+  assert.equal(decisionHelpers.allowedEndpoint(skill,'fetch'),'/api/skills/fetch');
+  assert.deepEqual(decisionHelpers.controlsFor(skill).map(c=>c.choice),['fetch','reject']);
+  for(const message of [
+    {...skill,kind:'request'},
+    {...skill,detail:{...skill.detail,state:'proposed'}},
+    {...skill,detail:{...skill.detail,state:'rejected'}},
+    {...skill,action:{...skill.action,choices:['fetch']}}
+  ])assert.equal(decisionHelpers.allowedEndpoint(message,'reject'),'/api/skills/fetch');
+  for(const message of [{...skill,action:null},{...skill,action:{...skill.action,endpoint:'/api/arbitrary'}}]) {
+    assert.equal(decisionHelpers.allowedEndpoint(message,'reject'),null);
+    assert.throws(()=>decisionHelpers.skillBody(message,'reject'),/classic/);
+  }
+  assert.deepEqual(decisionHelpers.skillBody(skill,'reject'),{id:'fetch',action:'reject'});
+  assert.throws(()=>decisionHelpers.skillBody({...skill,action:{...skill.action,choices:['fetch']}},'reject'),/classic/);
+});
+test('M5 body helpers exclude unapproved fields and enforce text/confirm rules',()=>{
+  const c=fx.decisionMessages(),p={confirm_word:'actual-server-word'};
+  assert.deepEqual(decisionHelpers.reviewBody(c.low,'approve',{remember:true,confirm:'ignored',redirect:'ignored',extra:'private'},p),{run:'run_test',kind:'permission',request_id:'low',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'approve',remember:true});
+  assert.deepEqual(decisionHelpers.reviewBody(c.critical,'approve',{remember:true,confirm:p.confirm_word},p),{run:'run_test',kind:'permission',request_id:'critical',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'approve',confirm:p.confirm_word});
+  assert.throws(()=>decisionHelpers.reviewBody(c.critical,'approve',{confirm:'hard-coded'},p),/actual-server-word/);
+  assert.throws(()=>decisionHelpers.researchBody(c.research,'approve',{confirm:'wrong'},p),/actual-server-word/);
+  assert.throws(()=>decisionHelpers.controlBody(c.proposal,'repropose',{text:' '}),/note/);assert.throws(()=>decisionHelpers.controlBody(c.proposal,'repropose',{text:'x'.repeat(2001)}),/2,000/);
+  assert.throws(()=>decisionHelpers.reviewBody(c.low,'reject',{redirect:'x'.repeat(5001)},p),/5,000/);
+  assert.deepEqual(decisionHelpers.skillBody(c.skillFetch,'fetch'),{id:'fetch'});
+});
+const catalogueCases=[
+  ['low','approve',{}, {run:'run_test',kind:'permission',request_id:'low',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'approve'}],
+  ['low','approve',{remember:true}, {run:'run_test',kind:'permission',request_id:'low',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'approve',remember:true}],
+  ['critical','approve',{confirm:'CONFIRM-TEST'}, {run:'run_test',kind:'permission',request_id:'critical',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'approve',confirm:'CONFIRM-TEST'}],
+  ['low','reject',{}, {run:'run_test',kind:'permission',request_id:'low',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'reject'}],
+  ['low','reject',{redirect:'Use local tests instead'}, {run:'run_test',kind:'permission',request_id:'low',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'reject',redirect:'Use local tests instead'}],
+  ['question','answer',{answers:['JSON']}, {run:'run_test',kind:'question',request_id:'question',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'answer',answers:[['JSON']]}],
+  ['question','answer',{answers:['My format']}, {run:'run_test',kind:'question',request_id:'question',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'answer',answers:[['My format']]}],
+  ['multiple','answer',{answers:['JSON','SQLite']}, {run:'run_test',kind:'question',request_id:'multiple',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'answer',answers:[['JSON','SQLite']]}],
+  ['question','reject',{}, {run:'run_test',kind:'question',request_id:'question',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'reject'}],
+  ['proposal','approve_team',{}, {run:'run_test',action:'approve_team'}],
+  ['proposal','single_agent',{}, {run:'run_test',action:'single_agent'}],
+  ['proposal','repropose',{text:'A smaller plan'}, {run:'run_test',action:'repropose',text:'A smaller plan'}],
+  ['research','approve',{confirm:'CONFIRM-TEST'}, {run:'run_test',step:'research',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'approve',confirm:'CONFIRM-TEST'}],
+  ['research','reject',{}, {run:'run_test',step:'research',fingerprint:'NEVER-SHOW-FINGERPRINT',action:'reject'}],
+  ['skillFetch','fetch',{}, {id:'fetch'}],
+  ['skillFetch','reject',{}, {id:'fetch',action:'reject'}, '/api/skills/decide'],
+  ['skillInstall','approve',{}, {id:'install',action:'approve'}],
+  ['skillInstall','reject',{}, {id:'install',action:'reject'}],
+  ['outcome','apply',{}, {run:'run_done',action:'apply'}],
+  ['outcome','discard_workspace',{}, {run:'run_done',action:'discard_workspace'}],
+  ['outcome','verify',{}, {run:'run_done',action:'verify'}]
+];
+for(const [name,choice,inputs,expected,expectedEndpoint] of catalogueCases)test('M5 DOM exact '+name+' '+choice+' '+JSON.stringify(inputs),async()=>{
+  const h=await decisionHarness(name,{post:async()=>({ok:true})}), message=h.f.thread.messages.find(m=>m.kind!=='session_start'), card=decisionCard(h,message.id), original=JSON.stringify(h.core.getState().thread.messages[message.id]);
+  if(inputs.remember)card.querySelector('[data-remember]').checked=true;
+  if(inputs.answers)for(const field of card.querySelectorAll('[data-question]')) {
+    for(const input of field.querySelectorAll('input[type="radio"],input[type="checkbox"]'))input.checked=inputs.answers.includes(input.value) || input.hasAttribute('data-custom') && inputs.answers.some(value=>!['JSON','SQLite'].includes(value));
+    const custom=inputs.answers.find(value=>!['JSON','SQLite'].includes(value));if(custom)field.querySelector('.custom-answer').value=custom;
+  }
+  const status=card.querySelector('[role="status"]');await clickDecision(h,choice);
+  if(h.document.querySelector('#decision-dialog').hasAttribute('open')) {assert(h.document.activeElement.hasAttribute('data-cancel-decision'));await confirmDecision(h,inputs);}
+  assert.deepEqual(posts(h),[{url:expectedEndpoint || message.action.endpoint,body:expected}]);
+  assert.equal(JSON.stringify(h.core.getState().thread.messages[message.id]),original);
+  assert.equal(card.querySelector('[role="status"]'),status);assert.equal(status.textContent,'Sent · waiting for AgentControl to record it');assert(card.querySelector('.waiting-state'));
+  assert.equal(h.core.getState().channels.channels[0].waiting,h.f.channels.channels[0].waiting);
+  recordedDecision(h.f,message,choice);await h.core.refresh();
+  const result=decisionCard(h,message.id);assert.equal(result.querySelector('[role="status"]'),status);assert(!result.textContent.includes('Sent · waiting'));assert.equal(h.core.getState().thread.messages[message.id].rev,2);assert.equal(h.core.getState().channels.channels[0].waiting,h.f.channels.channels[0].waiting);
+  if(name==='low' || name==='critical' || name==='question' || name==='multiple')assert(result.textContent.includes(choice==='approve'?'Approved once':choice==='reject'?'Denied':'Answered'));
+  if(choice==='verify')assert(h.timeline.textContent.includes('verification (on demand) · passed'));
+});
+test('M5 no controls on historical, expired, decided or unsupported actions',async()=>{
+  const f=fx.decisionFixture('all');for(const message of f.thread.messages.filter(m=>m.action)){message.action=null;message.detail.expired=true;}
+  const unknown=fx.decisionMessages().low;unknown.id='m5:unknown';unknown.action.endpoint='/api/not-allowed';f.thread.messages.push(unknown);
+  const h=await harness(f.state,{thread:f.thread});assert.equal(h.timeline.querySelectorAll('[data-decision]').length,0);assert.equal(decisionCard(h,'m5:unknown').querySelector('a[href="/classic"]').textContent,'Open in classic dashboard');assert.equal(posts(h).length,0);
+});
+test('M5 truncation blocks approvals but keeps safe refusal choices',async()=>{
+  for(const [name,blocked,safe] of [['low','approve','reject'],['question','answer','reject'],['proposal','approve_team','single_agent'],['research','approve','reject'],['skillInstall','approve','reject'],['outcome','apply','discard_workspace']]) {
+    const f=fx.decisionFixture(name),msg=f.thread.messages.find(m=>m.action);msg.detail.review_truncated=true;
+    const h=await harness(f.state,{thread:f.thread,channels:f.channels,post:async()=>({ok:true})});assert(button(h,blocked).disabled,name);assert(!button(h,safe).disabled,name);
+    assert(decisionCard(h,msg.id).textContent.includes('Too large to review here'));assert.equal(decisionCard(h,msg.id).querySelectorAll('a[href="/classic"]').length,1);
+    button(h,blocked).click();await tick();assert.equal(posts(h).length,0);await clickDecision(h,safe);if(h.document.querySelector('#decision-dialog').hasAttribute('open'))await confirmDecision(h);assert.equal(posts(h).length,1);
+  }
+});
+test('M5 critical/research/install evidence opens by default and excludes private values',async()=>{
+  for(const name of ['critical','research','skillInstall']) {
+    const f=fx.decisionFixture(name),message=f.thread.messages.find(m=>m.action);message.detail.reasoning='PRIVATE';message.detail.output='PRIVATE';if(message.detail.review)Object.assign(message.detail.review,{output:'PRIVATE',reasoning:'PRIVATE'});
+    const h=await harness(f.state,{thread:f.thread});const details=h.timeline.querySelector('.review-detail');assert(details.open,name);assert(!h.timeline.textContent.includes('PRIVATE'));assert(!h.document.toString().includes('NEVER-SHOW-FINGERPRINT'));
+    const expected=name==='critical'?['rm -r build/','Remove only generated build files','- generated build output']:name==='research'?['Which storage format','Check the public documentation','web','60']:['Testing helpers','SKILL.md','32 bytes','# Python testing'];for(const value of expected)assert(details.textContent.includes(value),value);
+  }
+});
+test('M5 question form requires every answer and offers custom only when allowed',async()=>{
+  const h=await decisionHarness('question',{post:async()=>({ok:true})});await clickDecision(h,'answer');assert.equal(posts(h).length,0);assert.match(h.timeline.querySelector('.decision-status').textContent,/nonempty/);assert(h.timeline.querySelector('[data-custom]'));
+  const multi=await decisionHarness('multiple');assert.equal(multi.timeline.querySelector('[data-custom]'),null);assert.equal(multi.timeline.querySelectorAll('input[type="checkbox"]').length,2);
+});
+test('M5 real-server confirm word required, remember follows recorded risk',async()=>{
+  const h=await decisionHarness('critical',{post:async()=>({ok:true})});h.f.state.permissions.confirm_word='OWNER-WORD';await h.core.refresh();await clickDecision(h,'approve');assert(h.document.querySelector('#decision-dialog').textContent.includes('OWNER-WORD'));assert.equal(h.timeline.querySelector('[data-remember]'),null);
+  await confirmDecision(h,{confirm:'CONFIRM-TEST'});assert.equal(posts(h).length,0);assert.match(h.timeline.querySelector('.decision-status').textContent,/OWNER-WORD/);await confirmDecision(h,{confirm:'OWNER-WORD'});assert.equal(posts(h)[0].body.confirm,'OWNER-WORD');
+});
+test('M5 2xx with thread held cannot manufacture receipts or waiting changes',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({ok:true})}),before=JSON.stringify(h.core.getState().thread),waiting=h.core.getState().channels.channels[0].waiting;let release;
+  h.options.respond=async url=>{if(url.startsWith('/api/thread'))return await new Promise(resolve=>{release=()=>resolve(h.f.thread);});};
+  await clickDecision(h,'approve');assert.equal(JSON.stringify(h.core.getState().thread),before);assert.equal(h.core.getState().channels.channels[0].waiting,waiting);assert.equal(decisionCard(h,'m5:low').querySelector('.decision-status').textContent,'Sent · waiting for AgentControl to record it');assert(button(h,'approve').closest('.decision-controls').hidden);await clickDecision(h,'approve');assert.equal(posts(h).length,1);
+  const message=h.f.thread.messages.find(m=>m.action);recordedDecision(h.f,message,'approve');release();await tick();await tick();assert(decisionCard(h,'m5:low').textContent.includes('Approved once'));h.options.respond=null;await h.core.refresh();assert.equal(h.core.getState().channels.channels[0].waiting,0);
+});
+test('M5 three successful refreshes require explicit fresh Refresh recovery',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({ok:true})});await clickDecision(h,'approve');await h.core.refresh();assert.equal(h.timeline.querySelector('.decision-status').textContent,'Sent · waiting for AgentControl to record it');
+  h.options.fail=true;await h.core.refresh();h.options.fail=false;assert.equal(h.timeline.querySelector('.decision-status').textContent,'Sent · waiting for AgentControl to record it');await h.core.refresh();assert.equal(h.timeline.querySelector('.decision-status').textContent,'Not recorded yet.');
+  const refresh=h.timeline.querySelector('[data-refresh-decision]');assert(!refresh.hidden);assert(button(h,'approve').closest('.decision-controls').hidden);await h.core.refresh();assert(button(h,'approve').closest('.decision-controls').hidden);refresh.click();await tick();assert(!button(h,'approve').closest('.decision-controls').hidden);assert.equal(h.timeline.querySelector('.decision-status').textContent,'');
+});
+test('M5 15-second not-recorded timer uses the same Refresh recovery',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({ok:true})});await clickDecision(h,'approve');await h.runTimers(15000);assert.equal(h.timeline.querySelector('.decision-status').textContent,'Not recorded yet.');h.timeline.querySelector('[data-refresh-decision]').click();await tick();assert(!button(h,'approve').disabled);
+});
+test('M5 409 blocks replay until fresh fingerprint arrives',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({status:409,error:'The requested action changed. Review the current request.'})});let release;
+  h.options.respond=async url=>{if(url.startsWith('/api/thread'))return await new Promise(resolve=>{release=()=>resolve(h.f.thread);});};
+  await clickDecision(h,'approve');assert.equal(h.timeline.querySelector('.decision-status').textContent,'The requested action changed. Review the current request.');assert(button(h,'approve').disabled);await clickDecision(h,'approve');assert.equal(posts(h).length,1);
+  const message=h.f.thread.messages.find(m=>m.action);message.rev++;message.action.fields.fingerprint='FRESH-FINGERPRINT';release();await tick();await tick();assert(!button(h,'approve').disabled);h.options.respond=null;h.options.post=async()=>({ok:true});await clickDecision(h,'approve');assert.equal(posts(h)[1].body.fingerprint,'FRESH-FINGERPRINT');assert(!h.document.toString().includes('FRESH-FINGERPRINT'));
+});
+test('M5 400 keeps non-confirm inputs, clears typed confirmation, shows exact error',async()=>{
+  const h=await decisionHarness('research',{post:async()=>({error:'The session has ended'})});await clickDecision(h,'approve');await confirmDecision(h,{confirm:'CONFIRM-TEST'});assert.equal(h.timeline.querySelector('.decision-status').textContent,'The session has ended');assert.equal(h.document.querySelector('[name="confirm"]').value,'');
+  const deny=await decisionHarness('low',{post:async()=>({error:'Redirection was rejected verbatim'})});await clickDecision(deny,'reject');await confirmDecision(deny,{redirect:'Keep this note'});assert.equal(deny.document.querySelector('[name="redirect"]').value,'Keep this note');assert.equal(deny.timeline.querySelector('.decision-status').textContent,'Redirection was rejected verbatim');
+  const team=await decisionHarness('proposal',{post:async()=>({error:'Three proposals have already been tried'})});await clickDecision(team,'repropose');await confirmDecision(team,{text:'Keep my plan note'});assert.equal(team.document.querySelector('[name="text"]').value,'Keep my plan note');
+});
+test('M5 network uncertainty waits for a fresh read, then permits recovery',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({throws:'offline'})});let release;
+  h.options.respond=async url=>{if(url.startsWith('/api/thread'))return await new Promise(resolve=>{release=()=>resolve(h.f.thread);});};
+  await clickDecision(h,'approve');assert.equal(h.timeline.querySelector('.decision-status').textContent,"Couldn't reach AgentControl. The decision may or may not have been recorded. Checking…");assert(button(h,'approve').closest('.decision-controls').hidden);await clickDecision(h,'approve');assert.equal(posts(h).length,1);
+  release();await tick();await tick();assert(!button(h,'approve').closest('.decision-controls').hidden);assert(!button(h,'approve').disabled);h.options.respond=null;h.options.post=async()=>({ok:true});await clickDecision(h,'approve');assert.equal(posts(h).length,2);
+});
+test('M5 uncertain network response can resolve as a recorded decision without retry',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({throws:'connection lost'})});const message=h.f.thread.messages.find(m=>m.action);
+  h.options.post=async()=>{recordedDecision(h.f,message,'approve');return {throws:'connection lost'};};await clickDecision(h,'approve');await tick();assert.equal(posts(h).length,1);assert.equal(h.timeline.querySelector('[data-decision="approve"]'),null);assert(h.timeline.textContent.includes('Approved once'));assert.equal(h.core.getState().channels.channels[0].waiting,0);
+});
+test('M5 in-flight server receipts forbid second decisions despite an action',async()=>{
+  for(const state of ['dispatching','sent','uncertain']) {
+    const f=fx.decisionFixture('low'),message=f.thread.messages.find(m=>m.action);message.detail.receipt={state,action:'approve',actor:'You, via dashboard'};
+    const h=await harness(f.state,{thread:f.thread,channels:f.channels});assert.equal(h.timeline.querySelectorAll('[data-decision]').length,0);assert(h.timeline.textContent.includes(({dispatching:'Sending decision',sent:'Awaiting confirmation',uncertain:'Delivery uncertain'})[state]));assert.equal(posts(h).length,0);
+  }
+});
+test('M5 dialog closes when its decision is recorded elsewhere',async()=>{
+  const h=await decisionHarness('critical');await clickDecision(h,'approve');const message=h.f.thread.messages.find(m=>m.action);recordedDecision(h.f,message,'reject');await h.core.refresh();assert(!h.document.querySelector('#decision-dialog').hasAttribute('open'));assert(h.timeline.textContent.includes('This was decided elsewhere or is no longer waiting.'));assert.equal(posts(h).length,0);
+});
+test('M5 changed material in an open dialog requires re-review',async()=>{
+  const h=await decisionHarness('critical');await clickDecision(h,'approve');const message=h.f.thread.messages.find(m=>m.action);message.rev++;message.action.fields.fingerprint='changed';message.detail.review.command='changed command';await h.core.refresh();assert(!h.document.querySelector('#decision-dialog').hasAttribute('open'));assert(h.timeline.textContent.includes('Review the updated item'));assert.equal(posts(h).length,0);
+});
+test('M5 401 discards decision inputs and returns to sign-in',async()=>{
+  const h=await decisionHarness('critical',{post:async()=>({status:401,error:'Connect again with your key'})});await clickDecision(h,'approve');await confirmDecision(h,{confirm:'CONFIRM-TEST'});assert(!h.core.getState().authenticated);assert(!h.document.querySelector('#decision-dialog').hasAttribute('open'));assert.equal(h.document.querySelector('[name="confirm"]'),null);assert.equal(h.local.has('ac-dashboard-key'),false);
+});
+test('M5 one decision flight disables all cards and composer; double clicks send once',async()=>{
+  let release;const h=await decisionHarness('all',{post:async()=>await new Promise(resolve=>{release=()=>resolve({ok:true});})});type(h,'Keep a draft');await clickDecision(h,'approve','m5:low');await clickDecision(h,'approve','m5:low');await h.composer.submit();assert.equal(posts(h).length,1);assert(h.document.querySelector('#send-message').disabled);assert([...h.timeline.querySelectorAll('[data-decision]')].every(node=>node.disabled));assert.equal(decisionCard(h,'m5:low').querySelector('.decision-status').textContent,'Sending your decision…');release();await tick();await tick();assert(!button(h,'reject','m5:install').disabled);
+});
+test('M5 composer and start preparation also block decisions',async()=>{
+  let release;const h=await decisionHarness('low',{post:async()=>await new Promise(resolve=>{release=()=>resolve({ok:true});})});type(h,'Keep this literal note');const task=h.composer.submit();await tick();assert(button(h,'approve').disabled);await clickDecision(h,'approve');assert.equal(posts(h).length,1);release();await task;
+  const start=await decisionHarness('outcome',{holdPreflight:true,post:async()=>({ok:true})});type(start,'Start another goal');const preparing=start.composer.submit();await tick();assert(button(start,'verify').disabled);await clickDecision(start,'verify');assert.equal(posts(start).length,0);start.options.holdPreflight=false;start.options.releasePreflight();await preparing;assert.equal(posts(start).length,1);assert.equal(posts(start)[0].url,'/api/runs');assert(!button(start,'verify').disabled);
+});
+test('M5 complete decision-card count follows waiting plus the server outcome',async()=>{
+  for(const name of ['all',...Object.keys(fx.decisionMessages())]) {
+    const h=await decisionHarness(name),messages=h.f.thread.messages, count=messages.filter(m=>m.kind==='outcome' && m.action).length;
+    assert(count<=1);assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,h.f.channels.channels[0].waiting+count,name);
+    assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable] .decision-buttons').length,h.f.channels.channels[0].waiting+count,name);
+  }
+});
+test('M5 waiting pointer prefers the first non-outcome actionable card',async()=>{
+  const h=await decisionHarness('all');assert.equal(await h.core.locateWaiting(),'m5:low');h.document.querySelector('#waiting-pointer').click();await tick();assert(decisionCard(h,'m5:low').classList.contains('focused'));
+});
+test('M5 slash aliases use the exact same controls and confirmations',async()=>{
+  for(const [text,name,choice,note] of [['/verify','outcome','verify'],['/apply','outcome','apply'],['/discard','outcome','discard_workspace'],['/team approve','proposal','approve_team'],['/team single','proposal','single_agent'],['/team repropose Keep the team small','proposal','repropose','Keep the team small']]) {
+    const h=await decisionHarness(name,{post:async()=>({ok:true})});type(h,text);await h.composer.submit();await tick();
+    const dialog=h.document.querySelector('#decision-dialog');if(dialog.hasAttribute('open')){assert.equal(posts(h).length,0);if(note)assert.equal(dialog.querySelector('[name="text"]').value,note);await confirmDecision(h);}
+    assert.deepEqual(posts(h).map(p=>p.body),[{run:name==='outcome'?'run_done':'run_test',action:choice,...(note?{text:note}:{})}],text);
+    await h.composer.submit();assert.equal(posts(h).length,1,text);
+  }
+});
+test('M5 missing slash targets, extra commands, choice restrictions and truncation never send',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({ok:true})});for(const text of ['/verify','/apply','/discard','/team approve','/team single','/team repropose New plan','/team','/team reject','/research','/install','/verify now','/apply extra']){type(h,text);await h.composer.submit();assert.equal(posts(h).length,0,text);assert(h.document.querySelector('#composer-status').textContent,text);}
+  const f=fx.decisionFixture('outcome');f.thread.messages.find(m=>m.action).action.choices=['verify'];const restricted=await harness(f.state,{thread:f.thread});type(restricted,'/apply');await restricted.composer.submit();assert.equal(posts(restricted).length,0);assert.equal(restricted.document.querySelector('#composer-status').textContent,'Nothing to apply here');
+});
+test('M5 dialog focus, Escape, object labels, status identity and outcome wording',async()=>{
+  const h=await decisionHarness('outcome',{post:async()=>({ok:true})});for(const [choice,expected] of [['apply','Merge agent/storage into main? 2 commits · 2 files changed, 20 insertions(+), 3 deletions(-). This changes your branch.'],['discard_workspace','Delete agent/storage and its worktrees? This cannot be undone.']]) {
+    await clickDecision(h,choice);const dialog=h.document.querySelector('#decision-dialog');assert(dialog.textContent.includes(expected));assert(dialog.querySelector('h2').textContent.includes('agent/storage'));assert(h.document.activeElement.hasAttribute('data-cancel-decision'));key(h,'Escape',{},h.document.activeElement);assert(!dialog.hasAttribute('open'));assert.equal(posts(h).length,0);
+  }
+  for(const node of h.timeline.querySelectorAll('[data-decision]'))assert(node.getAttribute('aria-label').includes('Tests pass; storage works.'));
+  const status=decisionCard(h,'m5:outcome').querySelector('[role="status"]');await clickDecision(h,'verify');assert.equal(decisionCard(h,'m5:outcome').querySelector('[role="status"]'),status);assert.equal(h.document.activeElement,decisionCard(h,'m5:outcome'));
+});
+test('M5 normalized server team plans expose responsibilities, files, dependencies and research questions',async()=>{
+  const f=fx.decisionFixture('proposal'),message=f.thread.messages.find(m=>m.action);
+  message.detail.proposal={agents:{'coder-1':{role:'coder',responsibility:'Build API',skills:['testing']},'researcher-1':{role:'researcher',responsibility:'Read docs'}},tasks:[{id:'docs',title:'Look up',agent:'researcher-1',question:'Which status is supported?',files:[]},{id:'api',title:'API',agent:'coder-1',files:['api.py'],depends_on:['docs']}]};
+  const h=await harness(f.state,{thread:f.thread,channels:f.channels,post:async()=>({ok:true})});for(const text of ['2 agents · 2 tasks','coder-1','Build API','testing','Which status is supported?','api.py','After docs'])assert(h.timeline.textContent.includes(text),text);await clickDecision(h,'approve_team');assert.deepEqual(posts(h).map(p=>p.body),[{run:'run_test',action:'approve_team'}]);
+});
+test('M5 skill risk and source accept the real capability record shape',async()=>{
+  const f=fx.decisionFixture('skillInstall'),message=f.thread.messages.find(m=>m.action);message.detail.risk='caution';message.detail.source={type:'git',url:'https://example.test/skills',path:'testing'};const h=await harness(f.state,{thread:f.thread});assert(h.timeline.textContent.includes('Risk · caution'));assert(h.timeline.textContent.includes('https://example.test/skills'));
+});
+test('M5 result arriving during a held POST wins over its later 2xx response',async()=>{
+  let release;const h=await decisionHarness('low',{post:async()=>await new Promise(resolve=>{release=()=>resolve({ok:true});})});await clickDecision(h,'approve');const message=h.f.thread.messages.find(m=>m.action);recordedDecision(h.f,message,'approve');await h.core.refresh();assert(h.timeline.textContent.includes('Approved once'));release();await tick();await tick();assert(!h.timeline.textContent.includes('Sent · waiting'));assert.equal(h.timeline.querySelector('[data-decision="approve"]'),null);assert.equal(posts(h).length,1);
+});
+test('M5 repeated Enter in a confirmation sends exactly once',async()=>{
+  let release;const h=await decisionHarness('critical',{post:async()=>await new Promise(resolve=>{release=()=>resolve({ok:true});})});await clickDecision(h,'approve');await confirmDecision(h,{confirm:'CONFIRM-TEST'});await confirmDecision(h,{confirm:'CONFIRM-TEST'});assert.equal(posts(h).length,1);assert(h.document.querySelector('[data-confirm-decision]').disabled);release();await tick();assert(!h.document.querySelector('#decision-dialog').hasAttribute('open'));
+});
+test('M5 stale refusal decided elsewhere disappears only after its server read',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({status:409,error:'This request was already decided'})});h.options.post=async()=>{recordedDecision(h.f,h.f.thread.messages.find(m=>m.action),'reject');return {status:409,error:'This request was already decided'};};await clickDecision(h,'approve');await tick();assert(h.timeline.textContent.includes('Denied'));assert.equal(h.timeline.querySelector('[data-decision="approve"]'),null);assert.equal(h.core.getState().channels.channels[0].waiting,0);assert.equal(posts(h).length,1);
+});
+test('M5 changed skill and Apply-conflict 400s show recorded fresh material and exact server text',async()=>{
+  const h=await decisionHarness('skillInstall',{post:async()=>({ok:true})});h.options.post=async()=>{const message=h.f.thread.messages.find(m=>m.action);message.rev++;message.detail.review.skill_md='# Changed skill';return {error:'The skill changed since it was shown to you. Review the new version.'};};await clickDecision(h,'approve');await tick();assert(h.timeline.textContent.includes('# Changed skill'));assert(!button(h,'approve').disabled);assert.equal(posts(h).length,1);
+  const apply=await decisionHarness('outcome',{post:async()=>({error:'Your branch is unchanged. Resolve the merge conflict and try again.'})});await clickDecision(apply,'apply');await confirmDecision(apply);assert.equal(apply.timeline.querySelector('.decision-status').textContent,'Your branch is unchanged. Resolve the merge conflict and try again.');assert.equal(apply.core.getState().thread.messages['m5:outcome'].detail.workspace.state,'open');
+});
+test('M5 network uncertainty can return an in-flight receipt while waiting remains one',async()=>{
+  const h=await decisionHarness('low',{post:async()=>({ok:true})});h.options.post=async()=>{const message=h.f.thread.messages.find(m=>m.action);message.rev++;message.detail.receipt={state:'uncertain',action:'approve',actor:'You, via dashboard'};return {throws:'lost after recording'};};await clickDecision(h,'approve');await tick();assert(h.timeline.textContent.includes('Delivery uncertain · by you'));assert.equal(h.timeline.querySelector('[data-decision="approve"]'),null);assert.equal(h.core.getState().channels.channels[0].waiting,1);assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,1);assert.equal(posts(h).length,1);
+});
+test('M5 complete paged room includes old actionable cards and refreshes them without a count change',async()=>{
+  const message=fx.decisionMessages().low,session=fx.threadSession('run_test',{status:'waiting',ended:null}),newest=Array.from({length:200},(_,i)=>fx.threadMessage('m5:new:'+i,'decision','Public update '+i)),page=fx.threadResponse(newest,[session],'older'),old=fx.threadResponse([fx.threadMessage('run:run_test','session_start','Active session'),message],[session]);
+  const channels=fx.threadChannels(page,1), h=await harness(fx.decisionFixture('low').state,{thread:page,channels,respond:url=>{if(url.startsWith('/api/thread'))return new URL(url,'http://test').searchParams.has('before')?old:page;},post:async()=>({throws:'offline'})});
+  await h.core.loadOlder();assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,1);assert.equal(h.core.getState().thread.before,null);assert.equal(await h.core.locateWaiting(),message.id);const initialWalks=h.calls.filter(c=>c.url.includes('before=older')).length;
+  await clickDecision(h,'approve',message.id);await tick();assert(h.calls.filter(c=>c.url.includes('before=older')).length>initialWalks);assert(!button(h,'approve',message.id).disabled);assert.equal(h.core.getState().channels.channels[0].waiting,1);assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,1);
+});
+test('M5 on-demand verification uses its recorded system event, including grouped updates',async()=>{
+  const h=await decisionHarness('outcome',{post:async()=>({ok:true})});await clickDecision(h,'verify');assert(!h.timeline.textContent.includes('Verification (on demand) · passed'));
+  h.f.thread.messages.push(fx.threadMessage('m5:verify-requested','system','Verify now requested.'),fx.threadMessage('m5:verify-result','system','passed',{status:'passed',argv:['python3','-m','unittest'],ended:'2026-09-30T12:00:00Z',output:'PRIVATE'}));await h.core.refresh();assert(h.timeline.textContent.includes('Verification (on demand) · passed'));assert(!h.timeline.textContent.includes('PRIVATE'));assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,1);assert.equal(h.core.getState().channels.channels[0].waiting,0);
+});
+test('M5 unsupported or unavailable review material cannot be approved',async()=>{
+  for(const [name,mutate,safe] of [['low',m=>m.detail.review={diff:{reasoning:'PRIVATE'}},'reject'],['question',m=>m.detail.questions=[{question:{reasoning:'PRIVATE'},options:[]}],'reject'],['proposal',m=>m.detail.proposal={agents:[],tasks:[]},'single_agent'],['research',m=>m.detail.request={question:'Only a fragment'},'reject'],['skillInstall',m=>m.detail.review={description:'Missing SKILL.md',files:[],size:0},'reject']]) {
+    const f=fx.decisionFixture(name),message=f.thread.messages.find(m=>m.action);mutate(message);const h=await harness(f.state,{thread:f.thread,channels:f.channels,post:async()=>({ok:true})});const approval=h.timeline.querySelector('[data-decision="'+(name==='proposal'?'approve_team':name==='question'?'answer':'approve')+'"]');assert(approval.disabled,name);assert(!button(h,safe).disabled,name);approval.click();await tick();assert.equal(posts(h).length,0);assert(h.timeline.textContent.includes('Cannot review this approval here'));assert(!h.timeline.textContent.includes('PRIVATE'));assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,f.channels.channels[0].waiting);
+  }
+});
+test('M5 typed confirmation mirrors the server case/space rule and preserves the supplied body',()=>{
+  const c=fx.decisionMessages(),permissions={confirm_word:'server-word'};
+  assert.equal(decisionHelpers.reviewBody(c.critical,'approve',{confirm:' SERVER-WORD '},permissions).confirm,' SERVER-WORD ');assert.equal(decisionHelpers.researchBody(c.research,'approve',{confirm:'SERVER-WORD'},permissions).confirm,'SERVER-WORD');
+});
+test('M5 a decision in the single-session fallback gets its own fresh server read',async()=>{
+  const current=fx.threadResponse([fx.threadMessage('newest','decision','Current room update',{}, {session:'new'})],[fx.threadSession('new')],'more'),message=fx.decisionMessages().low;message.session='far';message.action.fields.run='far';
+  const far=fx.threadResponse([fx.threadMessage('run:far','session_start','Far active session',{}, {session:'far'}),message],[fx.threadSession('far',{status:'waiting',ended:null})]);
+  const h=await harness(fx.decisionFixture('low').state,{hash:'#/s/far',thread:current,channels:fx.threadChannels(current,1),post:async()=>({throws:'offline'}),respond:url=>{if(url.startsWith('/api/thread'))return new URL(url,'http://test').searchParams.get('session')==='far'?far:current;}});
+  assert(h.core.getState().single);await clickDecision(h,'approve',message.id);await tick();assert(h.calls.some(c=>c.url.includes('session=far') && c.url.includes('known=')));assert(!button(h,'approve',message.id).disabled);assert.equal(h.core.getState().single.messages[message.id].action.fields.run,'far');assert.equal(posts(h).length,1);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

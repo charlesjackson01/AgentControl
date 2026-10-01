@@ -180,3 +180,36 @@ select { font: inherit; color: var(--text); background: var(--bg); border: var(-
   #settings-sheet label { margin-bottom: var(--s2); }
   #resume-session { padding: var(--s1); font-size: var(--type-xs); }
 }
+/* M5: decisions live with their evidence, outside the compact composer. */
+.message:has(.decision-host[data-actionable]) { display: block; border-left: var(--focus) solid var(--warning); padding-left: var(--s3); }
+.decision-host { margin: var(--s2) 0; color: var(--text); font-size: var(--type-sm); }
+.decision-facts { font-family: var(--mono); }
+.decision-buttons, .decision-dialog-buttons { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+.decision-primary { color: var(--bg); background: var(--accent); }
+.decision-primary:hover { color: var(--accent); }
+.decision-status, .review-unavailable { margin-top: var(--s2); color: var(--muted); }
+.decision-classic { font-size: var(--type-xs); }
+.decision-remember, .decision-question label { display: flex; align-items: flex-start; gap: var(--s2); margin: var(--s2) 0; }
+.decision-question { min-width: 0; border: 0; padding: 0; margin: var(--s3) 0; }
+.decision-question legend { font-weight: 600; }
+.decision-question input[type="radio"], .decision-question input[type="checkbox"], .decision-remember input { flex-shrink: 0; margin-top: var(--s1); }
+.custom-answer { width: 100%; }
+.review-detail pre { margin: var(--s2) 0 var(--s3); padding: var(--s2); background: var(--surface); border-radius: var(--r1); }
+.proposal-agents { margin: var(--s2) 0; }
+#decision-dialog { color: var(--text); background: var(--bg); border: var(--line) solid var(--border); border-radius: var(--r2); padding: var(--s6); width: min(var(--signin-width),calc(100% - var(--s6))); max-height: var(--sheet-height); overflow-y: auto; box-shadow: var(--shadow); }
+#decision-dialog::backdrop { background: var(--scrim); }
+#decision-dialog label { display: block; font-size: var(--type-sm); }
+#decision-dialog label input:not([type="checkbox"]), #decision-dialog textarea { display: block; width: 100%; margin-top: var(--s2); }
+#decision-dialog textarea { min-height: var(--composer-height); resize: vertical; }
+#decision-dialog .decision-remember { display: flex; }
+#decision-dialog h2 { overflow-wrap: anywhere; }
+.decision-dialog-buttons { justify-content: flex-end; }
+.decision-dialog-error { margin-top: var(--s2); color: var(--muted); }
+.decision-destructive { color: var(--danger); }
+#composer-status.decision-command-status { position: absolute; bottom: 100%; left: 0; right: 0; margin: 0; padding: var(--s2); background: var(--surface); border: var(--line) solid var(--border); border-radius: var(--r1); box-shadow: var(--shadow); }
+#room-footer:has(.waiting-strip) #composer-status.decision-command-status { bottom: calc(100% + var(--target) + var(--s2)); }
+@media (max-width: 767px) {
+  .decision-buttons > button, .decision-dialog-buttons > button { width: 100%; min-height: var(--target); }
+  .decision-question label, .decision-remember { min-height: var(--target); }
+  #decision-dialog { position: fixed; inset: auto 0 0; margin: 0; width: 100%; max-width: 100%; max-height: var(--sheet-height); padding: var(--s4); border-radius: var(--r3) var(--r3) 0 0; }
+}

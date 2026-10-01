@@ -124,6 +124,7 @@ function threadActive() {
   const result=threadSingle(),s=result.sessions[0];s.status='waiting';s.ended=null;
   result.messages=result.messages.filter(m=>!['outcome','request'].includes(m.kind));
   result.messages.push(threadMessage('ev:3','note','Keep the format simple.',{to:'coder-2'}),threadMessage('ev:4','note','Use local tests.',{redirect_for:'p0'}),threadMessage('req:permission:p1','request','bash · python3 -m unittest',{kind:'permission',permission:'bash',patterns:['python3 -m unittest'],risk:{level:'R1',label:'Low risk',class:'low',reasons:['Local tests']},receipt:null,pending:true},{actor:'coder-1',action:{endpoint:'/api/review',fields:{run:s.id,kind:'permission',request_id:'p1',fingerprint:'NEVER-SHOW-FINGERPRINT'}}}));
+  result.messages.find(m=>m.kind==='request').detail.review={command:'python3 -m unittest'};
   result.live={session:s.id,phase:'code',status:'waiting'};return result;
 }
 function threadTeam() {
@@ -136,6 +137,7 @@ function threadTeam() {
     threadMessage('ev:6','progress','Team started'),threadMessage('ev:7','progress','Storage task started'),threadMessage('ev:8','system','Workspace ready'),
     threadMessage('turn:r','research','Check the documentation',{number:3,status:'finished',kind:'research',request:{question:'Which storage format?',why:'Check compatibility',toolsets:['web'],max_turns:2,seconds:60},events:[{kind:'research started',created:s.created,text:'Reading docs'},{kind:'research result',created:s.created,text:'JSON is supported'}]},{actor:'researcher-1'}),
     threadMessage('cap:1','skill','Python testing',{name:'Python testing',agent:'coder-2',state:'proposed',source:'local library',risk:{level:'R1',label:'Low risk'},reasons:['Needed for tests']},{action:{endpoint:'/api/skills/decide',fields:{id:'1'},choices:['approve','reject']}}),pending);
+  result.messages.find(m=>m.id==='cap:1').detail.review={description:'Testing helpers',files:['SKILL.md'],size:32,skill_md:'# Python testing\nRun unittest.'};
   return result;
 }
 function threadLong() {
@@ -185,3 +187,31 @@ function composerFixture(kind='new') {
 const composerPreflight={is_repo:true,usable:true,dirty_count:0,changes:[],untracked:[],reason:'',branch:'main'};
 const composerErrors={validation:{error:'Supply a valid goal check'},unauthorized:{error:'Connect again with the dashboard key'}};
 Object.assign(module.exports,{composerFixture,composerPreflight,composerErrors});
+
+// M5 public decision records; none is an optimistic client decision.
+function decisionMessages() {
+  const review={endpoint:'/api/review',fields:{run:'run_test',kind:'permission',request_id:'low',fingerprint:'NEVER-SHOW-FINGERPRINT'}};
+  const low=threadMessage('m5:low','request','bash · npm test',{kind:'permission',permission:'bash',patterns:['npm test'],risk:{level:'R1',label:'Low risk',decision:'allow',remember_allowed:true},review:{command:'npm test'}},{actor:'coder-1',action:review});
+  const critical=clone(low);Object.assign(critical,{id:'m5:critical',text:'bash · remove generated build files'});critical.action.fields.request_id='critical';Object.assign(critical.detail,{patterns:['rm -r build/'],risk:{level:'R3',label:'Critical',decision:'confirm',remember_allowed:false,reasons:['Deletes generated files']},review:{command:'rm -r build/',description:'Remove only generated build files',diff:'- generated build output'}});
+  const question=threadMessage('m5:question','request','Storage · Which format?',{kind:'question',questions:[{header:'Storage',question:'Which format?',multiple:false,custom:true,options:[{label:'JSON',description:'Local file'},{label:'SQLite',description:'Database'}]}]},{actor:'coder-2',action:{endpoint:'/api/review',fields:{...review.fields,kind:'question',request_id:'question'}}});
+  const multiple=clone(question);multiple.id='m5:multiple';multiple.action.fields.request_id='multiple';Object.assign(multiple.detail.questions[0],{multiple:true,custom:false});
+  const proposal=threadTeam().messages.find(m=>m.kind==='proposal');proposal.id='m5:proposal';
+  const research=threadMessage('m5:research','research','Check storage compatibility',{status:'awaiting_approval',request:{question:'Which storage format is supported?',why:'Check the public documentation',toolsets:['web'],max_turns:2,seconds:60}},{actor:'researcher-1',action:{endpoint:'/api/research/decide',fields:{run:'run_test',step:'research',fingerprint:'NEVER-SHOW-FINGERPRINT'},choices:['approve','reject'],confirm_required:true}});
+  const skillFetch=threadMessage('m5:fetch','skill','Python testing',{state:'awaiting_fetch',name:'Python testing',agent:'coder-2',source:'https://example.test/testing',risk:{level:'R1',label:'Low risk'},reasons:['Needed for tests']},{action:{endpoint:'/api/skills/fetch',fields:{id:'fetch'}}});
+  const skillInstall=clone(threadTeam().messages.find(m=>m.kind==='skill'));skillInstall.id='m5:install';skillInstall.action.fields.id='install';
+  const outcome=threadMessage('m5:outcome','outcome','Tests pass; storage works.',{status:'completed',workspace:{state:'open',branch:'agent/storage',base_branch:'main',commits:2,shortstat:'2 files changed, 20 insertions(+), 3 deletions(-)'}},{session:'run_done',action:{endpoint:'/api/control',fields:{run:'run_done'},choices:['apply','discard_workspace','verify']}});
+  const truncated=clone(low);truncated.id='m5:truncated';truncated.action.fields.request_id='truncated';truncated.detail.review_truncated=true;truncated.detail.review.command='x'.repeat(3999)+'…';
+  return {low,critical,question,multiple,proposal,research,skillFetch,skillInstall,outcome,truncated};
+}
+function decisionFixture(name='all') {
+  const state=richActive();state.permissions={confirm_word:'CONFIRM-TEST'};
+  const catalogue=decisionMessages(), messages=name==='all' ? Object.values(catalogue) : [catalogue[name]];
+  const sessions=[threadSession('run_test',{status:'waiting',ended:null,mode:'team'})];
+  const outcome=messages.find(m=>m.kind==='outcome');if(outcome)sessions.unshift(threadSession('run_done',{title:'Storage work',created:'2026-09-27T16:00:00Z'}));
+  const pending=messages.some(m=>m.kind!=='outcome');
+  if(!pending){state.run.status='completed';state.runs[0].status='completed';}
+  const start=s=>threadMessage('run:'+s.id,'session_start',s.title,{mode:s.mode},{session:s.id,at:s.created});
+  const thread=threadResponse([...sessions.filter(s=>s.id==='run_done').map(start),...messages.filter(m=>m.kind==='outcome'),...sessions.filter(s=>s.id==='run_test').map(start),...messages.filter(m=>m.kind!=='outcome')],sessions,null,{session:pending?'run_test':null,phase:pending?'code':null,status:pending?'waiting':null});
+  return {state,thread,channels:threadChannels(thread,messages.filter(m=>m.action && m.kind!=='outcome').length)};
+}
+Object.assign(module.exports,{decisionMessages,decisionFixture});

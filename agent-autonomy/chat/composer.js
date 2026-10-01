@@ -2,7 +2,8 @@
   'use strict';
   const terminal = new Set(['completed','blocked','failed','stopped','limit_reached']);
   const limits = {goal:12000,title:120,note:5000,checks:20,check:1000,max_steps:20,run_minutes:120,command:2000,team_size:3};
-  const commands = ['pause','resume','stop','check','title','help'], deferred = ['verify','apply','discard','team'];
+  const decisionCommands = ['verify','apply','discard','team'];
+  const commands = ['pause','resume','stop','check','title','help',...decisionCommands];
   const preferenceKeys = ['verifier','max_steps','run_minutes','mode','team_size','isolation','network','cpus','memory_gb','setup','preview'];
   const settingKeys = ['title','goal_checks',...preferenceKeys];
   function preferencesOnly(values) {
@@ -23,7 +24,8 @@
     const match = text.trim().match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     if (!match) return null;
     const command=match[1].toLowerCase(), argument=(match[2] || '').trim();
-    return {command,text:argument,error:deferred.includes(command) ? '/'+command+' is not available here. Use the classic dashboard.' : !commands.includes(command) ? 'Unknown command /'+command+'. Use /help.' : ['check','title'].includes(command) && !argument ? 'Add text after /'+command+'.' : !['check','title'].includes(command) && argument ? '/'+command+' does not take text.' : ''};
+    const teamError=command==='team' && !/^(?:approve|single|repropose\s+\S[\s\S]*)$/.test(argument) ? 'Use /team approve, /team single or /team repropose <text>.' : '';
+    return {command,text:argument,error:!commands.includes(command) ? 'Unknown command /'+command+'. Use /help.' : teamError || (['check','title'].includes(command) && !argument ? 'Add text after /'+command+'.' : !['check','title','team'].includes(command) && argument ? '/'+command+' does not take text.' : '')};
   }
   function parseMention(text, agents = []) {
     const names = new Set(agents.filter(a=>a.type!=='orchestrator' && a.role!=='orchestrator' && a.name!=='hermes').map(a=>a.name));
@@ -69,7 +71,7 @@
     input.value=core.read('sessionStorage','acx-draft') || '';
     const agents=()=>((snapshot.state?.run?.id===view().run ? snapshot.state.agents : details?.run?.id===view().run ? details.agents : snapshot.agentsByRun?.[view().run]) || []).filter(a=>a.name!=='hermes' && a.type!=='orchestrator' && a.role!=='orchestrator');
     const view=()=>{const id=snapshot.thread?.live?.session || snapshot.channels?.channels?.[0]?.active_session;return composerState(id && details?.run?.id===id && snapshot.state?.run?.id!==id ? {...snapshot,state:{...snapshot.state,run:details.run}} : snapshot,follow);};
-    function tell(value, classic=false) {clearTimeout(statusTimer);status.textContent=value;status.hidden=!value;$('composer-classic').hidden=!classic;}
+    function tell(value, classic=false, decisionCommand=false) {clearTimeout(statusTimer);status.textContent=value;status.hidden=!value;status.classList.toggle('decision-command-status',decisionCommand && !!value);$('composer-classic').hidden=!classic;}
     function resize() {
       if(!input.value){input.style.height='40px';return;}
       input.style.height='auto';
@@ -102,26 +104,28 @@
       $('composer-target').textContent=v.kind==='note' ? 'Note → '+(mention.agent ? '@'+mention.agent : 'Hermes') : v.chip;$('composer-target').title=$('composer-target').textContent;$('composer-target').dataset.kind=v.kind;
       input.placeholder=composerState(snapshot,follow,mention.agent).placeholder;input.disabled=!!v.reason;
       input.maxLength=v.kind==='note'?limits.note:limits.goal;
-      $('send-message').disabled=busy || !!previewTask || !!v.reason || !input.value.trim();
+      $('send-message').disabled=busy || !!previewTask || !!core.getState().writeOwner || !!v.reason || !input.value.trim();
       $('composer-settings').hidden=v.kind==='note' || !!v.reason && v.reason!=='Connections are not ready';
-      $('cancel-follow-up').hidden=!follow;$('resume-session').hidden=!v.paused || !!v.reason;$('resume-session').disabled=busy;
-      $('composer-blocked').textContent=v.reason;$('composer-blocked').hidden=!v.reason;$('check-connections').hidden=v.reason!=='Connections are not ready';$('check-connections').disabled=busy;
+      $('cancel-follow-up').hidden=!follow;$('resume-session').hidden=!v.paused || !!v.reason;$('resume-session').disabled=busy || !!core.getState().writeOwner;
+      $('composer-blocked').textContent=v.reason;$('composer-blocked').hidden=!v.reason;$('check-connections').hidden=v.reason!=='Connections are not ready';$('check-connections').disabled=busy || !!core.getState().writeOwner;
       if(v.run && snapshot.state?.run?.id!==v.run && detailsSource!==snapshot.state && !detailsTask){
         detailsSource=snapshot.state;const id=v.run;
         detailsTask=core.api('/api/state?scope=current&run='+encodeURIComponent(id)).then(data=>{if(view().run===id){details=data;render(snapshot);controls.stateChanged?.();}}).catch(()=>{}).finally(()=>{detailsTask=null;if(detailsSource!==snapshot.state)render(snapshot);});
       }
       if(!next.authenticated)closeSettings();
-      resize();controls.busy?.(busy || !!previewTask);
+      resize();controls.busy?.(busy || !!previewTask || !!core.getState().writeOwner);
     }
     async function request(path,body,clear=false,submittedDraft=input.value) {
-      if(busy || previewTask)return false;busy=true;tell('Sending…');controls.error?.('');render(snapshot);closePopover();
+      if(busy || previewTask || core.getState().writeOwner && core.getState().writeOwner!=='composer')return false;
+      busy=true;if(!core.getState().writeOwner && !core.beginWrite('composer')){busy=false;return false;}
+      tell('Sending…');controls.error?.('');render(snapshot);closePopover();
       try {
         await core.post(path,body);
         if(clear && input.value===submittedDraft){input.value='';core.write('sessionStorage','acx-draft',null);}
         tell('Sent · it will appear in the room');statusTimer=setTimeout(()=>{status.textContent='';status.hidden=true;},3000);
         controls.bottom();core.refreshNow();return true;
       }catch(error){tell(error.message);controls.error?.(error.message);return false;}
-      finally{busy=false;render(snapshot);input.focus?.({preventScroll:true});}
+      finally{busy=false;core.endWrite('composer');render(core.getState());input.focus?.({preventScroll:true});}
     }
     async function control(action, clear=false, run=view().run) {
       if(view().reason){tell(view().reason);return false;}
@@ -134,12 +138,13 @@
       return preflight;
     }
     async function submit() {
-      if(busy || previewTask)return;
+      if(busy || previewTask || core.getState().writeOwner)return;
       const v=view(), draft=input.value, text=draft.trim();if(!text)return;
       const slash=parseSlash(text);
       if(slash){
-        if(slash.error){tell(slash.error,deferred.includes(slash.command));return;}
+        if(slash.error){tell(slash.error,false,decisionCommands.includes(slash.command));return;}
         if(slash.command==='help'){tell('');showChoices('slash',commands);return;}
+        if(decisionCommands.includes(slash.command)){tell(controls.decision(slash.command,slash.text),false,true);closePopover();return;}
         const run=slash.command==='title' ? v.run || snapshot.focused : v.run;
         if(!run || v.reason && v.reason!=='Connections are not ready'){tell(v.reason || 'There is no active session.');return;}
         if(slash.command==='stop'){controls.stop({id:run,title:activeTitle()},true);return;}
@@ -149,7 +154,7 @@
       if(v.reason){tell(v.reason);return;}
       if(v.kind==='note'){await request('/api/control',noteBody(v.run,draft,agents()),true,draft);return;}
       // Preparation shares the submission lock so repeated Enter cannot start a second session.
-      busy=true;render(snapshot);
+      busy=true;if(!core.beginWrite('composer')){busy=false;return;}render(snapshot);
       try {
         await ensurePreflight(true);
         if(preflight.dirty_count>0 && !$('allow-dirty').checked){tell(preflight.dirty_count+' uncommitted changes. Open Settings and choose “Start anyway with uncommitted changes”.');await openSettings();$('settings-advanced').open=true;return;}
@@ -162,7 +167,7 @@
           for(const [key,value] of changed)if(value===undefined)delete preferences[key];else preferences[key]=value;
           core.write('localStorage','acx-settings',JSON.stringify(preferencesOnly(preferences)));follow=null;clearSession();closeSettings();render(snapshot);
         }
-      }catch(error){tell(error.message);}finally{busy=false;render(snapshot);}
+      }catch(error){tell(error.message);}finally{busy=false;core.endWrite('composer');render(core.getState());}
     }
     function activeTitle() {const id=view().run;return snapshot.thread?.sessions[id]?.title || snapshot.state?.runs?.find(r=>r.id===id)?.title || id;}
     async function reply(id) {
@@ -216,12 +221,16 @@
     async function performModePreview() {
       const node=$('mode-preview');if(!node || currentSettings().mode!=='auto')return;
       node.hidden=false;if(!input.value.trim()){node.textContent='Write a goal to see what Auto would choose.';return;}
+      if(core.getState().writeOwner && core.getState().writeOwner!=='composer')return;
+      const ownsLock=!core.getState().writeOwner;
+      if(ownsLock && !core.beginWrite('composer'))return;
       const goal=input.value, generation=settingsGeneration, key=previewKey();
       try {
         const data=await core.post('/api/mode/preview',{goal,goal_checks:currentSettings().goal_checks || [],verifier:currentSettings().verifier || '',max_steps:currentSettings().max_steps ?? 8});
         if(generation!==settingsGeneration || currentSettings().mode!=='auto' || key!==previewKey())return;
         node.textContent='Auto would '+(data.mode==='team'?'ask Hermes for a team plan':'use one agent')+'. '+(data.reasons || []).join(' ');node.dataset.failed='false';if(!sheet.hidden)visiblePreviewKey=previewKey();
       }catch(error){if(generation!==settingsGeneration || key!==previewKey())return;node.textContent=error.message;node.dataset.failed='true';tell(error.message);}
+      finally{if(ownsLock)core.endWrite('composer');}
     }
     function schedulePreview() {clearTimeout(previewTimer);previewTimer=setTimeout(()=>{if(!busy)modePreview();},400);}
     async function openSettings() {
@@ -257,7 +266,7 @@
     $('settings-scrim').addEventListener('click',()=>{closeSettings();input.focus();});
     sheet.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeSettings();input.focus();}if(event.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,input,select,summary,a')].filter(n=>!n.disabled && !n.closest('[hidden]') && (!n.closest('#settings-advanced') || $('settings-advanced').open || n.tagName==='SUMMARY'));const i=nodes.indexOf(document.activeElement);if(event.shiftKey && i===0 || !event.shiftKey && i===nodes.length-1){event.preventDefault();nodes[event.shiftKey?nodes.length-1:0]?.focus();}}});
     if(root.visualViewport){const viewport=()=>{document.documentElement.style.setProperty('--viewport-height',root.visualViewport.height+'px');resize();};root.visualViewport.addEventListener('resize',viewport);root.visualViewport.addEventListener('scroll',viewport);viewport();}
-    return {render,submit,control,reply,openSettings,closeSettings,activeTitle,getView:view,getBusy:()=>busy || !!previewTask};
+    return {render,submit,control,reply,openSettings,closeSettings,activeTitle,getView:view,getBusy:()=>busy || !!previewTask || !!core.getState().writeOwner};
   }
   const composer={composerState,parseSlash,parseMention,runBody,noteBody,followUpDefaults,limits,mount};root.AC=root.AC || {};root.AC.composer=composer;
   if(typeof module!=='undefined' && module.exports)module.exports=composer;

@@ -50,7 +50,7 @@ async function harness(state = fixture(), options = {}) {
       if (options.hold && url.startsWith('/api/state')) await new Promise(resolve=>{options.release=resolve;});
       return {ok:true,status:200,json:async()=>{const result=clone(state);if(url.endsWith('run=bogus')) result.run=null;return result;}};
     }});
-  for (const file of ['core.js','model.js','thread.js','decisions.js','composer.js','members.js','shell.js'].filter(file=>fs.existsSync(path.join(root,file)))) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
+  for (const file of ['core.js','model.js','thread.js','decisions.js','composer.js','members.js','workspace.js','shell.js'].filter(file=>fs.existsSync(path.join(root,file)))) vm.runInContext(fs.readFileSync(path.join(root,file),'utf8'),context);
   await tick();await tick();
   async function runTimers(delay) {const pending=[...timers].filter(([,t])=>t.delay===delay);for(const [id,t] of pending){timers.delete(id);t.fn();}await tick();}
   return {window,document,composer:window.AC.shell.composer,core:window.AC.core,shell:window.AC.shell,local,session,timers,calls,runTimers,options,publicThread,timeline:document.querySelector('#timeline'),emit:async text=>{streamWake({done:false,value:new TextEncoder().encode(text)});await tick();},drop:async()=>{streamWake({done:true});await tick();}};
@@ -141,7 +141,7 @@ test('pure model functions preserve state and terminal semantics',()=>{
 test('tokens and isolation guards',()=>{
   const css=fs.readFileSync(path.join(root,'chat.css'),'utf8'),tokens=fs.readFileSync(path.join(root,'tokens.css'),'utf8');assert(!/#(?:[0-9a-f]{3,8})\b|\brgba?\(|\bhsla?\(|(?:^|[: ,])(?:white|black|red|blue|gray|grey|transparent|currentColor)(?=[; ,}])/i.test(css));
   for(const [,token] of css.matchAll(/var\((--[\w-]+)\)/g))assert(tokens.includes(token+':'),token);
-  for(const file of fs.readdirSync(root))assert(!/\/(?:app\.js|workspace\.js|app\.css|themes\.css|workspace\.css)/.test(fs.readFileSync(path.join(root,file),'utf8')),file);
+  for(const file of fs.readdirSync(root))assert(!/\/(?:app\.js|app\.css|themes\.css|workspace\.css)|(?<!\/chat)\/workspace\.js/.test(fs.readFileSync(path.join(root,file),'utf8')),file);
 });
 test('M3 kinds, progressive detail, roles, receipts and unknown kinds',async()=>{
   const data=fx.threadTeam();data.messages.push(fx.threadMessage('alert:1','alert','Needs attention',{reason:'Check integration'}),fx.threadMessage('unknown:1','future_kind','Recorded future event',{raw:'PRIVATE'}));
@@ -149,7 +149,7 @@ test('M3 kinds, progressive detail, roles, receipts and unknown kinds',async()=>
   for(const label of ['turn 1','✕ failed','✓ passed','submission uncertain','Team plan · 2 agents · 2 tasks','Team proposal waiting','coder-2','Awaiting confirmation · by you','3 updates','research ·','Python testing','Needs attention','Recorded future event','→ @coder-2','Redirect after denying request p0']) assert(content.includes(label),label);
   assert(!content.includes('PRIVATE'));assert(h.timeline.querySelector('[data-message="unknown:1"] .quiet'));
   const details=h.timeline.querySelector('[data-message="turn:1"] details');assert(!details.open);details.open=true;
-  assert(details.textContent.includes('todo.py'));assert(details.textContent.includes('Tests failed'));assert(details.textContent.includes('Inspect in classic'));
+  assert(details.textContent.includes('todo.py'));assert(details.textContent.includes('Tests failed'));assert(details.textContent.includes('Open workspace'));assert.equal(details.querySelector('a').getAttribute('href'),'#/w/run_test/coder-1');
   for(const selector of ['[data-message="ev:2"] ol','[data-message="ev:5"] dl','[data-message="turn:r"] dl','[data-message="cap:1"] dl','[data-message="req:permission:p2"] dl'])assert(h.timeline.querySelector(selector),selector);
   data.messages.find(m=>m.id==='req:permission:p2').detail.receipt.actor='automatic local rule';data.messages.find(m=>m.id==='req:permission:p2').rev++;await h.core.refresh();assert(h.timeline.textContent.includes('Awaiting confirmation · by automatic local rule'));
   const single=await harness(richCompleted(),{thread:fx.threadSingle()});assert(single.timeline.textContent.includes('Workspace open'));assert(single.timeline.textContent.includes('apply blocked: Working tree changed'));
@@ -1034,6 +1034,166 @@ for(const kind of ['teamStopping','teamExpired'])test('M7 S1 '+kind+' labels nev
   assert.equal(h.document.querySelectorAll('.proposed-members [data-proposed]').length,2);
   assert(!h.document.querySelector('#live-members').textContent.includes('coder-2'));
   assert.equal(h.document.querySelectorAll('[data-decision]').length,0);assert.equal(posts(h).length,0);
+});
+
+// M7 Part B: route, shared data and read-only entry points.
+async function wsHarness(kind='workspaceLive',options={}){const f=fx.workspaceFixture(kind),h=await harness(f.state,{thread:f.thread,channels:f.channels,...options});h.f=f;return h;}
+async function openWorkspace(h,agent='coder-1',run='run_test'){h.window.location.hash='#/w/'+encodeURIComponent(run)+'/'+encodeURIComponent(agent);h.shell.route();await tick();await tick();}
+const wsText=h=>h.document.querySelector('#workspace').textContent;
+test('M7 B Workspace route selects its session and recorded agent without an extra active read',async()=>{
+  const h=await wsHarness(),before=h.calls.length;await openWorkspace(h);assert.equal(h.document.querySelector('#workspace').hidden,false);assert.equal(h.core.getState().focused,'run_test');assert.equal(h.calls.length,before);assert(wsText(h).includes('coder-1 (API)'));assert(wsText(h).includes('● Working'));assert(wsText(h).includes('agent/api'));assert(wsText(h).includes('in container'));assert.equal(h.document.querySelector('#context').hidden,true);
+});
+test('M7 B header uses recorded researcher, role, task, since and exact classic pop-out link',async()=>{
+  const h=await wsHarness();await openWorkspace(h,'researcher-1');for(const text of ['researcher','Read docs','scratch folder · no project files'])assert(wsText(h).includes(text));const classic=h.document.querySelector('#workspace [data-popout]');assert.equal(classic.getAttribute('href'),'/?popout=researcher-1&run=run_test');assert.equal(classic.getAttribute('target'),'_blank');assert.equal(classic.getAttribute('rel'),'noopener noreferrer');assert.equal(posts(h).length,0);
+});
+test('M7 B unknown session and agent have exact errors and Back without extra endpoints',async()=>{
+  const h=await wsHarness();await openWorkspace(h,'not-live');assert(wsText(h).includes('No recorded agent named ‹not-live› in this session.'));assert(h.document.querySelector('#workspace [data-back-room]'));
+  h.options.respond=url=>url==='/api/state?scope=current&run=missing'?{...h.f.state,run:null,agents:[]}:undefined;await openWorkspace(h,'coder-1','missing');assert(wsText(h).includes("That session is not in this project's history."));assert.equal(detailCalls(h,'missing').length,1);assert(h.calls.every(c=>['/api/state','/api/channels','/api/thread','/api/events','/api/workspace/preflight','/api/sandbox'].some(path=>c.url.startsWith(path))));
+  for(const hash of ['#/w/%ZZ/coder-1','#/w/run_test/','#/w/run_test/coder-1/extra']){h.window.location.hash=hash;h.shell.route();assert.equal(h.window.location.hash,'#/');}
+});
+test('M7 B room, live members and tasks link into Workspace while proposed agents do not',async()=>{
+  const h=await wsHarness();assert(!h.timeline.textContent.includes('Inspect in classic'));const link=h.timeline.querySelector('[data-message="turn:api-new"] a[data-workspace-link]');assert.equal(link.getAttribute('href'),'#/w/run_test/coder-1');
+  await openMembers(h);assert.equal(h.document.querySelector('#live-members [data-member="hermes"] [data-workspace-link]').textContent,'Open log');assert.equal(h.document.querySelector('#live-members [data-member="coder-1"] [data-workspace-link]').textContent,'Open workspace');assert.equal(h.document.querySelector('[data-task="t2"] [data-workspace-link]').textContent,'Workspace');
+  const f=fx.membersFixture('teamProposed'),p=await harness(f.state,{thread:f.thread,channels:f.channels});await openMembers(p);assert.equal(p.document.querySelectorAll('.proposed-members [data-workspace-link]').length,0);assert.equal(posts(h).length+posts(p).length,0);
+});
+test('M7 B Back and Escape restore the previous room route and opening focus',async()=>{
+  const h=await wsHarness();await openMembers(h);const link=h.document.querySelector('#live-members [data-member="coder-1"] [data-workspace-link]');link.focus();link.click();await tick();assert.equal(h.document.querySelector('#workspace').hidden,false);h.document.querySelector('#workspace [data-back-room]').click();await tick();assert.equal(h.window.location.hash,'#/s/run_test');assert.equal(h.document.activeElement,link);
+  h.window.location.hash='#/';h.shell.route();await openWorkspace(h);h.document.dispatchEvent(new h.window.Event('keydown',{bubbles:true}));const event=new h.window.Event('keydown',{bubbles:true});event.key='Escape';h.document.dispatchEvent(event);assert.equal(h.window.location.hash,'#/');assert.equal(h.document.querySelector('#workspace').hidden,true);
+});
+test('M7 B historical Workspace and members share exactly one guarded GET per selection',async()=>{
+  const h=await wsHarness(),old=fx.workspaceFixture('workspaceHistorical');h.f.state.runs.push({id:'older',status:'completed',title:'Older team',created:'2026-09-01'});h.f.thread.sessions.push({...old.thread.sessions[0],id:'older'});h.f.thread.messages.unshift(fx.threadMessage('run:older','session_start','Older team',{}, {session:'older'}));h.options.respond=url=>url==='/api/state?scope=current&run=older'?old.state:undefined;await h.core.refresh();await openMembers(h,'older');await openWorkspace(h,'coder-1','older');assert(wsText(h).includes('Historical recorded task'));assert.equal(detailCalls(h,'older').length,1);h.document.querySelector('[data-back-room]').click();h.window.location.hash='#/s/older';h.shell.route();await tick();h.document.querySelector('#members-tab').click();assert.equal(detailCalls(h,'older').length,1);for(let i=0;i<3;i++)await h.core.refresh();assert.equal(detailCalls(h,'older').length,1);
+});
+test('M7 B 401 closes Workspace and clears rendered material',async()=>{
+  const h=await wsHarness();await openWorkspace(h);h.options.unauthorized=true;await h.core.refresh();assert.equal(h.document.querySelector('#workspace').hidden,true);assert.equal(h.document.querySelector('#workspace').textContent,'');assert.equal(h.core.getState().authenticated,false);
+});
+test('M7 B waiting header returns to the room through the M6 locate path without POSTs',async()=>{
+  const h=await wsHarness('workspaceLive',{coarse:true});await openWorkspace(h,'coder-2');h.document.querySelector('#workspace [data-room-link="waiting"]').click();await tick();await tick();assert.equal(h.document.querySelector('#workspace').hidden,true);assert(h.timeline.querySelector('[data-message="m5:question"]').classList.contains('focused'));assert.equal(posts(h).length,0);assert.equal(h.document.querySelector('#workspace [data-decision]'),null);
+});
+
+test('M7 B a classic-readable foreign session is outside the current room history',async()=>{
+  const h=await wsHarness();h.options.respond=url=>url==='/api/state?scope=current&run=foreign'?{...h.f.state,run:{id:'foreign',project:'/tmp/foreign'},agents:[{name:'foreign-agent',state:'working'}]}:undefined;
+  await openWorkspace(h,'foreign-agent','foreign');assert(wsText(h).includes("That session is not in this project's history."));assert(!wsText(h).includes('foreign-agent'));assert.equal(detailCalls(h,'foreign').length,1);assert.equal(posts(h).length,0);
+});
+
+test('M7 B Escape preserves the room Stop confirmation while a Workspace is open',async()=>{
+  const h=await wsHarness();await openWorkspace(h);h.document.querySelector('[data-session-control="stop"]').click();assert(h.document.querySelector('#stop-dialog').hasAttribute('open'));const event=new h.window.Event('keydown',{bubbles:true});event.key='Escape';h.document.dispatchEvent(event);assert(!h.document.querySelector('#stop-dialog').hasAttribute('open'));assert.equal(h.document.querySelector('#workspace').hidden,false);assert.equal(posts(h).length,0);
+});
+
+const wsHelpers=()=>require(path.join(root,'workspace.js'));
+async function turnsHarness(kind='workspaceLive',options={}){const f=fx.workspaceTurns(kind),h=await harness(f.state,{thread:f.thread,channels:f.channels,...options});h.f=f;return h;}
+test('M7 C transcript fallback keeps activity order then result, and an array takes precedence',()=>{
+  const w=wsHelpers(),step={activity:[{kind:'read',detail:'a',output:'first'},{kind:'bash',detail:'b',status:'completed'}],result:'last',tool_results:['TOOLRESULTS-SENTINEL']};
+  assert.deepEqual(w.transcriptOf(step),[{type:'tool',tool:'read',status:'',summary:'a',output:'first'},{type:'tool',tool:'bash',status:'completed',summary:'b',output:''},{type:'text',text:'last'}]);
+  step.transcript=[];assert.deepEqual(w.transcriptOf(step),[]);assert.deepEqual(w.transcriptOf(null),[]);
+});
+test('M7 C terminal filtering drops reasoning and unknown parts without reading tool_results',()=>{
+  const w=wsHelpers(),entries=w.terminalEntries(fx.workspaceTurns().state.steps[1]);assert.equal(entries.length,4);assert(entries.every(e=>['tool','text'].includes(e.type)));assert(!JSON.stringify(entries).includes('REASONING-SENTINEL'));assert(!JSON.stringify(entries).includes('TOOLRESULTS-SENTINEL'));
+});
+test('M7 C every stage-state combination matches a table evaluated from classic',()=>{
+  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8'),oracle=vm.createContext({});
+  vm.runInContext(source.match(/const ended = new Set\([^\n]+/)[0]+source.slice(source.indexOf('function planningNext('),source.indexOf('const TOOL_SYMBOL')),oracle);
+  const w=wsHelpers();let cases=0;
+  for(const status of ['prepared','dispatching','running','waiting','finished','completed','failed','awaiting_approval','approved','rejected','researching','interrupted','uncertain'])for(const runStatus of ['coding','paused','interrupted','completed','blocked','failed','stopped','limit_reached'])for(const phase of ['code','verify','manager'])for(const verification of [undefined,{status:'passed'},{status:'failed'},{status:'not configured'}])for(const isLast of [false,true])for(const pending of [[],[{}]])for(const next of [false,true]){
+    const run={status:runStatus,phase},step={status,verification};const expected=oracle.stageStates(run,step,isLast,pending,next);assert.deepEqual(w.stageStates(run,step,isLast,pending,next),JSON.parse(JSON.stringify(expected)));cases++;
+  }
+  assert.equal(cases,9984);
+  for(const status of ['coding','completed','blocked','failed','stopped','limit_reached'])for(const phase of ['code','manager'])for(const steps of [[],[{verified:false}],[{verified:true}]])assert.equal(w.planningNext({status,phase},steps),oracle.planningNext({status,phase},steps));
+  assert.equal(w.planningNext(null,[]),false);assert.deepEqual(w.STAGES,JSON.parse(JSON.stringify(vm.runInNewContext(source.match(/const STAGES = [^\n]+/)[0]+'STAGES'))));
+});
+test('M7 C turn selection filters agent, sorts number and follows Latest without mutating steps',()=>{
+  const w=wsHelpers(),steps=[{id:'late',number:4},{id:'other',agent:'coder-2',number:2},{id:'early',number:1}],before=JSON.stringify(steps),turns=w.turnsFor(steps,'coder-1');assert.deepEqual(turns.map(s=>s.id),['early','late']);assert.equal(w.selectedTurn(turns).id,'late');assert.equal(w.selectedTurn(turns,'early').id,'early');turns.push({id:'new',number:5});assert.equal(w.selectedTurn(turns).id,'new');assert.equal(w.selectedTurn(turns,'early').id,'early');assert.equal(JSON.stringify(steps),before);
+});
+test('M7 C latest turn renders recorded text/tools, statuses, safe output and omitted entries',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);const terminal=h.document.querySelector('#workspace-terminal');assert.equal(terminal.getAttribute('role'),'log');assert.equal(terminal.getAttribute('aria-live'),'off');assert(wsText(h).includes('5 earlier entries were not kept'));assert(wsText(h).includes('TRANSCRIPT-SENTINEL'));assert(wsText(h).includes('$ python -m unittest'));assert(!wsText(h).includes('$ bash'));assert(wsText(h).includes('› read storage.py'));assert(wsText(h).includes('• mystery Check syntax'));for(const status of ['running','completed','error'])assert(wsText(h).includes(status));
+  assert.equal(h.document.querySelector('#workspace-turn-status').textContent,'Turn 2 · active');assert(h.document.querySelector('[data-output-status="running"]').open);assert(h.document.querySelector('[data-output-status="error"]').open);assert(!h.document.querySelector('[data-output-status="completed"]').open);
+  assert(wsText(h).includes('<img src=x onerror=alert(1)>'));assert.equal(h.document.querySelector('#workspace img'),null);assert.equal(h.document.querySelector('#workspace a[href="https://example.test/plain-text"]'),null);assert(!wsText(h).includes('OTHER-AGENT-TRANSCRIPT'));assert.equal(posts(h).length,0);
+});
+test('M7 C raw step sentinels never enter room, members or rail and close removes material',async()=>{
+  const h=await turnsHarness();await openMembers(h);await openWorkspace(h);for(const selector of ['#timeline','#context','#rail'])for(const value of ['TRANSCRIPT-SENTINEL','RESULT-SENTINEL','PROMPT-SENTINEL','REASONING-SENTINEL','TOOLRESULTS-SENTINEL'])assert(!h.document.querySelector(selector).textContent.includes(value),selector+':'+value);
+  for(const value of ['RESULT-SENTINEL','REASONING-SENTINEL','UNKNOWN-SENTINEL','TOOLRESULTS-SENTINEL'])assert(!wsText(h).includes(value));h.document.querySelector('#workspace [data-back-room]').click();assert.equal(wsText(h),'');
+});
+test('M7 C Prompt disclosure is escaped, bounded to 8000 characters and retained across reads',async()=>{
+  const h=await turnsHarness();h.f.state.steps[1].prompt='<img src=x onerror=alert(1)>'+('z'.repeat(8050));await h.core.refresh();await openWorkspace(h);const prompt=h.document.querySelector('#ws-prompt');assert(!prompt.open);assert.equal(prompt.querySelector('pre').textContent,h.f.state.steps[1].prompt.slice(0,8000)+'…truncated');prompt.open=true;await h.core.refresh();assert.equal(h.document.querySelector('#ws-prompt'),prompt);assert(prompt.open);assert.equal(h.document.querySelector('#workspace img'),null);
+});
+test('M7 C keyed live updates preserve entry, button, output focus and disclosure state',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);const button=h.document.querySelector('[data-ws-turn="ws-live"]'),entry=h.document.querySelector('#ws-entry-ws-live-tool-ws-complete'),output=entry.querySelector('details');output.open=true;output.querySelector('summary').focus();h.f.state.steps[1].transcript[4].output+='\nAdded output';h.f.state.steps[1].transcript.push({type:'text',text:'Later text'});await h.core.refresh();assert.equal(h.document.querySelector('[data-ws-turn="ws-live"]'),button);assert.equal(h.document.querySelector('#ws-entry-ws-live-tool-ws-complete'),entry);assert.equal(entry.querySelector('details'),output);assert(output.open);assert.equal(h.document.activeElement,output.querySelector('summary'));assert(wsText(h).includes('Added output'));assert(wsText(h).includes('Later text'));
+});
+test('M7 C tools default open on running/error and respect manual state until status changes',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);const output=h.document.querySelector('[data-output-status="running"]');output.open=false;await h.core.refresh();assert(!output.open);h.f.state.steps[1].transcript[3].status='error';await h.core.refresh();assert(output.open);h.f.state.steps[1].transcript[3].status='completed';await h.core.refresh();assert(output.open,'Completing a tool must not close an open disclosure');output.open=false;await h.core.refresh();assert(!output.open);
+});
+test('M7 C latest follows output, scroll-up holds position and Jump resumes without a read',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);const term=h.document.querySelector('#workspace-terminal');Object.defineProperties(term,{scrollHeight:{value:900,configurable:true},clientHeight:{value:200,configurable:true}});await h.core.refresh();assert.equal(term.scrollTop,900);term.scrollTop=100;term.dispatchEvent(new h.window.Event('scroll',{bubbles:true}));assert.equal(h.shell.workspace.getState().follow,false);assert(!h.document.querySelector('#ws-jump').hidden);h.f.state.steps[1].transcript.push({type:'text',text:'Growing recorded transcript'});await h.core.refresh();assert.equal(term.scrollTop,100);const n=h.calls.length;h.document.querySelector('#ws-jump').click();assert.equal(term.scrollTop,900);assert(h.document.querySelector('#ws-jump').hidden);assert.equal(h.calls.length,n);
+});
+test('M7 C pinned turn keeps selection and scroll when new turns arrive until Latest',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);h.document.querySelector('[data-ws-turn="ws-first"]').click();const term=h.document.querySelector('#workspace-terminal');Object.defineProperties(term,{scrollHeight:{value:1000,configurable:true},clientHeight:{value:200,configurable:true}});term.scrollTop=70;h.f.state.steps.push({id:'ws-new',agent:'coder-1',number:4,title:'Next recorded turn',status:'running',transcript:[{type:'text',text:'Fourth turn'}]});await h.core.refresh();assert(wsText(h).includes('Earlier recorded turn'));assert(!wsText(h).includes('Fourth turn'));assert.equal(term.scrollTop,70);assert.equal(h.shell.workspace.getState().pinned,'ws-first');h.document.querySelector('[data-ws-latest]').click();assert(wsText(h).includes('Fourth turn'));assert.equal(h.shell.workspace.getState().pinned,'');assert.equal(term.scrollTop,1000);assert.equal(posts(h).length,0);
+});
+test('M7 C stages include classic symbols and actors, with actionable-only waiting count',async()=>{
+  const h=await turnsHarness('workspaceReviewer');await openWorkspace(h,'reviewer-1');assert(wsText(h).includes('OpenCode · read-only · reviewer-1 (Review)'));for(const label of ['Plan','Hermes → OpenCode','AgentControl',': done',': active'])assert(wsText(h).includes(label));
+  h.f.state.steps[2].status='waiting';await h.core.refresh();await openWorkspace(h,'coder-2');assert.equal(h.document.querySelector('#workspace-turn-status').textContent,'Turn 3 · waiting');assert(wsText(h).includes('! Code'));assert(wsText(h).includes('Waiting on you'));h.f.thread.messages.find(m=>m.action).action=null;await h.core.refresh();assert.equal(h.document.querySelector('#workspace-turn-status').textContent,'Turn 3 · active');
+});
+test('M7 C next planning state is recorded and pinned turns keep their own stages',async()=>{
+  const h=await turnsHarness();h.f.state.run.phase='manager';h.f.state.steps[1].verified=true;h.f.state.steps[1].status='finished';await h.core.refresh();await openWorkspace(h);assert.equal(h.document.querySelector('#ws-stage-plan').dataset.state,'active');assert.equal(h.document.querySelector('#ws-stage-code').dataset.state,'pending');assert.equal(h.document.querySelector('#workspace-turn-status').textContent,'Turn 2 · done');h.document.querySelector('[data-ws-turn="ws-first"]').click();assert.equal(h.document.querySelector('#ws-stage-plan').dataset.state,'done');
+});
+test('M7 C no-turn and live no-output states retain Latest without synthetic messages',async()=>{
+  const h=await turnsHarness('workspaceNoTurns');await openWorkspace(h);assert(wsText(h).includes('No turns yet.'));assert(h.document.querySelector('[data-ws-latest]'));assert.equal(h.document.querySelector('#workspace-terminal'),null);const output=await turnsHarness('workspaceNoOutput');await openWorkspace(output);assert(output.document.querySelector('#workspace-terminal').textContent.includes('No output yet.'));assert.equal(posts(h).length+posts(output).length,0);
+});
+test('M7 C every local Workspace button and link stays read-only, and sign-out drops output',async()=>{
+  const h=await turnsHarness();await openWorkspace(h);for(const button of [...h.document.querySelectorAll('#workspace button')])button.click();for(const link of [...h.document.querySelectorAll('#workspace a')]){link.click();await tick();}assert.equal(posts(h).length,0);await openWorkspace(h);h.core.connect('',false);assert.equal(h.document.querySelector('#workspace').hidden,true);assert.equal(wsText(h),'');
+});
+test('M7 C Hermes must be recorded in agents rather than manufactured for Workspace routing',async()=>{
+  const h=await turnsHarness();h.f.state.agents=h.f.state.agents.filter(a=>a.name!=='hermes');await h.core.refresh();await openWorkspace(h,'hermes');assert(wsText(h).includes('No recorded agent named ‹hermes› in this session.'));assert.equal(h.document.querySelector('#workspace-turns'),null);
+});
+
+async function detailsHarness(kind='workspaceLive',options={}){const f=fx.workspaceDetails(kind),h=await harness(f.state,{thread:f.thread,channels:f.channels,...options});h.f=f;return h;}
+test('M7 D verification labels match classic including no command and coding failure',()=>{
+  const w=wsHelpers(),source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8'),oracle=vm.runInNewContext(source.slice(source.indexOf('function verificationLabel('),source.indexOf('function fileStats('))+'verificationLabel');
+  for(const step of [null,{},...['passed','failed','not configured','running','unknown'].map(status=>({verification:{status}})),{status:'failed'}])assert.equal(w.verificationLabel(step),oracle(step));
+});
+test('M7 D files are bounded to 50 while retaining recorded partial statistics',()=>{
+  const w=wsHelpers(),evidence={file_stats:Array.from({length:53},(_,i)=>({path:'file'+i,change:'changed',added:i,removed:0,partial:i===1}))},before=JSON.stringify(evidence),files=w.fileList(evidence);assert.equal(files.items.length,50);assert.equal(files.omitted,3);assert.equal(files.items[1].partial,true);assert.equal(JSON.stringify(evidence),before);assert.deepEqual(w.fileList(null),{items:[],omitted:0});
+});
+test('M7 D surfaces use classic labels and raw fallback, filtered by recorded agent access',()=>{
+  const w=wsHelpers(),source=fs.readFileSync(path.join(__dirname,'../workspace.js'),'utf8'),labels=vm.runInNewContext(source.match(/const SURFACE_LABEL = [^\n]+/)[0]+'SURFACE_LABEL');for(const [kind,label] of Object.entries(labels))assert.equal(w.surfaceLabel(kind),label);for(const kind of ['unknown-kind','__proto__','constructor'])assert.equal(w.surfaceLabel(kind),kind);const surfaces=fx.workspaceDetails().state.surfaces;assert.deepEqual(w.surfacesFor(surfaces,'coder-1').map(s=>s.id),['web','terminal','vm','desktop','unknown']);assert.deepEqual(w.surfacesFor(surfaces,'researcher-1').map(s=>s.id),['web']);
+});
+test('M7 D diff preserves classic prefixes and escapes lines rather than interpreting markup',()=>{
+  const w=wsHelpers(),attack='<img src=x onerror=alert(1)>',text='@@ -1 +1 @@\n--- a/a\n+++ b/a\n-'+attack+'\n+'+attack+'\n context',html=w.diffHTML(text),{document}=parseHTML('<pre>'+html+'</pre>');assert.equal(document.querySelectorAll('img').length,0);assert.deepEqual([...document.querySelectorAll('.diff-line')].map(n=>n.textContent),text.split('\n'));assert.equal(document.querySelectorAll('.diff-heading').length,3);assert(document.querySelector('.diff-add').textContent.startsWith('+'));assert(document.querySelector('.diff-remove').textContent.startsWith('-'));
+});
+test('M7 D Hermes helper takes only latest 40 decisions and repairs with bounded fallback text',()=>{
+  const w=wsHelpers(),events=fx.workspaceDetails().state.events,calls=w.hermesCalls(events);assert.equal(calls.length,40);assert.equal(calls[0].id,'call-3');assert.equal(calls.at(-1).id,'call-42');assert.equal(calls.at(-1).text,'code · Recorded turn 42 · Manager summary 42');assert(!JSON.stringify(calls.map(c=>c.text)).includes('REASONING-SENTINEL'));assert(!calls.some(c=>c.kind==='Hermes request'));assert.equal(w.hermesCalls([{kind:'Hermes decision',detail:'x'.repeat(6500)+'tail'}])[0].text.length,6000);
+});
+test('M7 D selected turn shows files, partial counts, diff truncation and failed verification',async()=>{
+  const h=await detailsHarness('workspaceHistorical');await openWorkspace(h,'coder-1','older');for(const text of ['storage.py · changed +6/−1','(partial)','Preview truncated','-old storage','+new storage','Verification failed','Exit code 1'])assert(wsText(h).includes(text),text);const output=h.document.querySelector('#workspace-verification details');assert(!output.open);assert(output.textContent.includes('VERIFICATION-SENTINEL'));output.open=true;await h.core.refresh();assert(output.open);assert.equal(h.document.querySelector('#workspace img'),null);assert.equal(posts(h).length,0);
+});
+test('M7 D file omission and path keys survive updated evidence and preserve focused row',async()=>{
+  const h=await detailsHarness();h.f.state.steps[1].evidence={file_stats:Array.from({length:52},(_,i)=>({path:'path-'+i,change:'added',added:1,removed:0}))};await h.core.refresh();await openWorkspace(h);assert.equal(h.document.querySelectorAll('#workspace-changes li').length,50);assert(wsText(h).includes('…and 2 more'));assert(!wsText(h).includes('path-50'));const row=h.document.querySelector('#ws-file-path-3');row.tabIndex=0;row.focus();h.f.state.steps[1].evidence.file_stats.reverse();h.f.state.steps[1].evidence.file_stats[48].added=8;await h.core.refresh();assert.equal(h.document.querySelector('#ws-file-path-3'),row);assert.equal(h.document.activeElement,row);assert(row.textContent.includes('+8/−0'));
+});
+test('M7 D live changes, empty diff and verification exit code zero are explicit recorded states',async()=>{
+  const h=await detailsHarness();await openWorkspace(h);assert(wsText(h).includes('Changes appear when the turn ends.'));assert(wsText(h).includes('No captured text changes'));assert(wsText(h).includes('Not verified yet'));h.f.state.steps[1].verification={status:'passed',exit_code:0,output:'Recorded verifier success'};await h.core.refresh();assert(wsText(h).includes('Verification passed · Exit code 0'));h.f.state.steps[1].verification.status='not configured';await h.core.refresh();assert(wsText(h).includes('Review only'));
+});
+test('M7 D changing selected turn changes diff and verification solely from that turn',async()=>{
+  const h=await detailsHarness('workspaceHistorical');await openWorkspace(h,'coder-1','older');assert(wsText(h).includes('Verification failed'));h.document.querySelector('[data-ws-turn="ws-first"]').click();assert(!wsText(h).includes('Verification failed'));assert(!wsText(h).includes('+new storage'));assert(wsText(h).includes('Not verified yet'));h.document.querySelector('[data-ws-latest]').click();assert(wsText(h).includes('+new storage'));
+});
+test('M7 D researcher log has question, status, bounded summary and eight plain sources',async()=>{
+  const h=await detailsHarness();await openWorkspace(h,'researcher-1');assert(wsText(h).includes('Which storage format is supported?'));assert(wsText(h).includes('finished'));assert(wsText(h).includes('The researcher runs Hermes once per approved question; its report is recorded when that call ends. There is no live stream.'));assert.equal(h.document.querySelector('#workspace-research li > p:nth-child(2)').textContent.length,2000);assert.equal(h.document.querySelectorAll('.workspace-sources li').length,8);assert.equal(h.document.querySelectorAll('.workspace-sources a').length,0);assert(!wsText(h).includes('source/8'));assert.equal(h.document.querySelector('#workspace-terminal'),null);assert(!wsText(h).includes('REASONING-SENTINEL'));
+});
+test('M7 D Hermes log shows decisions and repairs with time and excludes requests and private fields',async()=>{
+  const h=await detailsHarness();await openWorkspace(h,'hermes');assert.equal(h.document.querySelectorAll('#workspace-hermes .workspace-records > li').length,40);assert(wsText(h).includes('code · Recorded turn 42 · Manager summary 42'));assert(wsText(h).includes('Hermes JSON repaired'));assert(wsText(h).includes('Hermes runs as one call per decision.'));assert(h.document.querySelector('#workspace-hermes small').textContent);for(const sentinel of ['HERMES-REQUEST-SENTINEL','REASONING-SENTINEL','HERMES-DECISION-PROMPT-SENTINEL','TRANSCRIPT-SENTINEL'])assert(!wsText(h).includes(sentinel));assert.equal(h.document.querySelector('#workspace-turns'),null);
+});
+test('M7 D surfaces have metadata and one section pop-out, with no native controls or frames',async()=>{
+  const h=await detailsHarness();await openWorkspace(h);for(const text of ['Storage preview','Web','Program','VM screen','Desktop','custom-surface','failed','Live view and input are in the classic pop-out for now.'])assert(wsText(h).includes(text),text);assert(!wsText(h).includes('OTHER-AGENT-SURFACE'));const section=h.document.querySelector('#workspace-surfaces');assert.equal(section.querySelectorAll('a').length,1);assert.equal(section.querySelector('a').getAttribute('href'),'/?popout=coder-1&run=run_test');assert.equal(section.querySelector('a').getAttribute('rel'),'noopener noreferrer');assert.equal(section.querySelector('a').getAttribute('target'),'_blank');assert.equal(section.querySelectorAll('button,img,iframe,input,textarea,form,[data-decision]').length,0);assert.equal(posts(h).length,0);assert.equal(h.calls.filter(c=>/preview|ticket|frame|surface/.test(c.url)).length,0);
+});
+test('M7 D no surfaces and empty Hermes/research logs use exact empty states',async()=>{
+  const h=await detailsHarness();h.f.state.surfaces=[];h.f.state.events=[];h.f.state.steps=h.f.state.steps.filter(s=>s.agent!=='researcher-1');await h.core.refresh();await openWorkspace(h,'researcher-1');assert(wsText(h).includes('No questions yet.'));assert(wsText(h).includes('No surfaces for this agent.'));await openWorkspace(h,'hermes');assert(wsText(h).includes('No Hermes calls recorded yet.'));assert(wsText(h).includes('No surfaces for this agent.'));
+});
+test('M7 D every allowed recorded field is escaped in headers, files, diffs, logs and surfaces',async()=>{
+  const h=await detailsHarness('workspaceHistorical'),attack='<img src=x onerror=alert(1)>';h.f.state.agents.find(a=>a.name==='coder-1').task=attack;h.f.state.run.workspace.agents['coder-1'].branch=attack;h.f.state.surfaces[0].title=attack;h.f.state.surfaces[0].kind=attack;h.f.state.surfaces[0].state=attack;h.f.state.steps.find(s=>s.id==='ws-research').question=attack;h.f.state.steps.find(s=>s.id==='ws-research').report.sources=[attack];h.f.state.events.at(-2).detail=JSON.stringify({action:attack,title:attack,summary:attack});await h.core.refresh();for(const agent of ['coder-1','researcher-1','hermes']){await openWorkspace(h,agent,'older');assert(wsText(h).includes(attack));assert.equal(h.document.querySelectorAll('#workspace img, #workspace iframe').length,0);}assert.equal(posts(h).length,0);
+});
+test('M7 D full Workspace material stays out of room/panel/rail and no independent read or input exists',async()=>{
+  const h=await detailsHarness('workspaceHistorical');await openWorkspace(h,'coder-1','older');for(const selector of ['#timeline','#context','#rail'])for(const value of ['TRANSCRIPT-SENTINEL','VERIFICATION-SENTINEL','PROMPT-SENTINEL','+new storage','REASONING-SENTINEL','TOOLRESULTS-SENTINEL'])assert(!h.document.querySelector(selector).textContent.includes(value));const source=fs.readFileSync(path.join(root,'workspace.js'),'utf8');assert(!/\bfetch\s*\(|\bset(?:Timeout|Interval)\s*\(|\bcore\.(?:api|post)\s*\(/.test(source));assert.equal(h.document.querySelector('#workspace [data-decision]'),null);assert.equal(posts(h).length,0);
+});
+
+test('M7 live read that began before opening Workspace still updates its active snapshot',async()=>{
+  const h=await turnsHarness();h.options.hold=true;const reading=h.core.refresh();await tick();const count=h.calls.length;await openWorkspace(h);assert.equal(h.calls.length,count);h.f.state.steps[1].transcript.push({type:'text',text:'Recorded output from the in-flight live read'});h.options.hold=false;h.options.release();await reading;assert(wsText(h).includes('Recorded output from the in-flight live read'));assert.equal(posts(h).length,0);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

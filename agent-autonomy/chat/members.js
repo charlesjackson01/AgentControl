@@ -1,11 +1,12 @@
 (function(root){
   'use strict';
   const core=root.AC?.core,m=root.AC?.model || require('./model.js'),e=m.esc;
+  const workspaceHref=(run,agent)=>'#/w/'+encodeURIComponent(run)+'/'+encodeURIComponent(agent);
   const href=id=>'#/s/'+encodeURIComponent(id);
   const omitted=n=>n?`<p class="muted">…and ${e(n)} more</p>`:'';
   const lines=(list,cls='')=>`<ul class="team-notes ${cls}">${list.items.map(value=>`<li>${e(m.boundText(value))}</li>`).join('')}</ul>${omitted(list.omitted)}`;
   function rosterHTML(members,full=false,run='') {
-    return members.slice(0,50).map(member=>`<li data-member="${e(member.name)}"><span class="member-name">${e(member.displayName)}</span><span class="muted">${e(m.boundText(member.role))}</span><span>${e(member.symbol)} ${e(member.stateLabel)}</span>${full && member.task?`<p class="member-task" title="${e(member.task)}">${e(member.task)}</p>`:''}${full && member.since?`<small>${e(m.relTime(member.since))}</small>`:''}${full && member.activity?`<small>${e(member.activity)}</small>`:''}${full && member.state==='waiting_on_you'?`<a class="room-link" href="${e(href(run))}" data-room-link="waiting" data-run="${e(run)}" data-actor="${e(member.name)}">Go to waiting item</a>`:''}</li>`).join('');
+    return members.slice(0,50).map(member=>`<li data-member="${e(member.name)}"><span class="member-name">${e(member.displayName)}</span><span class="muted">${e(m.boundText(member.role))}</span><span>${e(member.symbol)} ${e(member.stateLabel)}</span>${full && member.task?`<p class="member-task" title="${e(member.task)}">${e(member.task)}</p>`:''}${full && member.since?`<small>${e(m.relTime(member.since))}</small>`:''}${full && member.activity?`<small>${e(member.activity)}</small>`:''}${full?`<a class="room-link" data-workspace-link href="${e(workspaceHref(run,member.name))}">${member.name==='hermes'?'Open log':'Open workspace'}</a>`:''}${full && member.state==='waiting_on_you'?`<a class="room-link" href="${e(href(run))}" data-room-link="waiting" data-run="${e(run)}" data-actor="${e(member.name)}">Go to waiting item</a>`:''}</li>`).join('');
   }
   function panelHTML(data) {
     const run=data.run || {},members=m.membersFromState({...data,agents:data.agents || []}),plan=m.teamFromRun(run),graph=m.tasksFromRun(run);
@@ -18,7 +19,7 @@
     if(plan.state==='unusable')html+=lines(plan.problems);
     if(plan.pending && ['proposed','unusable'].includes(plan.state))html+=`<a class="room-link" href="${e(href(run.id))}" data-room-link="proposal" data-run="${e(run.id)}">Decide in the room</a>`;
     html+='</section>';
-    if(graph.total)html+=`<section class="task-graph"><h3>Tasks · ${e(graph.done)} of ${e(graph.total)} done</h3>${graph.groups.map(group=>`<section class="task-group" data-depth="${e(group.depth)}"><h3 id="task-depth-${e(group.depth)}">${e(group.label)}</h3><ul aria-labelledby="task-depth-${e(group.depth)}">${group.tasks.map(task=>`<li data-task="${e(task.id)}"><div class="task-title">${task.turn?`<button data-room-link="turn" data-run="${e(run.id)}" data-message-id="${e(task.turn)}" aria-label="Show the latest turn of task ${e(task.id)}: ${e(task.title)}">${e(task.id)}</button>`:`<span class="task-id">${e(task.id)}</span>`}<strong>${e(task.title)}</strong></div><small>${e(task.agent)}</small>${task.dependencies.items.length?`<small>After ${e(task.dependencies.items.map(m.boundText).join(', '))}</small>${omitted(task.dependencies.omitted)}`:''}<p>${e(task.symbol)} ${e(task.label)}${task.attempts>1?' · '+e(task.attempts)+' tries':''}</p>${task.reason?`<p class="muted task-reason">${e(task.reason)}</p>`:''}</li>`).join('')}</ul></section>`).join('')}${omitted(graph.omitted)}</section>`;
+    if(graph.total)html+=`<section class="task-graph"><h3>Tasks · ${e(graph.done)} of ${e(graph.total)} done</h3>${graph.groups.map(group=>`<section class="task-group" data-depth="${e(group.depth)}"><h3 id="task-depth-${e(group.depth)}">${e(group.label)}</h3><ul aria-labelledby="task-depth-${e(group.depth)}">${group.tasks.map(task=>`<li data-task="${e(task.id)}"><div class="task-title">${task.turn?`<button data-room-link="turn" data-run="${e(run.id)}" data-message-id="${e(task.turn)}" aria-label="Show the latest turn of task ${e(task.id)}: ${e(task.title)}">${e(task.id)}</button>`:`<span class="task-id">${e(task.id)}</span>`}<strong>${e(task.title)}</strong></div><small>${e(task.agent)}</small>${members.find(a=>m.agentLabel(a.name,run)===task.agent)?`<a class="room-link" data-workspace-link href="${e(workspaceHref(run.id,members.find(a=>m.agentLabel(a.name,run)===task.agent).name))}">Workspace</a>`:''}${task.dependencies.items.length?`<small>After ${e(task.dependencies.items.map(m.boundText).join(', '))}</small>${omitted(task.dependencies.omitted)}`:''}<p>${e(task.symbol)} ${e(task.label)}${task.attempts>1?' · '+e(task.attempts)+' tries':''}</p>${task.reason?`<p class="muted task-reason">${e(task.reason)}</p>`:''}</li>`).join('')}</ul></section>`).join('')}${omitted(graph.omitted)}</section>`;
     return html;
   }
   // Reconcile keyed items and their children in place; focused links and scroll survive reads.
@@ -26,7 +27,7 @@
     const focused=host.contains(document.activeElement)?document.activeElement:null;
     const owner=focused?.closest('[data-task],[data-member]');
     const template=document.createElement('template');template.innerHTML=html;
-    const key=node=>node.nodeType!==1?'':node.id?'id:'+node.id:['data-member','data-proposed','data-task','data-depth'].find(a=>node.hasAttribute(a))?['data-member','data-proposed','data-task','data-depth'].filter(a=>node.hasAttribute(a)).map(a=>a+':'+node.getAttribute(a)).join('|'):node.hasAttribute('data-room-link')?'room:'+node.getAttribute('data-room-link')+':'+node.getAttribute('data-run')+':'+(node.getAttribute('data-room-link')==='turn' ? node.closest('[data-task]')?.getAttribute('data-task') || node.getAttribute('data-message-id') : node.getAttribute('data-actor') || ''):node.tagName==='A' && node.getAttribute('href')?.startsWith('#/')?'href:'+node.getAttribute('href'):'';
+    const key=node=>node.nodeType!==1?'':node.id?'id:'+node.id:['data-member','data-proposed','data-task','data-depth'].find(a=>node.hasAttribute(a))?['data-member','data-proposed','data-task','data-depth'].filter(a=>node.hasAttribute(a)).map(a=>a+':'+node.getAttribute(a)).join('|'):node.hasAttribute('data-workspace-link')?'workspace:'+(node.closest('[data-task]')?.getAttribute('data-task') || node.closest('[data-member]')?.getAttribute('data-member'))+':'+node.getAttribute('href'):node.hasAttribute('data-room-link')?'room:'+node.getAttribute('data-room-link')+':'+node.getAttribute('data-run')+':'+(node.getAttribute('data-room-link')==='turn' ? node.closest('[data-task]')?.getAttribute('data-task') || node.getAttribute('data-message-id') : node.getAttribute('data-actor') || ''):node.tagName==='A' && node.getAttribute('href')?.startsWith('#/')?'href:'+node.getAttribute('href'):'';
     const keyed=new Map([...host.querySelectorAll('*')].map(node=>[key(node),node]).filter(([key])=>key));
     function sync(parent,fresh) {
       const old=[...parent.childNodes],used=new Set();let cursor=parent.firstChild;
@@ -43,32 +44,9 @@
     if(focused && (!focused.isConnected || document.activeElement!==focused)){if(focused.isConnected)focused.focus?.({preventScroll:true});else if(owner?.isConnected){const target=owner.querySelector('button,a,summary') || owner;if(target===owner)target.tabIndex=-1;target.focus?.({preventScroll:true});}}
   }
   function mount(changed) {
-    let selected='',status,active=false,generation=0,data=null,error='',loading=false,flight=null;
-    function clear(){selected='';status=undefined;data=null;error='';loading=false;generation++;}
-    function read() {
-      if(!selected || active || flight || !core.getState().authenticated)return;
-      const id=selected,version=generation;loading=true;error='';
-      flight=core.api('/api/state?scope=current&run='+encodeURIComponent(id)).then(result=>{
-        if(version!==generation || selected!==id || !core.getState().authenticated)return;
-        if(result.run?.id!==id)throw Error('That session is not available.');data=result;
-      }).catch(exception=>{if(version===generation && selected===id && core.getState().authenticated)error=exception.message;}).finally(()=>{
-        flight=null;
-        if(version===generation){loading=false;changed();}
-        else if(selected && !active && !data && !error){read();changed();}
-      });
-    }
-    function update(snapshot,id) {
-      if(!snapshot.authenticated){clear();return;}
-      const nextStatus=snapshot.state?.runs?.find(r=>r.id===id)?.status;
-      const isActive=!!id && snapshot.channels?.channels?.[0]?.active_session===id;
-      if(selected!==id || active!==isActive){selected=id;status=nextStatus;active=isActive;data=null;error='';loading=false;generation++;}
-      else if(nextStatus!==undefined && nextStatus!==status){status=nextStatus;data=null;error='';generation++;}
-      if(active){data=snapshot.state?.run?.id===id?snapshot.state:null;loading=false;}
-      else if(id && !data && !error){loading=true;if(snapshot.state && snapshot.channels)read();}
-    }
-    function retry(){if(flight)return;error='';data=null;read();changed();}
-    function html(){return loading?'<p role="status">Loading team…</p>':error?`<p role="status">${e(error)}</p><button id="retry-team">Retry</button>`:data?panelHTML(data):'<p class="muted">No recorded members</p>';}
-    return {update,retry,html,getState:()=>({data,selected,loading,error})};
+    const reader=core.selectedSession(changed);
+    function html(){const {loading,error,data}=reader.getState();return loading?'<p role="status">Loading team…</p>':error?`<p role="status">${e(error)}</p><button id="retry-team">Retry</button>`:data?panelHTML(data):'<p class="muted">No recorded members</p>';}
+    return {...reader,html};
   }
   const members={mount,patch,panelHTML,rosterHTML};
   root.AC=root.AC || {};root.AC.members=members;

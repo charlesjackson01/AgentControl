@@ -273,3 +273,55 @@ function endedPlan(kind='teamStopping') {
   return f;
 }
 Object.assign(module.exports,{endedPlan});
+
+// M7 Workspace reads the same /api/state snapshot as members.
+function workspaceFixture(kind='workspaceLive') {
+  const f=membersFixture('teamRunning');f.state.run.isolation='container';f.state.run.workspace={agents:{'coder-1':{branch:'agent/api'}}};
+  f.state.agents.push({name:'researcher-1',role:'researcher',state:'idle',task:'Read docs'});
+  if(kind==='workspaceHistorical'){f.state.run.id='older';f.state.run.status='completed';f.state.agents.find(a=>a.name==='coder-1').task='Historical recorded task';f.state.runs=[{...f.state.run}];f.state.agents.forEach(a=>a.state='finished');Object.assign(f.thread.sessions[0],{id:'older',status:'completed'});f.thread.messages.forEach(message=>{message.session='older';message.action=null;if(message.kind==='session_start')message.id='run:older';});f.thread.live={session:null,phase:null,status:null};f.channels=threadChannels(f.thread,0);}
+  return f;
+}
+Object.assign(module.exports,{workspaceFixture});
+
+// M7 Part C: raw step material is visible only in the selected agent's Workspace.
+function workspaceTurns(kind='workspaceLive') {
+  const f=workspaceFixture(kind),attack='<img src=x onerror=alert(1)>';
+  f.state.run.phase='code';
+  f.state.steps=[
+    {id:'ws-first',number:1,agent:'coder-1',role:'coder',title:'Define storage',status:'completed',prompt:'First prompt',verified:true,transcript:[{type:'text',text:'Earlier recorded turn'}]},
+    {id:'ws-live',number:2,agent:'coder-1',role:'coder',title:'Add API',status:'running',prompt:'PROMPT-SENTINEL '+('x'.repeat(8100)),transcript_omitted:5,
+      transcript:[{type:'reasoning',text:'REASONING-SENTINEL'},{type:'unknown',text:'UNKNOWN-SENTINEL'},
+        {type:'text',text:'TRANSCRIPT-SENTINEL\nReading the recorded files.'},
+        {type:'tool',id:'ws-run',tool:'bash',summary:'python -m unittest',status:'running',output:'Running tests\n'+attack+'\nhttps://example.test/plain-text\n'+'a'.repeat(1400)},
+        {type:'tool',id:'ws-complete',tool:'read',title:'storage.py',status:'completed',output:'Recorded file contents'},
+        {type:'tool',id:'ws-error',tool:'mystery',summary:'Check syntax',status:'error',output:Array.from({length:55},(_,i)=>'Syntax error line '+i).join('\n')}],
+      result:'RESULT-SENTINEL',tool_results:['TOOLRESULTS-SENTINEL']},
+    {id:'ws-other',number:3,agent:'coder-2',status:'running',prompt:'OTHER-AGENT-PROMPT',transcript:[{type:'text',text:'OTHER-AGENT-TRANSCRIPT'}],tool_results:['TOOLRESULTS-SENTINEL']}
+  ];
+  if(kind==='workspaceHistorical')f.state.steps[1].status='completed';
+  if(kind==='workspaceReviewer'){f.state.steps.push({id:'ws-review',number:1,agent:'reviewer-1',role:'reviewer',title:'Review storage',status:'running',prompt:'Read the change without editing',transcript:[{type:'text',text:'Reviewing the recorded changes.'},{type:'tool',id:'ws-review-read',tool:'read',summary:'storage.py',status:'completed',output:'Storage definitions'}]});f.state.agents.find(a=>a.name==='reviewer-1').state='working';}
+  if(kind==='workspaceNoOutput')f.state.steps=[{id:'ws-empty',number:1,agent:'coder-1',title:'Prepare API',status:'prepared',prompt:'Prepare storage',transcript:[]}];
+  if(kind==='workspaceNoTurns')f.state.steps=[];
+  return f;
+}
+Object.assign(module.exports,{workspaceTurns});
+
+// M7 Part D: recorded changes, bounded logs and metadata-only surfaces.
+function workspaceDetails(kind='workspaceLive') {
+  const f=workspaceTurns(kind),attack='<img src=x onerror=alert(1)>',last=f.state.steps.find(s=>s.id==='ws-live');
+  if(kind==='workspaceHistorical'){
+    Object.assign(last,{status:'finished',evidence:{file_stats:[{path:'storage.py',change:'changed',added:6,removed:1,partial:false},{path:attack,change:'added',added:1,removed:0,partial:true}],diff:'--- a/storage.py\n+++ b/storage.py\n@@ -1 +1,2 @@\n-old storage\n+new storage\n+'+attack+'\n',diff_truncated:true},verification:{status:'failed',exit_code:1,output:'VERIFICATION-SENTINEL\nAssertionError: '+attack}});
+  }
+  f.state.steps.push({id:'ws-research',number:1,agent:'researcher-1',role:'researcher',question:'Which storage format is supported?',title:'Public docs',status:'finished',report:{summary:'Research summary · '+('s'.repeat(2050)),sources:Array.from({length:10},(_,i)=>'https://example.test/source/'+i)},transcript:[{type:'reasoning',text:'REASONING-SENTINEL'}]});
+  if(kind==='workspaceResearcher')f.state.steps.at(-1).report.summary='The public documentation supports both storage formats. JSON suits a small local file; SQLite supports concurrent updates. The recorded sources below describe the supported behavior.';
+  f.state.events=Array.from({length:43},(_,i)=>({id:'call-'+i,kind:i%2?'Hermes JSON repaired':'Hermes decision',created:'2026-09-30T12:00:00Z',detail:JSON.stringify({action:'code',title:'Recorded turn '+i,summary:'Manager summary '+i,reasoning:'REASONING-SENTINEL',prompt:'HERMES-DECISION-PROMPT-SENTINEL'})}));
+  f.state.events.push({id:'hermes-request',kind:'Hermes request',created:'2026-09-30T12:01:00Z',detail:'HERMES-REQUEST-SENTINEL '+attack});
+  f.state.surfaces=[{id:'web',title:'Storage preview',kind:'web',state:'running',agents:'all',note:'Read-only status · https://example.test/preview'},
+    {id:'terminal',title:'Test program',kind:'terminal',state:'stopped',agents:['coder-1'],note:'No input here'},
+    {id:'vm',title:'VM console',kind:'vm-console',state:'idle',agents:['coder-1'],note:'Recorded screen available in classic'},
+    {id:'desktop',title:'Desktop',kind:'desktop',state:'running',agents:['coder-1'],note:attack},
+    {id:'unknown',title:'Recorded custom surface',kind:'custom-surface',state:'failed',agents:['coder-1'],note:'Error recorded'},
+    {id:'other',title:'OTHER-AGENT-SURFACE',kind:'vnc',state:'running',agents:['coder-2']}];
+  return f;
+}
+Object.assign(module.exports,{workspaceDetails});

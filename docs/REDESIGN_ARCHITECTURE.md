@@ -57,6 +57,8 @@ The priorities, in order:
    review, capability or agent). The UI never writes text in Hermes's or an agent's voice. Status lines that the UI
    derives (for example "Hermes is planning…" from `run.phase`) are styled as system status, not as messages.
 4. **No private reasoning.** The rule of `verify.transcript` and the W7 constraints holds: reasoning parts are never stored, sent or shown.
+   Step material (transcript, tool output, diff, verification output, prompt) renders only inside a Workspace,
+   from `/api/state`, never in the room, panel or rail; reasoning is never rendered anywhere.
 5. **Approvals use the existing system unchanged.** The new UI uses the same endpoints and rules:
    - `POST /api/review` with the displayed `fingerprint`, which the server revalidates
    - the typed confirm word (`permissions.CONFIRM_WORD`) for critical requests
@@ -123,15 +125,17 @@ agent-autonomy/chat/
   index.html      markup: sign-in, shell regions; loads the scripts below with defer, in order
   tokens.css      design tokens only (colour, type, space, radius, shadow, motion); light + dark
   chat.css        layout and components; uses var(--token) only, no raw colour literals
-  core.js         AC.core: key storage, api(), live stream (SSE via fetch) + polling fallback, store
+  core.js         AC.core: key storage, api(), live stream (SSE via fetch) + polling fallback, store;
+                  shared, generation-guarded M6 selected-session reader
   model.js        AC.model: pure view-model adapters (channels, sessions, members, presence)
                   members come from /api/state `agents` (the selected run); no separate /api/agents call
   thread.js       AC.thread: server-projected timeline, keyed cards and history cache
   decisions.js    AC.decisions: M5 room decisions and server-authoritative reconciliation
   composer.js     AC.composer: M4 composer and decision aliases
-  members.js      AC.members: recorded team panel, guarded selected-session read, keyed rendering
-  shell.js        AC.shell: rendering of the rail, room, context panel; hash router; boot
-  (later) workspace.js
+  members.js      AC.members: recorded team panel, shared selected-session data, keyed rendering
+  workspace.js    AC.workspace: read-only agent turns, classic stages, terminal, changes, verification,
+                  recorded Hermes/researcher logs and surface metadata; no reads or POSTs of its own
+  shell.js        AC.shell: rendering of the rail, room, context panel and Workspace; hash router; boot
 ```
 
 **Conventions**, chosen so the existing DOM-test style works (`tests/test_ui.cjs` runs scripts in `node:vm` with linkedom):
@@ -155,6 +159,14 @@ agent-autonomy/chat/
   Unknown hashes fall back to `#/`.
 
 ## 6. Conversation model
+
+Step material (transcript, tool output, diff, verification output, prompt) renders only inside a Workspace,
+from `/api/state`, never in the room, panel or rail; reasoning is never rendered anywhere.
+The accepted M3 bounded public `/api/thread` turn projection is preserved. M7 does not expand those room details
+or read raw steps into the room. Active Workspace data comes from the established live snapshot; historical
+Workspace data shares M6's one guarded selected-session GET. Opening an active Workspace during that live read
+does not drop the arriving snapshot or add a read. Hermes requests remain in classic and Activity, never in the
+chat Workspace; its log contains only recorded decisions and JSON repairs.
 
 ### 6.1 Entities
 
@@ -248,7 +260,7 @@ verification changes its `rev`. No verification output, command or exit code is 
 | `attention`, `recovery`, `submission uncertain`, `apply conflict`, `completion rejected`, `watch alert` | `alert` | agentcontrol | |
 | run terminal status + `summary` + `workspace` | `outcome` | agentcontrol | actionable: Apply / Discard / Verify now / Reply in session |
 | `control`, `vm`, `container`, `setup`, `preview`, `workspace`, `model warning`, `spend cap`, `applied`, `discarded`, `notification`… | `system` | agentcontrol | quiet line |
-| `Hermes request` (the full manager prompt), `connection retry`, `agent state`, `watch`, per-tool `OpenCode tool`, `notification`, `notification error` | *omitted* or folded | | still visible in Activity (More) and Workspaces |
+| `Hermes request` (the full manager prompt), `connection retry`, `agent state`, `watch`, per-tool `OpenCode tool`, `notification`, `notification error` | *omitted* or folded | | remain in Activity (More) and classic; chat Workspace permits only the recorded material specified above, never Hermes requests |
 
 Any event kind not listed maps to a quiet `system` message and is **never silently dropped**. A unit test
 collects every `store.event(<run>, '<kind>', …)` literal in `agent-autonomy/*.py` and fails if a kind has no mapping.
@@ -353,6 +365,12 @@ real work, and the content comes first.
   - below 768 px: the room only, with the rail as a drawer and the context panel as a bottom sheet
 
   There is no horizontal scrolling at 390 px.
+- **Workspace (`#/w/<runId>/<agent>`):** at ≥ 1200 px, a right pane in the context slot, widened to
+  `min(960px, 60vw)`, with the room visible and usable alongside. From 768–1199 px it is a room overlay;
+  below 768 px it is a full-screen sheet and the room footer is hidden. Back to room and Escape restore the
+  prior room route and opening focus. No page overflow at 390 or 320 px; long lines scroll within their `<pre>`.
+  M4's footer budgets hold when the sheet is closed. Workspace has no decisions or input; waiting links return
+  to the authoritative room cards.
 - **One place per control:**
   - An approval appears **once** in the room, plus one pinned "waiting" pointer above the composer.
   - Pause, Resume and Stop live in the active session's header menu, and are also available as slash commands.
@@ -506,3 +524,10 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
 - 2026-10-01 (M7 Part A): S1 aligns team-panel pending state with M5.0's not-terminal/not-stopping predicate.
   Stopping plans show their recorded lifecycle state, and every never-approved roster remains explicitly proposed.
   No backend or room decision semantics changed; optional M6 polish is deferred.
+- 2026-10-01 (M7): native read-only Workspaces implement turns, classic stages, terminal text/tools, changes,
+  verification and recorded Hermes/researcher logs. The live snapshot and shared M6 historical reader remain
+  the only data sources. Raw step material stays within the open Workspace; reasoning and Hermes requests are
+  excluded. Surfaces show metadata and the existing standalone classic pop-out link. Native surfaces and input
+  need their own handoff before M9; M8 and M9 remain unstarted. Backend, schema, classic, M5 decisions and D7
+  are unchanged. The owner authorized exactly the superseded M3 turn-link assertion and the isolation assertion
+  that also rejected the new `/chat/workspace.js` asset; no other earlier assertion was rewritten.

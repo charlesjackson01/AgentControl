@@ -84,10 +84,10 @@
         readIds=[...readIds,...detailPage.messages.map(m=>m.id)];
       }
       targets.forEach(id=>refreshTargets.delete(id));readSerial++;
-      if (requested === focused) {
-        if (stateResult.run?.id) agentsByRun[stateResult.run.id] = stateResult.agents || [];
-        state = stateResult;
-      }
+      // The live read follows the active session, independently of room/Workspace focus.
+      // Opening an active Workspace must neither discard this read nor start another one.
+      if (stateResult.run?.id) agentsByRun[stateResult.run.id] = stateResult.agents || [];
+      state = stateResult;
       error = '';emit();
     } catch {} finally {
       refreshing = false;
@@ -160,10 +160,38 @@
   }
   function start() { if (key) { refresh(); connectEvents(); } else emit(); }
   function connect(value, remember) { stop(); key = value.trim(); authError = ''; write('localStorage',storageKey,remember ? key : null); write('sessionStorage',storageKey,remember ? null : key); emit(); start(); }
-  function focus(id) { if (id !== focused) { focused = id; single = null; scheduleRefresh(); } }
+  // Shared M6 selected-session reader: one guarded read for panel and Workspace.
+  function selectedSession(changed) {
+    let selected='',status,active=false,generation=0,data=null,error='',loading=false,flight=null,errorStatus=0;
+    function clear(){selected='';status=undefined;data=null;error='';errorStatus=0;loading=false;generation++;}
+    function read() {
+      if(!selected || active || flight || !core.getState().authenticated)return;
+      const id=selected,version=generation;loading=true;error='';
+      flight=core.api('/api/state?scope=current&run='+encodeURIComponent(id)).then(result=>{
+        if(version!==generation || selected!==id || !core.getState().authenticated)return;
+        if(result.run?.id!==id)throw Object.assign(Error('That session is not available.'),{status:404});data=result;
+      }).catch(exception=>{if(version===generation && selected===id && core.getState().authenticated){error=exception.message;errorStatus=exception.status || 0;}}).finally(()=>{
+        flight=null;
+        if(version===generation){loading=false;changed();}
+        else if(selected && !active && !data && !error){read();changed();}
+      });
+    }
+    function update(snapshot,id) {
+      if(!snapshot.authenticated){clear();return;}
+      const nextStatus=snapshot.state?.runs?.find(r=>r.id===id)?.status;
+      const isActive=!!id && snapshot.channels?.channels?.[0]?.active_session===id;
+      if(selected!==id || active!==isActive){selected=id;status=nextStatus;active=isActive;data=null;error='';errorStatus=0;loading=false;generation++;}
+      else if(nextStatus!==undefined && nextStatus!==status){status=nextStatus;data=null;error='';generation++;}
+      if(active){data=snapshot.state?.run?.id===id?snapshot.state:null;loading=false;}
+      else if(id && !data && !error){loading=true;if(snapshot.state && snapshot.channels)read();}
+    }
+    function retry(){if(flight)return;error='';data=null;read();changed();}
+    return {update,retry,getState:()=>({data,selected,loading,error,errorStatus})};
+  }
+  function focus(id, refreshOnChange=true) { if (id !== focused) { focused = id; single = null; if(refreshOnChange)scheduleRefresh(); } }
   function post(path,body) { return api(path,'POST',body); }
   function refreshNow(messageId) { if(messageId)refreshTargets.add(messageId);clearTimeout(scheduled);scheduled=null;return refresh(); }
-  const core = {api,post,beginWrite,endWrite,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
+  const core = {selectedSession,api,post,beginWrite,endWrite,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
   root.AC = root.AC || {}; root.AC.core = core;
   if (typeof module !== 'undefined' && module.exports) module.exports = core;
 })(typeof window !== 'undefined' ? window : globalThis);

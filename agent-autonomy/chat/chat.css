@@ -128,7 +128,7 @@ time { font-size: var(--type-xs); color: var(--muted); }
 /* M4: the room keeps one compact composer and reveals Settings on demand. */
 body:has(#app:not([hidden])) { overflow: hidden; }
 #composer:placeholder-shown { white-space: pre; }
-.visually-hidden { position: absolute; width: var(--line); height: var(--line); padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.visually-hidden, .sr-only { position: absolute; width: var(--line); height: var(--line); padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 #room-footer { padding: var(--s2) var(--s6); flex-shrink: 0; }
 #composer-host, #waiting { max-width: var(--room-width); width: 100%; margin: 0 auto; }
 #composer-host { position: relative; }
@@ -238,4 +238,47 @@ select { font: inherit; color: var(--text); background: var(--bg); border: var(-
 @media (max-width: 767px) {
   .task-title button { min-width: var(--target); }
   #context header { position: sticky; top: 0; background: var(--bg); z-index: 1; padding-bottom: var(--s2); }
+}
+/* M7: read-only Workspace, beside the room on desktop and a sheet on phones. */
+#workspace { min-width: 0; min-height: 0; overflow-y: auto; background: var(--bg); border-left: var(--line) solid var(--border); padding: var(--s4); overflow-wrap: anywhere; }
+#workspace > header { position: sticky; top: calc(var(--s4) * -1); background: var(--bg); margin: calc(var(--s4) * -1) calc(var(--s4) * -1) var(--s3); padding: var(--s4); z-index: 1; }
+#workspace-content { min-width: 0; }
+#workspace pre { white-space: pre; overflow-wrap: normal; overflow-x: auto; max-width: 100%; }
+#workspace summary { min-height: var(--target); }
+#workspace-turns { display: flex; flex-wrap: wrap; gap: var(--s1); margin: var(--s4) 0; }
+#workspace-turns [aria-pressed="true"] { background: var(--accent-soft); }
+.workspace-stages { list-style: none; padding: 0; margin: var(--s3) 0 var(--s6); }
+.workspace-stages > li { padding: var(--s2) 0; border-bottom: var(--line) solid var(--border); }
+.workspace-stages small { color: var(--muted); margin-left: var(--s2); }
+.workspace-stages [data-state="failed"] { color: var(--danger); }
+.workspace-stages [data-state="waiting"] { color: var(--warning); }
+#workspace-terminal-section { margin-top: var(--s4); }
+.workspace-terminal-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2); }
+#workspace-turn-status { font-size: var(--type-sm); color: var(--muted); }
+#workspace-terminal { max-height: calc(var(--target) * 8); overflow-y: auto; min-width: 0; background: var(--surface); border: var(--line) solid var(--border); border-radius: var(--r1); padding: var(--s3); font-family: var(--mono); font-size: var(--type-sm); }
+.workspace-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-tool { margin: var(--s3) 0; }
+.workspace-tool > p { margin: var(--s1) 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workspace-tool-status { font-family: var(--font); color: var(--muted); }
+#workspace-changes, #workspace-verification, #workspace-surfaces, #workspace-hermes, #workspace-research { margin-top: var(--s6); }
+.workspace-files, .workspace-records { list-style: none; padding: 0; }
+.workspace-files > li, .workspace-records > li { padding: var(--s2) 0; border-bottom: var(--line) solid var(--border); }
+.workspace-files, .workspace-sources, .workspace-surface-note { font-family: var(--mono); font-size: var(--type-sm); }
+.diff-line { display: block; min-height: calc(var(--type-sm) * var(--line-height)); }
+.diff-add { color: var(--success); }
+.diff-remove { color: var(--danger); }
+.diff-heading { color: var(--muted); }
+@media (min-width: 1200px) {
+  #app.workspace-open { grid-template-columns: var(--rail-width) minmax(0,1fr) min(calc(var(--s6) * 40),60vw); }
+  .workspace-open #room-header .heading { flex-basis: 100%; }
+  .workspace-open .composer-row { flex-wrap: wrap; }
+  .workspace-open #composer { flex-basis: 100%; order: -1; }
+  .workspace-open #waiting .waiting-strip { flex-wrap: wrap; white-space: normal; }
+}
+@media (min-width: 768px) and (max-width: 1199px) {
+  #workspace { position: absolute; inset: 0 0 0 auto; width: min(calc(var(--s6) * 40),calc(100% - var(--s6))); z-index: 4; box-shadow: var(--shadow); }
+}
+@media (max-width: 767px) {
+  #workspace { position: absolute; inset: 0; z-index: 5; border: 0; }
+  .workspace-open #room-footer { visibility: hidden; }
 }

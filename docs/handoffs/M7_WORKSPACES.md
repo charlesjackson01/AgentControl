@@ -436,3 +436,204 @@ The in-flight skill-fetch race and native phone-keyboard testing remain deferred
 
 The standalone Part A commit contains this report and is titled `Align team plans with accepted decision state`.
 Its hash will be recorded in the final M7 report. Parts B–D begin only after this verified commit.
+
+## M7 completion report — 2026-10-01 (Codex)
+
+### Commits and sequencing
+
+- **Standalone Part A:** `fb8c90f68d87f596f35db16a5e5c23074073d1cc`, `Align team plans with accepted decision state`.
+  S1 was tested, inspected and committed before any Workspace implementation. The preceding Part A report
+  records the failing regressions against `7134ada` and its complete verification.
+- **Final M7, Parts B–D:** the commit containing this report, titled `Add read-only agent Workspaces`.
+  Its hash is reported separately in the owner reply and is available in the branch log.
+- Started in `~/AgentControl` on `feature/chat-first-redesign`; the tree was clean before and after the
+  fast-forward pull to `0878af1`. B's full verification gate passed before C began, and C's full gate passed
+  before D began. No M8/M9 implementation, PR or merge was performed.
+
+### Implementation
+
+`#/w/<run>/<agent>` is decoded and validated, and requires a session in this project's history and an agent
+recorded in that session. Turns, member rows and assigned task rows link into it; proposed-only members have
+no Workspace link. Back/Escape restore the previous room route and focus. Unknown routes retain Back and the
+handoff's exact error text; 401/sign-out remove all rendered Workspace material.
+
+The existing M6 selected-session reader moved to `core` and is shared by members and Workspace. Active data
+uses the established live snapshot with zero extra requests. Historical data uses one generation-guarded GET
+per selection, retaining M6's status-change refresh and explicit Retry. A new regression exposed the inherited
+focus guard dropping a live snapshot when Workspace opened during its read. The client now accepts that
+active snapshot independently of room focus, preserving the epoch guard and adding no request. This is a
+Workspace read-path fix; no server, lifecycle or engine semantics changed.
+
+Latest follows new agent turns; selecting a turn pins it. Stages copy classic's helper semantics, symbols,
+actors and screen-reader states. Prompts are escaped and bounded to 8,000 characters. The terminal copies
+classic's ordered transcript/fallback but allows only text and tool entries. Tool statuses include completed;
+output starts open for running/error tools. Scrolling up pauses follow, Jump resumes it, and keyed updates
+preserve focus, open disclosures, pinned scroll, tool identity and file rows.
+
+Selected-turn files are bounded to 50, with recorded partial counts and omitted count. Diffs preserve the
+classic line prefixes and truncation notice. Verification uses classic wording, recorded exit codes and
+collapsed output. Research logs bound summaries to 2,000 characters and sources to eight plain-text entries.
+Hermes shows only its latest 40 decisions/JSON repairs and permitted parsed fields, never Hermes requests.
+Surfaces show recorded metadata, filtered by agent, with one section link to the existing standalone classic
+pop-out. There are no frames, tickets, images, input controls or Workspace POSTs.
+
+Desktop uses the specified context-slot pane and keeps the room title, composer and waiting recovery link
+usable at 1440 and 1200 px. Laptop uses an overlay; phone uses a full-screen sheet with the room footer hidden.
+The sticky Back header covers the pane top while scrolling. Long `<pre>` lines scroll internally at 390/320 px.
+Raw `/api/state` step material remains within the open agent/turn Workspace. All recorded strings are escaped;
+output URLs remain text. Reasoning, unknown transcript types and `tool_results` are excluded. M3's existing
+bounded public `/api/thread` turn details, M5 decisions and waiting counts remain unchanged.
+
+### Verification gates
+
+Commands ran from the repository; `NODE_PATH=/tmp/ac-tests/node_modules` supplies the existing test-only
+dependencies. Socket/Chromium commands ran with the approved local execution permissions.
+
+| Gate | Python, unchanged | Classic DOM | Chat DOM | Browser |
+|---|---|---|---|---|
+| A, before its commit | 423, OK, 3 skips, 256.079 s | 82/82 | 173/173 | 222 combinations + 6 regressions; 306 screenshots |
+| B, before C | 423, OK, 3 skips, 257.249 s | 82/82 | 183/183 | 240 combinations + 6 regressions; 350 screenshots |
+| C, before D | 423, OK, 3 skips, 257.483 s | 82/82 | 199/199 | 258 combinations + 6 regressions; 398 screenshots |
+| Final D/M7 | 423, OK, 3 skips, 259.153 s | 82/82 | 215/215 | 276 combinations + 7 regressions; 441 screenshots |
+
+- Python: `python3 -m unittest discover -s agent-autonomy/tests`.
+- Classic: `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`.
+- Chat: `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`.
+- Browser: `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m7d`;
+  earlier gate directories are `/tmp/chat-shots-m7a`, `/tmp/chat-shots-m7b`, `/tmp/chat-shots-m7c`.
+- Logs: `/tmp/ac-m7a-python.log`, `/tmp/ac-m7b-python.log`, `/tmp/ac-m7c-python.log`, final
+  `/tmp/ac-m7d-python.log`, and the corresponding `*-chat.log`, `*-classic.log`, `*-browser.log`.
+
+The final chat suite contains **48 new M7 regressions** above the 167 accepted M6 tests. These include 9,984
+stage-state combinations evaluated from classic, exact route/pop-out shapes, zero extra active reads, shared
+historical reads, 401/sign-out clearing, read-only controls, keyed focus/disclosures/scroll, turn following,
+all material bounds, surface filtering, source escaping and sentinel guards. All earlier M5 actionability,
+server-authoritative reconciliation, network/stale decision and complete paged waiting/card tests pass.
+The full Python suite includes the unchanged 51 projection and 19 HTTP tests, including both exact D7 guards.
+No Python test was added or modified.
+
+Regression proof from an isolated archive of **Part A `fb8c90f`**, with only the expanded chat tests/fixtures
+copied in: B **172/183**, C **172/199**, final B–D **172/215**. All 42 post-A feature tests fail there, along
+with the authorized replacement of the old turn-link assertion. Part A's existing 173-test behavior is otherwise
+preserved. The live-read/focus regression also failed on the inherited guard with Workspace already implemented
+(**214/215**), then passed after its correction (**215/215**). Logs are
+`/tmp/ac-m7b-before-fb8c90f.log`, `/tmp/ac-m7c-before-fb8c90f.log`, `/tmp/ac-m7d-before-fb8c90f.log`,
+and `/tmp/ac-m7-live-focus-before.log`.
+
+B's first full Python run hit three unchanged specialist timeouts (423 tests, three failures, three skips):
+`test_specialists.SpecialistRunTests.test_capacity_follows_the_model_slots`,
+`test_specialists.SpecialistRunTests.test_declined_research_is_reported_and_not_retried`, and
+`test_specialists.SpecialistRunTests.test_research_waits_for_typed_approval_and_feeds_the_coder`.
+All three passed together in isolation in 2.409 s, then the full suite passed in 257.249 s. Logs:
+`/tmp/ac-m7b-python-first.log` and `/tmp/ac-m7b-timing-rerun.log`. No protected code or test was changed.
+
+The first final D Python run took 529.406 s and failed in three unchanged tests: the paid-model prompt test
+below (its fixed wait elapsed before a prompt arrived), the explicit-mode wait, and permission-scope setup
+(`podman image inspect agentcontrol-agent:1` timed out after 60 s). Exact tests:
+- `test_paid.PaidModelTests.test_coder_prompt_names_its_model_and_the_gateway_routes_it_with_the_key`
+- `test_modes.AutoRunTests.test_your_explicit_choice_is_never_overridden`
+- `test_workflow.WorkflowTests.test_permission_scope_cannot_be_widened_by_api`
+
+The first isolated cohort rerun passed mode and permission scope but still failed paid (132.396 s); the second
+passed paid but failed the two workflow waits (86.207 s). Read-only `podman image exists` and formatted
+`podman image inspect` probes returned successfully; no runtime configuration was changed. Preserved logs:
+`/tmp/ac-m7d-python-first.log`, `/tmp/ac-m7d-isolated-rerun-first.log`,
+`/tmp/ac-m7d-isolated-rerun-second.log`. A third isolated round passed paid but hit both workflow waits and
+the mode fixture's existing teardown race (`Directory not empty: state`), 123.419 s;
+`/tmp/ac-m7d-isolated-rerun-third.log` preserves it. Each original failing test passed in an isolated round.
+The second full run failed in two other unchanged tests (423 tests, one failure, one error, three skips,
+430.850 s): `test_capabilities.TeamSkillTests.test_skill_loads_are_auto_approved_only_for_the_agent_it_was_installed_for`
+hit the same 60-second Podman image-inspection timeout, and
+`test_workflow.WorkflowTests.test_invalid_question_answers_are_rejected` hit its fixed workflow wait.
+Both passed together in isolation in 5.314 s. Logs: `/tmp/ac-m7d-python-second.log` and
+`/tmp/ac-m7d-isolated-new-failures.log`.
+
+The third full run had five unchanged timing failures (423 tests, five failures, three skips, 408.406 s):
+- `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish` (the documented lifecycle sampling assertion)
+- `test_capabilities.SkillRunTests.test_content_changed_after_review_is_not_installed`
+- `test_capabilities.SkillRunTests.test_discard_rolls_back_every_install`
+- `test_capabilities.SkillRunTests.test_first_install_needs_review_then_the_same_version_is_trusted`
+- `test_capabilities.SkillRunTests.test_git_skills_you_add_are_fetched_for_review_hermes_ones_wait_for_you`
+
+The four skill failures hit their fixed eight-second prompt waits; teardown then removed a fixture before its
+delayed background worker finished. All five passed together in isolation in 3.681 s. Logs:
+`/tmp/ac-m7d-python-third.log` and `/tmp/ac-m7d-isolated-third-failures.log`.
+The fourth full run had four failures and two teardown errors (423 tests, three skips, 343.971 s):
+- `test_vm.VMRunTests.test_console_input_is_checked_and_audited`: an asynchronous VM push appended to the fake's input log before the suffix assertion
+- `test_workflow.WorkflowTests.test_cannot_complete_with_failed_verifier`: fixed workflow wait
+- `test_workflow.WorkflowTests.test_changed_request_cannot_be_approved_from_old_window`: fixed workflow wait, then `Directory not empty: state` in teardown
+- `test_workflow.WorkflowTests.test_changed_tool_input_invalidates_displayed_permission`: the same wait and teardown race
+
+All four passed together in isolation in 6.313 s. Logs:
+`/tmp/ac-m7d-python-fourth.log` and `/tmp/ac-m7d-isolated-fourth-failures.log`.
+The fifth unchanged full run passed: **423 tests, OK (skipped=3), 259.153 s**, with no other shell checks
+alongside it. `/tmp/ac-m7d-python.log` preserves the successful result. Every failing test above passed in an
+isolated round and in this final full run. No protected code, test, runtime setting or skip was changed.
+
+The same three environment-gated tests are skipped (the OpenCode trio ran):
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+### Actual render inspection
+
+Inspected the standalone A stopping/expired images named above, plus these final renders under
+`/tmp/chat-shots-m7d/`:
+- `workspaceLive-desktop-light.png`, `workspaceLive-compact-desktop-light.png`, `workspaceLive-phone-light.png`, `workspaceLive-narrow-phone-dark.png`:
+  native terminal, long internal output scroll, Jump, escaping and phone layout.
+- `workspaceHistorical-desktop-light.png`, `workspaceHistorical-phone-dark.png`: older session, prefix diff,
+  partial files, truncated preview and failed verification.
+- `workspaceReviewer-phone-dark.png`, `workspaceResearcher-phone-light.png`, `workspaceHermes-phone-light.png`:
+  read-only reviewer actor, bounded plain-source research and recorded reply-only Hermes log.
+- `workspaceSurfaces-phone-dark.png`, `workspaceNoOutput-phone-light.png`, `workspaceNoTurns-desktop-dark.png`:
+  metadata-only surfaces and explicit empty states.
+- `teamStopping-phone-light.png`, `teamExpired-desktop-dark.png`, `teamRunning-desktop-dark.png`,
+  `singleMembers-desktop-light.png`: never-approved proposed roster versus recorded running members.
+
+The matrix also checks laptop, light/dark, 1200 px room usability, 40 px phone targets, no page overflow,
+screen-reader-only stage state, waiting links, all prior dialogs and a browser-held live-read race.
+With Workspace closed, footer measurements remain **57 px idle / 105 px waiting**, waiting row **40 px**,
+and conversation at least **70.1%** of the 390 × 844 viewport. These are recorded in
+`/tmp/chat-shots-m7d/footer-measurements.json`. Native OS keyboard testing remains M8.
+
+### Real app.py check
+
+`NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m7-real-check.cjs` passes against actual `app.py` and
+`Controller`, workflow `FakeManager`/decisions, team `FakeTeamAPI`, and a disposable git project. The check
+temporarily stops only core's existing delivery timers while counting, then probes its normal live refresh:
+- Opening a running coder Workspace: **zero extra requests**.
+- Fake OpenCode transcript grows to three recorded entries across the live read; that refresh sends exactly
+  the established `/api/state`, `/api/channels`, `/api/thread` GETs, with no independent Workspace read.
+- The finished turn renders its real git `proof.txt` diff line by line and recorded passed verification,
+  exit code zero and `VERIFIED-REAL-PROOF` output, collapsed initially.
+- A second active session makes the first historical; the room members panel and repeated Workspace opens
+  share **exactly one** selected-session GET.
+- Exact `/?popout=coder-1&run=<id>` standalone classic entry returns **HTTP 200**.
+- **Zero browser/server POSTs** throughout. Fully paged waiting is zero, actionable non-outcomes zero,
+  one actionable outcome and one decision card; `waiting = actions`, `cards = actions + outcomes`.
+
+Evidence: `/tmp/ac-m7-real-check.log`, `/tmp/ac-m7-real-results.json`, disposable server helper
+`/tmp/ac-m7-real-server.py`; screenshots `/tmp/ac-m7-real-live-desktop.png`,
+`/tmp/ac-m7-real-finished-desktop.png`, `/tmp/ac-m7-real-historical-phone.png` (phone inspected).
+Temporary check helpers and screenshots are not repository changes.
+
+### Earlier assertions and scope
+
+Part A rewrote **none**. The owner explicitly authorized only these two superseded Part B assertions:
+1. **`M3 kinds, progressive detail, roles, receipts and unknown kinds`**: `Inspect in classic` is replaced by
+   `Open workspace`, with the exact recorded turn Workspace href. All existing public prompt/file/result-tail
+   assertions remain.
+2. **`tokens and isolation guards`**: the classic-asset exclusion still rejects classic assets, while allowing
+   the new `/chat/workspace.js` asset. Token checks and the rest of the isolation guard remain.
+
+No other earlier assertion was rewritten or weakened. Changes are confined to §8: no Python, backend API,
+schema, engine, classic UI, `decisions.js`, `composer.js` or token-file change. Before the final commit,
+`git status`, `git diff --stat`, `git diff --name-only` and `git diff --check` were inspected: all 13 changed
+files are permitted, with no whitespace errors. Part A was inspected separately before its commit.
+`main` and `origin/main` remain at `9c20d73`. No unresolved specification question remains.
+
+**Deferrals:** native surface viewing and keyboard/mouse/program/VM/desktop input, iframe/ticket mechanisms
+need a separate handoff before M9. Native phone OS keyboard testing remains M8. M6 P1–P4 and optional M5 polish
+were not implemented. The **intentionally excluded in-flight skill-fetch race** is unchanged: a fetch accepted
+earlier can finish downloading after its session becomes finished; no post-fetch guard, cleanup or lifecycle
+change was added. D7 still authorizes exactly its two pre-effect guards. M8/M9 and a main merge remain unstarted.

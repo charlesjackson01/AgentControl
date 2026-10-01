@@ -2,7 +2,8 @@
   'use strict';
   const {core,model:m} = root.AC, e = m.esc, $ = id=>document.getElementById(id);
   let focused = '', tab = 'session', locating = false, located = '';
-  let connectionsError='',pagingSessions=false;
+  let connectionsError='',pagingSessions=false,workspaceRoute=null,roomRoute='#/',workspaceOpener=null;
+  const workspace=root.AC.workspace.mount($('workspace'));
   const members=root.AC.members.mount(()=>render(core.getState()));
   let contextOpen = core.read('localStorage','acx-context-open') === 'true';
   const decisions=root.AC.decisions.mount($('timeline'),$('decision-dialog'));
@@ -19,7 +20,7 @@
     $('sign-in').hidden = snapshot.authenticated; $('app').hidden = !snapshot.authenticated;
     $('sign-in-error').textContent = snapshot.authError;
     $('banner').hidden = !snapshot.error; $('banner-text').textContent = snapshot.error;
-    if (!snapshot.authenticated) {composer.render(snapshot);if($('stop-dialog').hasAttribute('open'))closeStop();return;}
+    if (!snapshot.authenticated) {workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open');composer.render(snapshot);if($('stop-dialog').hasAttribute('open'))closeStop();return;}
     if (!snapshot.focused && focused && root.location.hash === '#/') focused = '';
     const state = snapshot.state;
     if (!state) { $('room-header').textContent = 'Connecting…'; return; }
@@ -36,11 +37,13 @@
     const cache = snapshot.single || snapshot.thread;
     const count = snapshot.channels?.channels?.[0]?.waiting || 0;
     $('waiting').innerHTML = count ? `<div class="waiting-strip"><button id="waiting-pointer">! ${e(count)} waiting for you</button><span aria-hidden="true"> · </span><a href="/classic">Open classic dashboard</a></div>` : '';
-    if(focused && cache && located !== focused && !locating) {
+    if(!workspaceRoute && focused && cache && located !== focused && !locating) {
       locating=true;const id=focused;
       Promise.resolve().then(()=>core.locateSession(id)).then(()=>{if(focused===id){timeline.reveal(id);located=id;}}).catch(()=>{}).finally(()=>{locating=false;if(focused!==id)render(core.getState());});
     }
-    $('context').hidden = !contextOpen || !selected;
+    $('context').hidden = !!workspaceRoute || !contextOpen || !selected;
+    $('app').classList.toggle('workspace-open',!!workspaceRoute);
+    workspace.render(snapshot,workspaceRoute,members.getState(),roomRoute);
     $('app').classList.toggle('context-open',!$('context').hidden);
     if (selected) {
       const detail=members.getState().data;
@@ -58,15 +61,23 @@
     controlBusy(composer.getBusy());panels();
   }
   function route() {
-    const hash = root.location.hash || '#/'; let id = '';
-    try { const match = hash.match(/^#\/s\/([^/]+)$/); if (match) id = decodeURIComponent(match[1]); else if (hash !== '#/') root.location.hash = '#/'; } catch {root.location.hash = '#/';}
-    if (id !== focused) { focused = id; located = ''; if (id) { contextOpen = true; core.write('localStorage','acx-context-open','true'); } core.focus(id); }
-    $('app').classList.remove('rail-open'); render(core.getState());
+    const hash=root.location.hash || '#/',next=root.AC.workspace.parseRoute(hash);let id='';
+    if(next){if(!workspaceRoute){roomRoute=/^#\/s\/[^/]+$/.test(lastRoomRoute)?lastRoomRoute:'#/';workspaceOpener=document.activeElement?.matches('a,button,input,textarea,summary,[tabindex]')?document.activeElement:null;}workspaceRoute=next;id=next.run;}
+    else{workspaceRoute=null;try{const match=hash.match(/^#\/s\/([^/]+)$/);if(match)id=decodeURIComponent(match[1]);else if(hash!=='#/')root.location.hash='#/';}catch{root.location.hash='#/';}lastRoomRoute=root.location.hash || '#/';}
+    if(id!==focused){focused=id;located='';if(id){contextOpen=true;core.write('localStorage','acx-context-open','true');}core.focus(id,!workspaceRoute);}
+    $('app').classList.remove('rail-open');render(core.getState());
+  }
+  let lastRoomRoute=/^#\/s\/[^/]+$/.test(root.location.hash)?root.location.hash:'#/';
+  function closeWorkspace(){
+    const run=workspaceRoute?.run,opener=workspaceOpener;root.location.hash=roomRoute;route();
+    if(opener?.isConnected)opener.focus?.({preventScroll:true});else if(run)timeline.reveal(run);
   }
   $('connect-form').addEventListener('submit',event=>{event.preventDefault();core.connect($('dashboard-key').value,$('remember-key').checked);$('dashboard-key').value='';});
   $('dismiss-error').addEventListener('click',core.dismissError);
   document.addEventListener('click',event=>{
-    const link=event.target.closest('[data-room-link]');if(link){event.preventDefault();if(root.matchMedia?.('(max-width: 767px)').matches)setContext(false);locateRoomLink(link).catch(()=>{});return;}
+    const workspaceLink=event.target.closest('[data-workspace-link]');if(workspaceLink){if(event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)return;event.preventDefault();workspaceOpener=workspaceLink;root.location.hash=workspaceLink.getAttribute('href');route();workspaceOpener=workspaceLink;$('workspace').querySelector('[data-back-room]')?.focus?.({preventScroll:true});return;}
+    if(event.target.closest('[data-back-room]')){event.preventDefault();closeWorkspace();return;}
+    const link=event.target.closest('[data-room-link]');if(link){event.preventDefault();if(workspaceRoute)closeWorkspace();if(root.matchMedia?.('(max-width: 767px)').matches)setContext(false);locateRoomLink(link).catch(()=>{});return;}
     const reply=event.target.closest('[data-reply]');if(reply){event.preventDefault();composer.reply(reply.dataset.reply);}
     const action=event.target.closest('[data-session-control]')?.dataset.sessionControl;
     if(action==='stop')openStop({id:root.AC.composer.composerState(core.getState()).run,title:composer.activeTitle()});else if(action)composer.control(action);
@@ -109,9 +120,9 @@
   function closeStop() {if($('stop-dialog').close)$('stop-dialog').close();else $('stop-dialog').removeAttribute('open');stopTarget=null;(stopFocus?.isConnected ? stopFocus : $('composer')).focus?.({preventScroll:true});}
   function openStop(target,clear=false) {if(!target.id || composer.getBusy())return;stopTarget=target;stopDraft=clear;stopFocus=document.activeElement;$('stop-title').textContent='Stop '+target.title+'?';if($('stop-dialog').showModal)$('stop-dialog').showModal();else $('stop-dialog').setAttribute('open','');$('cancel-stop').focus();}
   $('stop-dialog').addEventListener('cancel',event=>{event.preventDefault();closeStop();});
-  document.addEventListener('keydown',event=>{if(event.defaultPrevented)return;if(event.key==='Escape' && $('stop-dialog').hasAttribute('open')){event.preventDefault();closeStop();return;}if (event.key === 'Escape') {$('app').classList.remove('rail-open');setContext(false);}});
+  document.addEventListener('keydown',event=>{if(event.defaultPrevented)return;if(event.key==='Escape' && $('stop-dialog').hasAttribute('open')){event.preventDefault();closeStop();return;}if(event.key==='Escape' && workspaceRoute){event.preventDefault();closeWorkspace();return;}if (event.key === 'Escape') {$('app').classList.remove('rail-open');setContext(false);}});
   root.addEventListener('hashchange',route);
   core.subscribe(render); route(); core.start();
-  const shell = {render,route,setContext,composer,decisions,members}; root.AC.shell = shell;
+  const shell = {render,route,setContext,composer,decisions,members,workspace}; root.AC.shell = shell;
   if (typeof module !== 'undefined' && module.exports) module.exports = shell;
 })(window);

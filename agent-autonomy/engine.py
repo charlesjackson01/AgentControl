@@ -1673,6 +1673,9 @@ class Controller:
             step = self.store.get('steps', step_id)
             if step.get('run') != ident or step.get('status') != 'awaiting_approval':
                 raise ValueError('That research task is not waiting for your decision.')
+            run = self.store.get('runs', ident)
+            if run.get('status') in TERMINAL or run.get('stop'):
+                raise ValueError('This session has ended; its research task can no longer run.')
             if fingerprint != step['request']['fingerprint']:
                 raise ReviewConflict('The research request changed after it was shown to you. Review it again.')
             if action == 'approve':
@@ -2009,6 +2012,9 @@ class Controller:
     def fetch_capability(self, ident):
         """You allow the network fetch of a skill Hermes asked for; it then waits for your review."""
         item = self.store.capability(ident)
+        run = self.store.get('runs', item['run'])
+        if run.get('status') in TERMINAL:
+            raise ValueError('This session has ended; the skill can no longer be installed.')
         if item['state'] != 'awaiting_fetch':
             raise ValueError('This skill is not waiting to be fetched')
         self._fetch_into(item)  # network: outside the controller lock

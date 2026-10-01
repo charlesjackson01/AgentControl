@@ -166,3 +166,151 @@ M5 will add real controls, so the server should refuse these dead decisions itse
 2. Set M5.0 to done in `CURRENT_STATE.md`, then push. No PR and no merge unless the owner asks.
 
 After M5.0 (and M4.1) are accepted, Opus writes the full M5 handoff (decision controls) on this single definition of actionable.
+
+---
+
+## Completion report — 2026-09-30 (Codex)
+
+**M5.0 Parts A and B are complete, awaiting architecture review.** Work resumed from the surviving diff at
+`a60589d` on `feature/chat-first-redesign`. M5 decision controls have not begun.
+
+### Recovery assessment
+
+The surviving five-file diff contained the shared actionability predicates, waiting-count alignment, exactly
+the two D7 engine guards, five projection/reader regressions, three HTTP regressions and two DOM regressions.
+No file was syntactically truncated. The expired label, contract/state updates, completion report and final
+verification were unfinished. One new DOM assertion incorrectly expected a revised message to keep the old
+DOM node; it now checks the replacement node's preserved disclosure and removal of the waiting marker,
+following the existing renderer. All surviving implementation work was retained and completed.
+
+Verification was restarted after the interruptions; no earlier process's results were used.
+
+### Part A: projection and presentation
+
+- `accepts_decisions`, `research_actionable`, `skill_actionable` and `proposal_actionable` now govern both
+  thread actions and channel waiting counts. The newest recorded proposal alone can act.
+- The existing request rules are shared too: the first packet per recorded kind/id is projected, and only
+  a pending packet with a fingerprint has an action. Duplicates, packets needing refresh, non-research steps
+  and a proposed team without a recorded proposal no longer inflate waiting counts.
+- Research waiting by status and skills in `proposed`/`awaiting_fetch` gain `detail.expired: true` when their
+  session is finished or stopping. Recorded status/state values remain intact. Installed, rejected and failed
+  skills have neither actions nor expiry flags. Expiry changes message revisions once; known revisions then
+  yield normal stubs, including when a stopping session becomes terminal.
+- `thread.js` changes only the two requested labels. Expired research and skill rows show the muted
+  "Not decided before the session ended", keeping the research title, skill name/agent and Details. They have
+  no waiting line or classic decision link. Skills retain their existing inline layout.
+- Requests, receipts, and the M2.1 newest-terminal outcome rule are preserved. Existing outcome action/revision
+  tests pass unmodified across pages and single-session views. The M3.1 defensive client guard is retained.
+
+The invariant regression fully pages five fixture journal cases (active with every kind; finished leftovers
+beside active; stopping; no active; proposal-only), for each of two project views. Another case checks duplicate
+packets, missing fingerprints, non-research steps and unrecorded/older proposals. The authenticated HTTP case
+also walks every page and checks that the expired research item has a null action and unchanged recorded status.
+Reads leave the recorded rows and audit chain unchanged.
+
+### Part B: exactly D7
+
+`engine.py` has **six added lines in two guards**, with no other engine changes:
+
+At lines **1676–1678**, inside the existing `decide_research` lock, after the step/run-ownership check and before
+the fingerprint check or first update:
+
+```python
+run = self.store.get('runs', ident)
+if run.get('status') in TERMINAL or run.get('stop'):
+    raise ValueError('This session has ended; its research task can no longer run.')
+```
+
+At lines **2015–2017**, in `fetch_capability`, before the state check and `_fetch_into`:
+
+```python
+run = self.store.get('runs', item['run'])
+if run.get('status') in TERMINAL:
+    raise ValueError('This session has ended; the skill can no longer be installed.')
+```
+
+Authenticated POST tests receive HTTP 400 for research decisions on every terminal status and stopping,
+including stale fingerprints, and for skill fetches on every terminal status. Snapshots compare every table's
+row count and contents plus the audit chain; spies verify no update, event, audit append or download occurred.
+A boundary test verifies skill fetch still succeeds in active **and stopping** sessions. The existing active
+research approval/rejection and real skill-fetch tests pass unmodified in the full suite.
+
+**Intentionally excluded in-flight skill-fetch race:** a session may finish after an accepted fetch has already
+begun downloading in `_fetch_into`, outside the controller lock. D7 authorizes the entry guard only. The existing
+post-fetch behaviour remains unchanged; M5.0 adds no second completion check, state rewrite, cleanup or lifecycle
+hook for this race. `decide_capability`, `review`, `_team_decision`, `_end` and `_retire_skills` are unchanged.
+
+### Fresh verification
+
+| Suite | Command | Result |
+|---|---|---|
+| All Python | `python3 -m unittest discover -s agent-autonomy/tests -v` | **408 tests, OK (skipped=3)**; no intermittent failures |
+| Classic DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82 passed** |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **79/79 passed**, including both M5.0 label/refresh regressions |
+| Browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m50-resumed` | **108 combinations + 4 regressions passed**, 158 temporary screenshots; no overflow or page errors |
+| Dedicated projection + HTTP | From `agent-autonomy/tests`: `python3 -m unittest -v test_conversation test_thread_api` | **55 tests, OK** (40 projection/reader + 15 HTTP); 10 new Python regressions |
+| Syntax and diff hygiene | `node --check` on `thread.js` and `test_chat_ui.cjs`; `git diff --check` | Passed |
+
+Skipped tests, by name:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container` — requires
+  `AGENTCONTROL_CONTAINER_TESTS=1` with a runtime and agent image.
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input` — desktop preview tools unavailable.
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone` — requires `AGENTCONTROL_VM_TESTS=1` on a KVM host.
+
+The OpenCode E2E trio ran and passed. Socket-based tests and Chromium were rerun outside the sandbox after
+socket creation/launch was blocked inside it. Test-only npm packages were installed in `/tmp/ac-tests`, outside
+the repository. Desktop/light and phone/dark team timeline screenshots were inspected from the fresh matrix.
+
+### Trimmed matching read-model samples
+
+Temporary fixture journal, using the same completed-plus-active pattern as the paged HTTP regression:
+**8 pages at limit 2, 16 unique messages, 5 actionable non-outcome messages, waiting = 5**. The completed session
+also has an actionable outcome, which remains excluded from waiting. The research status below is recorded;
+only the action and expiry flag are derived.
+
+`/api/thread?channel=main` (other messages and metadata omitted):
+
+```json
+{
+  "channel": "main",
+  "project": "/project",
+  "messages": [{
+    "id": "turn:ended-research",
+    "session": "ended",
+    "actor": "researcher-1",
+    "kind": "research",
+    "text": "Find docs",
+    "detail": {
+      "status": "awaiting_approval",
+      "request": {"question": "Find docs"},
+      "expired": true
+    },
+    "action": null
+  }]
+}
+```
+
+Matching `/api/channels` (updated timestamp omitted):
+
+```json
+{
+  "project": "/project",
+  "channels": [{
+    "id": "main",
+    "kind": "project",
+    "title": "project",
+    "sessions": 2,
+    "active_session": "active",
+    "waiting": 5
+  }]
+}
+```
+
+### Scope and delivery
+
+The diff is limited to `conversation.py`, the expired-label lines in `chat/thread.js`, the two guards in
+`engine.py`, `test_conversation.py`, `test_thread_api.py`, `test_chat_ui.cjs`, the architecture contract,
+`CURRENT_STATE.md` and this handoff. No endpoint or schema change, classic UI change, or other lifecycle/engine
+change is included. `git diff --stat`, `git diff --name-only` and `git diff --check` were inspected before committing.
+Delivery is only to `feature/chat-first-redesign`; no PR or merge into `main`. Opus review precedes the M5 handoff.

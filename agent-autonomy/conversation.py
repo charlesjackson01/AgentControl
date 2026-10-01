@@ -57,6 +57,38 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
 
 
+def accepts_decisions(run):
+    return run.get('status') not in TERMINAL and not run.get('stop')
+
+
+def research_actionable(run, step):
+    return (accepts_decisions(run) and role_of(step.get('agent')) == 'researcher'
+            and step.get('status') == 'awaiting_approval' and bool(step.get('request')))
+
+
+def skill_actionable(run, item):
+    return accepts_decisions(run) and item.get('state') in ('proposed', 'awaiting_fetch')
+
+
+def proposal_actionable(run, proposal_id, newest_proposal):
+    return (accepts_decisions(run) and (run.get('team') or {}).get('state') == 'proposed'
+            and proposal_id is not None and proposal_id == newest_proposal)
+
+
+def pending_packets(run):
+    """The projection uses the first packet for each recorded request identity."""
+    packets = {}
+    if accepts_decisions(run):
+        for packet in run.get('pending', []):
+            ident = packet.get('request_id') or packet.get('id') or packet.get('requestID') or ''
+            packets.setdefault((packet.get('kind', 'permission'), ident), packet)
+    return list(packets.values())
+
+
+def request_actionable(packet, pending):
+    return pending and bool(packet.get('fingerprint'))
+
+
 class Bounds:
     def __init__(self):
         self.truncated = False
@@ -184,7 +216,7 @@ def request_message(run, packet, receipt, at, pending):
     action = None
     if pending:
         detail['pending'] = True
-        if packet.get('fingerprint'):
+        if request_actionable(packet, pending):
             action = {'endpoint': '/api/review', 'fields': {'run': run['id'], 'kind': kind, 'request_id': ident, 'fingerprint': packet['fingerprint']}}
         else:
             detail['refresh_needed'] = True
@@ -265,7 +297,7 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
                 actor = data.get('agent', 'agentcontrol')
         action = None
         team = run.get('team') or {}
-        if kind == 'proposal' and event['id'] == newest_proposal and team.get('state') == 'proposed' and not terminal:
+        if kind == 'proposal' and proposal_actionable(run, event['id'], newest_proposal):
             proposal = team.get('proposal') or {}
             detail['proposal'] = {'agents': b.value(proposal.get('agents', []), limit=300, count=8),
                                   'tasks': b.value(proposal.get('tasks', []), limit=300, count=20)}
@@ -313,13 +345,15 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
             request = step.get('request') or {}
             if request:
                 detail['request'] = b.fields(request, ('question', 'why', 'toolsets', 'max_turns', 'seconds'))
-            if step.get('status') == 'awaiting_approval' and request:
+            if step.get('status') == 'awaiting_approval' and not accepts_decisions(run):
+                detail['expired'] = True
+            if research_actionable(run, step):
                 action = {'endpoint': '/api/research/decide', 'fields': {'run': run['id'], 'step': step['id'], 'fingerprint': request.get('fingerprint', '')},
                           'choices': ['approve', 'reject'], 'confirm_required': True}
         messages.append(message(run, 'turn:' + step['id'], step.get('created'), actor, kind, step.get('title', ''), detail,
                                 {'step': step['id'], 'agent': actor}, action, b))
     receipts = {(r['kind'], r['request_id']): r for r in reviews}
-    pending = run.get('pending', []) if not terminal and not run.get('stop') else []
+    pending = pending_packets(run)
     pending_keys = set()
     end_at = max(t for t in [run.get('created', ''),
                              *(e['created'] for e in [*events, *annotations]),
@@ -355,9 +389,11 @@ def project_session(run, steps=(), events=(), reviews=(), capabilities=(), annot
         b = Bounds()
         detail = b.fields(item, ('name', 'agent', 'state', 'source', 'requested_by', 'risk', 'reasons'))
         action = None
-        if item.get('state') == 'awaiting_fetch':
+        if item.get('state') in ('proposed', 'awaiting_fetch') and not accepts_decisions(run):
+            detail['expired'] = True
+        if skill_actionable(run, item) and item.get('state') == 'awaiting_fetch':
             action = {'endpoint': '/api/skills/fetch', 'fields': {'id': item['id']}}
-        elif item.get('state') == 'proposed':
+        elif skill_actionable(run, item) and item.get('state') == 'proposed':
             action = {'endpoint': '/api/skills/decide', 'fields': {'id': item['id']}, 'choices': ['approve', 'reject']}
         messages.append(message(run, 'cap:' + item['id'], item.get('created'), 'agentcontrol', 'skill', item.get('name', ''), detail, action=action, bounds=b))
     if terminal:
@@ -496,9 +532,12 @@ def channels(controller):
         events = controller.store.events_page(run['id'], None, 1)
         times = [s.get('created') for s in steps] + [e['created'] for e in events]
         updated = max([t for t in [updated, *times] if t], default=None)
-        if is_active and not run.get('stop'):
-            waiting = len(run.get('pending', [])) + sum(s.get('status') == 'awaiting_approval' and bool(s.get('request')) for s in steps)
-            waiting += int((run.get('team') or {}).get('state') == 'proposed')
-            waiting += sum(i.get('state') in ('awaiting_fetch', 'proposed') for i in controller.store.capabilities(run['id'], limit=2**31 - 1))
+        if is_active and accepts_decisions(run):
+            waiting = sum(request_actionable(p, True) for p in pending_packets(run))
+            waiting += sum(research_actionable(run, s) for s in steps)
+            proposals = controller.store.latest_events(run['id'], 'team proposal', limit=1) if (run.get('team') or {}).get('state') == 'proposed' else []
+            newest_proposal = proposals[0]['id'] if proposals else None
+            waiting += int(proposal_actionable(run, newest_proposal, newest_proposal))
+            waiting += sum(skill_actionable(run, i) for i in controller.store.capabilities(run['id'], limit=2**31 - 1))
     return {'project': str(controller.s.project), 'channels': [{'id': 'main', 'kind': 'project', 'title': Path(controller.s.project).name,
             'sessions': len(runs), 'active_session': active['id'] if active else None, 'waiting': waiting, 'updated': updated}]}

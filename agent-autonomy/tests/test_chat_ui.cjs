@@ -356,6 +356,31 @@ test('M3.1 unchanged waiting never walks for an actionable finished-session rese
   for(let i=0;i<3;i++)await h.core.refresh();assert.equal(reads,0);assert(h.core.getState().thread.messages.stale.action);
 });
 
+test('M5.0 expired research and skills retain recorded details without waiting or classic links',async()=>{
+  const label='Not decided before the session ended';
+  const messages=[fx.threadMessage('expired:research','research','Find docs',{status:'awaiting_approval',expired:true,request:{question:'Public docs',why:'Check compatibility'}}),
+    ...['proposed','awaiting_fetch'].map(state=>fx.threadMessage('expired:'+state,'skill','Docs skill',{state,expired:true,agent:'coder-2',source:{type:'github',url:'https://example.test/docs'},reasons:['Docs']}))];
+  const h=await harness(richCompleted(),{thread:fx.threadResponse(messages,[fx.threadSession('run_test',{status:'completed'})])});
+  for(const msg of messages){
+    const node=h.timeline.querySelector(`[data-message="${msg.id}"]`);
+    assert(node.textContent.includes(label),msg.id);assert.equal(node.querySelector('.muted').textContent,label);
+    assert.equal(node.querySelector('.waiting-line'),null);assert.equal(node.querySelector('a[href="/classic"]'),null);
+    assert(node.querySelector('details'));assert(node.textContent.includes(msg.text));
+    if(msg.kind==='skill'){assert(node.textContent.includes('coder-2'));assert(!node.querySelector('.message > p').textContent.includes(msg.detail.state));}
+    else {assert(node.textContent.includes('research · Find docs'));assert(node.querySelector('details').textContent.includes('Public docs'));assert(!node.textContent.includes('Awaiting approval'));}
+  }
+});
+test('M5.0 server expiry refresh retains research disclosure and removes its stale marker',async()=>{
+  const msg=fx.threadMessage('expiry:research','research','Find docs',{status:'awaiting_approval',request:{question:'Public docs'}},{action:{endpoint:'/api/research/decide'}});
+  const data=fx.threadResponse([msg],[fx.threadSession()]),channels=fx.threadChannels(data,1),h=await harness(fixture(),{thread:data,channels});
+  const node=h.timeline.querySelector('[data-message="expiry:research"]');node.querySelector('details').open=true;
+  msg.action=null;msg.detail.expired=true;msg.rev++;channels.channels[0].waiting=0;
+  await h.core.refresh();
+  const updated=h.timeline.querySelector('[data-message="expiry:research"]');assert(updated.querySelector('details').open);
+  assert.equal(updated.querySelector('.muted').textContent,'Not decided before the session ended');
+  assert.equal(updated.querySelector('.waiting-line'),null);assert.equal(updated.querySelector('a[href="/classic"]'),null);
+});
+
 const composerHelpers=require(path.join(root,'composer.js'));
 async function composerHarness(kind='new',options={}) {const f=fx.composerFixture(kind);return harness(f.state,{thread:f.thread,channels:f.channels,...options});}
 const posts=h=>h.calls.filter(c=>c.request.method==='POST').map(c=>({url:c.url,body:JSON.parse(c.request.body)}));

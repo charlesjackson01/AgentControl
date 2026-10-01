@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import threading
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import handler
 import conversation as cv
 import test_workflow as workflow
-from test_conversation import run, step, packet, receipt
+from test_conversation import run, step, packet, receipt, seed_waiting_session
 
 
 class ThreadAPITests(unittest.TestCase):
@@ -48,6 +49,16 @@ class ThreadAPITests(unittest.TestCase):
     def get(self, path, **query):
         return json.loads(self.raw(path + ('?' + urllib.parse.urlencode(query) if query else '')))
 
+    def post(self, path, body):
+        request = urllib.request.Request(self.url + path, data=json.dumps(body).encode(),
+            headers={'Authorization': 'Bearer test-key', 'Content-Type': 'application/json'}, method='POST')
+        try:
+            response = self.opener.open(request)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            return response.code, json.loads(response.read())
+
     def save_run(self, ident='single', **fields):
         value = run(ident, project=self.project, **fields)
         self.store.put('runs', value)
@@ -57,6 +68,12 @@ class ThreadAPITests(unittest.TestCase):
         with self.store.connection() as c:
             names = [row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")]
             return {name: c.execute('SELECT COUNT(*) FROM "' + name.replace('"', '""') + '"').fetchone()[0] for name in names}
+
+    def journal_snapshot(self):
+        counts = self.counts()
+        with self.store.connection() as c:
+            rows = {name:list(c.execute('SELECT * FROM "' + name.replace('"', '""') + '"')) for name in counts}
+        return counts, rows, self.store.audit(), self.store.audit_verify()
 
     def test_auth_and_error_codes(self):
         for endpoint in ('/api/channels', '/api/thread'):
@@ -77,6 +94,7 @@ class ThreadAPITests(unittest.TestCase):
         self.store.put_capability({'id': 'cap2', 'run': 'single', 'created': run()['created'], 'state': 'proposed'})
         self.store.put_capability({'id': 'cap3', 'run': 'single', 'created': run()['created'], 'state': 'installed'})
         self.store.event('single', 'goal', 'Build CLI')
+        self.store.event('single', 'team proposal', 'CLI team')
         with self.store.connection() as c:c.execute("UPDATE events SET created='2026-09-30T12:30:00+00:00'")
         result = self.get('/api/channels')
         self.assertEqual(result['project'], self.project)
@@ -84,6 +102,86 @@ class ThreadAPITests(unittest.TestCase):
             'sessions': 2, 'active_session': 'single', 'waiting': 5, 'updated': s['created']}])
         thread = self.get('/api/thread')
         self.assertEqual(thread['live'], {'session': 'single', 'phase': 'code', 'status': 'coding'})
+
+    def test_paged_http_waiting_invariant_and_expired_research(self):
+        seed_waiting_session(self.store, 'ended', self.project, status='completed', created='2026-09-29',
+                             ended='2026-09-29T12:05:00+00:00', verifier=['true'])
+        seed_waiting_session(self.store, 'active', self.project)
+        self.store.audit_append('ended', {'action': 'fixture', 'actor': 'you'})
+        before_rows = self.journal_snapshot()
+        messages = [];cursor = None;pages = 0
+        while True:
+            page = self.get('/api/thread', channel='main', limit=2, **({'before': cursor} if cursor else {}))
+            messages.extend(page['messages']);pages += 1
+            cursor = page['before']
+            if cursor is None:break
+            self.assertLess(pages, 30)
+        self.assertGreater(pages, 1)
+        self.assertEqual(len(messages), len({m['id'] for m in messages}))
+        waiting = self.get('/api/channels')['channels'][0]['waiting']
+        self.assertEqual(waiting, 5)
+        self.assertEqual(waiting, sum(m['kind'] != 'outcome' and m['action'] is not None for m in messages))
+        expired = next(m for m in messages if m['id'] == 'turn:ended-research')
+        self.assertIsNone(expired['action'])
+        self.assertTrue(expired['detail']['expired'])
+        self.assertEqual(expired['detail']['status'], 'awaiting_approval')
+        self.assertTrue(any(m['kind'] == 'outcome' and m['action'] is not None for m in messages))
+        self.assertEqual(self.journal_snapshot(), before_rows)
+
+    def test_research_refusals_precede_fingerprints_and_all_side_effects(self):
+        states = [*({'status': status} for status in sorted(cv.TERMINAL)), {'stop': True}]
+        for fields in states:
+            for action, fingerprint in [('approve', 'fp'), ('reject', 'fp'), ('approve', 'stale')]:
+                with self.subTest(run=fields, action=action, fingerprint=fingerprint):
+                    self.save_run(**fields)
+                    self.store.put('steps', step('research', agent='researcher-1', status='awaiting_approval',
+                        question='Find docs', request={'fingerprint': 'fp', 'question': 'Find docs'}))
+                    self.store.audit_append('single', {'action': 'fixture', 'actor': 'you'})
+                    before = self.journal_snapshot()
+                    with patch.object(self.store, 'update', wraps=self.store.update) as update, \
+                         patch.object(self.store, 'audit_append', wraps=self.store.audit_append) as audit, \
+                         patch.object(self.store, 'event', wraps=self.store.event) as event:
+                        code, result = self.post('/api/research/decide', {'run': 'single', 'step': 'research',
+                            'action': action, 'fingerprint': fingerprint, 'confirm': 'approve'})
+                        self.assertEqual(code, 400)
+                        self.assertEqual(result['error'], 'This session has ended; its research task can no longer run.')
+                        update.assert_not_called();audit.assert_not_called();event.assert_not_called()
+                    self.assertEqual(self.journal_snapshot(), before)
+
+    def test_skill_fetch_refusals_precede_network_and_all_side_effects(self):
+        for status in sorted(cv.TERMINAL):
+            with self.subTest(status=status):
+                self.save_run(status=status)
+                self.store.put_capability({'id': 'docs', 'run': 'single', 'created': run()['created'],
+                    'state': 'awaiting_fetch', 'name': 'Docs', 'source': {'type': 'github', 'url': 'https://example.test/docs'}})
+                self.store.audit_append('single', {'action': 'fixture', 'actor': 'you'})
+                before = self.journal_snapshot()
+                with patch.object(self.controller, '_fetch_into', side_effect=ValueError('Unexpected network fetch')) as fetch, \
+                     patch.object(self.store, 'put_capability', wraps=self.store.put_capability) as put, \
+                     patch.object(self.store, 'audit_append', wraps=self.store.audit_append) as audit, \
+                     patch.object(self.store, 'event', wraps=self.store.event) as event:
+                    code, result = self.post('/api/skills/fetch', {'id': 'docs'})
+                    self.assertEqual(code, 400)
+                    self.assertEqual(result['error'], 'This session has ended; the skill can no longer be installed.')
+                    fetch.assert_not_called();put.assert_not_called();audit.assert_not_called();event.assert_not_called()
+                self.assertEqual(self.journal_snapshot(), before)
+
+    def test_skill_fetch_guard_still_allows_active_and_stopping_sessions(self):
+        def fetched(item):
+            item.update(state='proposed', hash='reviewed-skill-hash')
+        for stop in (False, True):
+            with self.subTest(stop=stop):
+                self.save_run(stop=stop)
+                self.store.put_capability({'id': 'docs', 'run': 'single', 'created': run()['created'],
+                    'state': 'awaiting_fetch', 'name': 'Docs', 'agent': 'coder-1',
+                    'source': {'type': 'git', 'url': 'https://example.test/docs'}})
+                with patch.object(self.controller, '_fetch_into', side_effect=fetched) as fetch:
+                    code, result = self.post('/api/skills/fetch', {'id': 'docs'})
+                    self.assertEqual(code, 200)
+                    self.assertEqual(result['state'], 'proposed')
+                    fetch.assert_called_once()
+                self.assertEqual(self.store.capability('docs')['state'], 'proposed')
+                self.assertEqual(self.store.get('runs', 'single')['stop'], stop)
 
     def populate_paging(self):
         expected = set()

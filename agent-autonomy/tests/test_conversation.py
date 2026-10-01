@@ -43,6 +43,25 @@ def receipt(**fields):
             'actor': 'you', 'risk': 'R2', 'request': packet(), **fields}
 
 
+def seed_waiting_session(store, ident, project='/project', proposal_only=False, **fields):
+    """Recorded pending work, including two proposals so only the newest can act."""
+    value = run(ident, project=project, pending=[] if proposal_only else [packet()],
+                team={'state': 'proposed'}, **fields)
+    store.put('runs', value)
+    store.event(ident, 'goal', value['goal'])
+    store.event(ident, 'team proposal', 'Earlier team')
+    store.event(ident, 'team proposal', 'Current team')
+    if not proposal_only:
+        store.put('steps', step(ident + '-research', run=ident, agent='researcher-1',
+                               title='Find docs', status='awaiting_approval', ended=None,
+                               request={'fingerprint': 'research-fp', 'question': 'Find docs'}))
+        for state in ('proposed', 'awaiting_fetch'):
+            store.put_capability({'id': ident + '-' + state, 'run': ident,
+                                  'created': value['created'], 'name': 'Docs', 'agent': 'coder-1',
+                                  'state': state, 'source': {'type': 'github', 'url': 'https://example.test/docs'}})
+    return value
+
+
 class ProjectionTests(unittest.TestCase):
     def find(self, messages, kind):
         return next(m for m in messages if m['kind'] == kind)
@@ -257,6 +276,46 @@ class ProjectionTests(unittest.TestCase):
         msg = self.find(cv.project_session(run(), events=[event(1, 'skill installed', 'Docs')]), 'skill')
         self.assertEqual((msg['actor'], msg['text']), ('agentcontrol', 'Docs'))
 
+    def test_research_actions_expire_without_rewriting_recorded_state(self):
+        for fields in ({}, *({'status': status} for status in sorted(cv.TERMINAL)), {'stop': True}):
+            for status, request in [('awaiting_approval', {'fingerprint': 'fp', 'question': 'Docs'}),
+                                    ('awaiting_approval', {}), ('approved', {'question': 'Docs'}),
+                                    ('finished', {}), ('failed', {}), ('rejected', {})]:
+                with self.subTest(run=fields, step=status, request=request):
+                    r = run(**fields)
+                    s = step(agent='researcher-1', status=status, request=request)
+                    before = copy.deepcopy((r, s))
+                    msg = self.find(cv.project_session(r, steps=[s]), 'research')
+                    accepts = not fields.get('stop') and fields.get('status') not in cv.TERMINAL
+                    self.assertEqual(msg['action'] is not None, accepts and status == 'awaiting_approval' and bool(request))
+                    self.assertEqual(msg['detail'].get('expired', False), not accepts and status == 'awaiting_approval')
+                    self.assertEqual(msg['detail']['status'], status)
+                    self.assertEqual((r, s), before)
+
+    def test_skill_actions_expire_without_rewriting_recorded_state(self):
+        for fields in ({}, *({'status': status} for status in sorted(cv.TERMINAL)), {'stop': True}):
+            for state in ('proposed', 'awaiting_fetch', 'installed', 'rejected', 'failed'):
+                with self.subTest(run=fields, state=state):
+                    r = run(**fields)
+                    item = {'id': 'docs', 'created': r['created'], 'state': state, 'name': 'Docs', 'agent': 'coder-1'}
+                    before = copy.deepcopy((r, item))
+                    msg = self.find(cv.project_session(r, capabilities=[item]), 'skill')
+                    accepts = not fields.get('stop') and fields.get('status') not in cv.TERMINAL
+                    waiting = state in ('proposed', 'awaiting_fetch')
+                    self.assertEqual(msg['action'] is not None, accepts and waiting)
+                    self.assertEqual(msg['detail'].get('expired', False), not accepts and waiting)
+                    self.assertEqual(msg['detail']['state'], state)
+                    self.assertEqual((r, item), before)
+
+    def test_stopping_proposal_and_requests_are_not_actionable(self):
+        events = [event(1, 'team proposal', 'Old team'), event(2, 'team proposal', 'Current team')]
+        for stop in (False, True):
+            messages = cv.project_session(run(stop=stop, pending=[packet()], team={'state': 'proposed'}), events=events)
+            proposals = [m for m in messages if m['kind'] == 'proposal']
+            self.assertIsNone(proposals[0]['action'])
+            self.assertEqual(proposals[1]['action'] is not None, not stop)
+            self.assertEqual(sum(m['kind'] == 'request' and m['action'] is not None for m in messages), int(not stop))
+
     def test_progress_alert_and_system(self):
         for event_kind, kind in [('task done', 'progress'), ('attention', 'alert'), ('control', 'system')]:
             msg = self.find(cv.project_session(run(), events=[event(1, event_kind, 'Recorded text')]), kind)
@@ -330,6 +389,80 @@ class ReaderTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_expiry_changes_revisions_once_and_revalidates_known_messages(self):
+        seed_waiting_session(self.store, 'single')
+        original = {m['id']: m for m in cv.thread(self.controller)['messages']}
+        waiting_ids = [ident for ident, m in original.items() if m['kind'] in ('research', 'skill')]
+        self.assertEqual(len(waiting_ids), 3)
+        for fields in ({'stop': True}, {'status': 'completed', 'stop': False}):
+            with self.subTest(run=fields):
+                self.store.update('runs', 'single', **fields)
+                expired = {m['id']: m for m in cv.thread(self.controller,
+                    known={ident: m['rev'] for ident, m in original.items()})['messages']}
+                for ident in waiting_ids:
+                    self.assertIsNone(expired[ident]['action'])
+                    self.assertTrue(expired[ident]['detail']['expired'])
+                    self.assertNotEqual(expired[ident]['rev'], original[ident]['rev'])
+                revalidated = {m['id']: m for m in cv.thread(self.controller,
+                    known={ident: expired[ident]['rev'] for ident in waiting_ids})['messages']}
+                for ident in waiting_ids:
+                    self.assertEqual(revalidated[ident], {'id': ident, 'rev': expired[ident]['rev'], 'same': True})
+                    if fields.get('status') == 'completed':
+                        self.assertEqual(expired[ident]['rev'], stopped[ident]['rev'])
+                stopped = expired
+
+    def test_waiting_matches_all_paged_actions_across_projects_and_session_states(self):
+        cases = [('active', {}, False, False, 5), ('leftovers', {}, True, False, 5),
+                 ('stopping', {'stop': True}, True, False, 0),
+                 ('no-active', None, True, False, 0), ('proposal', {}, True, True, 1)]
+        for name, active_fields, leftovers, proposal_only, expected in cases:
+            store = Store(Path(self.tmp.name) / (name + '.sqlite3'))
+            if leftovers:
+                for project in ('/project', '/other'):
+                    seed_waiting_session(store, 'old-' + Path(project).name, project,
+                                         status='completed', created='2026-09-29', ended='2026-09-29T12:05:00+00:00',
+                                         verifier=['true'], workspace={'toplevel': project})
+            if active_fields is not None:
+                seed_waiting_session(store, 'active', proposal_only=proposal_only, **active_fields)
+            for project in ('/project', '/other'):
+                with self.subTest(case=name, project=project):
+                    controller = SimpleNamespace(store=store, s=SimpleNamespace(project=Path(project)),
+                        run_project=lambda r:r.get('project'), workspace_status=self.controller.workspace_status)
+                    with store.connection() as c:
+                        before_rows = {t:list(c.execute('SELECT * FROM ' + t)) for t in ('runs', 'steps', 'events', 'capabilities', 'audit')}
+                    messages = [];cursor = None;pages = 0
+                    while True:
+                        page = cv.thread(controller, channel='main', before=cursor, limit=2)
+                        messages.extend(page['messages']);pages += 1
+                        cursor = page['before']
+                        if cursor is None:break
+                        self.assertLess(pages, 30, 'cursor walk must terminate')
+                    self.assertGreater(pages, 1)
+                    self.assertEqual(len(messages), len({m['id'] for m in messages}))
+                    actionable = [m for m in messages if m['kind'] != 'outcome' and m['action'] is not None]
+                    waiting = cv.channels(controller)['channels'][0]['waiting']
+                    self.assertEqual(waiting, len(actionable))
+                    self.assertEqual(waiting, expected)
+                    self.assertTrue(all(m['session'] == 'active' for m in actionable))
+                    if leftovers:
+                        self.assertTrue(any(m['kind'] == 'outcome' and m['action'] is not None for m in messages))
+                        expired = [m for m in messages if m['session'].startswith('old-') and m['kind'] in ('research', 'skill')]
+                        self.assertEqual(len(expired), 3)
+                        self.assertTrue(all(m['detail'].get('expired') and m['action'] is None for m in expired))
+                    with store.connection() as c:
+                        self.assertEqual({t:list(c.execute('SELECT * FROM ' + t)) for t in before_rows}, before_rows)
+
+    def test_waiting_counts_only_unique_actionable_packets_and_recorded_proposals(self):
+        self.store.put('runs', run(pending=[packet(), packet(), packet(request_id='refresh', fingerprint=None),
+                                           packet(request_id='refresh', fingerprint='later')], team={'state': 'proposed'}))
+        self.store.put('steps', step(status='awaiting_approval', request={'question': 'Not research'}))
+        for expected in (1, 2):
+            messages = cv.thread(self.controller)['messages']
+            self.assertEqual(cv.channels(self.controller)['channels'][0]['waiting'], expected)
+            self.assertEqual(sum(m['kind'] != 'outcome' and m['action'] is not None for m in messages), expected)
+            self.store.event('single', 'team proposal', 'Recorded team')
+            self.store.event('single', 'control', 'More recent event')
 
     def test_events_page_order_exclusion_and_sql_values(self):
         for kind in ('goal', 'control', "x') OR 1=1 --", 'control'):

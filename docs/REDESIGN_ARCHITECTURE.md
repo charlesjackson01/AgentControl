@@ -217,6 +217,11 @@ Query parameters:
 
 ### 6.4 Journal → message mapping (normative)
 
+Actionable = the session accepts decisions (not finished, not stopping), except outcomes (M2.1 rule).
+`channels.waiting` counts exactly the actionable non-outcome items of the active session. Items waiting by state
+in a session that no longer accepts decisions carry `detail.expired`. Research and skill items retain their
+recorded status/state and show "Not decided before the session ended" in place of the waiting status.
+
 | Source | `kind` | `actor` | Notes |
 |---|---|---|---|
 | run created | `session_start` | agentcontrol | the session divider; carries title, mode, parent |
@@ -407,3 +412,8 @@ Each milestone has one handoff file, `docs/handoffs/M<n>_<NAME>.md`, written bef
   goal checks and allow_dirty are per-session and never remembered.
 - 2026-09-30 (M4.1 review): M4 and M4.1 accepted. `M5_0_ACTIONABILITY.md` was re-checked against `581b382` and remains
   accurate; it gained only execution details (starting point, exact label placement, test baselines). D7 is unchanged.
+- 2026-09-30 (M5.0 completion): Actionable = the session accepts decisions (not finished, not stopping), except
+  outcomes (M2.1 rule). `channels.waiting` counts exactly the actionable non-outcome items of the active session.
+  Items waiting by state in a session that no longer accepts decisions carry `detail.expired`. D7 adds exactly
+  the two pre-effect refusals in `decide_research` and `fetch_capability`; the in-flight skill-fetch race remains
+  outside its scope. M5 decision controls have not begun.

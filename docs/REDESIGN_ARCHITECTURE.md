@@ -604,3 +604,18 @@ person's.
   keyboard and VoiceOver/TalkBack checks remain owner-run via `docs/DEVICE_CHECKLIST.md` before M9; they are not
   claimed by browser emulation and are not an M8 acceptance gate. M9 remains unstarted. Interactive surfaces
   still use the classic pop-out; the D7 in-flight skill-fetch race and persistent bots remain deferred.
+- 2026-10-02 (M8 review):
+  - M8 accepted (Parts A–E). No Python, API, classic or decision-semantics change. The only `decisions.js` change is
+    the O2 key-fact fallback.
+  - The border tokens changed for 3:1 control contrast (light `#85858f`, dark `#777984`).
+  - **Rule clarified:** the rail's "Showing X of N sessions" appears **only while X < N** (the owner's approval). The
+    X > N case is finding N1, fixed in M9 Part 0.
+  - The next milestone is **M9, Parity and cutover** (`docs/handoffs/M9_PARITY_AND_CUTOVER.md`). Part A is an
+    evidenced parity checklist (docs only).
+  - Part B, the cutover, waits for the owner's gates:
+    - **G1:** parity
+    - **G2:** surfaces before or after cutover
+    - **G3:** the device checklist
+  - Under D3, Part B changes only the `do_GET` routing (`/` → chat, `/chat` as an alias, `/classic` and `/classic/` →
+    classic) and the chat pop-out href (→ `/classic?popout=`).
+  - Retiring classic and merging into `main` remain separate owner decisions.

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-01, by Codex (M8 Parts A–E verified; awaiting review).
+**Last updated:** 2026-10-02, by Opus (M8 accepted; M9 handoff written).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M8_PHONE_AND_ACCESSIBILITY.md` (implemented; awaiting review) |
+| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` (Part 0 and Part A ready; Part B waits for owner gates G1–G3) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -36,8 +36,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M5 Decisions in the room** | ✅ **accepted (Parts A `e6e6ebf` and B `b12e88a`; review 2026-10-01)** | Codex | every room decision uses its existing endpoint with server-authoritative state. Owner authorized only the awaiting-fetch skill Reject endpoint exception. F1 (fast verification reconciliation) is corrected in M6 Part A. The review is in `docs/handoffs/M5_DECISIONS.md` |
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
-| **M8 Phone and accessibility** | **implemented; awaiting review** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: standalone A `68c7cab`, B `fddf9eb`, C `dbb8713`, D `316ba80`, then final E/report commit. Deferred corrections, seven-size layouts, keyboard/focus, stable announcements, measured contrast and motion/forced colours are complete. Final Python 423 OK (3 unchanged skips), classic 82/82, chat 239/239, browser 672 combinations + 51 regressions / 1,139 screenshots / zero accessibility findings. Real-server before/after counts change only for the authorized fallback GET; keyboard critical approval and complete waiting/card invariants pass. Phone footer 57/105 px; portrait/landscape conversation ≥70.08%/58.33%. Native device checks → `docs/DEVICE_CHECKLIST.md`, owner-run before M9 |
-| M9 | not started | | parity and cutover; see architecture §12 |
+| **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. One should-fix (N1: the rail shows "Showing X of N" when X > N) is M9 Part 0 |
+| **M9 Parity and cutover** | 📝 handoff ready | Codex, then the owner | `docs/handoffs/M9_PARITY_AND_CUTOVER.md`: Part 0 (N1), then Part A (evidenced parity checklist and chat-only walkthrough; docs only), then a **stop for owner gates G1 parity, G2 surfaces, G3 device checklist**, then Part B (routing `/` → chat, `/classic` → classic, and the pop-out href) |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -193,15 +193,20 @@ was changed.
 
 ## Next step
 
-1. Opus reviews the completed M8 implementation and report.
-2. The owner runs `docs/DEVICE_CHECKLIST.md` on real iOS Safari/Android Chrome devices before M9 sign-off. Browser emulation does not verify native keyboards or VoiceOver/TalkBack.
-3. M9 (parity and cutover) remains unstarted. All redesign work stays on `feature/chat-first-redesign`, with no merge
-   into `main`.
+1. Codex implements M9 **Part 0** (N1), then **Part A** (the parity checklist and walkthrough), then stops.
+2. **The owner** decides:
+   - **G1:** parity sign-off
+   - **G2:** surfaces before or after cutover; Opus recommends after, through the classic pop-out
+   - **G3:** runs `docs/DEVICE_CHECKLIST.md`
+
+   The owner also confirms the three P2 rail-assertion rewrites listed in the M8 review.
+3. Only then, M9 **Part B** (cutover). Retiring classic and merging into `main` remain separate owner decisions.
+   All redesign work stays on `feature/chat-first-redesign`.
 
 Still deferred:
-- native surface viewing and input (its own handoff before M9)
-- native phone-keyboard testing (the owner device checklist, an M9 input)
+- native surface viewing and input (G2)
+- native phone-keyboard and assistive-technology testing (G3)
 - the in-flight skill-fetch race (the D7 boundary)
-- R1 persistent bots (the roadmap)
+- R1 persistent bots (the roadmap, architecture §12.1)
 
-Separately, for the owner: the timing-sensitive backend tests needed five full runs during M7 (see the M7 review).
+Separately, for the owner: the timing-sensitive backend tests keep needing reruns (M7, M8).

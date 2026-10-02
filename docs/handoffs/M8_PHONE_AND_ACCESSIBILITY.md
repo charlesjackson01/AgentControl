@@ -742,3 +742,142 @@ records are retained above.
 
 Final scope inspection uses git status, diff stat, names and whitespace checks (also staged checks); only §8 files
 are included. The final push targets `HEAD:refs/heads/feature/chat-first-redesign` only. No PR or main merge.
+
+## Architecture, correctness, accessibility and UX review — 2026-10-02 (Opus)
+
+**Verdict: M8 accepted (Parts A–E: `68c7cab`, `fddf9eb`, `dbb8713`, `316ba80`, `2741085`).**
+- Nothing is blocking.
+- **One small should-fix (N1)** is Part 0 of `docs/handoffs/M9_PARITY_AND_CUTOVER.md`.
+- **One owner confirmation is requested** about the rail-test scope (below).
+
+Reviewed: `87ce82f..2741085`.
+
+### Re-run in the review environment (at `2741085`)
+
+| Suite | Result |
+|---|---|
+| Python, full | **423, OK (skipped=6)**, 140 s, first attempt. These are the same six environment gates as in earlier reviews (3 in Codex's environment). **No Python file changed** |
+| Classic DOM | **82/82** |
+| Chat DOM | **239/239** |
+| Browser matrix | **672 combinations + 51 regressions, 1,139 screenshots**, identical to Codex's report |
+
+**Scope of the diff.**
+- **No** `*.py` file and no classic file (`app.js`, `index.html`, `workspace.js`, `app.css`) changed.
+- `decisions.js` changed by **one line**: the O2 key-fact fallback (command, then file, then the first pattern, and no
+  empty paragraph). Decision bodies, endpoints, the status machine and the lock are untouched.
+- `core.js` adds only §3.1's fallback refresh. It runs only while the fallback session's recorded status is not
+  terminal, uses `known=` stubs on the existing refresh, adds no timer, and keeps the existing targeted decision
+  recovery.
+
+**New tests against the code they protect.**
+- Part A's tests against the `9b97b51` chat files: **213/224**. All nine new Part A tests fail, plus the two superseded
+  rail assertions. This matches Codex's baseline exactly.
+- Codex's per-part baselines are recorded: B 224/225, C 225/233 plus 32 keyboard workflows, D 233/238 plus 4 spot
+  checks, E 238/239 plus the panel geometry checks.
+
+### Verified
+
+- **Part A (deferrals).**
+  - Load earlier: focus moves to the first new message, the visible anchor is kept, and paging sets `aria-busy`.
+  - Partial dividers say "Show messages". This fixes the "Show 0 messages" seen in the M7 renders.
+  - Verification lines show the recorded time. "since" labels, task-id alignment, the sticky Workspace line and O2
+    are all in place.
+  - The rail disclosure is hidden at completion.
+- **Part B (layout).**
+  - The room keeps ≥ 420 px beside the Workspace. In `workspaceLive-desktop-workspace-light`, the waiting strip is on
+    one line, the chip is complete, and the sticky line reads "coder-1 (API) · ● Working · Turn 2".
+  - Tablet and landscape use the drawer and centred cards. The landscape critical dialog is a centred card with
+    Cancel focused (`decisionCritical-phone-landscape-dark`).
+  - Targets are ≥ 40 × 40 px on every small-screen viewport (≈ 40 k measurements).
+  - 200% text reflows, and safe areas are applied.
+  - **Footer:** portrait 57/105 px with ≥ 70.08% conversation; landscape 57/105 px with ≥ 58.33%. Every M4 budget is
+    met.
+- **Part C (keyboard).**
+  - The skip link, the ARIA tabs pattern and the Workspace toolbar and terminal keys all work.
+  - **The shared modal helper:**
+    - **Covers:** decision, Stop and Settings dialogs, plus the rail, context and Workspace sheets at ≤ 1199 px (true
+      overlays there).
+    - **Behaviour:** traps Tab, makes the background `inert` and `aria-hidden` (keeping both live regions outside),
+      starts on the safe control, returns focus to the opener, and is re-synchronised on every render, focus and
+      dialog close.
+  - **It changes no decision behaviour.**
+  - 32 real-key workflows pass.
+- **Part D (screen readers, contrast and motion).**
+  - Polite, atomic announcements of connection and waiting-count changes, each only when the value changes.
+  - Decorative symbols are hidden, landmarks and list semantics are in place, and pluralisation is fixed.
+  - The sign-in field has `autocomplete="off"`.
+  - Reduced motion also stops smooth scrolling. Forced colours keep selection outlines (`forced-colors-light`
+    inspected).
+  - **Contrast:** all 52 pairs pass. The only token change is the border, `#dedee4 → #85858f` (light) and
+    `#393a44 → #777984` (dark), raising control boundaries from about 1.3:1 to ≥ 3.355:1.
+  - The in-repo audit: 1,624 audits with zero findings.
+- **Part E.**
+  - Two late defects were found by the final verification and fixed, each with a regression: the empty final page of
+    Load earlier, and phone-sheet geometry with a tall task graph.
+  - `docs/DEVICE_CHECKLIST.md` covers the composer, Settings, typed confirm, terminal, rotation and
+    VoiceOver/TalkBack, with a blank results table. It does **not** claim device results.
+- **Real server** (Codex): the request pattern before and after M8 is identical, apart from the one extra
+  `known=`-stub GET for a non-terminal fallback. The keyboard-only critical approval sent exactly one POST. The M5.0
+  invariant held at 1/1/1 → 0/0/0. Proposed and live members stay distinct.
+- **Accepted contracts are unchanged:** server authority, privacy (all M5–M7 sentinels pass), Workspace read-only, the
+  proposed/live roster and the M4 budgets.
+
+### The rail-test scope: owner confirmation requested
+
+The owner's approval named "the existing test assertion that explicitly pins the old wording". Codex rewrote **three**
+assertions that pin it, and reports that the owner approved the two extra ones in the session:
+1. the M3.1 DOM test, as recorded
+2. the post-paging check in `M6 rail paging … exact X/N counts`
+3. the browser `railPaged` 35/35 check
+
+All three change **only** the X = N case, from "Showing N of N" to "no disclosure". Every incomplete-count, paging,
+row and zero-POST assertion is kept. I consider them within the approval's intent. Because the approval was recorded
+in the singular, **please confirm** so the record matches.
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix before M9 (N1): the rail disclosure for X > N.**
+- **The defect.** `railSessions` shows the note whenever X ≠ N. When the rail lists **more** sessions than the server's
+  total, it renders a false "Showing 2 of 1 session". This is visible in every `*-text-zoom` render, whose fixture has
+  2 runs and a total of 1.
+- **On a real server it is rare but possible.** `/api/channels` counts `channel_runs` (this project's runs plus any
+  non-terminal run), and `state.runs` is a subset of that. But the rail also keeps loaded thread sessions, so a
+  previously active session from another project that has since finished can remain listed after it leaves the count.
+- **The owner-approved rule** is: shown only while history is incomplete (X < N). X > N is not covered by it.
+- **The fix** is one condition (`<` instead of `!==`) plus a regression. It is within the existing rail-presentation
+  approval. It is M9 Part 0.
+
+**Optional polish:** none outstanding. M6 P1–P4, M7 Q1–Q2 and M5 O2 are closed.
+
+**Deferrals preserved:**
+- interactive surfaces (classic pop-out)
+- native phone-keyboard and assistive-technology testing (`docs/DEVICE_CHECKLIST.md`, owner-run, an M9 gate)
+- the in-flight skill-fetch race (the D7 boundary)
+- R1 persistent bots (the roadmap)
+
+**For the owner, separately:** the backend's fixed-wait tests failed on Codex's first full run of Part B (six
+failures), which passed in isolation. My single full run passed first time. This continues the robustness note from
+M7; it is outside the redesign.
+
+### Next milestone
+
+**M9, Parity and cutover:** see `docs/handoffs/M9_PARITY_AND_CUTOVER.md`. I took its scope from §12 ("parity checklist
+vs classic; `/` → chat, `/classic` → classic; README; owner sign-off") and from `docs/CHAT-FIRST-PLAN.md` §5.
+
+The order is:
+1. **Part 0:** N1.
+2. **Part A:** an evidenced parity checklist covering all 15 README "What you see" bullets, every classic view and
+   every classic-only capability, plus a chat-only real-server walkthrough. Docs only.
+3. **A hard stop** for the owner's gates:
+   - **G1:** parity sign-off
+   - **G2:** surfaces, before or after cutover
+   - **G3:** the device checklist results
+4. **Part B, the cutover:** only the `do_GET` routing, plus the chat pop-out href. Investigation found that
+   `chat/workspace.js` hard-codes `/?popout=`, which would open the chat after the swap; it must become
+   `/classic?popout=`. Classic's own pop-out uses `location.pathname`, so it is unaffected.
+
+Retiring classic and merging to `main` remain separate owner decisions.
+
+Delivery is documentation only, on `feature/chat-first-redesign`. There is no PR and no merge into `main`.

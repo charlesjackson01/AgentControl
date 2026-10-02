@@ -14,6 +14,10 @@
 capabilities, six interactive-surface facets, further classic-only actions, and explicit native subsets are covered.
 Counts include deliberate overlapping feature/view/facet rows; they are not unique backend-capability counts.
 
+**Owner decision (2026-10-02): G1 cleared.** The owner accepts these 17 Native, 54 Linked to classic and
+1 Intentionally not ported rows. Classic stays accessible at `/classic` for linked functionality, and C1
+pop-out compatibility is approved. G3 (physical devices) is still pending, so the cutover is not authorised.
+
 **Missing:** none found with the documented classic fallbacks available. This does not mean full native parity.
 The owner must decide whether the linked functionality is sufficient for G1. Physical-device behavior is not
 classified as verified by this browser audit; G3 remains pending.

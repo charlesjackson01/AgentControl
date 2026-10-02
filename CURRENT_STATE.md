@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (M9 Part 0 and Part A accepted; G1 ready for the owner; G3 pending).
+**Last updated:** 2026-10-02, by Opus (owner cleared G1; G3 pending; Part B not authorised).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -37,7 +37,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
-| **M9 Parity and cutover** | ✅ Part 0 + A complete; awaiting owner gates G1–G3 | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G2 choice (a) recorded; G1 and G3 pending |
+| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 pending; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G2 choice (a) recorded; G1 and G3 pending |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -182,10 +182,11 @@ was changed.
   - Incomplete-history, pagination and session-count checks remain intact.
 - **N1 approved as M9 Part 0 (2026-10-02).** When X > N, the disclosure is hidden. Counts and pagination are
   unchanged.
-- **M9 gates (2026-10-02).**
-  - **G2:** the owner's choice is (a): switch to chat first, and keep classic pop-outs for interactive surfaces.
-  - **G1** (parity sign-off) and **G3** (physical-device checks) are **pending**.
-  - **The cutover (Part B) must not start** until the owner explicitly clears G1 and G3.
+- **M9 gates (updated 2026-10-02).**
+  - **G1 is cleared** (17 Native, 54 Linked, 1 not ported; classic stays at `/classic`; C1 approved).
+  - **G2 is approved: (a).**
+  - **G3 is pending.**
+  - **The cutover (Part B) must not start** until the owner explicitly clears G3.
 - **M8 rail disclosure approved by the owner (2026-10-01).**
   - The behaviour:
     - "Showing X of N sessions" is hidden when every session is listed (X = N).
@@ -236,18 +237,16 @@ was changed.
 
 ## Next step
 
-1. **M9 Part 0 (`568534e`) and Part A (`1025518`) are accepted** (the review is at the end of
-   `docs/handoffs/M9_PARITY_AND_CUTOVER.md`). Part B's spec gained one compatibility rule (C1: `/?popout=…` keeps
-   serving classic).
-2. **G1, parity sign-off (owner, ready now).**
-   - Review the 54 "Linked to classic" rows and the one intentional omission (themes) in `docs/PARITY_CHECKLIST.md`.
-   - Also consider the two optional items: classic links land on the last-used view, and chat has no sign-out button.
-   - Record "G1 cleared", or name the rows to bring native first.
-3. **G3, physical devices (owner, pending).** Run `docs/DEVICE_CHECKLIST.md` on a real iPhone (Safari) and a real
+1. **M9 Part 0 and Part A are accepted.**
+2. **G1 was cleared by the owner on 2026-10-02.**
+   - The owner accepts the 17 Native, 54 Linked to classic and 1 Intentionally not ported rows.
+   - Classic stays at `/classic` for linked functionality.
+   - C1 pop-out compatibility is approved.
+3. **G2 is approved: (a).** The chat becomes the default, and interactive surfaces stay in classic.
+4. **G3, physical devices (owner, pending).** Run `docs/DEVICE_CHECKLIST.md` on a real iPhone (Safari) and a real
    Android phone (Chrome), in light and dark. Fill in the table, and record "G3 cleared" or the failures you accept.
-4. **G2 is already chosen: (a).** Switch to chat first, and keep classic pop-outs.
-5. Only after G1 and G3 are recorded: Codex implements **Part B** (routing, the pop-out href, README). Merging into
-   `main` and retiring classic remain separate owner decisions.
+5. **Part B (the cutover) is not authorised** until the owner records G3 as cleared. Merging into `main` and retiring
+   classic remain separate owner decisions.
 
 Still deferred:
 - native surface viewing and input (G2)

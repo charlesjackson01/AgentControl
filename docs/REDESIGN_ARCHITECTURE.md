@@ -632,3 +632,6 @@ person's.
   - **Part B spec amended (C1):** `/` with a `popout` query parameter keeps serving classic, so open classic windows and
     bookmarked pop-outs survive the cutover.
   - **G1 is ready for the owner.** G3 is pending. G2 is (a).
+- 2026-10-02 (owner decision): **G1 cleared.** Parity is accepted at 17 Native, 54 Linked to classic and 1 not ported.
+  Classic stays accessible at `/classic`, and the C1 pop-out compatibility is approved. G2 (a) stands. **G3 is
+  pending, and M9 Part B is not authorised.**

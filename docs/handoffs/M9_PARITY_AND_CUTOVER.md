@@ -162,16 +162,16 @@ Update `CURRENT_STATE.md` to "M9 Part A complete; awaiting owner gates G1–G3".
 
 If any gate is refused, Opus writes the corrective handoff. Part B does not start.
 
-**Gate status (2026-10-02, recorded from the owner):**
+**Gate status (updated 2026-10-02, recorded from the owner):**
 
 | Gate | Status |
 |---|---|
-| **G1** | **Pending.** It needs Part A's checklist |
-| **G2** | **Owner's stated choice: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces. Native surfaces come later, under their own handoff |
+| **G1** | **Cleared by the owner, 2026-10-02.** The owner accepts Part A's checklist (`1025518`): the 17 native features, the 54 classic-linked features and the one intentionally unported feature (themes, D4). Classic stays accessible at `/classic` for everything not yet in the new interface. The owner also approved keeping C1, so existing and bookmarked classic pop-outs keep working |
+| **G2** | **Approved: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces. Native surfaces come later, under their own handoff |
 | **G3** | **Pending.** The owner runs `docs/DEVICE_CHECKLIST.md` on physical devices |
 
-**Part B stays blocked** until the owner explicitly records G1 and G3 as cleared. G2's choice alone does not unblock
-it, and neither does any Codex or Opus judgement.
+**Part B stays blocked until the owner explicitly records G3 as cleared.** G1 and G2 are settled, but neither unblocks
+Part B on its own, and neither does any Codex or Opus judgement. Part B is **not authorised**.
 
 ## 5. Part B: cutover (only after G1–G3)
 
@@ -649,3 +649,19 @@ Then record one of two answers in `CURRENT_STATE.md` and this file:
 - the README updates
 
 Merging into `main` and retiring classic remain separate decisions.
+
+## Owner decision — G1 cleared (2026-10-02)
+
+The owner approved **G1, feature parity**, on the basis of `docs/PARITY_CHECKLIST.md` at `1025518`:
+- **17 Native**
+- **54 Linked to classic**
+- **1 Intentionally not ported** (themes, D4)
+
+Along with it:
+- **Classic stays accessible** at `/classic` for every function not yet brought into the new interface. Retiring
+  classic remains a separate, later decision.
+- **C1 is approved.** `/` with a `popout` query keeps serving classic, so existing and bookmarked classic pop-outs keep
+  working after the cutover.
+- **G2 stays approved:** the chat becomes the default, and interactive surfaces stay available through classic.
+- **G3 is pending.** The owner's physical-device verification (`docs/DEVICE_CHECKLIST.md`) is not complete. **Part B
+  is not authorised** and must not start until the owner records G3 as cleared.

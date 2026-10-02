@@ -158,7 +158,7 @@ Update `CURRENT_STATE.md` to "M9 Part A complete; awaiting owner gates G1–G3".
 |---|---|---|
 | **G1** | Parity sign-off: the owner accepts the checklist, including every Linked to classic and Missing row, as sufficient for the chat UI to become the default at `/` | `CURRENT_STATE.md` and this file |
 | **G2** | Interactive surfaces: **(a)** cut over with surfaces reached through the classic pop-out (Opus's recommendation: classic stays at `/classic`, and the link opens a standalone pop-out), or **(b)** write and complete a native-surfaces handoff first | the same |
-| **G3** | Device checks: the owner ran `docs/DEVICE_CHECKLIST.md` on iOS Safari and Android Chrome, and either all rows pass or the owner accepts the listed failures | the same, with the filled-in table |
+| **G3** | **Round 2 passed, owner-reported (2026-10-02). Awaiting the owner's explicit "G3 cleared".** Round 1 failed. M9.1 was accepted at `fd3c4d3`. Round-2 results are in `docs/DEVICE_CHECKLIST.md`; device versions were not supplied |
 
 If any gate is refused, Opus writes the corrective handoff. Part B does not start.
 
@@ -686,3 +686,12 @@ Along with it:
 
 **Next:** Codex implements M9.1 (Parts A–C). Then the owner re-runs the device checklist. **G3 stays pending and Part B
 stays unauthorised** until the owner records G3 as cleared.
+
+## G3 round 2 — owner-reported pass (2026-10-02)
+
+The owner ran `docs/DEVICE_CHECKLIST.md` round 2 with the isolated device fixture (`fd3c4d3`, over the tailnet) and
+reported **"Checklist passed!"**. Every round-2 cell is recorded as Pass on that report. Device models and versions
+were not supplied.
+
+**Part B (the cutover) is still not authorised.** It may start only after the owner explicitly records **"G3 cleared"**
+(G1 is cleared, and G2 (a) is approved).

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (M9.1 implementation accepted at `fd3c4d3`; G3 pending the owner device run; Part B not authorised).
+**Last updated:** 2026-10-02, by Opus (G3 round 2 passed per owner report; awaiting explicit "G3 cleared"; Part B not authorised).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -238,16 +238,12 @@ was changed.
 
 ## Next step
 
-1. **The M9.1 implementation is accepted** (`fd3c4d3`): 10/10 device-discovery runs, and the unmodified matrix is
-   green.
-2. **The owner runs `docs/DEVICE_CHECKLIST.md` round 2** with the isolated fixture
-   (`python3 agent-autonomy/tests/device_fixture.py --host <LAN-or-tailnet-IPv4> --port 8767`):
-   - on a real iPhone (Safari) and a real Android phone (Chrome), each in light and dark
-   - covering the keyboard, pinch-zoom, rotation and VoiceOver/TalkBack
-   - recording Pass, Fail or Not performed per cell, with versions
-3. **G1 is cleared and G2 (a) is approved. G3 is pending** until the owner records it. M9 Part B (the cutover) is not
-   authorised, and the default routes stay unchanged. Merging into `main` and retiring classic remain separate owner
-   decisions.
+1. **G3 round 2 passed, per the owner's report** (2026-10-02, "Checklist passed!"). It was run with the isolated
+   fixture over the tailnet, and the results are in `docs/DEVICE_CHECKLIST.md`. Device versions were not supplied.
+2. **The owner records "G3 cleared"** to finish the gate. G1 is cleared, and G2 (a) is approved.
+3. Only after that may Codex implement **M9 Part B**: routing `/` → chat, `/classic` and `/classic/` → classic, the C1
+   `/?popout=…` compatibility rule, the chat pop-out href, and the README. Merging into `main` and retiring classic
+   remain separate owner decisions.
 
 Still deferred:
 - native surface viewing and input (G2)

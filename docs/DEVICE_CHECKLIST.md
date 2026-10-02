@@ -136,11 +136,17 @@ observations are recorded once below rather than inferred as separate passes/fai
 | Terminal scrolling | **Not performed** | Workspace not found; no result supplied |
 | User zoom | **Not performed** | No result supplied |
 
-### Round 2 — awaiting owner, after M9.1a acceptance and Opus re-review
+### Round 2 — performed by the owner, 2026-10-02 (after M9.1a acceptance)
 
 | Platform / device | OS / browser / reader versions | Appearance | Find requests | Composer | Typed confirm | Workspace / terminal | Rotation | Zoom | Screen reader | Settings | Date / notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| iOS Safari / owner to supply | Owner to supply | Light | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Owner to supply |
-| iOS Safari / owner to supply | Owner to supply | Dark | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Owner to supply |
-| Android Chrome / owner to supply | Owner to supply | Light | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Owner to supply |
-| Android Chrome / owner to supply | Owner to supply | Dark | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Owner to supply |
+| iOS Safari / not supplied | Not supplied | Light | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+| iOS Safari / not supplied | Not supplied | Dark | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+| Android Chrome / not supplied | Not supplied | Light | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+| Android Chrome / not supplied | Not supplied | Dark | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+
+**Round 2 basis.** The owner reported "Checklist passed!" on 2026-10-02 for the round-2 checklist, run with the
+isolated fixture over the tailnet. Each cell is recorded as **Pass** on that report.
+- The device models and OS, browser and screen-reader versions were **not supplied**. Add them here if available.
+- Opus did not observe the devices.
+- **G3 is cleared only when the owner records it explicitly.**

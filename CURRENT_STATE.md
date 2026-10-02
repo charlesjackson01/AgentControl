@@ -240,7 +240,7 @@ was changed.
 
 1. **G3 round 2** (2026-10-02, owner-reported):
    - **iPhone 17 Pro / Safari, light and dark: Pass.** OS and screen-reader versions were not supplied.
-   - **Android Chrome: Not performed.**
+   - **Android Chrome: Not performed.** The owner has no Android device.
 
    Results are in `docs/DEVICE_CHECKLIST.md`.
 2. **The owner decides** either to run the checklist on an Android phone with Chrome, **or** to explicitly accept

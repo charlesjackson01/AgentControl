@@ -699,3 +699,7 @@ were not supplied.
 **Correction (2026-10-02).** The owner clarified that round 2 used **only an iPhone 17 Pro with Safari**. The Android
 Chrome rows are recorded as **Not performed**, not Pass. G3 remains pending, and Part B remains unauthorised, until
 the owner either tests Android Chrome or explicitly accepts it as not performed, and records "G3 cleared".
+
+**Update (2026-10-02).** The owner stated they have **no Android device**, so Android Chrome cannot be tested. G3 can
+be cleared only by the owner explicitly accepting Android Chrome as not performed and recording "G3 cleared". Until
+then G3 stays pending, and Part B stays unauthorised.

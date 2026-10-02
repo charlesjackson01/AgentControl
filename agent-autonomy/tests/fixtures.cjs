@@ -338,3 +338,13 @@ function contrastReport(source) {
   return result;
 }
 Object.assign(module.exports,{contrastReport});
+
+// M9.1: recorded live members/turns plus both device decision prerequisites.
+function deviceDiscoveryFixture() {
+  const f=workspaceDetails(),requests=decisionMessages();
+  f.state.permissions={confirm_word:'CONFIRM-TEST'};
+  f.thread.messages=f.thread.messages.filter(m=>!m.action).concat(clone(requests.critical),clone(requests.question));
+  f.channels=threadChannels(f.thread,2);
+  return f;
+}
+Object.assign(module.exports,{deviceDiscoveryFixture});

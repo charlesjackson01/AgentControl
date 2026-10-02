@@ -152,7 +152,7 @@ test('M3 kinds, progressive detail, roles, receipts and unknown kinds',async()=>
   for(const label of ['turn 1','✕ failed','✓ passed','submission uncertain','Team plan · 2 agents · 2 tasks','Team proposal waiting','coder-2','Awaiting confirmation · by you','3 updates','research ·','Python testing','Needs attention','Recorded future event','→ @coder-2','Redirect after denying request p0']) assert(content.includes(label),label);
   assert(!content.includes('PRIVATE'));assert(h.timeline.querySelector('[data-message="unknown:1"] .quiet'));
   const details=h.timeline.querySelector('[data-message="turn:1"] details');assert(!details.open);details.open=true;
-  assert(details.textContent.includes('todo.py'));assert(details.textContent.includes('Tests failed'));assert(details.textContent.includes('Open workspace'));assert.equal(details.querySelector('a').getAttribute('href'),'#/w/run_test/coder-1');
+  assert(details.textContent.includes('todo.py'));assert(details.textContent.includes('Tests failed'));assert(!details.querySelector('[data-workspace-link]'));const workspaceLink=h.timeline.querySelector('[data-message="turn:1"] .message > [data-workspace-link]');assert.equal(workspaceLink.textContent,'Open workspace');assert.equal(workspaceLink.getAttribute('href'),'#/w/run_test/coder-1');
   for(const selector of ['[data-message="ev:2"] ol','[data-message="ev:5"] dl','[data-message="turn:r"] dl','[data-message="cap:1"] dl','[data-message="req:permission:p2"] dl'])assert(h.timeline.querySelector(selector),selector);
   data.messages.find(m=>m.id==='req:permission:p2').detail.receipt.actor='automatic local rule';data.messages.find(m=>m.id==='req:permission:p2').rev++;await h.core.refresh();assert(h.timeline.textContent.includes('Awaiting confirmation · by automatic local rule'));
   const single=await harness(richCompleted(),{thread:fx.threadSingle()});assert(single.timeline.textContent.includes('Workspace open'));assert(single.timeline.textContent.includes('apply blocked: Working tree changed'));
@@ -1347,6 +1347,30 @@ test('M9.1 A missing visualViewport leaves existing layout fallbacks untouched',
 test('M9.1 A viewport meta enables keyboard layout resize while preserving user zoom',async()=>{
   const h=await harness(),meta=h.document.querySelector('meta[name="viewport"]').content;
   assert.match(meta,/interactive-widget=resizes-content/);assert(!/maximum-scale|user-scalable/.test(meta));
+});
+
+
+test('M9.1 B rail waiting is always findable and exactly matches channel counts',async()=>{
+ const h=await decisionHarness('critical');for(const count of [0,1,2]){h.f.channels.channels[0].waiting=count;await h.core.refresh();const line=h.document.querySelector('#rail-waiting');assert(line,'Waiting line remains present');assert.equal(line.textContent,count?'! '+count+' waiting for you':'Nothing is waiting for you');assert.equal(!!line.querySelector('a'),count>0);assert.equal(h.core.getState().channels.channels[0].waiting,count);}assert.equal(h.document.querySelectorAll('#rail [data-decision]').length,0);assert.equal(posts(h).length,0);
+});
+test('M9.1 B rail waiting uses locateWaiting and reveals the room after closing the phone drawer',async()=>{
+ const h=await decisionHarness('critical',{coarse:true});let located=0;h.core.locateWaiting=async()=>{located++;return h.f.thread.messages.find(m=>m.action).id;};h.document.querySelector('#open-rail').click();const link=h.document.querySelector('#rail-waiting a');assert(link);link.click();await tick();assert.equal(located,1);assert(!h.document.querySelector('#app').classList.contains('rail-open'));assert(h.timeline.querySelector('.focused[data-message]'));assert.equal(posts(h).length,0);
+});
+test('M9.1 B each turn has one visible summary Workspace link with its exact route',async()=>{
+ const h=await harness(richCompleted());for(const turn of h.publicThread.messages.filter(m=>m.kind==='turn')){const card=h.timeline.querySelector('[data-message="'+turn.id+'"]'),links=card.querySelectorAll('[data-workspace-link]');assert.equal(links.length,1);assert(!links[0].closest('details'),'Workspace link must be outside Details');assert.equal(links[0].getAttribute('href'),'#/w/'+encodeURIComponent(turn.session)+'/'+encodeURIComponent(turn.refs.agent || turn.actor));assert.equal(links[0].textContent,'Open workspace');}assert.equal(posts(h).length,0);
+});
+test('M9.1 B rail and session menu link only the active recorded members to their Workspaces',async()=>{
+ const h=await membersHarness('teamRunning'),run=h.f.state.run.id;for(const member of h.f.state.agents){const href='#/w/'+encodeURIComponent(run)+'/'+encodeURIComponent(member.name),rail=h.document.querySelector('#rail [data-member="'+member.name+'"] [data-workspace-link]'),menu=[...h.document.querySelectorAll('#session-menu [data-workspace-link]')].find(a=>a.getAttribute('href')===href);assert(rail && menu,member.name+' must have both entry links');assert.equal(rail.getAttribute('href'),href);assert.equal(rail.textContent,member.name==='hermes'?'Open log':'Open workspace');}assert.match(h.document.querySelector('#session-menu').textContent,/Workspaces/);assert(!h.document.querySelector('#rail').textContent.includes('youOpen'));assert.equal(h.document.querySelectorAll('#rail [data-decision],#session-menu [data-decision]').length,0);assert.equal(posts(h).length,0);
+});
+test('M9.1 B proposed-only, stopping and never-approved expired agents get no entry links',async()=>{
+ for(const name of ['teamProposed','teamStopping','teamExpired']){const f=name==='teamProposed'?fx.membersFixture(name):fx.endedPlan(name),h=await harness(f.state,{thread:f.thread,channels:f.channels});assert(h.document.querySelector('#rail-waiting'));for(const agent of ['coder-1','coder-2'])assert.equal(h.document.querySelectorAll('#rail a[href$="/'+agent+'"],#session-menu a[href$="/'+agent+'"]').length,0);await openMembers(h);assert.equal(h.document.querySelectorAll('.proposed-members [data-workspace-link]').length,0);assert.equal(posts(h).length,0);}
+});
+test('M9.1 B empty and quiet rooms explain the existing decision cards without another decision surface',async()=>{
+ const guidance='Approvals and questions from agents appear here as cards, with a "waiting for you" bar above the message box.';
+ for(const state of [fx.empty(),richCompleted()]){const h=await harness(state);assert(h.timeline.textContent.includes(guidance));assert.equal(h.document.querySelectorAll('.room-guidance [data-decision],.room-guidance button,.room-guidance a').length,0);assert.equal(posts(h).length,0);}
+});
+test('M9.1 B Workspace navigation from the drawer restores its visible opening link without a write',async()=>{
+ const h=await membersHarness('teamRunning',{coarse:true});h.document.querySelector('#open-rail').click();const opener=h.document.querySelector('#rail [data-member="coder-1"] [data-workspace-link]');assert(opener);opener.focus();const n=h.calls.length;opener.click();await tick();assert.equal(h.window.location.hash,'#/w/run_test/coder-1');assert(!h.document.querySelector('#app').classList.contains('rail-open'));h.document.querySelector('[data-back-room]').click();await tick();assert(h.document.querySelector('#app').classList.contains('rail-open'));assert(h.document.activeElement===opener);assert.equal(h.calls.length,n);assert.equal(posts(h).length,0);
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

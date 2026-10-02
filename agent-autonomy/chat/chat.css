@@ -362,3 +362,11 @@ input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: 
   #decision-dialog .decision-dialog-buttons { position: sticky; bottom: 0; background: var(--bg); padding-top: var(--s2); }
   #decision-dialog input:not([type="checkbox"]), #decision-dialog textarea { scroll-margin-bottom: calc(var(--target) + var(--s6)); }
 }
+
+/* M9.1: waiting and recorded Workspaces are discoverable without new decisions. */
+#rail-waiting p { font-size: calc(var(--type-sm) / var(--s4) * 1rem); margin: var(--s2) 0 0; }
+#rail-waiting a { color: var(--warning); }
+.turn-workspace-link { display: inline-flex; align-items: center; min-width: var(--target); min-height: var(--target); }
+.room-guidance { margin-top: var(--s3); font-size: calc(var(--type-sm) / var(--s4) * 1rem); }
+#session-menu section > h2 { color: var(--muted); font-size: calc(var(--type-xs) / var(--s4) * 1rem); margin: var(--s2); }
+#session-menu > div { max-height: var(--sheet-height); overflow-y: auto; }

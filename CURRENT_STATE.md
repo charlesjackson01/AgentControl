@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Codex (M9.1 Part A complete; discoverability and isolated device tooling next; G3 pending).
+**Last updated:** 2026-10-02, by Codex (M9.1 Parts A/B complete; isolated device tooling next; G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -38,7 +38,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
 | **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
-| **M9.1 Device corrections** | 🚧 Part A complete | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Part A, composer and viewport (16 px inputs, visual-viewport pinning, sheets above the keyboard); Part B, mobile discoverability of approvals and Workspaces; Part C, the device-test fixture and checklist update |
+| **M9.1 Device corrections** | 🚧 Parts A/B complete | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Part A, composer and viewport (16 px inputs, visual-viewport pinning, sheets above the keyboard); Part B, mobile discoverability of approvals and Workspaces; Part C, the device-test fixture and checklist update |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -274,3 +274,15 @@ Separately, for the owner: the timing-sensitive backend tests keep needing rerun
   and privacy assertions remain; no earlier assertion rewrite. Full Python verification runs at the final Part C gate.
 - Real iOS/Android keyboard, pinch zoom and assistive technology still require the owner's device re-test.
   M9 cutover remains unauthorised; G1 cleared, G2 (a) recorded, G3 pending.
+
+## M9.1 Part B verification (2026-10-02)
+
+- Part A committed separately as `fdbc64a` before discoverability work.
+- Rail Waiting reads the same channel count as the footer; it calls locateWaiting and closes the drawer.
+  Empty/quiet room text explains room cards. No new decision controls or writes.
+- One Workspace link now sits outside each turn's collapsed Details. Active recorded members get rail and
+  session-menu links; proposed-only agents never do. New navigation preserves visible opener focus.
+- Before fixes: all seven new DOM regressions fail (244/251) and all four new phone/landscape browser cases fail.
+  After: chat 251/251, classic 82/82, four discovery cases pass in light/dark; footers unchanged at 105 px with waiting.
+- Only the M3 turn test's Workspace-location assertions were moved, as explicitly authorised by M9.1. All its
+  other assertions are unchanged. Final Python/full browser verification runs after Part C. G3 remains pending.

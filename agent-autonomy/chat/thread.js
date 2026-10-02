@@ -38,8 +38,9 @@
   }
   function mount(host, controls) {
     const m = root.AC.model, e = m.esc, expanded = {}, nodes = new Map(), disclosures = new Map();
+    const guidance='Approvals and questions from agents appear here as cards, with a "waiting for you" bar above the message box.';
     let cache = emptyCache(), initial = true, follow = true, unseen = 0, mode = '', paging = false, emptyPageFocused = false;
-    host.innerHTML = '<div id="thread-mode"></div><div id="thread-history"></div><div id="thread-items" role="list"></div><p id="thread-live" role="status"></p>';
+    host.innerHTML = '<div id="thread-mode"></div><div id="thread-history"></div><div id="thread-items" role="list"></div><p id="thread-live" role="status"></p><div id="thread-guidance" class="room-guidance muted" hidden></div>';
     const $ = id=>host.querySelector('#'+id), items = $('thread-items');
     const pill = document.createElement('button'); pill.id = 'new-messages'; pill.hidden = true;
     host.parentNode.insertBefore(pill,host.nextSibling);
@@ -78,8 +79,9 @@
           const files=d.files || [], add=files.reduce((n,f)=>n+(Number(f.added)||0),0), remove=files.reduce((n,f)=>n+(Number(f.removed)||0),0);
           const v=d.verification?.status, verification=v==='passed' ? '✓ passed' : v==='failed' ? '✕ failed' : '– not configured';
           summary=text('turn '+d.number+' · '+message.text)+text(statusText(d.status)+' · '+verification+' · '+(files.length+(d.files_omitted || 0))+' files +'+add+'/−'+remove,'',true)+(d.uncertain ? text('! submission uncertain','warning',true) : '');
+          summary+=`<a class="turn-workspace-link" data-workspace-link href="#/w/${e(encodeURIComponent(message.session))}/${e(encodeURIComponent(message.refs?.agent || message.actor))}">Open workspace</a>`;
           // This is the bounded public task from /api/thread, never the Hermes request prompt.
-          detail=(d.prompt ? '<h3>Task</h3><details class="task-more"><summary>Show more</summary>'+text(d.prompt)+'</details>'+text(d.prompt,'task-preview') : '')+'<ul class="files">'+files.map(f=>`<li class="plain">${e(f.path)} · ${e(f.change)} +${e(f.added)}/−${e(f.removed)}</li>`).join('')+'</ul>'+(d.files_omitted ? text(d.files_omitted+' more files') : '')+(d.result_tail ? `<pre>${e(d.result_tail)}</pre>` : '')+(d.ended ? text('Ended '+m.timeLabel(d.ended)) : '')+`<a data-workspace-link href="#/w/${e(encodeURIComponent(message.session))}/${e(encodeURIComponent(message.refs?.agent || message.actor))}">Open workspace</a>`;break;
+          detail=(d.prompt ? '<h3>Task</h3><details class="task-more"><summary>Show more</summary>'+text(d.prompt)+'</details>'+text(d.prompt,'task-preview') : '')+'<ul class="files">'+files.map(f=>`<li class="plain">${e(f.path)} · ${e(f.change)} +${e(f.added)}/−${e(f.removed)}</li>`).join('')+'</ul>'+(d.files_omitted ? text(d.files_omitted+' more files') : '')+(d.result_tail ? `<pre>${e(d.result_tail)}</pre>` : '')+(d.ended ? text('Ended '+m.timeLabel(d.ended)) : '');break;
         }
         case 'research': summary=text('research · '+message.text)+text(d.expired ? 'Not decided before the session ended' : statusText(d.status),d.expired ? 'muted' : '',true);detail=fields(d.request,['question','why','toolsets','max_turns','seconds'])+(d.events || []).map(event=>text(event.kind+' · '+event.text)+time(event.created)).join('');break;
         case 'request': type='request-card';summary=text(message.text)+`<p class="risk ${['R2','R3'].includes(d.risk?.level) ? 'warning' : 'muted'}" data-risk-class="${e(d.risk?.class)}">${e([d.risk?.level,d.risk?.label,d.risk?.class].filter(Boolean).join(' · '))}</p>`+text(receiptState(d.receipt));detail=action ? '' : (d.patterns || []).map(p=>text(p)).join('')+(d.questions || []).map(q=>fields(q,['header','question'])+(q.options || []).map(o=>fields(o,['label','description'])).join('')).join('')+risk(d.risk)+fields(d.receipt,['action','state','risk','created','updated','redirect'])+(d.receipt?.actor ? text('Recorded actor: '+receiptActor(d.receipt.actor)) : '')+(d.refresh_needed ? text('Request needs refresh in classic') : '');break;
@@ -150,8 +152,9 @@
       let cursor=items.firstChild;for(const node of desired){if(node===cursor)cursor=cursor.nextSibling;else items.insertBefore(node,cursor);}
       for(const message of messages){const node=nodes.get(message.id)?.node;if(node)controls.decisions?.attach(node,message);}
       if(focusedGroup && !host.contains(document.activeElement)){const replacement=[...nodes.values()].find(record=>record.messageIds?.some(id=>focusedGroup.ids.includes(id)));replacement?.node.querySelectorAll('a,button,summary')[focusedGroup.index]?.focus?.({preventScroll:true});}
-      if(!messages.length)items.innerHTML='<div class="empty"><h2>A room for your project</h2><p>Write a goal below to start the first session.</p></div>';
+      if(!messages.length)items.innerHTML='<div class="empty"><h2>A room for your project</h2><p>Write a goal below to start the first session.</p><div class="room-guidance">'+e(guidance)+'</div></div>';
       else items.querySelector('.empty')?.remove();
+      $('thread-guidance').textContent=guidance;$('thread-guidance').hidden=!messages.length || !!cache.live.session || messages.some(m=>m.action && m.kind!=='outcome');
       if($('thread-live').textContent!==liveLabel(cache.live))$('thread-live').textContent=liveLabel(cache.live);$('thread-live').hidden=!liveLabel(cache.live);
       if(initial || modeChanged || follow){bottom();initial=false;}else{
         if(saved.node && keep.has(saved.node))host.scrollTop=saved.scroll+saved.node.getBoundingClientRect().top-host.getBoundingClientRect().top-saved.offset;

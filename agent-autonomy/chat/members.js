@@ -6,7 +6,7 @@
   const omitted=n=>n?`<p class="muted">…and ${e(n)} more</p>`:'';
   const lines=(list,cls='')=>`<ul class="team-notes ${cls}">${list.items.map(value=>`<li>${e(m.boundText(value))}</li>`).join('')}</ul>${omitted(list.omitted)}`;
   function rosterHTML(members,full=false,run='') {
-    return members.slice(0,50).map(member=>`<li data-member="${e(member.name)}"><span class="member-name">${e(member.displayName)}</span><span class="muted">${e(m.boundText(member.role))}</span><span>${m.symbolHTML(member.symbol)} ${e(member.stateLabel)}</span>${full && member.task?`<p class="member-task" title="${e(member.task)}">${e(member.task)}</p>`:''}${full && member.since?`<small>since ${e(m.relTime(member.since))}</small>`:''}${full && member.activity?`<small>${e(member.activity)}</small>`:''}${full?`<a class="room-link" data-workspace-link href="${e(workspaceHref(run,member.name))}">${member.name==='hermes'?'Open log':'Open workspace'}</a>`:''}${full && member.state==='waiting_on_you'?`<a class="room-link" href="${e(href(run))}" data-room-link="waiting" data-run="${e(run)}" data-actor="${e(member.name)}">Go to waiting item</a>`:''}</li>`).join('');
+    return members.slice(0,50).map(member=>`<li data-member="${e(member.name)}"><span class="member-name">${e(member.displayName)}</span><span class="muted">${e(m.boundText(member.role))}</span><span>${m.symbolHTML(member.symbol)} ${e(member.stateLabel)}</span>${full && member.task?`<p class="member-task" title="${e(member.task)}">${e(member.task)}</p>`:''}${full && member.since?`<small>since ${e(m.relTime(member.since))}</small>`:''}${full && member.activity?`<small>${e(member.activity)}</small>`:''}${full || run?` <a class="room-link" data-workspace-link href="${e(workspaceHref(run,member.name))}">${member.name==='hermes'?'Open log':'Open workspace'}</a>`:''}${full && member.state==='waiting_on_you'?`<a class="room-link" href="${e(href(run))}" data-room-link="waiting" data-run="${e(run)}" data-actor="${e(member.name)}">Go to waiting item</a>`:''}</li>`).join('');
   }
   function panelHTML(data) {
     const run=data.run || {},members=m.membersFromState({...data,agents:data.agents || []}),plan=m.teamFromRun(run),graph=m.tasksFromRun(run);
@@ -48,7 +48,7 @@
     function html(){const {loading,error,data}=reader.getState();return loading?'<p role="status">Loading team…</p>':error?`<p role="status">${e(error)}</p><button id="retry-team">Retry</button>`:data?panelHTML(data):'<p class="muted">No recorded members</p>';}
     return {...reader,html};
   }
-  const members={mount,patch,panelHTML,rosterHTML};
+  const members={mount,patch,panelHTML,rosterHTML,workspaceHref};
   root.AC=root.AC || {};root.AC.members=members;
   if(typeof module!=='undefined' && module.exports)module.exports=members;
 })(typeof window!=='undefined'?window:globalThis);

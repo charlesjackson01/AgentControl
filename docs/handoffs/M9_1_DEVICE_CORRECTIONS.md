@@ -285,3 +285,60 @@ complete review in the room and scrollable confirmation content.
 **Earlier assertion rewrites: none.** No permission/decision semantics, API, Python product, classic, schema,
 engine, data, routes or `decisions.js` change. Checked status/stat/names/whitespace before the separate commit.
 G3 remains pending; M9 Part B, native surfaces, R1 and the in-flight skill-fetch race remain excluded.
+
+## Part B completion report — 2026-10-02
+
+Part A `fdbc64a` was committed before Part B. This second commit adds only discoverability under §3.
+
+- Rail Waiting always exists. At 0 it says “Nothing is waiting for you”; at 1/2 it uses exactly the channel
+  count, the same count as the strip. The link invokes existing `locateWaiting`, closes the phone drawer
+  and reveals the authoritative room card. Empty and quiet rooms contain the specified explanatory sentence.
+- Each turn has exactly one visible summary “Open workspace” link outside closed Details. Recorded active
+  roster members have rail links, and the session menu has a Workspaces group using the Members panel's same
+  encoded href helper. Hermes uses “Open log”. Proposals do not create recorded member links; never-approved
+  stopping/finished proposals remain separate. No Workspace data is exposed by these links.
+- Returning from a rail Workspace restores that visible rail link; menu returns restore its replacement by id.
+  A browser regression exposed duplicate hashchange handling clearing the restored drawer; an already handled
+  hash is now ignored. This is navigation/focus only, with no API or decision semantics changed.
+- All new entries are links/status text, never `[data-decision]` or POST actions. The menu scrolls inside its
+  bounded height; the footer remains unchanged.
+
+Regression proof on the Part A product: `/tmp/ac-m91-b-before-dom.log` **244/251** (all seven new tests fail),
+`/tmp/ac-m91-b-before-browser.log` / `/tmp/chat-shots-m91-b-before/device-discovery-results.json`
+(all four portrait/landscape × light/dark cases fail for absent waiting links).
+After: `/tmp/ac-m91-b-dom-final.log` **251/251**, `/tmp/ac-m91-b-classic.log` **82/82**;
+`/tmp/ac-m91-b-browser-final2.log`, `/tmp/chat-shots-m91-b-final2/`: four cases, **12** actual renders.
+New links meet ≥40 × 40 px, existing layout/a11y/focus audits pass, no overflow, zero POSTs,
+footer **105 px** unchanged in both orientations. Full matrix/contrast/zoom and Python rerun at Part C's final gate.
+
+Inspected the actual phone rail, phone turn-summary and landscape menu renders:
+`device-waiting-rail-phone-light.png`, `device-turn-summary-phone-dark.png`,
+`device-menu-workspaces-phone-landscape-light.png` (focused predecessor and final directory above).
+
+### Sole earlier assertion rewrite (explicitly authorised by §1)
+
+Test **“M3 kinds, progressive detail, roles, receipts and unknown kinds”** originally asserted:
+
+```js
+assert(details.textContent.includes('Open workspace'));
+assert.equal(details.querySelector('a').getAttribute('href'),'#/w/run_test/coder-1');
+```
+
+Replacement asserts the link's absence inside Details, then the same wording and exact href in the visible summary:
+
+```js
+assert(!details.querySelector('[data-workspace-link]'));
+const workspaceLink=h.timeline.querySelector('[data-message="turn:1"] .message > [data-workspace-link]');
+assert.equal(workspaceLink.textContent,'Open workspace');
+assert.equal(workspaceLink.getAttribute('href'),'#/w/run_test/coder-1');
+```
+
+All other earlier assertions remain unchanged, including the complete decision-card/waiting-count tests,
+server-authoritative delivery, D7, privacy sentinels, paging, geometry budgets and user zoom. No geometry
+assertion was rewritten. Checked status/stat/names/whitespace before this separate commit. Part C next;
+M9 route cutover and merging into main remain unauthorised.
+
+Part B final-matrix correction before publishing: the unchanged “joined waiting link” browser assertion found
+`Waiting for youOpen workspace` in a new rail row. Added a separation assertion to the new roster regression
+(`250/251` on the initial Part B product, `/tmp/ac-m91-b-separator-before.log`), then a literal separator
+before the link. No older assertion changed. This correction is included in the local Part B commit before push.

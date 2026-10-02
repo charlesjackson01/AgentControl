@@ -140,13 +140,15 @@ observations are recorded once below rather than inferred as separate passes/fai
 
 | Platform / device | OS / browser / reader versions | Appearance | Find requests | Composer | Typed confirm | Workspace / terminal | Rotation | Zoom | Screen reader | Settings | Date / notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| iOS Safari / not supplied | Not supplied | Light | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
-| iOS Safari / not supplied | Not supplied | Dark | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
-| Android Chrome / not supplied | Not supplied | Light | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
-| Android Chrome / not supplied | Not supplied | Dark | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+| iOS Safari / iPhone 17 Pro | Safari; OS, browser and screen-reader versions not supplied | Light | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+| iOS Safari / iPhone 17 Pro | Safari; OS, browser and screen-reader versions not supplied | Dark | Pass | Pass | Pass | Pass | Pass | Pass | Pass | Pass | 2026-10-02 · owner reported "Checklist passed" |
+| Android Chrome / — | — | Light | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed: the owner tested only an iPhone 17 Pro with Safari |
+| Android Chrome / — | — | Dark | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed | Not performed: the owner tested only an iPhone 17 Pro with Safari |
 
-**Round 2 basis.** The owner reported "Checklist passed!" on 2026-10-02 for the round-2 checklist, run with the
-isolated fixture over the tailnet. Each cell is recorded as **Pass** on that report.
-- The device models and OS, browser and screen-reader versions were **not supplied**. Add them here if available.
-- Opus did not observe the devices.
-- **G3 is cleared only when the owner records it explicitly.**
+**Round 2 basis.** On 2026-10-02 the owner reported "Checklist passed!" for round 2, run with the isolated fixture
+over the tailnet, and then clarified that the device was **only an iPhone 17 Pro with Safari**.
+- **iOS Safari, light and dark:** Pass, on the owner's report. The OS and screen-reader versions were not supplied.
+- **Android Chrome, light and dark:** **Not performed.**
+- Opus did not observe the device.
+- **Before G3 can be cleared, the owner must either** run the checklist on an Android phone with Chrome, **or**
+  explicitly accept Android Chrome as not performed. G3 is cleared only when the owner records it.

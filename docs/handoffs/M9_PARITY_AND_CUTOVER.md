@@ -158,7 +158,7 @@ Update `CURRENT_STATE.md` to "M9 Part A complete; awaiting owner gates G1–G3".
 |---|---|---|
 | **G1** | Parity sign-off: the owner accepts the checklist, including every Linked to classic and Missing row, as sufficient for the chat UI to become the default at `/` | `CURRENT_STATE.md` and this file |
 | **G2** | Interactive surfaces: **(a)** cut over with surfaces reached through the classic pop-out (Opus's recommendation: classic stays at `/classic`, and the link opens a standalone pop-out), or **(b)** write and complete a native-surfaces handoff first | the same |
-| **G3** | **Round 2 passed, owner-reported (2026-10-02). Awaiting the owner's explicit "G3 cleared".** Round 1 failed. M9.1 was accepted at `fd3c4d3`. Round-2 results are in `docs/DEVICE_CHECKLIST.md`; device versions were not supplied |
+| **G3** | **Pending.** Round 2 is an owner-reported Pass on **iPhone 17 Pro / Safari only** (2026-10-02). **Android Chrome is Not performed.** To clear G3, the owner runs Android, or explicitly accepts it as not performed, then records "G3 cleared" |
 
 If any gate is refused, Opus writes the corrective handoff. Part B does not start.
 
@@ -695,3 +695,7 @@ were not supplied.
 
 **Part B (the cutover) is still not authorised.** It may start only after the owner explicitly records **"G3 cleared"**
 (G1 is cleared, and G2 (a) is approved).
+
+**Correction (2026-10-02).** The owner clarified that round 2 used **only an iPhone 17 Pro with Safari**. The Android
+Chrome rows are recorded as **Not performed**, not Pass. G3 remains pending, and Part B remains unauthorised, until
+the owner either tests Android Chrome or explicitly accepts it as not performed, and records "G3 cleared".

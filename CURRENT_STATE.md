@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (G3 round 2 passed per owner report; awaiting explicit "G3 cleared"; Part B not authorised).
+**Last updated:** 2026-10-02, by Opus (G3 round 2: iPhone 17 Pro / Safari passed per owner; Android Chrome not performed; G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -238,12 +238,15 @@ was changed.
 
 ## Next step
 
-1. **G3 round 2 passed, per the owner's report** (2026-10-02, "Checklist passed!"). It was run with the isolated
-   fixture over the tailnet, and the results are in `docs/DEVICE_CHECKLIST.md`. Device versions were not supplied.
-2. **The owner records "G3 cleared"** to finish the gate. G1 is cleared, and G2 (a) is approved.
-3. Only after that may Codex implement **M9 Part B**: routing `/` → chat, `/classic` and `/classic/` → classic, the C1
-   `/?popout=…` compatibility rule, the chat pop-out href, and the README. Merging into `main` and retiring classic
-   remain separate owner decisions.
+1. **G3 round 2** (2026-10-02, owner-reported):
+   - **iPhone 17 Pro / Safari, light and dark: Pass.** OS and screen-reader versions were not supplied.
+   - **Android Chrome: Not performed.**
+
+   Results are in `docs/DEVICE_CHECKLIST.md`.
+2. **The owner decides** either to run the checklist on an Android phone with Chrome, **or** to explicitly accept
+   Android Chrome as not performed. Then the owner records "G3 cleared". G1 is cleared, and G2 (a) is approved.
+3. Only after "G3 cleared" may Codex implement **M9 Part B**: routing, the C1 compatibility rule, the chat pop-out
+   href, and the README. Merging into `main` and retiring classic remain separate owner decisions.
 
 Still deferred:
 - native surface viewing and input (G2)

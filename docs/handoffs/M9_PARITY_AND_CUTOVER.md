@@ -72,7 +72,7 @@ Start from `2741085` or later.
   - Add a regression for X > N (no disclosure) that fails on `2741085`.
   - Keep the X = N and X < N assertions unchanged.
   - Re-run the full suites, and inspect one `text-zoom` render.
-- **Scope.** This is within the owner's existing rail-presentation approval. No other file or assertion changes.
+- **Scope: approved by the owner, 2026-10-02, as M9 Part 0.** When X > N, hide the disclosure. Do not change the underlying counts, the union, pagination or the data sources. No other file or assertion changes.
 
 ## 3. Part A: parity audit (docs and evidence only)
 
@@ -161,6 +161,17 @@ Update `CURRENT_STATE.md` to "M9 Part A complete; awaiting owner gates G1–G3".
 | **G3** | Device checks: the owner ran `docs/DEVICE_CHECKLIST.md` on iOS Safari and Android Chrome, and either all rows pass or the owner accepts the listed failures | the same, with the filled-in table |
 
 If any gate is refused, Opus writes the corrective handoff. Part B does not start.
+
+**Gate status (2026-10-02, recorded from the owner):**
+
+| Gate | Status |
+|---|---|
+| **G1** | **Pending.** It needs Part A's checklist |
+| **G2** | **Owner's stated choice: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces. Native surfaces come later, under their own handoff |
+| **G3** | **Pending.** The owner runs `docs/DEVICE_CHECKLIST.md` on physical devices |
+
+**Part B stays blocked** until the owner explicitly records G1 and G3 as cleared. G2's choice alone does not unblock
+it, and neither does any Codex or Opus judgement.
 
 ## 5. Part B: cutover (only after G1–G3)
 

@@ -881,3 +881,17 @@ The order is:
 Retiring classic and merging to `main` remain separate owner decisions.
 
 Delivery is documentation only, on `feature/chat-first-redesign`. There is no PR and no merge into `main`.
+
+### Owner confirmation — 2026-10-02
+
+The owner confirmed **all three** M8 rail-assertion rewrites:
+1. the M3.1 DOM test
+2. the post-paging check in `M6 rail paging … exact X/N counts`
+3. the browser `railPaged` check
+
+**The approval covers only the completed-history wording (X = N → no disclosure).** Every incomplete-history,
+pagination and session-count assertion must remain intact. The record now matches what was implemented, and the
+confirmation request above is closed.
+
+The owner also approved **N1 as M9 Part 0**: when the rail lists more sessions than the server's reported total
+(X > N), the misleading disclosure is hidden. The underlying counts and pagination do not change.

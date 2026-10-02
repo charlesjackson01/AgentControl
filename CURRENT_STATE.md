@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (M8 accepted; M9 handoff written).
+**Last updated:** 2026-10-02, by Opus (owner confirmed the M8 rail assertions and N1, and chose G2 (a); G1 and G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -176,6 +176,16 @@ was changed.
   is already downloading outside the controller lock. Existing post-fetch behaviour is unchanged; no new guard,
   cleanup or lifecycle change handles this case in M5.0 or M5–M8.
 - **M5 F1 corrected in M6 Part A.** The actionable outcome projects recorded `detail.verification {status, created, ended}`, preventing a fast verification from returning to its pre-verification revision. No `decisions.js` change. Successful slash aliases also clear their draft; errors retain it.
+- **M8 rail assertions confirmed by the owner (2026-10-02).**
+  - All three rewrites stand: the M3.1 DOM test, the M6 post-paging check, and the browser `railPaged` check.
+  - They cover **only** the completed-history wording (X = N → no disclosure).
+  - Incomplete-history, pagination and session-count checks remain intact.
+- **N1 approved as M9 Part 0 (2026-10-02).** When X > N, the disclosure is hidden. Counts and pagination are
+  unchanged.
+- **M9 gates (2026-10-02).**
+  - **G2:** the owner's choice is (a): switch to chat first, and keep classic pop-outs for interactive surfaces.
+  - **G1** (parity sign-off) and **G3** (physical-device checks) are **pending**.
+  - **The cutover (Part B) must not start** until the owner explicitly clears G1 and G3.
 - **M8 rail disclosure approved by the owner (2026-10-01).**
   - The behaviour:
     - "Showing X of N sessions" is hidden when every session is listed (X = N).
@@ -194,13 +204,11 @@ was changed.
 ## Next step
 
 1. Codex implements M9 **Part 0** (N1), then **Part A** (the parity checklist and walkthrough), then stops.
-2. **The owner** decides:
-   - **G1:** parity sign-off
-   - **G2:** surfaces before or after cutover; Opus recommends after, through the classic pop-out
-   - **G3:** runs `docs/DEVICE_CHECKLIST.md`
-
-   The owner also confirms the three P2 rail-assertion rewrites listed in the M8 review.
-3. Only then, M9 **Part B** (cutover). Retiring classic and merging into `main` remain separate owner decisions.
+2. **Owner gates.**
+   - **G2 is chosen: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces.
+   - **G1** (parity sign-off on the Part A checklist) is **pending**.
+   - **G3** (running `docs/DEVICE_CHECKLIST.md` on physical iOS Safari and Android Chrome devices) is **pending**.
+3. Only after the owner explicitly clears G1 and G3: M9 **Part B** (cutover). Retiring classic and merging into `main` remain separate owner decisions.
    All redesign work stays on `feature/chat-first-redesign`.
 
 Still deferred:

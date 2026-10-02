@@ -619,3 +619,10 @@ person's.
   - Under D3, Part B changes only the `do_GET` routing (`/` → chat, `/chat` as an alias, `/classic` and `/classic/` →
     classic) and the chat pop-out href (→ `/classic?popout=`).
   - Retiring classic and merging into `main` remain separate owner decisions.
+- 2026-10-02 (owner decisions):
+  - **M8 rail assertions confirmed.** All three P2 rewrites stand. They cover only the completed-history wording
+    (X = N). Incomplete-history, pagination and session-count checks are unchanged.
+  - **N1 approved as M9 Part 0.** The rail hides its disclosure when X > N. Counts and pagination are unchanged.
+  - **M9 G2: choice (a).** Cut over first, with interactive surfaces through the classic pop-out. Native surfaces need
+    their own later handoff.
+  - **G1 and G3 are pending.** M9 Part B (the cutover) stays blocked until the owner explicitly clears both.

@@ -597,3 +597,10 @@ person's.
   - **Native phone-keyboard testing stays deferred.** It becomes an owner-run device checklist
     (`docs/DEVICE_CHECKLIST.md`) as an M9 sign-off input.
   - Added §12.1, the long-term roadmap: **R1 persistent bots**, recorded and not authorised. It is not part of M8.
+
+- **2026-10-01, M8 implemented; awaiting review.** Parts A–E retain the accepted M1–M7 contracts. Keyboard paths,
+  modal focus/inert, stable polite announcements, token contrast, reduced motion and forced colours are tested.
+  The seven-size/light-dark matrix also covers actual doubled text and emulated safe-area insets. Native iOS/Android
+  keyboard and VoiceOver/TalkBack checks remain owner-run via `docs/DEVICE_CHECKLIST.md` before M9; they are not
+  claimed by browser emulation and are not an M8 acceptance gate. M9 remains unstarted. Interactive surfaces
+  still use the classic pop-out; the D7 in-flight skill-fetch race and persistent bots remain deferred.

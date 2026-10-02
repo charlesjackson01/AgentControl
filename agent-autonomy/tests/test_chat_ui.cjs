@@ -1306,4 +1306,8 @@ test('M8 D singular rail counts use session without changing counts or paginatio
   assert.equal(model.railSessions({runs:[]},null,1).note,'Showing 0 of 1 session');assert.equal(model.railSessions({runs:[]},null,2).note,'Showing 0 of 2 sessions');
 });
 
+test('M8 E empty final history page retains button focus and cannot trigger another read',async()=>{
+  const pages=fx.threadLong(),h=await harness(richCompleted(),{thread:pages[0],respond:url=>url.includes('before=')?{...pages[1],messages:[],before:null}:undefined}),button=h.document.querySelector('#load-earlier'),ids=[...h.core.getState().thread.ids];button.focus();button.click();await tick();await tick();assert(button.isConnected,'An empty page must retain its focus target');assert(h.document.activeElement===button,'Focus stays on the original paging control');assert.equal(button.getAttribute('aria-busy'),'false');assert.equal(button.getAttribute('aria-disabled'),'true');assert.equal(h.core.getState().thread.before,null);assert.deepEqual([...h.core.getState().thread.ids],ids);const reads=h.calls.length;button.click();await tick();assert.equal(h.calls.length,reads);h.document.querySelector('#composer').focus();h.options.respond=url=>url.startsWith('/api/thread')?{...pages[0],before:null}:undefined;await h.core.refresh();assert.equal(!!h.document.querySelector('#load-earlier'),false);assert.equal(posts(h).length,0);
+});
+
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

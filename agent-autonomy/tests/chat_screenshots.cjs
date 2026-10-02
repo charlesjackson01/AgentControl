@@ -15,7 +15,7 @@ const viewportFilter=process.argv.find(arg=>arg.startsWith('--viewport='))?.slic
 if(viewportFilter)assert(Object.hasOwn(matrixViewports,viewportFilter),'Unknown focused-test viewport');
 const keyboardOnly=process.argv.includes('--keyboard-only');
 const viewports=keyboardOnly?{}:viewportFilter?{[viewportFilter]:matrixViewports[viewportFilter]}:matrixViewports;
-const focusMeasurements=[];
+const focusMeasurements=[],targetMeasurements=[];
 const accessibilityMeasurements=[];
 async function accessibilityAudit(page,name,size){
  const findings=await page.evaluate(()=>{
@@ -73,6 +73,30 @@ async function focusCheck(page,name,size){
  });
  assert.deepEqual(result.errors,[],`${name}/${size} focus visibility`);assert(result.count>0);focusMeasurements.push({name,size,count:result.count,outline:result.outlineMinimum,inset:result.insetMinimum});
 }
+async function emptyHistoryCases(browser,out){
+ const failures=[];let count=0;
+ for(const width of [1440,390])for(const colorScheme of ['light','dark']){
+  const f={state:fx.richCompleted(),thread:fx.threadLong()[0]};f.channels=fx.threadChannels(f.thread,0);let exhausted=false,reads=0;const page=await browser.newPage({viewport:{width,height:844},colorScheme}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  try{
+   await page.route('**/*',async route=>{const u=new URL(route.request().url());assert.notEqual(route.request().method(),'POST');if(u.pathname.startsWith('/api/')){let body=u.pathname==='/api/state'?f.state:u.pathname==='/api/channels'?f.channels:{};if(u.pathname==='/api/thread'){reads++;if(u.searchParams.has('before')){exhausted=true;body={...f.thread,messages:[],before:null};}else body={...f.thread,...(exhausted?{before:null}:{})};}return route.fulfill({status:u.pathname==='/api/events'?503:200,contentType:'application/json',body:JSON.stringify(body)});}const file=u.pathname==='/chat'?'index.html':u.pathname.slice('/chat/'.length);return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
+   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#load-earlier').waitFor();await page.evaluate(()=>{AC.core.stop();window.__historyButton=document.getElementById('load-earlier');window.__historyIds=[...AC.core.getState().thread.ids];});
+   await keyboardFocus(page,'#load-earlier');await page.keyboard.press('Enter');await page.waitForFunction(()=>AC.core.getState().thread.before===null);assert(await page.evaluate(()=>__historyButton.isConnected && document.activeElement===__historyButton),'Empty final page must preserve native button focus');assert.equal(await page.locator('#load-earlier').getAttribute('aria-disabled'),'true');assert.equal(await page.locator('#load-earlier').getAttribute('aria-busy'),'false');assert(await page.evaluate(()=>JSON.stringify(__historyIds)===JSON.stringify(AC.core.getState().thread.ids)));const before=reads;await page.keyboard.press('Enter');await page.evaluate(()=>new Promise(requestAnimationFrame));assert.equal(reads,before,'Exhausted focused control cannot read again');await accessibilityAudit(page,'empty-history',String(width));await focusCheck(page,'empty-history',String(width));await page.screenshot({animations:'disabled',path:path.join(out,'empty-history-'+width+'-'+colorScheme+'.png')});count++;
+   await page.keyboard.press('Tab');await page.evaluate(()=>AC.core.refresh());assert.equal(await page.locator('#load-earlier').count(),0);assert.deepEqual(errors,[]);
+  }catch(e){failures.push({width,colorScheme,error:e.message});}finally{await page.close();}
+ }
+ fs.writeFileSync(path.join(out,'empty-history-results.json'),JSON.stringify({cases:4,failures},null,2));assert.deepEqual(failures,[]);return count;
+}
+async function phonePanelCases(browser,out){
+ const failures=[];let count=0;
+ for(const width of [390,320])for(const colorScheme of ['light','dark']){
+  const f=fx.membersFixture('teamRunning'),page=await browser.newPage({viewport:{width,height:844},colorScheme}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  try{
+   await page.route('**/*',async route=>{const u=new URL(route.request().url());assert.notEqual(route.request().method(),'POST');if(u.pathname.startsWith('/api/'))return route.fulfill({status:u.pathname==='/api/events'?503:200,contentType:'application/json',body:JSON.stringify(u.pathname==='/api/state'?f.state:u.pathname==='/api/channels'?f.channels:u.pathname==='/api/thread'?f.thread:{})});const file=u.pathname==='/chat'?'index.html':u.pathname.slice('/chat/'.length);return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
+   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat#/s/run_test');await page.locator('#context:not([hidden])').waitFor();await page.evaluate(()=>AC.core.stop());await page.locator('#members-tab').click();await page.locator('.task-graph').scrollIntoViewIfNeeded();const pane=await page.locator('#context').boundingBox();assert(Math.abs(pane.y+pane.height-844)<1,'Tall graph scrolling must keep the phone sheet at the viewport bottom');assert.equal(await page.locator('#app').evaluate(n=>n.scrollTop),0,'The outer grid must not scroll');await accessibilityAudit(page,'phone-panel',String(width));await focusCheck(page,'phone-panel',String(width));assert.deepEqual(errors,[]);await page.screenshot({animations:'disabled',path:path.join(out,'phone-panel-'+width+'-'+colorScheme+'.png')});count++;
+  }catch(e){failures.push({width,colorScheme,error:e.message});}finally{await page.close();}
+ }
+ fs.writeFileSync(path.join(out,'phone-panel-results.json'),JSON.stringify({cases:4,failures},null,2));assert.deepEqual(failures,[]);return count;
+}
 async function keyboardFocus(page,selector,reverse=false){
  for(let i=0;i<160;i++){if(await page.evaluate(s=>document.activeElement?.matches(s),selector))return;await page.keyboard.press(reverse?'Shift+Tab':'Tab');}
  throw Error('Keyboard could not reach '+selector);
@@ -110,8 +134,9 @@ async function layoutCheck(page,name,size,width){
  await accessibilityAudit(page,name,size);
  await focusCheck(page,name,size);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name}/${size}: page overflow`);
+ const targets=await page.locator('a[href],button,input,textarea,select,summary,[role="tab"],[tabindex="0"]').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length && getComputedStyle(n).visibility!=='hidden').map(n=>({name:n.id || n.getAttribute('aria-label') || n.textContent.slice(0,50),width:n.getBoundingClientRect().width,height:n.getBoundingClientRect().height})));
+ targetMeasurements.push({name,size,width,colorScheme:await page.evaluate(()=>matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'),targets});
  if(width<1200){
-  const targets=await page.locator('a[href],button,input,textarea,select,summary,[role="tab"],[tabindex="0"]').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length && getComputedStyle(n).visibility!=='hidden').map(n=>({name:n.id || n.getAttribute('aria-label') || n.textContent.slice(0,50),width:n.getBoundingClientRect().width,height:n.getBoundingClientRect().height})));
   for(const t of targets)assert(t.width>=39.9 && t.height>=39.9,`${name}/${size} target ${t.name}: ${t.width}×${t.height}`);
  }
  if(size==='laptop'||size==='tablet'||size==='phone-landscape'){
@@ -153,9 +178,11 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  const longRoom=fx.composerFixture('active');longRoom.state.run.title=longTitle;longRoom.thread.sessions[0].title=longTitle;longRoom.channels=fx.threadChannels(longRoom.thread,1);longRoom.channels.channels[0].title=longTitle;composerCases.longRoom=longRoom;
  const longWorkspace=fx.workspaceDetails('workspaceHistorical');longWorkspace.state.run.title=longTitle;longWorkspace.thread.sessions[0].title=longTitle;longWorkspace.state.run.workspace.agents['coder-1'].branch='agent/'+('branch/'.repeat(100));longWorkspace.state.agents.find(a=>a.name==='coder-1').task=longTitle;workspaceCases.workspaceLong=longWorkspace;
  const measurements=[];let keyboardCases=0;
+ if(process.argv.includes('--phone-panels-only')){try{console.log(await phonePanelCases(browser,out)+' phone panel cases passed');}finally{await browser.close();}return;}
+ if(process.argv.includes('--empty-history-only')){try{console.log(await emptyHistoryCases(browser,out)+' empty history cases passed');}finally{await browser.close();}return;}
  if(process.argv.includes('--accessibility-spots-only')){try{const shots=await accessibilitySpots(browser,out);console.log(shots+' accessibility spot checks passed');}finally{await browser.close();}return;}
  const contrast=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));fs.writeFileSync(path.join(out,'contrast-measurements.json'),JSON.stringify(contrast,null,2));assert.deepEqual(contrast.filter(v=>v.ratio<v.minimum),[]);
- try {count+=await accessibilitySpots(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
+ try {count+=await accessibilitySpots(browser,out);count+=await emptyHistoryCases(browser,out);count+=await phonePanelCases(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
   combinations++;
   const pages=workspaceCases[name]?[workspaceCases[name].thread]:membersCases[name] ? [membersCases[name].thread,...(membersCases[name].older?[membersCases[name].older]:[])] : decisionCases[name] ? [decisionCases[name].thread] : composerCases[name] ? [composerCases[name].thread] : name==='threadLong' ? fx.threadLong() : [name==='empty' ? fx.threadResponse([],[]) : name==='threadTeam'||name==='team' ? fx.threadTeam() : name==='completed' ? fx.threadSingle() : fx.threadActive()];
   const page=await browser.newPage({viewport:{width,height},colorScheme,...(width<1200?{hasTouch:true,...(width<768 || size==='phone-landscape'?{isMobile:true}:{})}:{})});const errors=[];page.on('pageerror',err=>errors.push(err.message));
@@ -306,7 +333,8 @@ await page.locator('#composer').fill(Array.from({length:10},()=>"A full line of 
   hold=true;await page.evaluate(()=>{window.pendingLiveRead=AC.core.refresh();});await held;const before=stateReads;await page.evaluate(()=>{location.hash='#/w/run_test/coder-1';AC.shell.route();});await page.locator('#workspace-terminal').waitFor();assert.equal(stateReads,before,'Opening during a live read must not add a read');f.state.steps[1].transcript.push({type:'text',text:'BROWSER-RACE-RECORDED-OUTPUT'});hold=false;release();await page.evaluate(()=>pendingLiveRead);assert((await page.locator('#workspace-terminal').textContent()).includes('BROWSER-RACE-RECORDED-OUTPUT'));await page.screenshot({path:path.join(out,'regression-workspace-live-focus-phone.png')});count++;await page.close();
  }
  fs.writeFileSync(path.join(out,'accessibility-measurements.json'),JSON.stringify(accessibilityMeasurements,null,2));
+ fs.writeFileSync(path.join(out,'target-measurements.json'),JSON.stringify(targetMeasurements,null,2));
  fs.writeFileSync(path.join(out,'focus-measurements.json'),JSON.stringify(focusMeasurements,null,2));
  fs.writeFileSync(path.join(out,'footer-measurements.json'),JSON.stringify(measurements,null,2));
- }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${11+keyboardCases} regression cases passed`);
+ }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${19+keyboardCases} regression cases passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

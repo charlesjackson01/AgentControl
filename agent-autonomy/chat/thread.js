@@ -38,7 +38,7 @@
   }
   function mount(host, controls) {
     const m = root.AC.model, e = m.esc, expanded = {}, nodes = new Map(), disclosures = new Map();
-    let cache = emptyCache(), initial = true, follow = true, unseen = 0, mode = '', paging = false;
+    let cache = emptyCache(), initial = true, follow = true, unseen = 0, mode = '', paging = false, emptyPageFocused = false;
     host.innerHTML = '<div id="thread-mode"></div><div id="thread-history"></div><div id="thread-items" role="list"></div><p id="thread-live" role="status"></p>';
     const $ = id=>host.querySelector('#'+id), items = $('thread-items');
     const pill = document.createElement('button'); pill.id = 'new-messages'; pill.hidden = true;
@@ -102,7 +102,7 @@
       const node=[...items.children].find(n=>!n.hidden && n.getBoundingClientRect?.().bottom > top);
       return {node,offset:node ? node.getBoundingClientRect().top-top : 0,height:host.scrollHeight,scroll:host.scrollTop};
     }
-    function render(next, viewMode = '') {
+    function render(next, viewMode = '', keepPagingControl=false) {
       let focusedGroup=null;
       for(const record of nodes.values())if(record.messageIds?.length){
         const open=[...record.node.querySelectorAll('details')].map(d=>d.open);
@@ -114,8 +114,8 @@
       if(cache.ids.length && next.ids[0]!==cache.ids[0] && next.ids.includes(cache.ids[0]) && next.windowIds.join(',')===cache.windowIds.join(','))follow=false;
       cache=next;mode=viewMode;
       $('thread-mode').innerHTML=mode ? '<strong>Viewing one session</strong> <a href="#/">Back to room</a>' : '';
-      const history=$('thread-history');
-      if(cache.before){if(!history.querySelector('#load-earlier'))history.innerHTML='<button id="load-earlier">Load earlier</button>';const button=history.querySelector('#load-earlier');button.disabled=paging;button.setAttribute('aria-busy',String(paging));}
+      const history=$('thread-history');emptyPageFocused=keepPagingControl || emptyPageFocused && history.querySelector('#load-earlier')?.contains(document.activeElement);
+      if(cache.before || paging || emptyPageFocused){if(!history.querySelector('#load-earlier'))history.innerHTML='<button id="load-earlier">Load earlier</button>';const button=history.querySelector('#load-earlier');button.disabled=paging;button.setAttribute('aria-busy',String(paging));button.setAttribute('aria-disabled',String(!cache.before));}
       else history.innerHTML="<p class=\"muted\">Beginning of this project's history</p>";
       const messages=cache.ids.map(id=>cache.messages[id]), newest=messages.at(-1)?.session, desired=[];let day='', session='';
       function keyed(id,key,html,messageIds=[]) {
@@ -162,9 +162,9 @@
     host.addEventListener('click',async event=>{
       const toggle=event.target.closest('[data-collapse]');if(toggle){const id=toggle.dataset.collapse;expanded[id]=toggle.getAttribute('aria-expanded')==='true';render(cache,mode);}
       const button=event.target.closest('#load-earlier');
-      if(button && !paging){const previous=new Set(cache.ids);paging=true;render(cache,mode);try{await controls.older();}catch{}finally{
-        paging=false;render(cache,mode);
+      if(button && !paging && cache.before){const previous=new Set(cache.ids);paging=true;render(cache,mode);try{await controls.older();}catch{}finally{
         const first=cache.ids.find(id=>!previous.has(id) && cache.messages[id].kind!=='session_start'),record=first && [...nodes.values()].find(record=>record.messageIds?.includes(first));
+        paging=false;render(cache,mode,!first);
         if(record){if(record.node.hidden){expanded[cache.messages[first].session]=false;render(cache,mode);}record.node.focus?.({preventScroll:true});}
         else $('load-earlier')?.focus?.({preventScroll:true});
       }}

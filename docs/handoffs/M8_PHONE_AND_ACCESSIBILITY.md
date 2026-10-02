@@ -566,3 +566,179 @@ tab remain outlined, the waiting state retains its symbol and words, and the key
 No earlier assertion, request, timer, decision state, API, backend or classic implementation changed. decisions.js
 was not changed in this part. Native device testing, interactive surfaces, bots and the in-flight skill-fetch race
 remain deferred.
+
+## Completion report — Part E / M8 (2026-10-01)
+
+The implementation is complete and awaiting review. Standalone commits, in the required order:
+**A 68c7cab**, **B fddf9eb**, **C dbb8713**, **D 316ba80**, then the final Part E commit containing this report.
+Each A–D commit passed the full Python, classic, chat and browser suites before the next part began.
+No M9, backend, API, schema, engine, journal, adapter or classic work is included.
+
+Final verification exposed two missing presentation cases, corrected within the existing M8 requirements:
+
+- An empty final older page removed the focused Load earlier button. It now retains that same control, exposes
+  aria-busy=false/aria-disabled=true, preserves the ids/cursor supplied by AgentControl and cannot issue another
+  read. Once focus leaves, the next render shows the existing beginning marker. The new DOM regression fails
+  on Part D **316ba80** (**238/239**) and passes now; all four native-focus cases at desktop/phone in both
+  appearances fail on Part D and pass now. `/tmp/ac-m8e-before-316ba80.log`,
+  `/tmp/ac-m8e-before-browser.log`, `empty-history-results.json`.
+- Actual screenshot inspection found that scrolling a tall task graph could scroll the outer grid's hidden
+  overflow and pull the phone sheet away from the bottom. The outer grid uses non-scrolling clipping; its
+  existing rail/timeline/context/Workspace scrollers continue to scroll internally. Four new geometry checks at
+  **390 × 844 and 320 × 844**, in both appearances, fail on Part D and pass now.
+  `/tmp/ac-m8e-panels-before.log`, `/tmp/ac-m8e-panels.log`, `phone-panel-results.json`.
+
+These are Part A/B follow-ups discovered during the specified final verification, rather than additional scope.
+No earlier assertion changed for C, D or E. The only three earlier assertion rewrites remain the explicitly
+approved P2 checks listed verbatim in the Part A report: named M3.1 complete-history assertion, M6 post-paging
+35/35 assertion, and browser railPaged 35/35 assertion. Exact incomplete counts and all other paging assertions
+remain. No privacy, footer, server-authority, decision or invariant assertion was weakened.
+
+Real app.py verification uses the existing FakeAPI/FakeManager/FakeTeamAPI/FakeTeamManager in disposable test
+repositories; before-M8 assets are from **87ce82f**, with the same server implementation and fixtures for both.
+Actual server counters are compared to the browser counters for each probe. Logs/results:
+`/tmp/ac-m8-real-check.log`, `/tmp/ac-m8-real-results.json`, `/tmp/ac-m8-workspace-check.log`,
+`/tmp/ac-m8-workspace-results.json`.
+
+| Probe | Before M8 | M8 |
+|---|---|---|
+| Normal room refresh (permission/team) | 3 GET: state/channels/thread | same 3 GET |
+| Open Team/Members tab | 0 additional GET, 0 POST | same |
+| Open active Workspace | 0 additional GET, 0 POST | same |
+| Keyboard-only critical approval | 1 exact POST /api/review, then 3 GET | same |
+| Non-terminal fallback (2,400 recorded history notes) | 3 GET | 4 GET: the extra session thread read uses limit=200 and known stubs |
+| Terminal fallback refresh | 3 GET | same 3 GET |
+| Reopen historical Team/Workspace | accepted M6/M7 shared read | 1 shared selected-session GET total |
+
+The critical permission has a real R3 fingerprint and pending review. Real Tab/Enter/typing starts on Cancel,
+sends the displayed confirm word with precisely the action fields, and shows Approved once only after a real
+GET returns the confirmed receipt and count zero. The fully paged invariant holds before approval
+(**waiting/actions/cards = 1/1/1**), after approval (**0/0/0**), for the proposed team (**1/1/1**) and for the
+finished actionable outcome (**waiting/actions = 0/0, outcome/cards = 1/1**). The proposed roster remains
+separate; actual members exactly equal the server roster, with proposed coder-2 absent from it.
+The fallback fixture writes only existing public test-journal events; it changes no production API or data source.
+
+The retained real Workspace check verifies growth to three recorded transcript entries, escaped output and
+excluded reasoning, an exact recorded diff and passed verifier output, one shared historical GET, zero Workspace
+POSTs, the actionable outcome/card invariant and HTTP 200 for the existing classic pop-out. Test drivers live
+under /tmp; they introduce no endpoint or product code.
+
+`docs/DEVICE_CHECKLIST.md` supplies the owner-run iOS Safari/Android Chrome steps and blank results table.
+Physical keyboard, rotation and VoiceOver/TalkBack results are **unverified**, not inferred from emulation.
+Interactive surfaces, the in-flight skill-fetch race and persistent bots remain out of scope. There are no other
+known M8 limitations; review and the owner device checks remain outstanding before the relevant M9 sign-off.
+
+Final measured matrix (all 48 states × seven viewports × light/dark): **672 combinations**, **51 regression cases**,
+**1,139 screenshots**, including 96 actual doubled-text renders and emulated 20 px safe-area checks.
+`/tmp/ac-m8e-browser.log`, `/tmp/chat-shots-m8e`. All 52 contrast pairs pass with the unchanged Part D values
+reported above. Page errors, accessibility findings and budget failures are zero.
+
+**1624 accessibility audits**, zero findings; **1624 focus audits / 39818 control checks**,
+minimum ring and inset **2 px**. Every interactive target is enumerated; the following minima include both
+appearances and every matrix state, not selected controls. Full individual records are in
+`target-measurements.json`, `focus-measurements.json`, `accessibility-measurements.json`,
+`contrast-measurements.json` and `footer-measurements.json` alongside the screenshots.
+
+| Viewport | Target measurements | Minimum width × height (px) | Required |
+|---|---:|---:|---|
+| desktop | 7776 | 37.875 × 13.000 | keyboard focus/reflow |
+| desktop-workspace | 7762 | 37.875 × 13.000 | keyboard focus/reflow |
+| laptop | 5685 | 40.000 × 40.000 | 40 × 40 |
+| tablet | 5692 | 40.000 × 40.000 | 40 × 40 |
+| phone | 5637 | 40.000 × 40.000 | 40 × 40 |
+| phone-landscape | 5709 | 40.000 × 40.000 | 40 × 40 |
+| narrow | 5633 | 40.000 × 40.000 | 40 × 40 |
+
+Footer and conversation measurements below are identical in light and dark. Portrait viewport is 844 px tall;
+landscape 390 px. Footer limits remain 72 idle / 120 waiting in portrait, 72 / 112 in landscape; the waiting row
+is 40 px and conversation minima exceed 65% / 45%. Workspaces are measured after returning to the room,
+as those limits apply with the Workspace closed. Desktop room width is ≥420 px; normal-text waiting strips
+remain one line and composer chips retain their full text at 1200/1440. Actual doubled text reflows, with the
+composer reachable and no clipped control; code/diff scrolling stays internal.
+
+| State | Portrait footer | Waiting row | Conversation px / % | Landscape footer | Waiting row | Conversation px / % |
+|---|---:|---:|---:|---:|---:|---:|
+| empty | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| active | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| completed | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| team | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| threadActive | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| threadTeam | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| threadLong | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| composerIdle | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| composerNote | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| composerPaused | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| composerFollow | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| composerBasic | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| composerAdvanced | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| composerStop | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| composerLiteral | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| composerTarget | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| composerCleanSettings | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| composerRestored | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| longRoom | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decisionCritical | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decisionQuestion | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decisionTeam | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decisionResearch | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decisionInstall | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decisionApply | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| decisionSent | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| decision409 | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| teamProposing | 57 | 0 | 639.500 / 75.770% | 57 | 0 | 275.500 / 70.641% |
+| teamProposed | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| teamUnusable | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| teamRunning | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| teamReview | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| teamFinished | 57 | 0 | 639.500 / 75.770% | 57 | 0 | 275.500 / 70.641% |
+| singleMembers | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| connections | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| railPaged | 105 | 40 | 591.500 / 70.083% | 105 | 40 | 227.500 / 58.333% |
+| teamStopping | 57 | 0 | 639.500 / 75.770% | 57 | 0 | 275.500 / 70.641% |
+| teamExpired | 57 | 0 | 639.500 / 75.770% | 57 | 0 | 275.500 / 70.641% |
+| workspaceLive | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceHistorical | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+| workspaceUnknown | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceReviewer | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceNoOutput | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceNoTurns | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceResearcher | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceHermes | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceSurfaces | 105 | 40 | 635.500 / 75.296% | 105 | 40 | 227.500 / 58.333% |
+| workspaceLong | 57 | 0 | 683.500 / 80.983% | 57 | 0 | 275.500 / 70.641% |
+
+Actual final renders inspected in `/tmp/chat-shots-m8e`:
+
+- Waiting room: `threadActive-phone-light.png`, `threadActive-phone-landscape-dark.png`.
+- Critical dialog: `decisionCritical-phone-light.png`, `decisionCritical-phone-landscape-dark.png`; Cancel has
+  visible focus and the typed-confirm field/buttons fit while the evidence remains available in the room.
+- Team: `teamRunning-phone-light-tasks.png`, `teamRunning-phone-landscape-dark-tasks.png`, plus the corrected
+  anchoring render `phone-panel-390-light.png` (also inspected in `/tmp/chat-shots-m8e-panels`).
+- Live Workspace terminal: `workspaceLive-phone-light-error.png`,
+  `workspaceLive-phone-landscape-dark-error.png`; output/diff scroll internally and navigation remains visible.
+- Tablet: `teamRunning-tablet-light.png`, with the centred context card.
+- Desktop Workspace: `workspaceLive-desktop-workspace-light.png` at 1200 px.
+- Doubled text: `workspaceLive-text-zoom-dark.png`; wrapped waiting controls and full composer target.
+- Forced colours: `forced-colors-light.png`; visible selection/focus and explicit status labels.
+
+Final chat DOM: **239/239** (215 accepted + nine A + one B + eight C + five D + one E),
+`/tmp/ac-m8e-chat.log`. Classic: **82/82**, `/tmp/ac-m8e-classic.log`. Every new behaviour regression has its
+recorded pre-part failure above; the eight extra E browser checks fail on Part D. All retained real-server checks
+pass. The only sequence adjustment was correcting the two existing A/B requirements found by final verification.
+
+Final Python: `python3 -m unittest discover -s agent-autonomy/tests`, **423, OK (skipped=3)**, **337.007 s**,
+`/tmp/ac-m8e-python.log`. OpenCode tests ran. Environment skips remain exactly:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+The first final attempt ran 423 in **269.620 s**, with the single previously documented lifecycle timing failure
+`test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish` (idle→finished sampled
+instead of the brief working→finished). Preserved log: `/tmp/ac-m8e-python-attempt1.log`. The unchanged isolated
+test passed in **2.544 s**, `/tmp/ac-m8e-python-isolated.log`, then the full unchanged suite passed. No runtime,
+wait, test assertion, skip gate or backend code changed. All five parts' full verification and failed-baseline
+records are retained above.
+
+Final scope inspection uses git status, diff stat, names and whitespace checks (also staged checks); only §8 files
+are included. The final push targets `HEAD:refs/heads/feature/chat-first-redesign` only. No PR or main merge.

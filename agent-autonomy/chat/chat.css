@@ -17,7 +17,7 @@ small, .muted { color: var(--muted); } small { display: block; font-size: calc(v
 #connect-form .remember { display: flex; gap: var(--s2); align-items: center; }
 #connect-form button { color: var(--bg); background: var(--accent); width: 100%; }
 #sign-in-error { color: var(--danger); }
-#app { height: var(--viewport-height); display: grid; grid-template-columns: var(--rail-width) minmax(0,1fr); position: relative; overflow: hidden; }
+#app { height: var(--viewport-height); display: grid; grid-template-columns: var(--rail-width) minmax(0,1fr); position: relative; overflow: clip; }
 #app.context-open { grid-template-columns: var(--rail-width) minmax(0,1fr) var(--context-width); }
 #rail { background: var(--rail); border-right: var(--line) solid var(--border); padding: var(--s4); overflow-y: auto; display: flex; flex-direction: column; gap: var(--s6); min-width: 0; }
 header { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }

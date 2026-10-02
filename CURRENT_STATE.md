@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (G3 round 2: iPhone 17 Pro / Safari passed per owner; Android Chrome not performed; G3 pending).
+**Last updated:** 2026-10-02, by Opus (G3 cleared by the owner; M9 Part B authorised; not started).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** owner device run (`docs/DEVICE_CHECKLIST.md` round 2); M9.1 is accepted |
+| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` §5, Part B (authorised; not started) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -37,7 +37,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
-| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
+| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 cleared (Android Chrome accepted as not performed); Part B authorised, not started** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
 | **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; app and sheets follow the visible area above the keyboard, frozen while pinch-zoomed; rail waiting line and visible Workspace links; isolated device fixture confined to its temporary folder; reliable focus return. **Physical-device checks: Not performed** |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
@@ -238,15 +238,19 @@ was changed.
 
 ## Next step
 
-1. **G3 round 2** (2026-10-02, owner-reported):
-   - **iPhone 17 Pro / Safari, light and dark: Pass.** OS and screen-reader versions were not supplied.
-   - **Android Chrome: Not performed.** The owner has no Android device.
-
-   Results are in `docs/DEVICE_CHECKLIST.md`.
-2. **The owner decides** either to run the checklist on an Android phone with Chrome, **or** to explicitly accept
-   Android Chrome as not performed. Then the owner records "G3 cleared". G1 is cleared, and G2 (a) is approved.
-3. Only after "G3 cleared" may Codex implement **M9 Part B**: routing, the C1 compatibility rule, the chat pop-out
-   href, and the README. Merging into `main` and retiring classic remain separate owner decisions.
+1. **All M9 gates are settled** (2026-10-02):
+   - **G1:** cleared
+   - **G2:** (a) approved
+   - **G3:** cleared. iPhone 17 Pro / Safari passed; **Android Chrome was accepted by the owner as not performed**
+     (no device).
+2. **Codex implements M9 Part B**, exactly per `docs/handoffs/M9_PARITY_AND_CUTOVER.md` §5–§7:
+   - routing `/` → chat, `/chat` as an alias, `/classic` and `/classic/` → classic
+   - the C1 `/?popout=…` → classic compatibility rule
+   - the chat pop-out href → `/classic?popout=…`
+   - the README and architecture route updates
+   - the tests, and the real-server walkthrough at `/`
+3. Opus reviews Part B. **Merging into `main` and retiring classic remain separate owner decisions**, and neither is
+   authorised.
 
 Still deferred:
 - native surface viewing and input (G2)

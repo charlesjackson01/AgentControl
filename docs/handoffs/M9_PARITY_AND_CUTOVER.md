@@ -158,7 +158,7 @@ Update `CURRENT_STATE.md` to "M9 Part A complete; awaiting owner gates G1–G3".
 |---|---|---|
 | **G1** | Parity sign-off: the owner accepts the checklist, including every Linked to classic and Missing row, as sufficient for the chat UI to become the default at `/` | `CURRENT_STATE.md` and this file |
 | **G2** | Interactive surfaces: **(a)** cut over with surfaces reached through the classic pop-out (Opus's recommendation: classic stays at `/classic`, and the link opens a standalone pop-out), or **(b)** write and complete a native-surfaces handoff first | the same |
-| **G3** | **Pending.** Round 2 is an owner-reported Pass on **iPhone 17 Pro / Safari only** (2026-10-02). **Android Chrome is Not performed.** To clear G3, the owner runs Android, or explicitly accepts it as not performed, then records "G3 cleared" |
+| **G3** | **Cleared by the owner, 2026-10-02:** "G3 cleared — iPhone 17 Pro / Safari passed; I accept Android Chrome as not performed." Android Chrome is an accepted, untested gap |
 
 If any gate is refused, Opus writes the corrective handoff. Part B does not start.
 
@@ -170,7 +170,7 @@ If any gate is refused, Opus writes the corrective handoff. Part B does not star
 | **G2** | **Approved: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces. Native surfaces come later, under their own handoff |
 | **G3** | **Pending; round 1 failed (2026-10-02).** See the section at the end and `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md` |
 
-**Part B stays blocked until the owner explicitly records G3 as cleared.** G1 and G2 are settled, but neither unblocks
+**Part B was blocked until the owner explicitly recorded G3 as cleared; that happened on 2026-10-02 (see the end of this file).** G1 and G2 are settled, but neither unblocks
 Part B on its own, and neither does any Codex or Opus judgement. Part B is **not authorised**.
 
 ## 5. Part B: cutover (only after G1–G3)
@@ -703,3 +703,25 @@ the owner either tests Android Chrome or explicitly accepts it as not performed,
 **Update (2026-10-02).** The owner stated they have **no Android device**, so Android Chrome cannot be tested. G3 can
 be cleared only by the owner explicitly accepting Android Chrome as not performed and recording "G3 cleared". Until
 then G3 stays pending, and Part B stays unauthorised.
+
+## Owner decision: G3 cleared, Part B authorised (2026-10-02)
+
+**The owner's words:** "G3 cleared — iPhone 17 Pro / Safari passed; I accept Android Chrome as not performed."
+
+**All gates are now settled:**
+- **G1:** cleared
+- **G2:** (a) approved
+- **G3:** cleared, with Android Chrome an accepted untested gap
+
+**Codex may now implement Part B**, exactly as specified in §5, within §6's Part B files and §7's Part B acceptance:
+- `do_GET` routing: `/` → chat; `/chat` and `/chat/` as aliases; `/classic` and `/classic/` → classic
+- **C1:** `/` with a `popout` query keeps serving classic
+- the chat pop-out href becomes `/classic?popout=…`
+- the README and architecture route updates
+- the route, DOM and browser tests and the real-server walkthrough at `/`
+
+**Not authorised:** merging into `main`, retiring classic, native surfaces, and anything beyond §5. Opus reviews Part B
+before anything further.
+
+**Known accepted risk:** Android Chrome's keyboard behaviour (`interactive-widget=resizes-content`) has only been
+verified in Chromium emulation, not on a physical Android device.

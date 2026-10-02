@@ -152,3 +152,6 @@ over the tailnet, and then clarified that the device was **only an iPhone 17 Pro
 - Opus did not observe the device.
 - **Before G3 can be cleared, the owner must either** run the checklist on an Android phone with Chrome, **or**
   explicitly accept Android Chrome as not performed. G3 is cleared only when the owner records it.
+
+**G3 outcome (2026-10-02).** The owner recorded "G3 cleared — iPhone 17 Pro / Safari passed; I accept Android Chrome
+as not performed." Android Chrome remains **Not performed**, as an owner-accepted gap.

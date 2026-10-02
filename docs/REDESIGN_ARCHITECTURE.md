@@ -659,3 +659,8 @@ person's.
 - 2026-10-02 (M9.1 re-review): **The M9.1 implementation is accepted** at `fd3c4d3`. The fixture is confined to its
   temporary folder, pinch-zoom freezes the viewport variables, and focus return is reliable (10/10). Physical-device
   checks are **Not performed**. G3 is pending, and M9 Part B is not authorised.
+- 2026-10-02 (owner decision): **G3 cleared.**
+  - iPhone 17 Pro / Safari passed. Android Chrome was accepted as not performed (no device), an accepted untested gap.
+  - With G1 cleared and G2 (a) approved, **M9 Part B is authorised** under D3, exactly per the M9 handoff §5:
+    routing, the C1 compatibility rule, the pop-out href and docs.
+  - Merging into `main` and retiring classic are not authorised.

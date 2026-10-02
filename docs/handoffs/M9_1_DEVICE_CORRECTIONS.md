@@ -342,3 +342,107 @@ Part B final-matrix correction before publishing: the unchanged “joined waitin
 `Waiting for youOpen workspace` in a new rail row. Added a separation assertion to the new roster regression
 (`250/251` on the initial Part B product, `/tmp/ac-m91-b-separator-before.log`), then a literal separator
 before the link. No older assertion changed. This correction is included in the local Part B commit before push.
+
+## Part C completion report and final M9.1 verification — 2026-10-02
+
+The required sequence is complete: **Part A `fdbc64a`**, **Part B `9d33510`**, then this separate Part C commit.
+Part B's unpublished local commit includes the separator correction above; `9d33510` is its final hash.
+Stopped for Opus review. **G1 cleared, G2 (a) approved, G3 pending. M9 Part B remains unauthorised.**
+
+### Isolated fixture and physical checklist
+
+- Added only test tooling: `agent-autonomy/tests/device_fixture.py` and the one small smoke test in
+  `test_device_fixture.py`. The fixture runs the real handler and Controller, existing FakeTeamAPI/FakeTeamManager,
+  normal `/api/runs` submission and engine polling. It does not seed projected messages or modify product code.
+- Each invocation generates a fresh key and temporary state plus disposable git project. Turn 1 creates
+  `device-example.txt`, captures its diff and passes a real verifier subprocess. Turn 2 remains live with one
+  simulated R3 permission and one question; fake output grows every three seconds and is recorded normally.
+  The simulated destructive command is never executed. Output is bounded; the run holds for up to two hours.
+- Default `--host 127.0.0.1`; explicit LAN/tailnet IPv4 bind is needed for phones. Supports `--port`, prints only
+  the URL, throwaway key and cleanup instruction. No real project/state path is accepted. Ctrl+C stops threads,
+  closes the server and removes temporary data. The owner must restart to restore decided/stopped prerequisites.
+- The checklist explains exact fixture setup, the real-project alternative, all three Workspace entry points,
+  room cards/Waiting, `/classic`, official platform appearance and reader instructions, and eight exact physical
+  steps. Settings is tested last after stopping the disposable session, since its gear is hidden during a run.
+- Round 1 preserves Composer Fail, approvals/workspaces “Not found” as Fail with notes, Rotation Pass, and
+  screen-reader/light-dark Not performed. No per-device attribution/version is invented. Every round-2 result
+  is explicitly **Not performed**, with owner placeholders for versions, dates and notes. G3 is not cleared.
+
+### Regression proof, commands and final results
+
+The new smoke test first failed on the Part B implementation because the fixture module did not exist:
+`/tmp/ac-m91-c-before-python.log`, `ModuleNotFoundError: No module named 'device_fixture'` (one test, one error).
+After implementation:
+
+```sh
+python3 -m unittest discover -s agent-autonomy/tests -p test_device_fixture.py -v
+```
+
+**1 passed, 0.559 s**, `/tmp/ac-m91-c-smoke-final.log`. It checks `/chat` HTTP 200, one actionable critical
+permission, one question, waiting count 2, complete thread and cleanup of the temporary directory.
+Initial fixture-only failures were corrected before verification (an overwritten fake-request closure);
+no backend, existing fake or protected test was changed.
+
+Final suites, run from the repository root:
+
+| Command | Result / evidence |
+|---|---|
+| `python3 -m unittest discover -s agent-autonomy/tests` | **424 tests, OK (skipped=3), 260.630 s**; `/tmp/ac-m91-final-python.log` |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82**; `/tmp/ac-m91-final-classic.log` |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **251/251**; `/tmp/ac-m91-final-chat.log` |
+| `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m91-final2` | **672 combinations + 61 regressions**, **1,163 screenshots**; `/tmp/ac-m91-final2-browser.log` |
+| `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-m91-fixture-real-check.cjs` | Real fixture/browser **passed**, including shutdown cleanup; `/tmp/ac-m91-fixture-real-final.log`, `/tmp/ac-m91-fixture-real-results.json` |
+
+Python ran alone after Chromium/real-server verification ended. **No timing failures and no retry** in this final
+run. All 423 earlier Python tests are unchanged. Two nonfatal unclosed-socket ResourceWarnings surface at
+`journal.py:333` and remain recorded in the log; no unrelated backend or protected-test changes.
+The same three environment-gated skips are:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+
+The OpenCode end-to-end tests ran. No runtime configuration or skip conditions were changed.
+
+Full browser results include all six fake-viewport cases (14 checks each), four discovery cases, **1,672**
+accessibility/input-font audits with minimum **16 px**, all **52** contrast pairs, **32** keyboard cases and
+**four** reduced-motion/forced-colors cases. Existing privacy, server-authoritative delivery, waiting/actionable
+invariants, text zoom and all target/budget assertions pass. At 16 px, across 96 measured rows per orientation:
+footer **57 px idle / 105 px waiting**, conversation minimum **70.0829% portrait / 58.3333% landscape**.
+Phone keyboard offsets 0/260 pin footer bottoms exactly 480/740; landscape 240/500. Fields and safe controls
+stay inside those viewports; tablet cards remain centred. Scale 2/offset 300 keeps top compensation at 0.
+No maximum-scale/user-scalable restriction; these synthetic results do not claim native keyboard or pinch checks.
+
+The first final matrix found the unchanged member-text assertion described above. It was fixed in Part B,
+then this complete matrix passed; no earlier assertion was weakened. The **sole earlier rewrite** remains the
+M3 turn-link location test, with original/replacement reproduced in the Part B report. No geometry test rewrite.
+
+### Real server and actual renders
+
+The standalone fixture was started with default loopback and an ephemeral port; Chromium connected using its
+fresh test key, without mocked HTTP responses. Fully paged thread (`before: null`) has **waiting 2 = 2 actionable
+non-outcome messages**, comprising exactly one R3 permission and one question. The rail member link opens its
+Workspace with **zero extra GETs**. After normal refresh, recorded terminal output grows. Turn 1 contains the
+captured `device-example.txt` diff and **Verification passed**. **Zero browser POSTs and zero page errors**;
+shutdown removed the disposable project/state. Browser requests total **24 GETs** (including assets).
+
+Inspected actual final `active-desktop-light.png` and
+`device-menu-workspaces-phone-landscape-light.png` under `/tmp/chat-shots-m91-final2/`, plus the Part A/B
+phone/tablet renders named above. Also inspected real-fixture phone renders:
+`/tmp/ac-m91-fixture-rail-phone.png`, `/tmp/ac-m91-fixture-live-phone.png`,
+`/tmp/ac-m91-fixture-completed-phone.png`. Waiting and recorded Workspace links are visible; live versus
+completed turns retain their distinct stages. No proposed agent is turned into a recorded member.
+
+### Scope and remaining limitations
+
+Checked `git status`, `git diff --stat`, `git diff --name-only` and `git diff --check` before each commit.
+Part C changes exactly its two new Python test/tool files, DEVICE_CHECKLIST, CURRENT_STATE and this report.
+Parts A/B stay within §5. Real projects/state, Python product, APIs, schema, engine, classic UI/routes,
+decision semantics, privacy and D7 are unchanged. No new POST surface or interactive-surface mechanism.
+Main is untouched; all three commits are pushed only to `feature/chat-first-redesign`.
+
+Physical iOS Safari/Android Chrome keyboard, zoom, touch and VoiceOver/TalkBack results remain **Not performed**.
+After Opus review, the owner runs the checklist on both real devices in Light and Dark, records versions and
+each result, and alone decides G3. Container/desktop/KVM end-to-end coverage remains environment-gated.
+Native surfaces, M9 cutover, R1 persistent bots and the in-flight skill-fetch race remain out of scope.
+**Stop here for Opus review; no M9 Part B or merge into main.**

@@ -601,3 +601,204 @@ phone with Chrome**, each in **Light and Dark**. For each device:
    failures you accept.
 
 Until then, every native keyboard, zoom, orientation and screen-reader item stays **Not performed**.
+
+## M9.1a completion report — 2026-10-02 (Codex)
+
+**F1–F3 implemented in one commit; stop for Opus re-review. M9.1 is not yet accepted; G3 remains pending.**
+This report supersedes the earlier completion report's insufficient fixture-isolation, pinch-zoom and focus
+verification claims. The Opus review and its binding requirements above remain intact.
+
+### Starting state and scope
+
+Verified `/home/charlesjackson/AgentControl`, `feature/chat-first-redesign`, and a clean tree, then pulled
+`origin/feature/chat-first-redesign` with `--ff-only` to review commit `ee2e871`; the tree remained clean. Read
+CURRENT_STATE, the architecture contract, this handoff including the appended review, then DEVICE_CHECKLIST.
+`ee2e871` changes only review documentation relative to `d738e33`; regression proofs use an archived
+`d738e33` product tree under `/tmp/ac-m91a-before`, with the final regression tests copied into it.
+
+Only the three required corrections are implemented. Optional O1/O2 are deferred. No backend product,
+orchestration, schema, journal, approval, decision, classic application, route or interactive-surface changes.
+Ordinary AgentControl project access and D7 are unchanged. No persistent-bot work, G3 authorisation, route
+cutover or merge into main.
+
+### F1 — fixture-only server confinement
+
+`DeviceFixture` now passes `projects_root=self.root` to `Settings`. The existing server resolver already
+canonicalises paths and checks their resolved containment, so this enables the established server boundary for
+the disposable fixture without changing ordinary Controller/API behaviour. Classic and chat use the same
+authenticated project endpoints; bypassing the UI does not bypass the boundary.
+
+Extended the existing fixture smoke test (Python still has 424 tests). It checks:
+
+- `/api/state.projects_root` and browse root equal the temporary root; `/classic` still serves normally.
+- Browse/select refuse outside absolute paths, relative parent traversal, absolute and relative outward
+  symlinks and `..`; rejected selection leaves the current project unchanged. Outward symlinks are omitted from
+  browse results.
+- Create refuses outside absolute names, parent traversal, a symlink-child name and an existing outward symlink;
+  nothing is created outside. Existing basename validation remains unchanged.
+- Allowed creation, absolute/relative selection and an inward symlink work. A subsequent run through the real
+  `/api/runs` workflow makes the existing fake coder actually write `isolated-write.txt` inside its assigned
+  fixture worktree. Every fake session directory stays under the root. Outside disposable repository bytes,
+  including its git data, remain unchanged; shutdown removes the entire fixture root.
+
+The outside project is itself disposable `/tmp` test data. A test-only `Path.home` patch substitutes that
+temporary home to demonstrate the old default-root escape safely; the standalone real-server check separately
+verifies the final configured root without this patch. No owner project or state is browsed or modified.
+
+Before correction: **one test, 11 assertion failures, 2.987 s** on `d738e33`, including the wrong root, accepted
+outside absolute/parent/symlink selections and creation outside the fixture root. Some malformed create names
+were already refused by existing validation; they remain covered. After: **one test OK, 3.264 s**. Logs:
+`/tmp/ac-m91a-f1-before.log`, `/tmp/ac-m91a-f1-after.log`.
+
+### F2 — preserve unzoomed layout during pinch
+
+When `abs(scale - 1) >= 0.01`, the visual-viewport callback returns before changing either viewport variable,
+composer size or timeline position. Draft edits also use the cached last unzoomed height. At normal zoom,
+height/top, keyboard opening/closing, focused-field scrolling and timeline anchoring resume as before. The
+no-visualViewport fallback is preserved. No viewport-meta/CSS change, maximum scale or user-zoom restriction.
+
+Both browser and DOM regressions set **scale 2 and visible height to base height / 2**, with panning, rather than
+changing scale alone. Browser checks cover normal full layout and the panned keyboard layout, multiline draft
+editing, app/composer/footer/waiting geometry, visible interactive targets, unzoom recovery, and the focused
+critical confirmation field/Cancel/Approve geometry. All original keyboard cases and budget assertions remain.
+
+The only earlier assertion replacements are explicitly required by F2:
+
+- DOM `M9.1 A visual viewport resize and scroll project height and scale-gated top`: replaces the old
+  scale-2/top-0 assertion with halved height and frozen prior height/top. Its other normal-zoom assertions remain.
+- Browser `pinch zoom applies no top compensation`: replaces the scale-only/top-0 check with
+  `pinch shrinking freezes app and composer geometry and resumes after unzoom`. It now retains the last
+  unzoomed top, as the appended handoff requires. No other earlier assertion is removed or loosened.
+
+Before correction, **all six** portrait/landscape/tablet × light/dark browser cases fail both realistic pinch
+checks; unchanged keyboard checks pass. After, all six pass with **15 checks each**. Artifacts:
+`/tmp/chat-shots-m91a-viewport-before-final/device-viewport-results.json`,
+`/tmp/chat-shots-m91a-viewport-after2/device-viewport-results.json` and the full matrix output below.
+The first corrected-code diagnostic run failed a newly added check that mistakenly treated the static target
+label span as a 40 px interactive control. Corrected that new check to require visible, unchanged geometry for
+the label; 40 px checks remain for interactive controls and all existing audits remain intact. The focused
+retry and final matrix pass. Logs: `/tmp/ac-m91a-viewport-after.log`, `-after2.log`.
+
+### F3 — observed race and focus-return correction
+
+Reproduced the old **fatal** discovery assertion on the baseline: one of four cases failed in
+`/tmp/ac-m91a-discovery-before.log`. A baseline diagnostic trace captured the cause: the menu element resolved
+by the check became **disconnected** during a subsequent recorded-state render, while the newly created entry
+had the same id and focus. `room-header.innerHTML` detached the actual returned opener, briefly losing focus
+and allowing the pending element check to observe the old node. The captured phone-dark failure reports
+`connected:false`, `current:false`, `active:"menu-workspace-hermes"`, **`contextHidden:true`** in
+`/tmp/chat-shots-m91a-focus-trace2/comparison-phone-dark.json`. The first diagnostic trace run passed; the second
+reproduced the race. This confirms header replacement as the intermittent cause rather than assuming the
+suspected context-sheet interaction.
+
+The header now uses the existing keyed `members.patch` reconciliation, preserving the actual focused entry
+across live renders. Workspace entry also snapshots the prior context state; returning restores it and never
+opens a previously closed context sheet. This separate context defect is reproduced by its own regression.
+Back and Escape return to the connected, visible entry; if the menu is closed or the entry disappeared, they
+return to its visible summary. The existing session fallback applies only if neither is available. Hidden,
+detached or inert elements are never selected for focus. Menu open/closed state and established navigation are
+preserved. No timers, arbitrary waits or browser-made decision state were added.
+
+Three new DOM regressions cover retained opener identity after real `core.refresh`, closed/removed entry
+fallback, and previously closed selected-session context. Together with the new F2 regression they fail on
+`d738e33`; the suite is **250/255 before, 255/255 after** (the fifth baseline failure is the explicitly replaced
+older F2 assertion). Logs: `/tmp/ac-m91a-dom-before-final2.log`, `/tmp/ac-m91a-dom-final2.log`.
+
+The browser's original focus assertion and its existing wait are unchanged and fatal. Added a deterministic
+saved-node check after `core.refresh` and an Escape-return check. These strengthened checks fail **4/4** on
+the baseline (`/tmp/ac-m91a-discovery-before-new.log`). After the correction, ran
+`--device-discovery-only` **10 consecutive times, all 40/40 cases passing**, then immediately ran the full
+checked-in matrix with no filters or non-fatal scratch substitutions. Logs:
+`/tmp/ac-m91a-discovery-10-01.log` through `/tmp/ac-m91a-discovery-10-10.log`; each matching directory under
+`/tmp/chat-shots-m91a-discovery-10-*` contains four successful records and zero failures.
+
+### Final verification
+
+| Suite | Actual result / evidence |
+|---|---|
+| Classic DOM | **82/82**; `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`, `/tmp/ac-m91a-classic-final.log` |
+| Chat DOM | **255/255**; `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`, `/tmp/ac-m91a-dom-final2.log` |
+| Python | **424 tests, OK (skipped=3), 260.273 s** on the full retry run alone; `python3 -m unittest discover -s agent-autonomy/tests -v`; first and retry logs below |
+| Device discovery | **10 consecutive runs, 40/40 cases**; command uses the checked-in browser script with `--device-discovery-only` |
+| Full browser matrix | **672 combinations + 61 regressions, 1,163 screenshots**, first full attempt; `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m91a-full`, `/tmp/ac-m91a-full-browser.log` |
+| Real server + Chromium | **Passed**, actual standalone CLI fixture/real HTTP/controller/existing fakes; `/tmp/ac-m91a-fixture-real-check.cjs`, `/tmp/ac-m91a-fixture-real.log`, `/tmp/ac-m91a-fixture-real-results.json` |
+
+The full matrix is fatal, with every existing keyboard and geometry check preserved and only the required F2
+replacement described above. **1,672** accessibility/input-font audits (minimum 16 px), **52** contrast pairs,
+**32** keyboard cases and **four** reduced-motion/forced-colors cases pass. Both orientations keep **57 px idle /
+105 px waiting** footers; minimum conversation shares are **70.0829% portrait / 58.3333% landscape**.
+
+The real-server check reports the fixture's actual temporary `projects_root`, fully paged waiting
+**2 = 2 actionable non-outcome requests**, exactly one critical permission and one question. Opening the active
+rail Workspace adds **zero GETs**; the established refresh records growing output, the turn-1 diff and passed
+verification. Back, subsequent live refresh, Escape and closed-menu summary fallback preserve visible focus;
+the context remains closed. **36 GETs including assets, zero browser POSTs, zero page errors**. SIGINT shutdown
+removes the temporary root. The fixture HTTP test above separately exercises rejected and allowed project
+POSTs; the browser does not add write actions.
+
+Inspected actual final `active-desktop-light.png`, `device-critical-tablet-dark.png`,
+`device-menu-workspaces-phone-dark.png` and `device-critical-landscape-light.png` under
+`/tmp/chat-shots-m91a-full/`, plus real-fixture phone renders `/tmp/ac-m91a-fixture-rail-phone.png`,
+`/tmp/ac-m91a-fixture-live-phone.png`, `/tmp/ac-m91a-fixture-completed-phone.png` and
+`/tmp/ac-m91a-menu-back-phone.png`. Typed confirmation and Cancel/Approve stay available; menu Workspaces list
+recorded members, and the room remains readable with its established footer.
+
+### Python timing failures, retries and environment gates
+
+Ran Python alone after all browser/real-server processes ended. First full run:
+**424 tests, four failures, one error, three skips, 414.246 s**,
+`/tmp/ac-m91a-full-python.log`. Exact unchanged failures:
+
+- `test_workflow.WorkflowTests.test_http_success_without_resolution_shows_waiting_confirmation`:
+  `IndexError: list index out of range` at line 461 while reading `c.state()['inbox'][0]['receipt']['state']`
+  immediately after the sent receipt.
+- `test_workflow.WorkflowTests.test_idle_with_only_old_message_does_not_complete_current_step`:
+  five-second wait for `len(self.api.prompts)==1` timed out, line 251.
+- `test_workflow.WorkflowTests.test_invalid_question_answers_are_rejected`:
+  `review_run` five-second inbox wait timed out, lines 490/402.
+- `test_workflow.WorkflowTests.test_new_instruction_discards_stale_unsubmitted_decision`:
+  five-second wait for `len(manager.calls)==1` timed out, line 203.
+- `test_workflow.WorkflowTests.test_note_for_an_agent_reaches_hermes_not_the_agent`:
+  the same five-second manager-call wait timed out, line 214.
+
+The delayed worker subsequently logged `sqlite3.OperationalError: unable to open database file` in `_drive`
+and `_abort` after fixture teardown; the log also contains two nonfatal unclosed-socket ResourceWarnings.
+All five tests passed unchanged together in isolation, **5.332 s**, `/tmp/ac-m91a-python-isolated.log`.
+Then retried the full suite alone, `/tmp/ac-m91a-full-python-retry.log`: **424 tests, OK (skipped=3), 260.273 s**.
+The retry has nonfatal unclosed-socket ResourceWarnings, no failed tests or background-thread exceptions.
+These are the established fixed-wait/background-teardown pattern documented in M7's completion report; that
+report specifically records `test_invalid_question_answers_are_rejected` timing out and passing on retry.
+M8/M9 also document backend sampling/asynchronous failures. The missing-inbox observation is reported as
+observed rather than claimed to be the identical earlier failure. No protected test, runtime setting, backend
+code or skip was changed; all 423 earlier Python tests are untouched.
+
+The three skips are **environment gates, not passes**:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`: container end-to-end gate
+  requires `AGENTCONTROL_CONTAINER_TESTS=1` with a runtime and image.
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`: desktop preview tools absent.
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`: requires `AGENTCONTROL_VM_TESTS=1` on a KVM host.
+
+The three real-OpenCode tests ran and passed in both full runs; they are not included in the skip count:
+`test_roles_e2e.RolesOnRealOpenCode.test_paid_coder_and_read_only_reviewer`,
+`test_team_e2e.RealOpenCodeTeamTest.test_installed_skill_reaches_the_agent_on_its_next_turn` and
+`test_team_e2e.RealOpenCodeTeamTest.test_two_agents_killed_mid_run_and_resumed`.
+
+### Publication and remaining limits
+
+Before committing inspected `git status`, `git diff --stat`, `git diff --name-only` and `git diff --check`.
+Exactly nine allowed files: the fixture and its test, composer, shell, chat DOM/browser tests, DEVICE_CHECKLIST,
+CURRENT_STATE and this report. `thread.js` was unnecessary. No other earlier assertion rewrite; no unrelated
+orchestration, approvals, journal, classic behaviour or main changes. One correction commit, pushed only to
+`feature/chat-first-redesign`.
+
+The checklist now states: **“Project switching inside the fixture is confined to its temporary folder.”**
+Round 2 remains **Not performed**. After Opus accepts M9.1a, the owner follows the existing exact fixture/LAN,
+appearance and screen-reader instructions on real iPhone/Safari and Android/Chrome, Light and Dark: record
+device/OS/browser/reader versions; check multiline composer and Settings with keyboard open; find both requests
+through footer and rail; check typed confirmation/Cancel/Approve; open Workspaces through turn/rail/menu and
+verify growing output/Back; pinch/unpinch; rotate with keyboard open; run VoiceOver/TalkBack safe-focus and
+return checks without terminal announcement flooding; record Pass/Fail/Not performed in each cell. Only the
+owner decides G3. Chromium simulations do not verify native keyboards, actual pinch gestures or screen readers.
+Optional SIGTERM cleanup/LAN warning, native surfaces, the in-flight skill-fetch race and R1 remain deferred.
+**Stop for Opus re-review. No next milestone or M9 Part B.**

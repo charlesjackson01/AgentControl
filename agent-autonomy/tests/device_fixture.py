@@ -48,7 +48,8 @@ class DeviceFixture:
             self.root = Path(self.temp.name)
             self.project = make_repo(self.root)
             settings = Settings(self.project, self.root / 'state', poll=.1, notifications=False,
-                                run_timeout=7200, step_timeout=7200, manager_timeout=30, verify_timeout=15)
+                                run_timeout=7200, step_timeout=7200, manager_timeout=30, verify_timeout=15,
+                                projects_root=self.root)
             self.api.on_submit = self._submitted
             # Lock mutation/read of the existing fake's message list, not controller state.
             fake_request = self.api.request

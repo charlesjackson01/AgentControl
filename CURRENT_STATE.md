@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (M9.1 reviewed: not yet accepted; M9.1a corrections required; G3 pending).
+**Last updated:** 2026-10-02, by Codex (M9.1a corrections implemented; awaiting Opus re-review; G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -38,7 +38,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
 | **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
-| **M9.1 Device corrections** | 🔧 **reviewed 2026-10-02: not yet accepted; M9.1a corrections required** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Parts A–C (`fdbc64a`, `9d33510`, `d738e33`) meet the handoff in substance. M9.1a must fix F1, fixture isolation (`projects_root` defaulted to the home directory; blocking), F2, pinch-zoom resizing the app, and F3, intermittent focus return after ⋯ → Workspaces (the M9.1 browser regression fails 2–4 of 4 per run) |
+| **M9.1 Device corrections** | 🔧 **M9.1a implemented; awaiting Opus re-review; not yet accepted** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Parts A–C (`fdbc64a`, `9d33510`, `d738e33`) followed by one M9.1a correction commit. Fixture project access is bounded server-side to its temporary root; pinch-zoom preserves the unzoomed layout; keyed header rendering preserves Workspace opener focus. Ten consecutive discovery runs and the full fatal browser matrix pass. G3 stays pending |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -238,14 +238,9 @@ was changed.
 
 ## Next step
 
-1. **M9.1 is reviewed and not yet accepted.** Codex implements **M9.1a**, one commit, defined at the end of
-   `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`:
-   - **F1:** fixture `projects_root` confined to its temporary folder
-   - **F2:** pinch-zoom no longer resizes the app
-   - **F3:** reliable focus return from ⋯ → Workspaces, with 10 consecutive green discovery runs
-
-   Then Opus re-reviews.
-2. **The owner then runs `docs/DEVICE_CHECKLIST.md` round 2** with the fixture, on a real iPhone (Safari) and a real
+1. **Opus re-reviews M9.1a.** Its three corrections and before/after evidence are appended to
+   `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`. M9.1 is not yet accepted.
+2. **After acceptance, the owner runs `docs/DEVICE_CHECKLIST.md` round 2** with the fixture, on a real iPhone (Safari) and a real
    Android phone (Chrome), in light and dark, covering keyboard, pinch-zoom, rotation and VoiceOver/TalkBack. Record
    Pass, Fail or Not performed per cell, with versions. The required evidence is listed in that handoff's
    "What the owner must provide for G3".
@@ -309,3 +304,29 @@ Separately, for the owner: the timing-sensitive backend tests keep needing rerun
 - `docs/DEVICE_CHECKLIST.md` records round 1 honestly and gives exact fixture, appearance, screen-reader and
   eight physical verification steps. Every round-2 result is **Not performed**. Native OS keyboards, pinch zoom,
   VoiceOver/TalkBack remain unverified. Stop for Opus review, then owner re-tests. **G3 pending; no M9 cutover.**
+
+## M9.1a correction verification (2026-10-02)
+
+- Synced a clean feature branch to review commit `ee2e871`. Only F1–F3 implemented, in one commit; the
+  appended report corrects the earlier fixture-isolation, zoom and focus claims identified by Opus.
+- Fixture-only `projects_root` uses the disposable root. Real HTTP tests reject outside absolute, parent and
+  symlink paths, exercise allowed creation/selection and a subsequent fake-coder write, and verify outside
+  disposable data is unchanged and shutdown removes the root. Before: 11 assertion failures; after: one test OK.
+- Pinch scale 2 with height halved freezes both viewport variables and draft sizing; normal keyboard handling
+  resumes at scale approximately 1. Only the explicitly superseded DOM/browser zoom assertions change.
+- The intermittent focus race was a live header `innerHTML` replacement detaching the returned menu entry;
+  the captured failure had the context sheet hidden. Existing keyed rendering preserves the entry. Closed or
+  removed entries return to the visible summary; a previously closed context sheet stays closed.
+- New DOM regressions fail on `d738e33` (250/255), then pass (255/255). Classic **82/82**. Discovery **10
+  consecutive runs, 40/40 cases**, followed by the full fatal matrix: **672 combinations + 61 regressions,
+  1,163 screenshots**. Keyboard, accessibility, contrast, forced-colors and footer budgets pass unchanged.
+- Python final result: **424 tests, OK (skipped=3), 260.273 s**, on the full retry run alone. Container, desktop
+  preview and KVM end-to-end tests remain environment-gated, not passes; real-OpenCode tests run and pass.
+  The first full run had four unchanged five-second
+  workflow timeouts and one missing-inbox error (424 tests, three environment skips, 414.246 s). All five passed
+  unchanged together in isolation (5.332 s), then in the full retry. Nonfatal unclosed-socket warnings remain;
+  exact names and comparison with earlier flakiness are in the report. No protected tests or backend changes.
+- Real standalone fixture/Chromium passes: root confinement, waiting **2 = 2 actionable requests**, zero extra
+  active Workspace reads, recorded output growth/diff/passed verification, Back/refresh/Escape/summary focus,
+  **36 GET / zero browser POST / zero page errors**, and shutdown cleanup. Actual desktop, tablet, portrait and
+  landscape renders inspected. Native device results remain **Not performed**; stop for Opus re-review.

@@ -27,6 +27,7 @@ Open the **printed URL ending in `/chat`** on the phone. Paste the **fresh throw
 fixture into Connect. It is not the real dashboard key. Prefer a private browser tab for this separate test
 origin. The script accepts no real project/state path: its real handler/controller use existing fakes, a
 new temporary state directory and a disposable git repository. Ctrl+C shuts it down and removes that directory.
+Project switching inside the fixture is confined to its temporary folder.
 Restarting generates a new key and fresh requests; reconnect with the newly printed key.
 
 Ready prerequisites are **one active session**, **one critical permission**, **one question**, a coder transcript
@@ -97,8 +98,9 @@ may toggle it, but is not assumed. [Google enable instructions](https://support.
    rotate portrait → landscape → portrait. Field, Send and waiting bar remain above the keyboard; draft, target
    and room position survive. Repeat with the typed-confirm field focused, then **Cancel**. Reopen Workspace and
    check its internal scrolling after rotation.
-6. **User zoom.** Pinch-zoom the page; verify zoom remains available and the app does not jump to compensate for
-   the panned viewport. Read enlarged content and use controls; reset zoom before repeating keyboard checks.
+6. **User zoom.** Pinch-zoom the page; verify zoom remains available, the app does not shrink or reflow, and it
+   does not jump to compensate for the panned viewport. Read enlarged content and use the composer, waiting
+   indicator and confirmation controls. Reset zoom and check layout recovery before repeating keyboard checks.
 7. **Screen reader.** Enable VoiceOver/TalkBack using the instructions above. Navigate room headings, waiting
    indicators and the two cards. Check names, count, review evidence and accessible Workspace links. Open the
    critical sheet: confirm the safe initial choice, field access and return after Cancel. Live terminal output
@@ -134,7 +136,7 @@ observations are recorded once below rather than inferred as separate passes/fai
 | Terminal scrolling | **Not performed** | Workspace not found; no result supplied |
 | User zoom | **Not performed** | No result supplied |
 
-### Round 2 — awaiting owner, after M9.1 and Opus review
+### Round 2 — awaiting owner, after M9.1a acceptance and Opus re-review
 
 | Platform / device | OS / browser / reader versions | Appearance | Find requests | Composer | Typed confirm | Workspace / terminal | Rotation | Zoom | Screen reader | Settings | Date / notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|

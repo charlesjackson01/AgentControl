@@ -56,6 +56,8 @@
     const {core,model:m}=root.AC, e=m.esc, $=id=>document.getElementById(id);
     const input=$('composer'), status=$('composer-status'), sheet=$('settings-sheet');
     let snapshot={}, follow=null, preferences={}, sessionSettings={}, busy=false, selected=0, popover='', choices=[], preflight=null, sandbox=null, details=null, detailsSource=null, detailsTask=null, settingsGeneration=0, previewTimer=null, statusTimer=null, visiblePreviewKey='', previewTask=null;
+    // Pinch zoom keeps the last unzoomed layout, including subsequent draft edits.
+    let viewportHeight=root.innerHeight || 844;
     const stored=core.read('localStorage','acx-settings');
     try {preferences=preferencesOnly(JSON.parse(stored || '{}'));}catch{}
     if(stored)core.write('localStorage','acx-settings',JSON.stringify(preferences));
@@ -76,7 +78,7 @@
       if(!input.value){input.style.height='40px';return;}
       input.style.height='auto';
       const line=Number.parseFloat(root.getComputedStyle?.(input).lineHeight) || 22.5;
-      input.style.height=Math.min(Math.max(40,input.scrollHeight || 40),6*line+16,(root.visualViewport?.height || root.innerHeight || 844)*0.4)+'px';
+      input.style.height=Math.min(Math.max(40,input.scrollHeight || 40),6*line+16,(root.visualViewport?viewportHeight:root.innerHeight || 844)*0.4)+'px';
     }
     function closePopover() {popover='';choices=[];$('composer-options').hidden=true;input.removeAttribute('aria-activedescendant');input.setAttribute('aria-expanded','false');}
     function showChoices(kind, values) {
@@ -271,13 +273,15 @@
     sheet.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeSettings();input.focus();}if(event.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,input,select,summary,a')].filter(n=>!n.disabled && !n.closest('[hidden]') && (!n.closest('#settings-advanced') || $('settings-advanced').open || n.tagName==='SUMMARY'));const i=nodes.indexOf(document.activeElement);if(event.shiftKey && i===0 || !event.shiftKey && i===nodes.length-1){event.preventDefault();nodes[event.shiftKey?nodes.length-1:0]?.focus();}}});
     if(root.visualViewport){
       const viewport=()=>{
-        const vv=root.visualViewport,room=$('timeline'),scroll=room.scrollTop;
+        const vv=root.visualViewport;if(Math.abs((vv.scale || 1)-1)>=0.01)return;
+        const room=$('timeline'),scroll=room.scrollTop;
         const following=room.scrollHeight-scroll-room.clientHeight<=32;
-        document.documentElement.style.setProperty('--viewport-height',vv.height+'px');
-        document.documentElement.style.setProperty('--viewport-top',(Math.abs((vv.scale || 1)-1)<0.01?vv.offsetTop || 0:0)+'px');
+        viewportHeight=vv.height;
+        document.documentElement.style.setProperty('--viewport-height',viewportHeight+'px');
+        document.documentElement.style.setProperty('--viewport-top',(vv.offsetTop || 0)+'px');
         resize();
         const focused=document.activeElement;
-        if(Math.abs((vv.scale || 1)-1)<0.01 && focused?.matches('input,textarea,select') && focused.closest('#decision-dialog,#settings-sheet'))focused.scrollIntoView?.({block:'nearest'});
+        if(focused?.matches('input,textarea,select') && focused.closest('#decision-dialog,#settings-sheet'))focused.scrollIntoView?.({block:'nearest'});
         // Read layout after resizing before the browser dispatches the timeline's scroll event.
         room.scrollTop=following?room.scrollHeight:scroll;
       };

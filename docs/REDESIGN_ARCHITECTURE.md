@@ -626,3 +626,9 @@ person's.
   - **M9 G2: choice (a).** Cut over first, with interactive surfaces through the classic pop-out. Native surfaces need
     their own later handoff.
   - **G1 and G3 are pending.** M9 Part B (the cutover) stays blocked until the owner explicitly clears both.
+- 2026-10-02 (M9 Part 0 and Part A review):
+  - Accepted. N1 is a one-condition fix, with the owner-approved X > N test exception only. The parity checklist has 72
+    rows: 17 Native, 54 Linked, 1 Not ported, 0 Missing.
+  - **Part B spec amended (C1):** `/` with a `popout` query parameter keeps serving classic, so open classic windows and
+    bookmarked pop-outs survive the cutover.
+  - **G1 is ready for the owner.** G3 is pending. G2 is (a).

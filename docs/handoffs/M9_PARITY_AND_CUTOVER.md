@@ -182,6 +182,7 @@ it, and neither does any Codex or Opus judgement.
 | `/` | the chat UI's `index.html` |
 | `/chat`, `/chat/` | the chat UI (kept as aliases, so existing bookmarks work) |
 | `/classic`, `/classic/` | the classic `index.html`. The trailing slash fixes M1 polish item 5, which today returns 401 JSON |
+| `/` **with a `popout` query parameter** | the classic `index.html` (**compatibility rule, added by the M9 Part A review**). A classic tab or pop-out window opened at `/` before the cutover builds pop-out URLs from `location.pathname`, so it opens `/?popout=…&run=…`. Bookmarked pop-outs use the same form. Both must keep reaching classic's pop-out view rather than the chat room |
 | `/chat/*.css`, `/chat/*.js` | unchanged (the same allow-list) |
 | classic assets (`/app.js`, `/app.css`, `/themes.css`, `/workspace.js`, `/workspace.css`) | unchanged, at their root paths |
 | `/api/*`, SSE, auth, the preview origin and the security headers | unchanged |
@@ -201,6 +202,9 @@ it, and neither does any Codex or Opus judgement.
 - Architecture §5.1 (routes) and the change log.
 
 ### 5.4 Tests
+
+- **The compatibility rule.** `/?popout=coder-1&run=<id>` returns the classic HTML, and plain `/` returns the chat HTML. The
+  route test asserts both.
 
 - **Python.** Update `tests/test_chat_routes.py` route expectations, the only Python test change authorised:
   - `/` returns the chat HTML
@@ -506,3 +510,142 @@ assertion was changed or weakened.
 already recorded. Interactive surfaces remain in classic and require a later native-surfaces handoff.
 The in-flight skill-fetch race stays intentionally excluded, and persistent bots remain future R1.
 Classic retirement, route cutover and merging into `main` have not been performed.
+
+## Review of Part 0 and Part A — 2026-10-02 (Opus)
+
+**Verdict: Part 0 (`568534e`) and Part A (`1025518`) accepted.**
+- Nothing is blocking.
+- One **should-fix is a Part B specification amendment** (C1, already written into §5.1 and §5.4). It does not change
+  Part A.
+- **G1 can now be decided by the owner.** G3 remains pending.
+
+### Re-run in the review environment (at `1025518`)
+
+| Suite | Result |
+|---|---|
+| Python, full | **423, OK (skipped=6)**, 132 s, **first attempt, no failures** |
+| Classic DOM | **82/82** |
+| Chat DOM | **240/240** |
+| Browser matrix | **672 combinations + 51 regressions, 1,139 screenshots**. Inspected `active-text-zoom-light`: both sessions are listed and the false "Showing 2 of 1 session" is gone |
+
+**The Part A diff is documentation only:** `docs/PARITY_CHECKLIST.md`, this file and `CURRENT_STATE.md`. No product,
+test, Python or classic file changed.
+
+### Part 0 (N1): verified
+
+- **The fix.** The product change is exactly one condition in `model.railSessions`, from `sessions.length!==total` to
+  `sessions.length<total`. The union, the counts, pagination and the data sources are untouched.
+- **The new regression.** `M9 N1 cached sessions exceeding the server total…` covers two listed sessions with a server
+  total of one. It asserts:
+  - the server count is still 1
+  - the cursor is still null
+  - there is no disclosure and no paging control
+  - there are no POSTs
+
+  Codex shows it failing on `2741085` (239/240).
+- **The test exception was followed exactly.** Only the `total === 2` branch (X = 3 > N = 2) of the M3.1 rail test
+  changed, from the old false "Showing 3 of 2 sessions" to absence. The owner approved it on 2026-10-02. In the same
+  test, the X < N assertions ("Showing 31 of 47", "Showing 3 of 47") and the X = N branch are byte-identical. The M6
+  and M8 paging and count tests are unchanged.
+
+### Part A (parity checklist): verified
+
+- **Classification.** All **72** rows parse to one status each: **17 Native, 54 Linked to classic, 1 Intentionally not
+  ported, 0 Missing**. That covers 15 README rows, 12 views, 10 M5 §2.7 capabilities, 6 surface facets, 18 further
+  classic-only actions and 11 native subsets.
+- **The classifications are accurate, and conservative where they should be:**
+  - R02 (live terminal) and R12 (Mission control) are **Linked**, not Native. Classic's `t` full-screen, Copy, token
+    cards and model queue have no chat equivalent, even though a native subset exists (N01, N07).
+  - The Native README rows (R01, R03, R05, R06, R07 and R10) match what M3–M8 actually delivered and accepted.
+    R03 states its difference from classic: a room card instead of banners. Audit browsing (C01) and oversized review
+    (C02) are split out as Linked.
+  - R15 Themes is "Intentionally not ported" under D4.
+  - "Missing: none" holds **only because** every gap has a classic fallback. The checklist says so explicitly, and does
+    not claim full native parity.
+- **The evidence is real.**
+  - All 30 cited test codes (T01–T30) and P1/P2 resolve to tests that pass in my run. Six M5 names are generated at
+    run time; I confirmed each one in the PASS output.
+  - The screenshots and real-server steps are named.
+- **Linked fallbacks work, and are honestly described.**
+  - All six More items, both Settings fallbacks, the room's "Open classic dashboard" and the truncated-review link go
+    to `/classic`, which Part B keeps.
+  - The Workspace pop-out works today. Part B changes its href.
+  - **Discoverability is generic rather than deep.** Every link lands on classic's last-used view, and the user then
+    picks the named view. The checklist states this. A real deep link would need a classic code change (a `?view=`
+    parameter), which M9 forbids. That makes it a G1 consideration, not a defect.
+- **The walkthrough is sufficient.**
+  - W1–W8 cover start, a critical typed approval, a question, team approval with the proposed/live separation,
+    Workspace growth with zero extra reads, Verify now, Apply and Reply in session.
+  - They used the real `app.py`, Controller, journal and git, and UI-created sessions with no seeding.
+  - Each step records exact GET and POST counts. The M5.0 invariant holds before and after every step. There are zero
+    classic loads and zero page errors.
+  - Deny with redirection, Discard, research and skills are not repeated here, but each already has accepted
+    real-server evidence from the M5 review (21 cases), and the Native rows cite their DOM tests.
+- **Readiness inventory.**
+  - Codex's list matches my inspection: the only chat href to change is `chat/workspace.js:5` (used at `:23` and
+    `:101`).
+  - I also verified that classic's assets are root-absolute (`/app.css`, `/app.js` …), so `/classic/` resolves them,
+    and that classic never navigates to `/`. Its only `window.open` calls are the preview-origin ticket and its
+    `location.pathname` pop-out.
+  - **No critical workflow becomes unreachable after the proposed cutover.**
+    - Every Linked feature stays at `/classic`.
+    - Chat's links already point there.
+    - Part B fixes the pop-out link.
+    - API, SSE, auth and the preview origin are unchanged.
+- **Python timing failures.** Part 0's two failed full attempts hit `test_agents…join_work_approval_and_finish` (the
+  documented 0.5 s sampling race, reproduced on pre-redesign `af4da89`) and `test_vm…console_input` (the asynchronous
+  push race seen in M7 and M8).
+  - M9 changed one JavaScript condition and docs, and no Python or backend file, so these cannot be M9 effects.
+  - Part A's full run passed first time, and so did mine.
+
+### Findings
+
+**Blocking:** none.
+
+**Should fix (in Part B; the spec is now amended), C1: pop-out compatibility at `/`.**
+- **The problem.** A classic tab or pop-out window that is already open at `/` when the server switches builds its
+  pop-out URLs from `location.pathname`, so it opens `/?popout=…`. Bookmarked pop-outs use the same form. After a
+  plain swap, all of these would land in the chat room instead of classic's pop-out.
+- **The fix.** Part B now serves classic for `/` **when the `popout` query parameter is present** (§5.1), with a route
+  test (§5.4). This is routing-only and within D3. Chat's own link still moves to `/classic?popout=`.
+
+**Optional (G1 considerations; no action unless the owner wants it):**
+- **O1. Classic deep links.** More items land on classic's last view, not the named one. Fixing that needs a
+  classic-side `?view=` parameter, which is a classic code change and needs an owner decision.
+- **O2. No sign-out control in chat** (C14). Signing out today means classic Connections → Forget key, which works
+  because the key is shared. On a shared device, chat users may expect a visible sign-out after cutover.
+
+### What remains for the gates
+
+**G1, parity sign-off (owner).** Read the "Linked to classic" list at the top of `docs/PARITY_CHECKLIST.md`: 54 rows.
+The most user-visible are:
+- full-screen terminal and Copy
+- the Mission dashboard and model queue
+- project switching and creation
+- paid models, the stuck watch and internet during work (start-time options)
+- Usage
+- full Activity and audit browsing, and rule revocation
+- skill proposal and removal
+- run search across projects
+- container and VM lifecycle
+- all interactive surfaces (the approved G2 choice)
+
+Then record one of two answers in `CURRENT_STATE.md` and this file:
+- **"G1 cleared"**, accepting the linked fallbacks, the one intentional omission (themes) and the two optional
+  considerations above as they are
+- **the rows to bring native first**, in which case Opus writes the corrective handoff
+
+**G3, physical devices (owner).**
+- Run `docs/DEVICE_CHECKLIST.md` on a **real iPhone with Safari** and a **real Android phone with Chrome**, in light
+  and dark appearance.
+- Use a test project with a current session, a pending critical permission and a Workspace with terminal output.
+- Fill in the results table: device, OS and browser versions, and the six columns (composer, Settings, typed confirm,
+  terminal, rotation, screen reader), with notes for any failure.
+- Record **"G3 cleared"**, or list the failures you accept. Opus can review any failures first.
+
+**Then Part B.** Only after both are recorded may Codex start Part B (G2 (a) is already recorded):
+- the routing, including C1's compatibility rule
+- the pop-out href
+- the README updates
+
+Merging into `main` and retiring classic remain separate decisions.

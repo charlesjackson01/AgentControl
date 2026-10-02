@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Codex (M9 Part A complete; awaiting owner gates G1–G3; G2 choice (a) already recorded).
+**Last updated:** 2026-10-02, by Opus (M9 Part 0 and Part A accepted; G1 ready for the owner; G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -236,13 +236,18 @@ was changed.
 
 ## Next step
 
-1. M9 **Part 0** and **Part A** are complete. Codex stops. Owner reviews `docs/PARITY_CHECKLIST.md` and the appended reports.
-2. **Owner gates.**
-   - **G2 is chosen: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces.
-   - **G1** (parity sign-off on the Part A checklist) is **pending**.
-   - **G3** (running `docs/DEVICE_CHECKLIST.md` on physical iOS Safari and Android Chrome devices) is **pending**.
-3. Only after the owner explicitly clears G1 and G3: M9 **Part B** (cutover). Retiring classic and merging into `main` remain separate owner decisions.
-   All redesign work stays on `feature/chat-first-redesign`.
+1. **M9 Part 0 (`568534e`) and Part A (`1025518`) are accepted** (the review is at the end of
+   `docs/handoffs/M9_PARITY_AND_CUTOVER.md`). Part B's spec gained one compatibility rule (C1: `/?popout=…` keeps
+   serving classic).
+2. **G1, parity sign-off (owner, ready now).**
+   - Review the 54 "Linked to classic" rows and the one intentional omission (themes) in `docs/PARITY_CHECKLIST.md`.
+   - Also consider the two optional items: classic links land on the last-used view, and chat has no sign-out button.
+   - Record "G1 cleared", or name the rows to bring native first.
+3. **G3, physical devices (owner, pending).** Run `docs/DEVICE_CHECKLIST.md` on a real iPhone (Safari) and a real
+   Android phone (Chrome), in light and dark. Fill in the table, and record "G3 cleared" or the failures you accept.
+4. **G2 is already chosen: (a).** Switch to chat first, and keep classic pop-outs.
+5. Only after G1 and G3 are recorded: Codex implements **Part B** (routing, the pop-out href, README). Merging into
+   `main` and retiring classic remain separate owner decisions.
 
 Still deferred:
 - native surface viewing and input (G2)

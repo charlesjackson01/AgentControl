@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Codex (M9.1a corrections implemented; awaiting Opus re-review; G3 pending).
+**Last updated:** 2026-10-02, by Opus (M9.1 implementation accepted at `fd3c4d3`; G3 pending the owner device run; Part B not authorised).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M9_1_DEVICE_CORRECTIONS.md` (G3 round-1 fixes; then the owner re-tests on devices) |
+| Handoffs | `docs/handoffs/`. **Current:** owner device run (`docs/DEVICE_CHECKLIST.md` round 2); M9.1 is accepted |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -38,7 +38,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
 | **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
-| **M9.1 Device corrections** | 🔧 **M9.1a implemented; awaiting Opus re-review; not yet accepted** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Parts A–C (`fdbc64a`, `9d33510`, `d738e33`) followed by one M9.1a correction commit. Fixture project access is bounded server-side to its temporary root; pinch-zoom preserves the unzoomed layout; keyed header rendering preserves Workspace opener focus. Ten consecutive discovery runs and the full fatal browser matrix pass. G3 stays pending |
+| **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; app and sheets follow the visible area above the keyboard, frozen while pinch-zoomed; rail waiting line and visible Workspace links; isolated device fixture confined to its temporary folder; reliable focus return. **Physical-device checks: Not performed** |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -238,14 +238,16 @@ was changed.
 
 ## Next step
 
-1. **Opus re-reviews M9.1a.** Its three corrections and before/after evidence are appended to
-   `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`. M9.1 is not yet accepted.
-2. **After acceptance, the owner runs `docs/DEVICE_CHECKLIST.md` round 2** with the fixture, on a real iPhone (Safari) and a real
-   Android phone (Chrome), in light and dark, covering keyboard, pinch-zoom, rotation and VoiceOver/TalkBack. Record
-   Pass, Fail or Not performed per cell, with versions. The required evidence is listed in that handoff's
-   "What the owner must provide for G3".
-3. **G1 is cleared and G2 (a) is approved. G3 is pending.** M9 Part B (the cutover) is not authorised. Merging into
-   `main` and retiring classic remain separate owner decisions.
+1. **The M9.1 implementation is accepted** (`fd3c4d3`): 10/10 device-discovery runs, and the unmodified matrix is
+   green.
+2. **The owner runs `docs/DEVICE_CHECKLIST.md` round 2** with the isolated fixture
+   (`python3 agent-autonomy/tests/device_fixture.py --host <LAN-or-tailnet-IPv4> --port 8767`):
+   - on a real iPhone (Safari) and a real Android phone (Chrome), each in light and dark
+   - covering the keyboard, pinch-zoom, rotation and VoiceOver/TalkBack
+   - recording Pass, Fail or Not performed per cell, with versions
+3. **G1 is cleared and G2 (a) is approved. G3 is pending** until the owner records it. M9 Part B (the cutover) is not
+   authorised, and the default routes stay unchanged. Merging into `main` and retiring classic remain separate owner
+   decisions.
 
 Still deferred:
 - native surface viewing and input (G2)

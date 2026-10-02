@@ -802,3 +802,66 @@ return checks without terminal announcement flooding; record Pass/Fail/Not perfo
 owner decides G3. Chromium simulations do not verify native keyboards, actual pinch gestures or screen readers.
 Optional SIGTERM cleanup/LAN warning, native surfaces, the in-flight skill-fetch race and R1 remain deferred.
 **Stop for Opus re-review. No next milestone or M9 Part B.**
+
+## Re-review of M9.1a — 2026-10-02 (Opus)
+
+**Verdict: the M9.1 implementation is accepted** (Parts A–C plus the M9.1a corrections, at `fd3c4d3`).
+- Nothing is blocking, and nothing should be fixed first.
+- **G3 is NOT cleared.** No physical-device check has been performed. M9 Part B (the cutover) is not authorised, the
+  default routes are unchanged, and nothing is merged into `main`.
+
+### Independent verification at `fd3c4d3`
+
+| Check | Result |
+|---|---|
+| Python, full | **424, OK (skipped=6)**, 136 s, **first attempt**. The skips are environment gates, not passes: the container end-to-end test, the desktop preview test and the KVM VM end-to-end test, plus three real-OpenCode tests (Codex's environment runs those three, hence its 3 skips) |
+| Classic DOM | **82/82** |
+| Chat DOM | **255/255** |
+| **Unmodified** full browser matrix | **672 combinations + 61 regressions, 1,163 screenshots, pass** |
+| Device discovery, `--device-discovery-only` | **10 consecutive runs, 0 failures** (40/40). Before the fix: 2–4 of 4 failures per run |
+| Live fixture probe | `projects_root` is the fixture's temporary folder, `browse /root` returns **400**, waiting is 2, and the temporary folder is removed on close |
+
+**Scope.** Product changes are limited to `chat/composer.js`, `chat/shell.js` and `tests/device_fixture.py`. No
+backend, API, `decisions.js`, `core.js` or classic file changed. Authorisation behaviour is unchanged.
+
+### Each finding is resolved at its root
+
+- **F1, fixture isolation.**
+  - `Settings(..., projects_root=self.root)`.
+  - `test_device_fixture.py` stands in a disposable home directory, then checks that absolute, `..` and symlink
+    escapes are all refused for browse, select and create.
+  - It checks that an allowed project inside the temporary folder works, and that a later fake run writes **only**
+    inside the temporary root, leaving the outside repository byte-identical.
+  - It confirms the temporary root is gone after `close()`.
+  - The test fails on `d738e33`, with 11 assertion failures.
+- **F2, pinch-zoom.**
+  - The handler returns early while `|scale − 1| ≥ 0.01`, so neither variable changes and the composer keeps its last
+    unzoomed height. Zoom is never disabled; the viewport tag still has no `maximum-scale`.
+  - The tests are now realistic: `height = base/2` at `scale: 2`, from both the keyboard-panned and full layouts.
+    They assert frozen geometry for the app, composer, Send, chip, waiting bar and confirm sheet (with focus kept), and
+    restoration after unzoom.
+  - **The earlier M9.1 tests that encoded the old behaviour were replaced, not loosened.** That is the DOM "scale-gated
+    top" assertion and the browser "no top compensation" check. Both were M9.1's own tests, not accepted-milestone
+    assertions.
+- **F3, focus return.** The root cause was found and fixed in product code:
+  - the room header is now updated in place, by key (`members.patch`), rather than rebuilt with `innerHTML`, so the
+    menu entry survives later renders
+  - `route()` restores the context sheet's state from before the Workspace, instead of re-opening it on return
+  - focus falls back to the ⋯ summary only when the entry cannot take focus
+  - The discovery assertion is **strengthened**. It keeps the original checks and adds: the same element survives a
+    recorded-state render, and Escape returns to it.
+
+**Timing failures.** Codex's first full Python run had five fixed-wait failures in `test_workflow`, plus teardown
+noise. All passed in isolation and on a full rerun.
+- M9.1a changes no backend or Python product file, so these are the established backend timing hazards, not M9.1
+  effects.
+- My single run passed first time.
+- Backend test robustness remains the owner's separate decision.
+
+### Remaining
+
+- **Optional (still open):** O1, clean up on SIGTERM, and O2, a warning when `--host` is not loopback. Neither is
+  needed for G3.
+- **G3, owner only.** Run `docs/DEVICE_CHECKLIST.md` round 2 and record results as listed in "What the owner must
+  provide for G3" above. Until then, every native keyboard, pinch-zoom, orientation and screen-reader item is **Not
+  performed**.

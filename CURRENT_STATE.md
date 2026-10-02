@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (owner confirmed the M8 rail assertions and N1, and chose G2 (a); G1 and G3 pending).
+**Last updated:** 2026-10-02, by Codex (M9 Part 0 N1 complete and verified; Part A next; Part B remains gated).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` (Part 0 and Part A ready; Part B waits for owner gates G1–G3) |
+| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` (Part 0 complete; Part A next; Part B waits for owner gates G1–G3) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -37,7 +37,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. One should-fix (N1: the rail shows "Showing X of N" when X > N) is M9 Part 0 |
-| **M9 Parity and cutover** | 📝 handoff ready | Codex, then the owner | `docs/handoffs/M9_PARITY_AND_CUTOVER.md`: Part 0 (N1), then Part A (evidenced parity checklist and chat-only walkthrough; docs only), then a **stop for owner gates G1 parity, G2 surfaces, G3 device checklist**, then Part B (routing `/` → chat, `/classic` → classic, and the pop-out href) |
+| **M9 Parity and cutover** | 🚧 Part 0 complete; Part A next | Codex, then the owner | `docs/handoffs/M9_PARITY_AND_CUTOVER.md`: Part 0 (N1), then Part A (evidenced parity checklist and chat-only walkthrough; docs only), then a **stop for owner gates G1 parity, G2 surfaces, G3 device checklist**, then Part B (routing `/` → chat, `/classic` → classic, and the pop-out href) |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -201,9 +201,23 @@ was changed.
   fallback refresh (one known-stub GET per existing cycle while non-terminal). Native phone-keyboard verification
   remains deferred to the owner device checklist; M4 verified `visualViewport` emulation only.
 
+## M9 Part 0 verification (2026-10-02)
+
+- N1 changes only the disclosure condition to `sessions.length < total`; the rail union, server counts and paging
+  are unchanged. New X > N regression fails on the `2741085` product code and passes after the fix.
+- Owner approved exactly one older-test exception: replace the M3.1 “Showing 3 of 2 sessions” assertion with
+  disclosure absence. X = N, X < N, counts and paging assertions remain unchanged. Exact before/after is in the
+  handoff completion report.
+- Final Python **423, OK (skipped=3), 258.358 s**; classic **82/82**; chat **240/240**;
+  browser **672 combinations + 51 regressions**, 1,139 screenshots. Inspected text-zoom Team and Workspace renders.
+- First two full Python runs repeated the known lifecycle sampling and asynchronous VM console-log failures.
+  Both then passed together in isolation (6.941 s) and in the final full run. The failures match M7 and M8's
+  established flakiness; no backend, protected test, runtime setting or skip was changed. Logs and exact names are
+  retained in the M9 handoff report.
+
 ## Next step
 
-1. Codex implements M9 **Part 0** (N1), then **Part A** (the parity checklist and walkthrough), then stops.
+1. M9 **Part 0** (N1) is complete. Codex commits it separately, then completes **Part A** (the parity checklist and walkthrough), then stops.
 2. **Owner gates.**
    - **G2 is chosen: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces.
    - **G1** (parity sign-off on the Part A checklist) is **pending**.

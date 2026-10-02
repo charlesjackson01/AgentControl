@@ -317,7 +317,7 @@ test('M3.1 rail counts use the M6 session union and current count wording',async
   assert(h.document.querySelector('#session-list a[href="#/s/run_test"]'));
   const note=h.document.querySelector('#session-list + .muted');assert(note);assert.equal(note.textContent,'Showing 31 of 47 sessions');
   state.runs=state.runs.slice(0,2);await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of 47 sessions');
-  for(const total of [3,2]){channels.channels[0].sessions=total;await h.core.refresh();if(total===3)assert.equal(!!h.document.querySelector('#session-list + .muted'),false);else assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of '+total+' sessions');}
+  for(const total of [3,2]){channels.channels[0].sessions=total;await h.core.refresh();if(total===3)assert.equal(!!h.document.querySelector('#session-list + .muted'),false);else assert.equal(!!h.document.querySelector('#session-list + .muted'),false);}
 });
 function revalidationPages(kind='skill') {
   const s=fx.threadSession(), action=fx.threadMessage('stale',kind,'Needs a decision',{state:'proposed'}, {action:{endpoint:'/api/skills/decide'}}), overlap=fx.threadMessage('overlap','decision','Latest recorded update');
@@ -1304,6 +1304,16 @@ test('M8 D sign-in protects the shared key from automatic completion, capitals a
 });
 test('M8 D singular rail counts use session without changing counts or pagination',()=>{
   assert.equal(model.railSessions({runs:[]},null,1).note,'Showing 0 of 1 session');assert.equal(model.railSessions({runs:[]},null,2).note,'Showing 0 of 2 sessions');
+});
+
+test('M9 N1 cached sessions exceeding the server total do not show an incomplete-history disclosure',async()=>{
+  const state=fixture(),channels=fx.threadChannels(fx.threadActive(),0);
+  state.runs=[{...state.run,id:'live-project-session'}];channels.channels[0].sessions=1;
+  const h=await harness(state,{channels}),snapshot=h.core.getState(),ids=[...h.document.querySelectorAll('#session-list a')].map(a=>a.getAttribute('href'));
+  assert.equal(ids.length,2);assert(ids.includes('#/s/live-project-session'));assert(ids.includes('#/s/run_test'));
+  assert.equal(snapshot.channels.channels[0].sessions,1);assert.equal(snapshot.thread.before,null);
+  assert.equal(!!h.document.querySelector('#session-count'),false);
+  assert.equal(!!h.document.querySelector('#load-earlier-sessions'),false);assert.equal(posts(h).length,0);
 });
 
 test('M8 E empty final history page retains button focus and cannot trigger another read',async()=>{

@@ -254,3 +254,119 @@ merge unless the owner asks.
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
 
 ---
+
+## Earlier Part 0 progress (superseded by the completion report below)
+
+Started from a clean `feature/chat-first-redesign` at `2741085`, pulled to `c6f12db`.
+The one-condition N1 fix and its new DOM regression are prepared. No commit or push has been made.
+Part A's independent source inventory has been read; its checklist and real-server walkthrough have not begun,
+and Part B has not begun.
+
+**Binding-specification conflict:** §2a's “No other file or assertion changes” conflicts with the existing
+`M3.1 rail counts use the M6 session union and current count wording` test, which explicitly requires
+“Showing 3 of 2 sessions” at `agent-autonomy/tests/test_chat_ui.cjs:320`. An asynchronous owner question requests
+permission to replace only this superseded X > N assertion with absence. All X = N, X < N, union/count and paging
+assertions are to stay unchanged. The assertion remains unchanged until the owner replies.
+
+| Check | Current result / evidence |
+|---|---|
+| Baseline N1 proof | 239/240; only the new regression fails, `true !== false` for disclosure presence. Product files match `2741085`. `/tmp/ac-m9-0-before.log` |
+| Fixed chat | New N1 regression passes; 239/240 because the older contradictory X > N assertion now fails. `/tmp/ac-m9-0-chat.log` |
+| Classic | 82/82. `/tmp/ac-m9-0-classic.log` |
+| Browser | 672 combinations + 51 regressions pass, 1,139 screenshots. `/tmp/ac-m9-0-browser.log`; `/tmp/chat-shots-m9-0/`. Inspected `composerBasic-text-zoom-dark.png` |
+| Python first full run | 423 tests, 2 failures, skipped=3, 429.412 s. `/tmp/ac-m9-0-python-attempt1.log` |
+| Combined isolation | Both failed in 5.392 s. `/tmp/ac-m9-0-python-isolated.log` |
+| Individual lifecycle | Passed in 3.382 s. `/tmp/ac-m9-0-lifecycle-isolated2.log` |
+| Individual VM console | Failed in 2.544 s: asynchronous push interleaved with the expected console tail. `/tmp/ac-m9-0-vm-isolated2.log` |
+| Python second full run | 423 tests, same 2 failures, skipped=3, 416.287 s. `/tmp/ac-m9-0-python.log` |
+
+The exact protected failures are
+`test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish`
+(`idle → finished` sampled instead of `working → finished`) and
+`test_vm.VMRunTests.test_console_input_is_checked_and_audited` (background script/push interleaves with
+click/type/key). These are documented pre-existing races, not changed in M9. The unchanged environment skips are
+`test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`, and
+`test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`.
+
+`git diff --check` passes. The only changed files are the two permitted Part 0 code/test files, this handoff and
+`CURRENT_STATE.md`. Backend, classic, routes, approval/privacy/D7 contracts and gates are unchanged. The in-flight
+skill-fetch race and persistent bots R1 remain excluded.
+
+## Part 0 completion report — 2026-10-02
+
+**N1 complete.** `model.railSessions` now shows the disclosure only when `sessions.length < total`.
+No union, count, pagination or data-source code changed. No backend, classic, route, approval, privacy or D7
+semantics changed. Part A begins only after this standalone Part 0 commit; Part B remains unstarted.
+
+The new regression is
+`M9 N1 cached sessions exceeding the server total do not show an incomplete-history disclosure`.
+It verifies two unchanged rail entries with server total one, no disclosure, unchanged history cursor and
+no paging control or POST. With product files byte-identical to `2741085`, it fails on disclosure presence
+(`true !== false`; 239/240). After the fix it passes.
+
+### Exact owner-authorized earlier-test exception
+
+The owner approved this single exception to §2a on 2026-10-02, after the contradictory older assertion was
+reported. In `M3.1 rail counts use the M6 session union and current count wording`, only the `total === 2`
+(X = 3 > N = 2) branch changed:
+
+Original:
+
+```js
+else assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of '+total+' sessions');
+```
+
+Replacement:
+
+```js
+else assert.equal(!!h.document.querySelector('#session-list + .muted'),false);
+```
+
+Its X = N and X < N assertions, rail entries, totals and refreshes remain unchanged. The existing M6/M8 paging
+and server-count assertions remain unchanged. No other earlier assertion was modified.
+
+### Verification
+
+| Suite | Result | Evidence |
+|---|---|---|
+| Baseline regression proof | 239/240, only new N1 regression fails | `/tmp/ac-m9-0-before.log` |
+| Final chat DOM | **240/240** | `/tmp/ac-m9-0-chat-approved.log` |
+| Final classic DOM | **82/82** | `/tmp/ac-m9-0-classic-approved.log` |
+| Browser matrix | **672 combinations + 51 regressions**, 1,139 screenshots | `/tmp/ac-m9-0-browser.log`, `/tmp/chat-shots-m9-0/` |
+| Final Python | **423 tests, OK (skipped=3), 258.358 s** | `/tmp/ac-m9-0-python-final.log` |
+
+Commands are the unchanged full Python discovery, `test_ui.cjs`, `test_chat_ui.cjs`, and
+`chat_screenshots.cjs /tmp/chat-shots-m9-0` with `NODE_PATH=/tmp/ac-tests/node_modules` for Node.
+Actual text-zoom renders inspected: `teamProposed-text-zoom-light.png`,
+`workspaceLive-text-zoom-light.png`, and `composerBasic-text-zoom-dark.png`.
+
+### Python timing-failure comparison
+
+The first two full runs failed the same two protected tests (423 tests, failures=2, skipped=3):
+429.412 s in `/tmp/ac-m9-0-python-attempt1.log`, then 416.287 s in
+`/tmp/ac-m9-0-python-attempt2.log`.
+
+- `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish`: sampled
+  `('coder-1', 'idle', 'finished')` instead of `('coder-1', 'working', 'finished')`. This is the same
+  0.5-second sampling race documented in `CURRENT_STATE.md`, reproduced on pre-redesign `af4da89`, and recorded
+  in the M7 final and M8 Part E reports.
+- `test_vm.VMRunTests.test_console_input_is_checked_and_audited`: a background `script` or `push` interleaved
+  with the expected last three `click`, `type`, `key` log entries. This matches the asynchronous VM push failure
+  in M7's fourth full run and M8 Part B's first full run (their appended reports).
+
+Combined isolation initially repeated both (5.392 s, `/tmp/ac-m9-0-python-isolated.log`). Individual lifecycle
+passed (3.382 s, `/tmp/ac-m9-0-lifecycle-isolated2.log`); individual VM repeated its push/log race
+(2.544 s, `/tmp/ac-m9-0-vm-isolated2.log`). The next combined isolation passed both in **6.941 s**
+(`/tmp/ac-m9-0-python-isolated3.log`), followed by the passing full run above, run without other suites alongside.
+Every result is reported; no protected code, wait, runtime configuration or skip was changed.
+
+The three unchanged skips are:
+`test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`, and
+`test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`. The OpenCode trio ran and passed.
+
+Before commit, inspected status, diff stat, file names and whitespace. Exactly the four Part 0 scope files
+changed: `chat/model.js`, `tests/test_chat_ui.cjs`, this handoff and `CURRENT_STATE.md`.
+The in-flight skill-fetch race and R1 remain excluded. Owner gates are unchanged: G2 choice (a) recorded;
+G1 and G3 pending.

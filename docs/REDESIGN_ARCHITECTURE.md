@@ -648,3 +648,11 @@ person's.
     - approvals and Workspaces each have a visible mobile entry: links and status only, never a second decision
       surface
   - G3 is pending, and M9 Part B is not authorised.
+- 2026-10-02 (M9.1 review):
+  - Not yet accepted. M9.1a is required for:
+    - **fixture isolation:** the fixture's `projects_root` must be its temporary folder
+    - **zoom:** while pinch-zoomed, the viewport variables freeze at their unzoomed values
+    - **reliable focus return** from ⋯ → Workspaces
+  - **Rule clarified:** the device fixture must not be able to reach or modify any real project, including through
+    classic's project switching.
+  - G3 is pending, and M9 Part B is not authorised.

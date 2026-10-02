@@ -446,3 +446,158 @@ After Opus review, the owner runs the checklist on both real devices in Light an
 each result, and alone decides G3. Container/desktop/KVM end-to-end coverage remains environment-gated.
 Native surfaces, M9 cutover, R1 persistent bots and the in-flight skill-fetch race remain out of scope.
 **Stop here for Opus review; no M9 Part B or merge into main.**
+
+## Review — 2026-10-02 (Opus)
+
+**Verdict: M9.1 is not yet accepted.**
+- Parts A and B meet their handoff in substance, and Part C's fixture exercises the intended UI paths.
+- **Three small corrections (M9.1a, below) are required first:** one blocking fixture-isolation gap, and two
+  should-fix defects.
+- **G3 stays pending.** M9 Part B (the cutover) is not authorised. No physical-device check is claimed.
+
+Reviewed: `3012231..d738e33` (Part A `fdbc64a`, Part B `9d33510`, Part C `d738e33`).
+
+### Re-run in the review environment
+
+| Suite | Result |
+|---|---|
+| Python, full | **424, OK (skipped=6)**, 125 s, first attempt. Codex had 3 skips. The six skips are environment gates and are labelled as such: the container end-to-end test (`AGENTCONTROL_CONTAINER_TESTS`), the desktop preview test (preview tools not installed), the KVM VM end-to-end test (`AGENTCONTROL_VM_TESTS`), and three real-OpenCode tests (`OPENCODE_BIN`). None is a pass |
+| Classic DOM | **82/82** |
+| Chat DOM | **251/251** |
+| Browser matrix (unmodified) | **Failed:** `deviceDiscoveryCases` aborted the run (F3) |
+| Browser, device discovery only, 3 runs | **2, 4 and 2 of 4 cases failed**, intermittently. Every failure is the same focus assertion after returning from a ⋯ → Workspaces link |
+| Browser matrix, rest (scratch copy, discovery made non-fatal) | **672 combinations + 57 regressions, 1,151 screenshots, pass.** That includes every Part A simulated-keyboard case: footer bottom = `offsetTop + height` at offsets 0 and 260 |
+
+**Scope.**
+- No `app.py` or other Python product file changed, and neither did `decisions.js`, `core.js` or the classic files.
+- The only Python files added are `tests/device_fixture.py` and `tests/test_device_fixture.py`.
+- The one earlier assertion rewritten is the M3 turn-link location, which §1 authorises.
+
+**Regression proofs are recorded:**
+- Part A: 241/244 DOM, and all 6 browser cases fail on `3012231`
+- Part B: 244/251, and 4/4 browser cases fail on Part A
+- Part C: the smoke test fails with the module absent
+
+### Verified
+
+- **Part A.**
+  - A `--type-input: 16px` token with a global text-entry rule. `interactive-widget=resizes-content`, with no zoom
+    lock.
+  - `#app` is fixed at `--viewport-top` / `--viewport-height`, and the offset applies only at scale ≈ 1.
+  - The phone sheets' bottom edges equal the visible area's bottom edge, and the sheet height is 75% of it.
+  - The composer's maximum height is 40% of the visible area. The newest message stays anchored while following;
+    otherwise the reading position is kept.
+  - The footer stays at **57 px idle / 105 px waiting** with 16 px text, in portrait and landscape, with no control
+    hidden.
+- **Part B.**
+  - The rail's "! N waiting for you" equals `channels.waiting`, runs the existing `locateWaiting`, and closes the
+    drawer. At zero it reads "Nothing is waiting for you".
+  - The empty and quiet room guidance is in place.
+  - **Each turn** has one visible "Open workspace" outside Details. Rail members and ⋯ → Workspaces link only to
+    recorded live members (`state.agents`). Proposed agents cannot appear.
+  - **No `[data-decision]` and no POST** were added. Decision semantics are untouched, and no actionable request is
+    manufactured (the count comes from the server).
+  - Renders inspected: `device-waiting-rail-phone-light`, `device-turn-summary-phone-dark`,
+    `device-menu-workspaces-phone-light`.
+- **Part C.**
+  - A temporary state directory and disposable repository, a fresh `secrets.token_urlsafe(32)` key, and a loopback
+    default.
+  - The real handler and Controller with the existing fakes. The simulated `rm -rf` is never executed.
+  - My probe of the live fixture: waiting = 2, and the temporary directory is removed after `close()`.
+  - The checklist is reproducible, with exact commands, locations, appearance and screen-reader steps. It separates
+    the Chromium simulation from native checks, and marks round 2 **Not performed**.
+
+### Findings
+
+**Blocking**
+
+- **F1: the fixture is not isolated from the owner's projects.**
+  - **The defect.** `device_fixture.py` builds `Settings` without `projects_root`, so it defaults to `Path.home()`.
+    Probe: `/api/state` reported `projects_root: /root`, outside the fixture's temporary root.
+  - **The consequence.** Through classic's Switch project, which the checklist itself points to, a tester can browse,
+    select or create folders in the owner's home directory. After the fixture run finishes, a new fixture run would
+    let the fake coder write `device-example.txt` into a **real** project.
+  - **The handoff required** "never touches the owner's real projects or state". The checklist currently claims "No
+    real-project changes are performed by the device-test tool", which is untrue.
+
+**Should fix**
+
+- **F2: pinch-zoom still resizes the app.**
+  - **The defect.** The handler always writes `visualViewport.height` to `--viewport-height`. On real devices, a
+    2× pinch-zoom roughly halves `visualViewport.height` in CSS pixels, so `#app` shrinks and reflows during zoom.
+    That fights the zoom, against §2.2 and WCAG 1.4.4.
+  - **Why the test missed it.** The test sets `scale: 2` but leaves `height` unchanged, so it cannot catch this. The
+    behaviour dates from M4, but M9.1 is where zoom handling was specified.
+- **F3: focus return after a ⋯ → Workspaces link is intermittent.**
+  - **The defect.** M9.1's own browser regression fails 2–4 of 4 times per run. After Back, focus reaches
+    `#menu-workspace-hermes` and is then lost. This is a real defect against the M7/M8 rule that focus returns to the
+    opener, not just a test problem.
+  - **Likely causes (unconfirmed):**
+    - the header is rebuilt with `innerHTML`, and `syncModal()` runs at the end of `render()`
+    - `route()` re-opens the context sheet (`contextOpen = true`) when returning to `#/s/<id>`, which on phones is a
+      modal that takes focus
+
+**Optional**
+
+- **O1.** Clean up on SIGTERM as well as Ctrl+C. Today, a killed fixture leaves its temporary directory behind.
+- **O2.** Print a one-line warning when `--host` is not loopback, for example "reachable by other devices on this
+  network".
+
+## M9.1a corrections (Codex; one commit; then a focused Opus re-review)
+
+1. **F1, fixture isolation.**
+   - Pass `projects_root=self.root` (the fixture's temporary root) to `Settings`.
+   - **Extend `test_device_fixture.py`:**
+     - `/api/state.projects_root` is inside the temporary root
+     - `POST /api/projects/select` and `/api/projects/create` with a path outside it are refused, and nothing is
+       created outside
+     - after `close()`, the temporary root no longer exists
+   - Keep the checklist's isolation sentence, which is now true. Add: "Project switching inside the fixture is confined
+     to its temporary folder."
+2. **F2, zoom.**
+   - While `|scale − 1| ≥ 0.01`, do **not** update `--viewport-height` or `--viewport-top`; keep the last unzoomed
+     values. When the scale returns to ≈ 1, resume normally.
+   - **Make the browser and DOM tests realistic:** set `height = baseHeight / scale` together with `scale: 2`, and
+     assert that `#app` height and top are unchanged while zoomed and restored after the zoom ends.
+   - The keyboard cases are unchanged.
+3. **F3, focus return.**
+   - Find the actual race and fix it in product code, so that after Back from a Workspace opened from ⋯ →
+     Workspaces, focus is on that menu entry. If the menu is closed, focus goes to the ⋯ summary, and the M7 fallback
+     rule (the session block) applies only if neither exists.
+   - Returning must not open the context sheet unless it was open before the Workspace.
+   - **Do not weaken the assertion.**
+   - **Evidence:** run `--device-discovery-only` **10 consecutive times with 0 failures**, then the full unmodified
+     matrix. Record the root cause in the report.
+4. **Optional:** O1 and O2.
+
+**Files:** `tests/device_fixture.py`, `tests/test_device_fixture.py`, `chat/composer.js`, `chat/shell.js` (and
+`chat/thread.js` only if F3 needs it), `tests/chat_screenshots.cjs`, `tests/test_chat_ui.cjs`,
+`docs/DEVICE_CHECKLIST.md`, this file, and `CURRENT_STATE.md`.
+
+**Acceptance:**
+- Each new test fails on `d738e33` and passes after the change.
+- Python is 424 plus the new assertions, classic is 82/82, chat is 251 plus the new tests, and the **unmodified** full
+  browser matrix passes.
+- Device discovery is green 10 times in a row.
+- No other assertion changes.
+- Stop afterwards; G3 stays with the owner.
+
+## What the owner must provide for G3 (after M9.1a is accepted)
+
+Run `docs/DEVICE_CHECKLIST.md` round 2 with the M9.1 fixture, on a **real iPhone with Safari** and a **real Android
+phone with Chrome**, each in **Light and Dark**. For each device:
+1. **Record** the device model, OS, browser and screen-reader versions, and the date.
+2. **Composer:** the multi-line draft stays visible above the keyboard, and Settings stays reachable with the keyboard
+   open.
+3. **Approvals:** found through the "2 waiting for you" bar **and** ☰ → "2 waiting for you". The typed-confirm field and
+   Cancel/Approve stay above the keyboard.
+4. **Workspaces:** opened from a turn's "Open workspace", from ☰ → Members, and from ⋯ → Workspaces. The live output
+   grows. Back returns to the opener.
+5. **Pinch-zoom:** zooming does not shrink or reflow the app, and un-zooming restores it.
+6. **Rotation with the keyboard open:** passed in round 1; re-run it.
+7. **VoiceOver / TalkBack:** room headings, the waiting bar, a decision card, the sheet's safe first focus, and return
+   after Cancel. The terminal does not flood announcements.
+8. **Results:** each cell is **Pass**, **Fail** (with notes) or **Not performed**. Then record "G3 cleared", or the
+   failures you accept.
+
+Until then, every native keyboard, zoom, orientation and screen-reader item stays **Not performed**.

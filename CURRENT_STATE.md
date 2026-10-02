@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Codex (M9.1 Parts A–C complete; stopped for Opus review; G3 pending).
+**Last updated:** 2026-10-02, by Opus (M9.1 reviewed: not yet accepted; M9.1a corrections required; G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -38,7 +38,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
 | **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
-| **M9.1 Device corrections** | ✅ Parts A–C implemented; awaiting Opus review and owner physical re-test | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: separate A `fdbc64a` (16 px inputs, visual viewport, sheets), B `9d33510` (Waiting and Workspace links), and C (isolated device fixture, smoke test and round-2 checklist). Full verification passes; G3 pending |
+| **M9.1 Device corrections** | 🔧 **reviewed 2026-10-02: not yet accepted; M9.1a corrections required** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Parts A–C (`fdbc64a`, `9d33510`, `d738e33`) meet the handoff in substance. M9.1a must fix F1, fixture isolation (`projects_root` defaulted to the home directory; blocking), F2, pinch-zoom resizing the app, and F3, intermittent focus return after ⋯ → Workspaces (the M9.1 browser regression fails 2–4 of 4 per run) |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -238,16 +238,19 @@ was changed.
 
 ## Next step
 
-1. **G3 round 1 failed** on the owner's devices (2026-10-02):
-   - composer not visible
-   - approvals and Workspace entry points not found
-   - rotation passed
-   - screen reader and light/dark not performed
-2. **Opus reviews M9.1 Parts A–C**, implemented in three separate commits. Codex stops here.
-3. **The owner re-runs `docs/DEVICE_CHECKLIST.md`** on a real iPhone (Safari) and a real Android phone (Chrome), in
-   light and dark, with VoiceOver/TalkBack. Using the M9.1 fixture makes the prerequisites present.
-4. **G1 is cleared and G2 (a) is approved. G3 is pending.** M9 Part B (the cutover) is **not authorised** until the
-   owner records G3 as cleared. Merging into `main` and retiring classic remain separate owner decisions.
+1. **M9.1 is reviewed and not yet accepted.** Codex implements **M9.1a**, one commit, defined at the end of
+   `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`:
+   - **F1:** fixture `projects_root` confined to its temporary folder
+   - **F2:** pinch-zoom no longer resizes the app
+   - **F3:** reliable focus return from ⋯ → Workspaces, with 10 consecutive green discovery runs
+
+   Then Opus re-reviews.
+2. **The owner then runs `docs/DEVICE_CHECKLIST.md` round 2** with the fixture, on a real iPhone (Safari) and a real
+   Android phone (Chrome), in light and dark, covering keyboard, pinch-zoom, rotation and VoiceOver/TalkBack. Record
+   Pass, Fail or Not performed per cell, with versions. The required evidence is listed in that handoff's
+   "What the owner must provide for G3".
+3. **G1 is cleared and G2 (a) is approved. G3 is pending.** M9 Part B (the cutover) is not authorised. Merging into
+   `main` and retiring classic remain separate owner decisions.
 
 Still deferred:
 - native surface viewing and input (G2)

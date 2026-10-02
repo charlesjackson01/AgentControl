@@ -168,7 +168,7 @@ If any gate is refused, Opus writes the corrective handoff. Part B does not star
 |---|---|
 | **G1** | **Cleared by the owner, 2026-10-02.** The owner accepts Part A's checklist (`1025518`): the 17 native features, the 54 classic-linked features and the one intentionally unported feature (themes, D4). Classic stays accessible at `/classic` for everything not yet in the new interface. The owner also approved keeping C1, so existing and bookmarked classic pop-outs keep working |
 | **G2** | **Approved: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces. Native surfaces come later, under their own handoff |
-| **G3** | **Pending.** The owner runs `docs/DEVICE_CHECKLIST.md` on physical devices |
+| **G3** | **Pending; round 1 failed (2026-10-02).** See the section at the end and `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md` |
 
 **Part B stays blocked until the owner explicitly records G3 as cleared.** G1 and G2 are settled, but neither unblocks
 Part B on its own, and neither does any Codex or Opus judgement. Part B is **not authorised**.
@@ -665,3 +665,24 @@ Along with it:
 - **G2 stays approved:** the chat becomes the default, and interactive surfaces stay available through classic.
 - **G3 is pending.** The owner's physical-device verification (`docs/DEVICE_CHECKLIST.md`) is not complete. **Part B
   is not authorised** and must not start until the owner records G3 as cleared.
+
+## G3 round 1: failed, and a corrective handoff (2026-10-02)
+
+**The owner's physical-device results:**
+- the composer field does not stay visible
+- no approvals or Workspace entry point was found in chat
+- rotation passed
+- the screen reader and light/dark mode were not performed
+
+**Opus's investigation** (detail in `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md` §0):
+- **Composer:** an implementation defect. Text inputs are 15 px, which triggers iOS focus zoom. The layout ignores
+  `visualViewport.offsetTop`, and the phone sheets are anchored under the keyboard. M8's emulated keyboard test could
+  not catch either.
+- **Approvals:** a missing prerequisite (no pending approval), plus a discoverability gap. By design, chat has no
+  Approvals section, and nothing says where approvals appear when none is waiting.
+- **Workspaces:** present but undiscoverable on mobile. The links are inside collapsed turn Details and behind Session
+  details; the rail members have none.
+- **The screen reader and light/dark** are not performed, so they are not passes.
+
+**Next:** Codex implements M9.1 (Parts A–C). Then the owner re-runs the device checklist. **G3 stays pending and Part B
+stays unauthorised** until the owner records G3 as cleared.

@@ -635,3 +635,16 @@ person's.
 - 2026-10-02 (owner decision): **G1 cleared.** Parity is accepted at 17 Native, 54 Linked to classic and 1 not ported.
   Classic stays accessible at `/classic`, and the C1 pop-out compatibility is approved. G2 (a) stands. **G3 is
   pending, and M9 Part B is not authorised.**
+- 2026-10-02 (G3 round 1):
+  - **Failed** on the owner's devices. The causes:
+    - **Composer:** inputs under 16 px trigger iOS focus zoom, and the layout and sheets do not follow the visual
+      viewport's offset.
+    - **Approvals and Workspaces:** they cannot be found on mobile.
+    - **Screen reader and light/dark:** not performed.
+  - The corrective handoff is `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`.
+  - **Rules added:**
+    - every text-entry control is ≥ 16 px, and page zoom is never disabled
+    - the app and phone sheets follow `visualViewport` (height **and** offset) while not pinch-zoomed
+    - approvals and Workspaces each have a visible mobile entry: links and status only, never a second decision
+      surface
+  - G3 is pending, and M9 Part B is not authorised.

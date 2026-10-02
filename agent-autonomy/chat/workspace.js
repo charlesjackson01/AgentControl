@@ -20,7 +20,7 @@
     const run=data.run,member=m.membersFromState({...data,agents:data.agents || []}).find(a=>a.name===agent);
     if(!data.agents?.some(a=>a.name===agent) || !member)return `<p>No recorded agent named ‹${e(agent)}› in this session.</p>`;
     const branch=run.workspace?.agents?.[agent]?.branch,where=member.role==='researcher'?'scratch folder · no project files':run.isolation==='container'?'in container':'';
-    return `<h2>${e(member.displayName)}</h2><p>${e(member.role)} · ${e(member.symbol)} ${e(member.stateLabel)}</p>${member.task?`<p>${e(member.task)}</p>`:''}${member.since?`<small>since ${e(m.relTime(member.since))}</small>`:''}${branch?`<p class="workspace-branch">Branch · ${e(branch)}</p>`:''}${where?`<p class="muted">${e(where)}</p>`:''}${member.state==='waiting_on_you'?`<a class="room-link" data-room-link="waiting" data-run="${e(run.id)}" data-actor="${e(agent)}" href="#/s/${e(encodeURIComponent(run.id))}">Go to waiting item</a>`:''}<a class="room-link" data-popout href="${e(popout(run.id,agent))}" target="_blank" rel="noopener noreferrer">Open in classic pop-out</a>`;
+    return `<h2>${e(member.displayName)}</h2><p>${e(member.role)} · ${m.symbolHTML(member.symbol)} ${e(member.stateLabel)}</p>${member.task?`<p>${e(member.task)}</p>`:''}${member.since?`<small>since ${e(m.relTime(member.since))}</small>`:''}${branch?`<p class="workspace-branch">Branch · ${e(branch)}</p>`:''}${where?`<p class="muted">${e(where)}</p>`:''}${member.state==='waiting_on_you'?`<a class="room-link" data-room-link="waiting" data-run="${e(run.id)}" data-actor="${e(agent)}" href="#/s/${e(encodeURIComponent(run.id))}">Go to waiting item</a>`:''}<a class="room-link" data-popout href="${e(popout(run.id,agent))}" target="_blank" rel="noopener noreferrer">Open in classic pop-out</a>`;
   }
   // Copied from classic app.js: planningNext and stageStates (including terminal run states).
   const ended=new Set(['completed','blocked','failed','stopped','limit_reached']);
@@ -163,7 +163,7 @@
       const step=member?selectedTurn(turnsFor(data.steps,route.agent),pinned):null,turn=step?.id || '';
       const presence=member && data?.run?.id===route.run && belongsToProject(data,snapshot)?m.membersFromState(data).find(a=>a.name===route.agent):null;
       const context=presence?presence.displayName+' · '+presence.symbol+' '+presence.stateLabel+(step?' · Turn '+step.number:''):'Workspace';
-      root.AC.members.patch(host,`<header><a class="room-link" data-back-room href="${e(back)}">Back to room</a><span class="muted workspace-context" title="${e(context)}">${e(context)}</span></header><div id="workspace-content">${body}</div>`);
+      root.AC.members.patch(host,`<header><a class="room-link" data-back-room href="${e(back)}">Back to room</a><span class="muted workspace-context" title="${e(context)}">${m.statusMarkup(context)}</span></header><div id="workspace-content">${body}</div>`);
       host.querySelectorAll('details[id]').forEach(node=>{const previous=open.get(node.id);if(previous && (previous.open || previous.status===node.dataset.outputStatus || !['running','error'].includes(node.dataset.outputStatus)))node.open=previous.open;});
       const buttons=[...host.querySelectorAll('#workspace-turns button')],focusId=buttons.some(n=>n.id===turnFocus)?turnFocus:pinned?'ws-turn-'+encodeURIComponent(pinned):'ws-latest';for(const node of buttons)node.tabIndex=node.id===focusId?0:-1;
       const terminal=host.querySelector('#workspace-terminal');

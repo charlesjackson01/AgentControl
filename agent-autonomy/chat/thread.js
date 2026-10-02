@@ -39,17 +39,17 @@
   function mount(host, controls) {
     const m = root.AC.model, e = m.esc, expanded = {}, nodes = new Map(), disclosures = new Map();
     let cache = emptyCache(), initial = true, follow = true, unseen = 0, mode = '', paging = false;
-    host.innerHTML = '<div id="thread-mode"></div><div id="thread-history"></div><div id="thread-items"></div><p id="thread-live" role="status"></p>';
+    host.innerHTML = '<div id="thread-mode"></div><div id="thread-history"></div><div id="thread-items" role="list"></div><p id="thread-live" role="status"></p>';
     const $ = id=>host.querySelector('#'+id), items = $('thread-items');
     const pill = document.createElement('button'); pill.id = 'new-messages'; pill.hidden = true;
     host.parentNode.insertBefore(pill,host.nextSibling);
     function bottom() {host.scrollTop = host.scrollHeight;follow = true;unseen = 0;pill.hidden = true;}
     pill.addEventListener('click',bottom);
     host.addEventListener('scroll',()=>{follow = host.scrollHeight-host.scrollTop-host.clientHeight <= 32;if(follow){unseen=0;pill.hidden=true;}});
-    const status = value=>{const info=m.sessionsFromState({runs:[{status:value}]})[0];return e(info.symbol+' '+info.statusLabel);};
+    const status = value=>{const info=m.sessionsFromState({runs:[{status:value}]})[0];return m.symbolHTML(info.symbol)+' '+e(info.statusLabel);};
     const time = at=>`<time title="${e(m.timeLabel(at))}">${e(m.relTime(at))}</time>`;
     const actor = name=>`<span class="actor"><span aria-hidden="true">${name === 'you' ? '◌' : name === 'hermes' ? '◇' : name?.startsWith('reviewer') ? '✓' : name?.startsWith('researcher') ? '⌕' : name?.startsWith('tester') ? '▧' : '●'}</span> ${e(name === 'agentcontrol' ? 'AgentControl' : name)}</span>`;
-    const text = (value,cls='')=>`<p class="plain ${cls}">${e(value)}</p>`;
+    const text = (value,cls='',decorative=false)=>`<p class="plain ${cls}">${decorative?m.statusMarkup(value):e(value)}</p>`;
     const fields = (obj,keys)=>`<dl>${keys.filter(k=>obj?.[k] !== undefined && obj[k] !== null).map(k=>`<dt>${e(k.replace(/_/g,' '))}</dt><dd class="plain">${e(Array.isArray(obj[k]) ? obj[k].join(', ') : typeof obj[k] === 'object' ? '' : obj[k])}</dd>`).join('')}</dl>`;
     const risk = value=>value ? fields(value,['level','label','class','reasons']) : '';
     const receiptActor = name=>name === 'You, via dashboard' ? 'you' : name;
@@ -64,7 +64,7 @@
     }
     function body(message, hint) {
       const d = message.detail || {}, action = message.action != null;
-      const decisionLink = action ? '<div class="waiting-line"><span class="waiting-state">! Waiting for you</span> · <a class="decision-classic" href="/classic">Open in classic dashboard</a></div>' : '';
+      const decisionLink = action ? '<div class="waiting-line"><span class="waiting-state"><span aria-hidden="true">!</span> Waiting for you</span> · <a class="decision-classic" href="/classic">Open in classic dashboard</a></div>' : '';
       let summary = '', detail = '', type = 'line';
       switch (message.kind) {
         case 'goal': case 'note':
@@ -77,24 +77,24 @@
         case 'turn': {
           const files=d.files || [], add=files.reduce((n,f)=>n+(Number(f.added)||0),0), remove=files.reduce((n,f)=>n+(Number(f.removed)||0),0);
           const v=d.verification?.status, verification=v==='passed' ? '✓ passed' : v==='failed' ? '✕ failed' : '– not configured';
-          summary=text('turn '+d.number+' · '+message.text)+text(statusText(d.status)+' · '+verification+' · '+(files.length+(d.files_omitted || 0))+' files +'+add+'/−'+remove)+(d.uncertain ? text('! submission uncertain','warning') : '');
+          summary=text('turn '+d.number+' · '+message.text)+text(statusText(d.status)+' · '+verification+' · '+(files.length+(d.files_omitted || 0))+' files +'+add+'/−'+remove,'',true)+(d.uncertain ? text('! submission uncertain','warning',true) : '');
           // This is the bounded public task from /api/thread, never the Hermes request prompt.
           detail=(d.prompt ? '<h3>Task</h3><details class="task-more"><summary>Show more</summary>'+text(d.prompt)+'</details>'+text(d.prompt,'task-preview') : '')+'<ul class="files">'+files.map(f=>`<li class="plain">${e(f.path)} · ${e(f.change)} +${e(f.added)}/−${e(f.removed)}</li>`).join('')+'</ul>'+(d.files_omitted ? text(d.files_omitted+' more files') : '')+(d.result_tail ? `<pre>${e(d.result_tail)}</pre>` : '')+(d.ended ? text('Ended '+m.timeLabel(d.ended)) : '')+`<a data-workspace-link href="#/w/${e(encodeURIComponent(message.session))}/${e(encodeURIComponent(message.refs?.agent || message.actor))}">Open workspace</a>`;break;
         }
-        case 'research': summary=text('research · '+message.text)+text(d.expired ? 'Not decided before the session ended' : statusText(d.status),d.expired ? 'muted' : '');detail=fields(d.request,['question','why','toolsets','max_turns','seconds'])+(d.events || []).map(event=>text(event.kind+' · '+event.text)+time(event.created)).join('');break;
+        case 'research': summary=text('research · '+message.text)+text(d.expired ? 'Not decided before the session ended' : statusText(d.status),d.expired ? 'muted' : '',true);detail=fields(d.request,['question','why','toolsets','max_turns','seconds'])+(d.events || []).map(event=>text(event.kind+' · '+event.text)+time(event.created)).join('');break;
         case 'request': type='request-card';summary=text(message.text)+`<p class="risk ${['R2','R3'].includes(d.risk?.level) ? 'warning' : 'muted'}" data-risk-class="${e(d.risk?.class)}">${e([d.risk?.level,d.risk?.label,d.risk?.class].filter(Boolean).join(' · '))}</p>`+text(receiptState(d.receipt));detail=action ? '' : (d.patterns || []).map(p=>text(p)).join('')+(d.questions || []).map(q=>fields(q,['header','question'])+(q.options || []).map(o=>fields(o,['label','description'])).join('')).join('')+risk(d.risk)+fields(d.receipt,['action','state','risk','created','updated','redirect'])+(d.receipt?.actor ? text('Recorded actor: '+receiptActor(d.receipt.actor)) : '')+(d.refresh_needed ? text('Request needs refresh in classic') : '');break;
         case 'proposal': {
           const agents=Array.isArray(d.proposal?.agents) ? d.proposal.agents : Object.entries(d.proposal?.agents || {}).map(([name,agent])=>({name,...agent}));
           type='request-card';summary=text(message.text)+(action ? text('Team proposal waiting for your decision') : '');detail=action ? '' : '<h3>Agents</h3>'+agents.map(a=>fields(a,['name','role','task','responsibility','model','skills'])).join('')+'<h3>Tasks</h3>'+(d.proposal?.tasks || []).map(t=>fields(t,['id','title','agent','depends_on','description'])).join('')+(d.warnings || []).map(w=>text(w,'warning')).join('');break;
         }
         case 'skill':type='quiet';summary=d.expired ? '<p class="plain">'+[...[message.text,d.agent].filter(Boolean).map(e),'<span class="muted">Not decided before the session ended</span>'].join(' · ')+'</p>' : text([message.text,d.agent,d.state].filter(Boolean).join(' · '));detail=fields(d,['source','reasons'])+risk(d.risk);break;
-        case 'alert':type='warning';summary=text('! '+message.text);detail=fields(d,['title','reason','summary','status','error']);break;
-        case 'outcome':type='outcome';summary=text(statusText(d.status))+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '')+(d.verification?.status ? text('Verification (on demand) · '+(Object.hasOwn(verificationStatus,d.verification.status) ? verificationStatus[d.verification.status] : d.verification.status)+((d.verification.status==='running'?d.verification.created:d.verification.ended) ? ' · '+m.relTime(d.verification.status==='running'?d.verification.created:d.verification.ended) : ''),'muted') : '');detail=text(message.text);break;
+        case 'alert':type='warning';summary=text('! '+message.text,'',true);detail=fields(d,['title','reason','summary','status','error']);break;
+        case 'outcome':type='outcome';summary=text(statusText(d.status),'',true)+text(message.text,'clamp-three')+(d.workspace?.state ? text('Workspace '+d.workspace.state) : '')+(d.workspace?.apply_blocked ? text('apply blocked: '+d.workspace.apply_blocked,'warning') : '')+(d.verification?.status ? text('Verification (on demand) · '+(Object.hasOwn(verificationStatus,d.verification.status) ? verificationStatus[d.verification.status] : d.verification.status)+((d.verification.status==='running'?d.verification.created:d.verification.ended) ? ' · '+m.relTime(d.verification.status==='running'?d.verification.created:d.verification.ended) : ''),'muted') : '');detail=text(message.text);break;
         case 'system':type='quiet';summary=text(publicText(message));break;
         default:type='quiet';summary=text(message.text);
       }
       if(action && (message.kind==='proposal' || message.kind==='request' || message.kind==='research'))detail='';
-      return `<div class="message ${type}"><div class="message-meta">${actor(message.actor)} ${time(message.at)}</div>${summary}${detail ? `<details class="message-detail"><summary>${['goal','note','outcome'].includes(message.kind) ? 'Show more' : 'Details'}</summary><div>${detail}</div></details>` : ''}${decisionLink}${message.kind==='outcome' && ['completed','blocked','failed','stopped','limit_reached'].includes(d.status) ? `<a class="reply-session" href="#/" data-reply="${e(message.session)}">Reply in session</a>` : ''}</div>`;
+      return `<h2 class="sr-only">${e(message.kind)} · ${e(m.boundText(message.text))}</h2><div class="message ${type}"><div class="message-meta">${actor(message.actor)} ${time(message.at)}</div>${summary}${detail ? `<details class="message-detail"><summary>${['goal','note','outcome'].includes(message.kind) ? 'Show more' : 'Details'}</summary><div>${detail}</div></details>` : ''}${decisionLink}${message.kind==='outcome' && ['completed','blocked','failed','stopped','limit_reached'].includes(d.status) ? `<a class="reply-session" href="#/" data-reply="${e(message.session)}">Reply in session</a>` : ''}</div>`;
     }
     function statusText(value) {if(value==='finished')return '✓ Finished';return m.sessionsFromState({runs:[{status:value}]})[0].symbol+' '+m.sessionsFromState({runs:[{status:value}]})[0].statusLabel;}
     function anchor() {
@@ -121,7 +121,7 @@
       function keyed(id,key,html,messageIds=[]) {
         let record=nodes.get(id);
         if (!record || record.key!==key) {
-          const node=document.createElement('article');node.dataset.key=id;node.tabIndex=-1;node.innerHTML=html;
+          const node=document.createElement('article');node.dataset.key=id;node.setAttribute('role','listitem');node.tabIndex=-1;node.innerHTML=html;
           const remembered=messageIds.map(id=>disclosures.get(id)).find(state=>state?.some(Boolean));
           if(remembered)[...node.querySelectorAll('details')].forEach((d,i)=>{d.open=!!remembered[i];});
           if(record){const opens=[...record.node.querySelectorAll('details')].map(d=>d.open);[...node.querySelectorAll('details')].forEach((d,i)=>{d.open=!!opens[i];});
@@ -152,7 +152,7 @@
       if(focusedGroup && !host.contains(document.activeElement)){const replacement=[...nodes.values()].find(record=>record.messageIds?.some(id=>focusedGroup.ids.includes(id)));replacement?.node.querySelectorAll('a,button,summary')[focusedGroup.index]?.focus?.({preventScroll:true});}
       if(!messages.length)items.innerHTML='<div class="empty"><h2>A room for your project</h2><p>Write a goal below to start the first session.</p></div>';
       else items.querySelector('.empty')?.remove();
-      $('thread-live').textContent=liveLabel(cache.live);$('thread-live').hidden=!liveLabel(cache.live);
+      if($('thread-live').textContent!==liveLabel(cache.live))$('thread-live').textContent=liveLabel(cache.live);$('thread-live').hidden=!liveLabel(cache.live);
       if(initial || modeChanged || follow){bottom();initial=false;}else{
         if(saved.node && keep.has(saved.node))host.scrollTop=saved.scroll+saved.node.getBoundingClientRect().top-host.getBoundingClientRect().top-saved.offset;
         else if(newCount && !addedNewest)host.scrollTop=saved.scroll+host.scrollHeight-saved.height;

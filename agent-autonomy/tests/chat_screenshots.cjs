@@ -16,6 +16,45 @@ if(viewportFilter)assert(Object.hasOwn(matrixViewports,viewportFilter),'Unknown 
 const keyboardOnly=process.argv.includes('--keyboard-only');
 const viewports=keyboardOnly?{}:viewportFilter?{[viewportFilter]:matrixViewports[viewportFilter]}:matrixViewports;
 const focusMeasurements=[];
+const accessibilityMeasurements=[];
+async function accessibilityAudit(page,name,size){
+ const findings=await page.evaluate(()=>{
+  const errors=[],all=[...document.querySelectorAll('*')],ids=new Set();
+  for(const node of all)if(node.id){if(ids.has(node.id))errors.push('Duplicate id '+node.id);ids.add(node.id);}
+  const visible=n=>!n.closest('[hidden],[inert],[aria-hidden="true"]') && n.getClientRects().length && getComputedStyle(n).visibility!=='hidden';
+  const text=n=>[...n.childNodes].map(c=>c.nodeType===3?c.textContent:c.nodeType===1 && !c.matches('[aria-hidden="true"]')?text(c):'').join(' ').trim();
+  const name=n=>n.getAttribute('aria-label') || (n.getAttribute('aria-labelledby') || '').split(/\s+/).map(id=>document.getElementById(id)).filter(Boolean).map(text).join(' ') || (n.id?[...document.querySelectorAll('label')].filter(l=>l.htmlFor===n.id).map(text).join(' '):'') || (n.closest('label')?text(n.closest('label')):'') || (n.type==='submit'?n.value:'') || text(n);
+  for(const n of all.filter(visible)){
+   if(n.matches('a[href],button,input:not([type="hidden"]),textarea,select,summary,[tabindex="0"],[role="tab"],[role="toolbar"],[role="tabpanel"],nav,main,aside,[role="dialog"],[role="log"]') && !name(n))errors.push('Unnamed '+(n.id || n.tagName));
+   if(n.hasAttribute('tabindex') && Number(n.getAttribute('tabindex'))>0)errors.push('Positive tabindex '+n.id);
+  }
+  const headings=all.filter(n=>/^H[1-6]$/.test(n.tagName) && visible(n)),regions=new Map();if(headings.filter(n=>n.tagName==='H1').length>1)errors.push('Multiple h1 headings');
+  for(const h of headings){const region=h.closest('main,nav,aside,dialog,[role="dialog"]') || document.body,level=Number(h.tagName.slice(1)),previous=regions.get(region);if(previous && level>previous+1 || !previous && level>2)errors.push('Heading jump '+h.textContent.slice(0,60));regions.set(region,level);}
+  for(const n of document.querySelectorAll('#live,#waiting-live'))if(n.getAttribute('aria-live')!=='polite' || n.getAttribute('aria-atomic')!=='true')errors.push('Invalid announcement '+n.id);
+  if(document.querySelectorAll('#live').length!==1 || document.querySelectorAll('#waiting-live').length!==1)errors.push('Missing stable live regions');
+  return errors;
+ });
+ accessibilityMeasurements.push({name,size,findings});assert.deepEqual(findings,[],name+'/'+size+' accessibility audit');
+}
+async function accessibilitySpots(browser,out){
+ const failures=[];let count=0;
+ for(const mode of ['reduced-motion','forced-colors'])for(const colorScheme of ['light','dark']){
+  const f=fx.workspaceDetails(),page=await browser.newPage({viewport:{width:1440,height:900},colorScheme}),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  try{
+   await page.route('**/*',async route=>{const u=new URL(route.request().url());assert.notEqual(route.request().method(),'POST');if(u.pathname.startsWith('/api/'))return route.fulfill({status:u.pathname==='/api/events'?503:200,contentType:'application/json',body:JSON.stringify(u.pathname==='/api/state'?f.state:u.pathname==='/api/channels'?f.channels:u.pathname==='/api/thread'?f.thread:{})});const file=u.pathname==='/chat'?'index.html':u.pathname.slice('/chat/'.length);return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
+   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat#/s/run_test');await page.locator('#context:not([hidden])').waitFor();await page.evaluate(()=>AC.core.stop());
+   if(mode==='reduced-motion'){
+    await page.emulateMedia({reducedMotion:'reduce'});await page.addStyleTag({content:'#timeline {scroll-behavior:smooth;transition:opacity 2s} #timeline::before {content:"";transition:opacity 2s}'});
+    const styles=await page.locator('#timeline').evaluate(n=>[getComputedStyle(n),getComputedStyle(n,'::before')].map(s=>({transition:s.transitionDuration,animation:s.animationDuration,scroll:s.scrollBehavior})));for(const v of styles){assert.equal(v.transition,'0s');assert.equal(v.animation,'0s');assert.equal(v.scroll,'auto');}
+    await page.locator('#waiting-pointer').click();assert.equal(await page.locator('.focused[data-message]').evaluate(n=>parseFloat(getComputedStyle(n).outlineWidth)),2);
+   }else{
+    await page.emulateMedia({forcedColors:'active'});assert(await page.evaluate(()=>matchMedia('(forced-colors: active)').matches));await page.locator('#members-tab').click();const selected=await page.locator('#members-tab').evaluate(n=>({width:parseFloat(getComputedStyle(n).outlineWidth),style:getComputedStyle(n).outlineStyle,weight:getComputedStyle(n).fontWeight}));assert(selected.width>=2 && selected.style!=='none' && Number(selected.weight)>=700,'Forced-colour selection needs a visible outline and weight');
+   }
+   await accessibilityAudit(page,mode,colorScheme);await focusCheck(page,mode,colorScheme);assert.deepEqual(errors,[]);await page.screenshot({animations:'disabled',path:path.join(out,mode+'-'+colorScheme+'.png')});count++;
+  }catch(e){failures.push({mode,colorScheme,error:e.message});}finally{await page.close();}
+ }
+ fs.writeFileSync(path.join(out,'accessibility-spots.json'),JSON.stringify({cases:4,failures},null,2));assert.deepEqual(failures,[]);return count;
+}
 async function focusCheck(page,name,size){
  await page.evaluate(()=>{window.__focusAudit={original:document.activeElement,scrolls:[...document.querySelectorAll('*')].map(n=>[n,n.scrollTop,n.scrollLeft])};});
  await page.keyboard.press('Tab');
@@ -62,12 +101,13 @@ async function keyboardPaths(browser,out){
     else{await keyboardFocus(page,'#live-members [data-member="coder-1"] [data-workspace-link]');await page.keyboard.press('Enter');await page.locator('#workspace-terminal').waitFor();assert(await page.evaluate(()=>document.activeElement.hasAttribute('data-back-room')));await keyboardFocus(page,'#ws-latest');await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.dataset.wsTurn),'ws-first');await page.keyboard.press('Enter');assert((await page.locator('#workspace-terminal').textContent()).includes('Earlier recorded turn'));await page.keyboard.press('End');await page.keyboard.press('Enter');await keyboardFocus(page,'#workspace-terminal');await page.keyboard.press('Home');assert.equal(await page.locator('#workspace-terminal').evaluate(n=>n.scrollTop),0);await keyboardFocus(page,'#ws-jump',true);await page.keyboard.press('Enter');await page.keyboard.press('Escape');await page.waitForFunction(()=>document.getElementById('workspace').hidden);assert(await page.evaluate(()=>document.activeElement.matches('[data-workspace-link]')));}
     assert.equal(posted.length,0);
    }
-   await focusCheck(page,'keyboard-'+name,String(width));assert.deepEqual(errors,[]);const file=`keyboard-${name}-${width}-${colorScheme}.png`;await page.screenshot({animations:'disabled',path:path.join(out,file)});shots.push(file);
+   await accessibilityAudit(page,'keyboard-'+name,String(width));await focusCheck(page,'keyboard-'+name,String(width));assert.deepEqual(errors,[]);const file=`keyboard-${name}-${width}-${colorScheme}.png`;await page.screenshot({animations:'disabled',path:path.join(out,file)});shots.push(file);
   }catch(e){failures.push({name,width,colorScheme,error:e.message});}finally{await page.close();}
  }
  fs.writeFileSync(path.join(out,'keyboard-results.json'),JSON.stringify({cases,failures},null,2));assert.equal(failures.length,0,JSON.stringify(failures));return {cases,screenshots:shots.length};
 }
 async function layoutCheck(page,name,size,width){
+ await accessibilityAudit(page,name,size);
  await focusCheck(page,name,size);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name}/${size}: page overflow`);
  if(width<1200){
@@ -96,7 +136,7 @@ async function zoomCheck(page,name,colorScheme,out){
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,name+' zoom overflow');
  if(await page.locator('#room-footer').isVisible()){const b=await page.locator('#composer').boundingBox();assert(b.y+b.height<=800 && b.height>=40,`${name} M8 zoom composer reachable: ${JSON.stringify(b)}`);}
  for(const box of await page.locator('button,summary,select,input:not([type="checkbox"]):not([type="radio"])').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length).map(n=>({name:n.id || n.textContent.slice(0,30),scroll:n.scrollWidth,width:n.clientWidth}))))assert(box.scroll<=box.width+1,name+' zoom clipped control '+box.name);
- await focusCheck(page,name,'text-zoom');
+ await accessibilityAudit(page,name,'text-zoom');await focusCheck(page,name,'text-zoom');
  await page.screenshot({animations:'disabled',path:path.join(out,`${name}-text-zoom-${colorScheme}.png`)});
  await page.evaluate(()=>document.documentElement.style.fontSize='');await page.setViewportSize(viewport);
 }
@@ -113,7 +153,9 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  const longRoom=fx.composerFixture('active');longRoom.state.run.title=longTitle;longRoom.thread.sessions[0].title=longTitle;longRoom.channels=fx.threadChannels(longRoom.thread,1);longRoom.channels.channels[0].title=longTitle;composerCases.longRoom=longRoom;
  const longWorkspace=fx.workspaceDetails('workspaceHistorical');longWorkspace.state.run.title=longTitle;longWorkspace.thread.sessions[0].title=longTitle;longWorkspace.state.run.workspace.agents['coder-1'].branch='agent/'+('branch/'.repeat(100));longWorkspace.state.agents.find(a=>a.name==='coder-1').task=longTitle;workspaceCases.workspaceLong=longWorkspace;
  const measurements=[];let keyboardCases=0;
- try {const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
+ if(process.argv.includes('--accessibility-spots-only')){try{const shots=await accessibilitySpots(browser,out);console.log(shots+' accessibility spot checks passed');}finally{await browser.close();}return;}
+ const contrast=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));fs.writeFileSync(path.join(out,'contrast-measurements.json'),JSON.stringify(contrast,null,2));assert.deepEqual(contrast.filter(v=>v.ratio<v.minimum),[]);
+ try {count+=await accessibilitySpots(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
   combinations++;
   const pages=workspaceCases[name]?[workspaceCases[name].thread]:membersCases[name] ? [membersCases[name].thread,...(membersCases[name].older?[membersCases[name].older]:[])] : decisionCases[name] ? [decisionCases[name].thread] : composerCases[name] ? [composerCases[name].thread] : name==='threadLong' ? fx.threadLong() : [name==='empty' ? fx.threadResponse([],[]) : name==='threadTeam'||name==='team' ? fx.threadTeam() : name==='completed' ? fx.threadSingle() : fx.threadActive()];
   const page=await browser.newPage({viewport:{width,height},colorScheme,...(width<1200?{hasTouch:true,...(width<768 || size==='phone-landscape'?{isMobile:true}:{})}:{})});const errors=[];page.on('pageerror',err=>errors.push(err.message));
@@ -263,7 +305,8 @@ await page.locator('#composer').fill(Array.from({length:10},()=>"A full line of 
   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#thread-items article').first().waitFor();await page.evaluate(()=>AC.core.stop());
   hold=true;await page.evaluate(()=>{window.pendingLiveRead=AC.core.refresh();});await held;const before=stateReads;await page.evaluate(()=>{location.hash='#/w/run_test/coder-1';AC.shell.route();});await page.locator('#workspace-terminal').waitFor();assert.equal(stateReads,before,'Opening during a live read must not add a read');f.state.steps[1].transcript.push({type:'text',text:'BROWSER-RACE-RECORDED-OUTPUT'});hold=false;release();await page.evaluate(()=>pendingLiveRead);assert((await page.locator('#workspace-terminal').textContent()).includes('BROWSER-RACE-RECORDED-OUTPUT'));await page.screenshot({path:path.join(out,'regression-workspace-live-focus-phone.png')});count++;await page.close();
  }
+ fs.writeFileSync(path.join(out,'accessibility-measurements.json'),JSON.stringify(accessibilityMeasurements,null,2));
  fs.writeFileSync(path.join(out,'focus-measurements.json'),JSON.stringify(focusMeasurements,null,2));
  fs.writeFileSync(path.join(out,'footer-measurements.json'),JSON.stringify(measurements,null,2));
- }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${7+keyboardCases} regression cases passed`);
+ }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${11+keyboardCases} regression cases passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

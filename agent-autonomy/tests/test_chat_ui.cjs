@@ -1290,4 +1290,20 @@ test('M8 C Workspace Escape focuses its recorded session when the opening link v
   const h=await turnsHarness(),opener=h.timeline.querySelector('[data-workspace-link]');opener.focus();opener.click();await tick();await tick();opener.remove();key(h,'Escape',{},h.document.querySelector('[data-back-room]'));assert.equal(h.document.activeElement.dataset.key,'divider:run_test');assert(h.document.querySelector('#workspace').hidden);assert.equal(posts(h).length,0);
 });
 
+test('M8 D connection and waiting announcements retain nodes and announce only changed server values',async()=>{
+  const h=await decisionHarness('low'),live=h.document.querySelector('#live'),waiting=h.document.querySelector('#waiting-live');assert(waiting,'A dedicated polite waiting announcement is required');assert.equal(live.getAttribute('aria-live'),'polite');assert.equal(waiting.getAttribute('aria-live'),'polite');const first=live.firstChild,waitText=waiting.firstChild;await h.core.refresh();assert(h.document.querySelector('#live')===live);assert(live.firstChild===first);assert(waiting.firstChild===waitText);assert.equal(waiting.textContent,'1 waiting for you');h.f.channels.channels[0].waiting=2;await h.core.refresh();assert.equal(waiting.textContent,'2 waiting for you');assert(waiting.firstChild!==waitText);assert.equal(h.document.querySelectorAll('#live').length,1);h.shell.render({...h.core.getState(),live:'Connected'});assert.equal(live.textContent,'Connected');const changed=live.firstChild;h.shell.render({...h.core.getState(),live:'Connected'});assert(live.firstChild===changed);assert.equal(posts(h).length,0);
+});
+test('M8 D decorative state symbols are hidden while recorded labels and list semantics remain',async()=>{
+  const h=await membersHarness('teamRunning');await openMembers(h);assert.equal(h.document.querySelector('#session-list').getAttribute('role'),'list');assert.equal(h.document.querySelector('#thread-items').getAttribute('role'),'list');assert(h.document.querySelector('#waiting-pointer [aria-hidden="true"]'));assert(h.document.querySelector('#live-members [aria-hidden="true"]'));assert(h.document.querySelector('.task-graph [aria-hidden="true"]'));assert.equal(h.document.querySelector('#context h2').textContent,'Members');assert(h.timeline.querySelector('[data-message] h2'));assert.equal(posts(h).length,0);
+});
+test('M8 D all token text, boundary and focus colour contrasts meet their measured thresholds',()=>{
+  const ratios=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));assert.equal(ratios.length,52);const failures=ratios.filter(v=>v.ratio<v.minimum);assert.deepEqual(failures,[]);
+});
+test('M8 D sign-in protects the shared key from automatic completion, capitals and spelling',async()=>{
+  const h=await harness(fixture(),{key:false}),field=h.document.querySelector('#dashboard-key');assert.equal(field.getAttribute('autocomplete'),'off');assert.equal(field.getAttribute('autocapitalize'),'off');assert.equal(field.getAttribute('spellcheck'),'false');assert.equal(field.type,'password');assert.equal(h.local.size,0);
+});
+test('M8 D singular rail counts use session without changing counts or pagination',()=>{
+  assert.equal(model.railSessions({runs:[]},null,1).note,'Showing 0 of 1 session');assert.equal(model.railSessions({runs:[]},null,2).note,'Showing 0 of 2 sessions');
+});
+
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

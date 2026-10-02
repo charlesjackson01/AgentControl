@@ -491,3 +491,78 @@ preserves that assertion and measures every focusable control, including doubled
 
 No new requests, timers, APIs, private material or decision semantics. Native keyboard behaviour, interactive
 surfaces, persistent bots and the D7 in-flight skill-fetch race remain excluded.
+
+## Implementation report — Part D (2026-10-01)
+
+Parts A/B/C are **68c7cab / fddf9eb / dbb8713**. The standalone commit containing this section completes
+screen-reader semantics, measured contrast and motion/forced-colour handling; Part E remains pending.
+
+The connection and waiting announcements are stable, polite, atomic nodes outside the modal background.
+Connection text and waiting-count text change only when their values change; the visible connection copy is
+aria-hidden to avoid a duplicate announcement. The existing stable decision status nodes and terminal live-off
+behaviour remain intact. Generated decorative symbols are hidden, with recorded labels retained. Session rows
+and timeline items have list semantics; the rail links remain links. Members/Team/task sections and message
+review evidence have a sequential heading outline with one visible h1. Singular session wording is corrected.
+The sign-in field disables autocomplete, capitals and spelling; shared-key/storage behaviour is unchanged.
+All chat asset versions now use v8.
+
+Reduced motion also disables smooth scrolling and covers pseudo-elements. Deep-link highlighting is a static
+outline. Forced colours use selection outlines and weight alongside text/symbol state labels. Only the light and
+dark border tokens needed colour changes: **#dedee4 → #85858f**, **#393a44 → #777984**. The --focus token is
+the existing 2 px ring width; its actual colour is --accent. Every measured pair appears below.
+
+| Foreground / background | Required | Light before → after | Dark before → after |
+|---|---:|---:|---:|
+| text / bg | 4.5:1 | 16.068 → 16.068 | 14.589 → 14.589 |
+| text / surface | 4.5:1 | 15.394 → 15.394 | 13.260 → 13.260 |
+| text / rail | 4.5:1 | 14.757 → 14.757 | 15.349 → 15.349 |
+| muted / bg | 4.5:1 | 5.887 → 5.887 | 8.091 → 8.091 |
+| muted / surface | 4.5:1 | 5.640 → 5.640 | 7.354 → 7.354 |
+| muted / rail | 4.5:1 | 5.406 → 5.406 | 8.513 → 8.513 |
+| accent / bg | 4.5:1 | 6.015 → 6.015 | 8.129 → 8.129 |
+| accent / surface | 4.5:1 | 5.763 → 5.763 | 7.389 → 7.389 |
+| accent / rail | 4.5:1 | 5.524 → 5.524 | 8.553 → 8.553 |
+| warning / bg | 4.5:1 | 7.306 → 7.306 | 11.681 → 11.681 |
+| warning / surface | 4.5:1 | 6.999 → 6.999 | 10.616 → 10.616 |
+| warning / rail | 4.5:1 | 6.709 → 6.709 | 12.289 → 12.289 |
+| danger / bg | 4.5:1 | 6.832 → 6.832 | 8.324 → 8.324 |
+| danger / surface | 4.5:1 | 6.546 → 6.546 | 7.566 → 7.566 |
+| danger / rail | 4.5:1 | 6.275 → 6.275 | 8.758 → 8.758 |
+| success / bg | 4.5:1 | 5.822 → 5.822 | 9.985 → 9.985 |
+| success / surface | 4.5:1 | 5.578 → 5.578 | 9.075 → 9.075 |
+| success / rail | 4.5:1 | 5.347 → 5.347 | 10.505 → 10.505 |
+| border / bg | 3:1 | 1.340 → 3.653 | 1.510 → 3.934 |
+| border / surface | 3:1 | 1.284 → 3.500 | 1.372 → 3.575 |
+| border / rail | 3:1 | 1.230 → 3.355 | 1.589 → 4.139 |
+| focus / bg | 3:1 | 6.015 → 6.015 | 8.129 → 8.129 |
+| focus / surface | 3:1 | 5.763 → 5.763 | 7.389 → 7.389 |
+| focus / rail | 3:1 | 5.524 → 5.524 | 8.553 → 8.553 |
+| warning / warning-bg | 4.5:1 | 6.784 → 6.784 | 8.978 → 8.978 |
+| accent / accent-soft | 4.5:1 | 5.335 → 5.335 | 6.029 → 6.029 |
+
+Verification:
+
+- Chat DOM: **238/238**, five new D tests. All five fail on Part C **dbb8713**, **233/238**,
+  `/tmp/ac-m8d-before-dbb8713.log`; current `/tmp/ac-m8d-chat.log`.
+- The four reduced-motion/forced-colours browser checks all fail on Part C: smooth scrolling remains enabled
+  and selected tabs lack a forced-colour outline/weight. `/tmp/ac-m8d-before-browser.log` and
+  `/tmp/chat-shots-m8d-before/accessibility-spots.json`. Current focused run: all four plus 32 keyboard workflows
+  and seven earlier regressions pass, `/tmp/ac-m8d-keyboard.log`.
+- Classic DOM: **82/82**, `/tmp/ac-m8d-classic.log`.
+- Full browser: **672 combinations + 43 regressions**, **1,131 screenshots**, `/tmp/ac-m8d-browser.log`,
+  `/tmp/chat-shots-m8d`; all 52 contrast pairs pass, including control boundaries ≥ **3.355:1**.
+  **1616 accessibility audits, zero findings**; **1616 focus audits / 39062 control checks**,
+  ring/inset ≥ **2 px**.
+- Python full suite: **423, OK (skipped=3)**, **260.464 s**, `/tmp/ac-m8d-python.log`; the same three Part A skips remain,
+  and OpenCode ran. No test or backend change.
+- A full phone run passes **96 combinations + 43 regressions**, **229 screenshots**,
+  `/tmp/ac-m8d-phone.log`. The original waiting text/link baseline assertion remains unchanged: decorative
+  symbol spans use display:contents so hiding them from assistive technology adds no line box.
+- The audit is implemented in-repo with existing test dependencies: duplicate ids, role/name checks,
+  unnamed focusables, positive tabindex, heading order and live-region attributes. Zero findings are allowed.
+
+Inspected `forced-colors-light.png` in `/tmp/chat-shots-m8d-keyboard`: selected rail rows and the selected Team
+tab remain outlined, the waiting state retains its symbol and words, and the keyboard focus ring is visible.
+No earlier assertion, request, timer, decision state, API, backend or classic implementation changed. decisions.js
+was not changed in this part. Native device testing, interactive surfaces, bots and the in-flight skill-fetch race
+remain deferred.

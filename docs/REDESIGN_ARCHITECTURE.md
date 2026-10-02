@@ -342,7 +342,10 @@ real work, and the content comes first.
   - a first-focusable skip link to the conversation; roving arrow-key context tabs and Workspace turn toolbar
   - modal dialogs/drawers/sheets trap focus, make the background inert, start on Cancel/Close and restore the opener
   - the read-only terminal supports arrow/Page/Home/End scrolling and reachable Jump to latest
-  - WCAG AA contrast in both appearances
+  - WCAG AA contrast in both appearances, computed from all text/status tokens against every neutral surface
+  - control boundaries and focus colour meet 3:1; text and special warning/accent pairs meet 4.5:1
+  - polite stable connection/waiting announcements, labelled landmarks/lists and sequential headings
+  - reduced motion disables animations, transitions and smooth scrolling; forced colours retain focus/selection
   - touch targets of at least 40 px on phones
 
 ## 10. Layout

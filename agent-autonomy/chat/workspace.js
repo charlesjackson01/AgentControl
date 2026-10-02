@@ -2,7 +2,7 @@
   'use strict';
   const m=root.AC?.model || require('./model.js'),e=m.esc;
   const href=(run,agent)=>'#/w/'+encodeURIComponent(run)+'/'+encodeURIComponent(agent);
-  const popout=(run,agent)=>'/?popout='+encodeURIComponent(agent)+'&run='+encodeURIComponent(run);
+  const popout=(run,agent)=>'/classic?popout='+encodeURIComponent(agent)+'&run='+encodeURIComponent(run);
   function parseRoute(hash){
     const match=hash.match(/^#\/w\/([^/]+)\/([^/]+)$/);if(!match)return null;
     try{const run=decodeURIComponent(match[1]),agent=decodeURIComponent(match[2]);return [run,agent].every(value=>value && !/[\/\x00-\x1f\x7f]/.test(value))?{run,agent}:null;}catch{return null;}

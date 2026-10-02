@@ -9,16 +9,25 @@ your configured verification command. Hermes reviews that evidence and chooses
 another task, a correction, completion, or a blocker. One OpenCode session is
 reused for the entire run.
 
-The dashboard shows each submitted prompt, OpenCode's response as it grows, tool
-activity, Hermes's decisions, file diffs, and test output. Hermes's existing
+The default **chat interface at `/`** shows the project room, sessions, recorded decisions and actionable
+requests. Open a turn's Workspace to inspect stages, recorded OpenCode output, changed files, diffs and
+verification. Members and the task graph live in Session details; proposed teams remain separate from running
+agents. `/chat` and `/chat/` are retained aliases. Hermes's existing
 `push` channel sends step-finished, needs-input, completion, and error alerts.
 
-Version 5 lays each run out horizontally. A **turn rail** lists every coding
+The **classic dashboard at `/classic`** retains the version-5 controls and detailed views. A **turn rail** lists every coding
 turn. The **workflow board** shows the selected turn as Plan → Prompt → Code →
 Verify, and the Code stage is a **live OpenCode terminal**: text, tool calls,
 and running command output stream in as OpenCode works. **Mac** (following the
 system light/dark setting) is the default theme; **Terminal** and **XP** are in
 the toolbar. Read `UPDATE_REPORT.md` for the change log and known gaps.
+
+Chat's More and Settings links open classic for project browsing/creation/switching, full Activity and audit
+history, skills library/removal, paid models and Usage, the stuck watch, internet during work, and runtime/preview
+controls. Chat Workspaces provide `/classic?popout=…&run=…` for interactive preview, program, VM and desktop
+surfaces. Existing root `/?popout=…` URLs remain compatible. Both interfaces share the dashboard key and server
+state. View-specific instructions below describe **classic** unless explicitly labelled as chat; backend
+execution and safety rules apply to both interfaces.
 
 ## Start or update
 
@@ -41,11 +50,12 @@ tracked by git, so updating the code preserves them.
 
 For everyday use, let the server start OpenCode and the dashboard for you: see **Daily use** below.
 
-1. With Tailscale connected, open **http://100.79.242.24:8766** on your phone.
+1. With Tailscale connected, open **http://100.79.242.24:8766/** on your phone for chat, or
+   **http://100.79.242.24:8766/classic** for the classic tutorial in steps 3–4 below.
 2. Enter the **Dashboard key** printed in the server terminal. Tick
    **Remember on this device** to keep it in that browser; otherwise it lasts
-   for the tab. **Connections → Forget key and sign out** removes it.
-3. Open **Connections** and wait for **Hermes CLI and OpenCode API ready**. The
+   for the tab. Classic's **Connections → Forget key and sign out** removes it.
+3. In **classic**, open **Connections** and wait for **Hermes CLI and OpenCode API ready**. The
    startup check reads the installed Hermes CLI's flags without invoking a
    model. If a check fails, the error appears at the top of the page.
 4. Click **New run**, then **Try the Python todo-app brief** and **Start run**.
@@ -55,6 +65,10 @@ For everyday use, let the server start OpenCode and the dashboard for you: see *
 
 You don't have to type the follow-up prompts. Each turn shows Hermes's plan and
 exact prompt next to OpenCode's live terminal.
+
+In chat, write the goal in the room composer and use its Settings for the supported run options. Decisions
+stay on the room cards; unsupported or truncated review links to classic. Start a follow-up through **Reply in
+session**. The [parity checklist](../docs/PARITY_CHECKLIST.md) lists every native and classic-linked feature.
 
 If a run was active when you stopped the dashboard, it will appear as
 **Interrupted**. Press **Resume** to reconnect to the same OpenCode session;

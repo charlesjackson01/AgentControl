@@ -94,7 +94,7 @@ The priorities, in order:
    └──────────────┬───────────────────────────────┘
                   │  same key, same origin
       ┌───────────┴────────────┐
-   classic UI  (/, /classic)   chat UI  (/chat → / at M9)
+   classic UI  (/classic)      chat UI  (/, /chat)
    index.html app.js …         agent-autonomy/chat/*
 ```
 
@@ -107,9 +107,10 @@ It **writes** only through the existing POST endpoints.
 
 | Path | Serves | When |
 |---|---|---|
-| `/` | classic `index.html` | until M9, then chat |
-| `/classic` | classic `index.html` | from M1, permanently until classic is retired |
-| `/chat`, `/chat/` | `agent-autonomy/chat/index.html` | from M1 |
+| `/` | `agent-autonomy/chat/index.html` | default after M9 Part B |
+| `/` with a `popout` query parameter | classic `index.html` | C1 compatibility for existing classic tabs and bookmarked pop-outs |
+| `/classic`, `/classic/` | classic `index.html` | permanently until separately authorised retirement |
+| `/chat`, `/chat/` | `agent-autonomy/chat/index.html` | retained aliases |
 | `/chat/<name>.css`, `/chat/<name>.js` | a file in `agent-autonomy/chat/` | from M1 |
 
 - A chat asset name must match `^[a-z0-9][a-z0-9-]*\.(css|js)$`: no slashes, no dots besides the extension.
@@ -117,6 +118,8 @@ It **writes** only through the existing POST endpoints.
 - Content types are fixed: `text/css; charset=utf-8` and `text/javascript; charset=utf-8`.
 - The static routes need no key, like the classic assets. Every `/api/*` route still does.
 - Classic asset paths are absolute (`/app.css`), so `/classic` needs no other change.
+- Chat Workspace pop-outs use `/classic?popout=<encoded agent>&run=<encoded session>`. Classic's own
+  pathname-based links and bookmarked root pop-outs keep working. API, SSE, key and preview-origin rules are unchanged.
 
 ### 5.2 Frontend tree
 
@@ -664,3 +667,8 @@ person's.
   - With G1 cleared and G2 (a) approved, **M9 Part B is authorised** under D3, exactly per the M9 handoff §5:
     routing, the C1 compatibility rule, the pop-out href and docs.
   - Merging into `main` and retiring classic are not authorised.
+- 2026-10-02 (M9 Part B implementation): under D3 and the recorded G1–G3 clearance, `/` serves chat, `/chat`
+  remains an alias, `/classic` and `/classic/` serve classic, and C1 root `popout` queries still serve classic.
+  Chat Workspace links use `/classic?popout=…`. No API, schema, engine, journal, approval, auth, preview-origin
+  or classic-code changes. Android Chrome remains the owner's accepted untested gap. Await Opus review;
+  merging into main and retiring classic remain separate decisions.

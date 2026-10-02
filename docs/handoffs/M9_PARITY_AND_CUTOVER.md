@@ -168,10 +168,10 @@ If any gate is refused, Opus writes the corrective handoff. Part B does not star
 |---|---|
 | **G1** | **Cleared by the owner, 2026-10-02.** The owner accepts Part A's checklist (`1025518`): the 17 native features, the 54 classic-linked features and the one intentionally unported feature (themes, D4). Classic stays accessible at `/classic` for everything not yet in the new interface. The owner also approved keeping C1, so existing and bookmarked classic pop-outs keep working |
 | **G2** | **Approved: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces. Native surfaces come later, under their own handoff |
-| **G3** | **Pending; round 1 failed (2026-10-02).** See the section at the end and `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md` |
+| **G3** | **Cleared by the owner, 2026-10-02.** iPhone 17 Pro / Safari passed; Android Chrome accepted as not performed. Exact owner decision is appended below |
 
-**Part B was blocked until the owner explicitly recorded G3 as cleared; that happened on 2026-10-02 (see the end of this file).** G1 and G2 are settled, but neither unblocks
-Part B on its own, and neither does any Codex or Opus judgement. Part B is **not authorised**.
+**Part B was blocked until the owner explicitly recorded G3 as cleared; that happened on 2026-10-02 (see the
+appended owner decision). All three gates are now settled and Part B is authorised within §5–§7.**
 
 ## 5. Part B: cutover (only after G1–G3)
 
@@ -725,3 +725,152 @@ before anything further.
 
 **Known accepted risk:** Android Chrome's keyboard behaviour (`interactive-widget=resizes-content`) has only been
 verified in Chromium emulation, not on a physical Android device.
+
+## Part B completion report — 2026-10-02 (Codex)
+
+**Cutover complete and verified under D3 and the owner's recorded G1–G3 decisions.**
+Await Opus review. No merge into main, classic retirement, native surfaces or next milestone.
+
+### Start and exact implementation scope
+
+Started with a clean `feature/chat-first-redesign` at `c7865c9`, then pulled `--ff-only` to `ae4bcb8`, containing
+the owner decision **“G3 cleared — iPhone 17 Pro / Safari passed; I accept Android Chrome as not performed.”**
+Read CURRENT_STATE, the architecture, both READMEs, DEVICE_CHECKLIST, the M9 handoff and the Part A inventory.
+G1 accepts the existing parity; G2 (a) keeps classic pop-outs; G3 is the owner's clearance, not a Codex claim of
+device verification. Android Chrome stays **Not performed**, an accepted untested gap.
+
+The only server change is the entry condition in `app.py.do_GET`:
+
+- Plain `/` serves the chat HTML; `/chat` and `/chat/` remain aliases.
+- `/classic` and `/classic/` serve the original classic HTML, publicly as before.
+- Root with a `popout` query parameter serves classic, including empty parameter values. Query presence is parsed
+  without changing the query or redirecting, preserving old tabs and bookmarked classic pop-outs (C1).
+- Chat asset allow-list, classic root assets, API/auth, security headers, SSE and preview origin are unchanged.
+
+The sole chat product change is `workspace.popout`'s prefix from `/?popout=` to `/classic?popout=`. Agent/session
+encoding, target and rel remain identical. No other chat href needed correction in Part A's inventory.
+Classic's own `location.pathname`-based pop-out code remains untouched and works at `/classic`; the C1 route
+also preserves classic tabs opened at root before the cutover.
+
+Both READMEs describe the room at `/`, retained aliases and classic at `/classic`, with honest classic-only
+runtime/preview controls, skills management, Usage, paid models, full history and themes. Architecture §5.1 and
+its change log now describe the implemented routes. The parity checklist records cutover status without changing
+its **72 rows: 17 Native / 54 Linked / one intentionally not ported / zero Missing**.
+
+### Tests and authorised earlier assertion changes
+
+`test_chat_routes.py` is the **only Python test file changed**. Its four existing tests now assert chat root,
+aliases, both classic forms and C1 compatibility, including unrelated root queries, empty/encoded `popout`
+presence; both HTML forms retain the same security headers. Existing asset allow-list refusals and API-key
+checks are unchanged; added checks confirm all five root classic assets retain their bytes and MIME types.
+Focused result: **four tests OK, 4.144 s**, `/tmp/ac-m9b-routes.log`.
+
+Exactly two earlier Chat DOM assertions change, only their exact href strings:
+
+1. **`M7 B header uses recorded researcher, role, task, since and exact classic pop-out link`**:
+   `/?popout=researcher-1&run=run_test` → `/classic?popout=researcher-1&run=run_test`.
+2. **`M7 D surfaces have metadata and one section pop-out, with no native controls or frames`**:
+   `/?popout=coder-1&run=run_test` → `/classic?popout=coder-1&run=run_test`.
+
+All their other assertions, every other chat assertion, all classic tests, and all other Python tests remain
+unchanged. The accepted post-M9.1 baseline has **424 Python tests and 255 chat tests**, superseding this
+handoff's original pre-M9.1 counts of 423/240; Part B adds no Python/DOM test case.
+
+The browser script adds a fatal **five-case cutover smoke** using the existing isolated fixture's real HTTP
+server/controller. It signs in at `/`, renders the room at desktop and phone sizes, opens `/classic` with the
+same remembered key, clicks the actual chat Workspace pop-out link and checks HTTP 200/classic's standalone
+terminal, opens an equivalent root compatibility URL, and checks `/classic/`. Zero browser POSTs/page errors;
+shutdown removes the disposable fixture. Every earlier matrix assertion and fatal check is unchanged.
+`--cutover-only` allows a focused run; the full command also runs the smoke before the existing matrix.
+
+Two initial runs of the **new** smoke failed because its selectors assumed a nonexistent Workspace-header id
+and then a visible classic pop-out tab bar. Corrected the new test to click the existing pop-out link and inspect
+the visible standalone terminal; classic intentionally hides its tab bar in pop-out mode. No product or earlier
+test was changed to resolve these harness mistakes. The third focused run passed **five cases**,
+`/tmp/ac-m9b-smoke3.log`, `/tmp/chat-shots-m9b-smoke3/cutover-smoke.json`.
+
+### Real server at `/`, then classic with the shared key
+
+Harnesses: `/tmp/ac-m9b-real-server.py` and `/tmp/ac-m9b-real-check.cjs`; actual `app.handler`/Controller,
+existing workflow/team fakes, one disposable git project/state, and three browser-created sessions.
+No owner project/state or runtime configuration was touched. Each step's fully paged invariant checks
+`before == null`, **waiting == actionable non-outcomes**, **cards == actions + outcomes**, outcomes ≤ 1.
+
+| Step | Observed server-recorded result | GET | POST |
+|---|---|---:|---:|
+| 1 Start | Single session starts; critical request appears, waiting/action/card = 1 | 8 | 1 |
+| 2 Critical permission | Cancel initially focused; empty confirm sends no write; typed word yields confirmed receipt, waiting/action/card = 0 | 3 | 1 |
+| 3 Question | JSON answer recorded as confirmed; pending checkpoint = 1, decided checkpoint = 0 | 6 | 1 |
+| 4 Team | Proposal shown separately; coder-2 absent before approval, present only after recorded approval; team audit recorded | 21 | 2 |
+| 5 Workspace | Opens with zero extra reads, recorded transcript grows, reasoning excluded and tool output confined to Workspace; zero Workspace writes | 8 | 0 |
+| 6 Verify | Recorded on-demand verification status/time says passed | 10 | 1 |
+| 7 Apply | Confirmed Apply records applied workspace and lands `api.py`, `ui.html`, `wire.txt` | 3 | 1 |
+| 8 Reply in session | New session records parent and inherited team mode; waiting/actions = 1, actionable outcome = 1, cards = 2 | 8 | 1 |
+| **Eight steps** | **Only `/` document loaded, no classic loads during walkthrough, no page errors** | **67** | **8** |
+| Separate classic smoke | `/classic` HTTP 200, Mission renders with the same stored key and no second sign-in | 10 | 0 |
+
+The 67 step GETs comprise **64 API fetches + three SSE reads**; each recorded fetch matches the real handler
+log. Exact POST bodies/fingerprints and each before/after checkpoint are in `/tmp/ac-m9b-real-results.json`.
+Additional real Auto preview evidence: **two GET / one POST**, recorded explanation only. Startup: **19 GET /
+zero POST**, including assets. More and Settings fallback links remain exactly `/classic`.
+
+First walkthrough attempt passed all eight root steps but the added classic smoke failed because the prior
+harness used Playwright's one-page implicit context. Changed only the scratch harness to use an explicit shared
+browser context; repeated **all eight steps and the same-key classic smoke successfully**. Logs:
+`/tmp/ac-m9b-real-check.log`, `/tmp/ac-m9b-real-check-retry.log`. Final normal shutdown removes the disposable
+project. These are test-harness corrections, not changes to API/state or assertions to conceal product failures.
+
+Inspected actual root-phone and classic pop-out screenshots under `/tmp/chat-shots-m9b-smoke3/`, then final
+`entry-root-desktop.png` and `entry-classic.png` under `/tmp/chat-shots-m9b-full/`, plus
+`/tmp/ac-m9b-live-workspace-phone.png`. Root renders the established room; classic retains Mission and its
+standalone terminal. Phone Workspace and footer remain usable; no native-device testing is inferred.
+
+### Final verification and publication
+
+| Suite | Actual result / log |
+|---|---|
+| Python | **424 tests, OK (skipped=3), 390.184 s**, full retry run alone; `python3 -m unittest discover -s agent-autonomy/tests -v`, `/tmp/ac-m9b-full-python-retry.log` |
+| Classic DOM | **82/82**, unchanged; `/tmp/ac-m9b-classic.log` |
+| Chat DOM | **255/255**, only two exact href replacements; `/tmp/ac-m9b-chat.log` |
+| Real route tests | **4/4**, security/assets/aliases/C1; `/tmp/ac-m9b-routes.log` |
+| Browser smoke | **5/5**, real HTTP/root/classic/new and old pop-outs/shared key; `/tmp/ac-m9b-smoke3.log` |
+| Full browser matrix + smoke | **672 combinations + 66 regressions, 1,168 screenshots**, first full attempt; `/tmp/ac-m9b-full-browser.log`, `/tmp/chat-shots-m9b-full/` |
+| Root walkthrough + classic smoke | **8/8 steps and same-key smoke passed**, recorded above |
+
+The full matrix retains the previous 61 regressions and adds five cutover cases. **1,672** accessibility/input-font
+audits (minimum 16 px), **52** contrast pairs, **32** keyboard cases and four reduced-motion/forced-colors checks
+pass. All **192** phone footer measurements retain **57 px idle / 105 px waiting** in portrait and landscape;
+conversation minimums remain **70.0829% portrait / 58.3333% landscape**. No budget or existing assertion weakened.
+
+Python ran alone after all browser/real-server checks ended. First full attempt:
+**424 tests, one failure, skipped=3, 260.466 s**, `/tmp/ac-m9b-full-python.log`.
+The sole failure is the unchanged `test_vm.VMRunTests.test_console_input_is_checked_and_audited`, line 255:
+expected the log's final three entries to be `click(10,5,640,400)`, `type('ls')`, `key('Return')`; observed
+`type('ls')`, `key('Return')`, `push(<temporary coder worktree>)`. A background VM push interleaved with the
+suffix assertion. This is the same protected-test race recorded in M7, M8 and M9 Part 0, not a routing failure.
+The unchanged test passed alone in **1.179 s**, `/tmp/ac-m9b-vm-isolated.log`. Then retried the full suite alone,
+`/tmp/ac-m9b-full-python-retry.log`: **424 tests, OK (skipped=3), 390.184 s**. No backend/test/runtime/skip changes
+were made to resolve it. The retry also contains nonfatal unclosed-socket ResourceWarnings, with no failures or
+background-thread exceptions.
+The first full log also has two nonfatal unclosed-socket ResourceWarnings; no workflow timeouts or teardown
+exceptions in that run.
+
+The three environment-gated skips are **not passes**:
+
+- `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container` requires
+  `AGENTCONTROL_CONTAINER_TESTS=1`, a runtime and image.
+- `test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`: preview tools are absent.
+- `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone` requires `AGENTCONTROL_VM_TESTS=1` on a KVM host.
+
+The three real-OpenCode tests ran and passed in both full attempts; they are not counted as skips:
+`test_roles_e2e.RolesOnRealOpenCode.test_paid_coder_and_read_only_reviewer`,
+`test_team_e2e.RealOpenCodeTeamTest.test_installed_skill_reaches_the_agent_on_its_next_turn`, and
+`test_team_e2e.RealOpenCodeTeamTest.test_two_agents_killed_mid_run_and_resumed`.
+
+Before committing inspected `git status`, `git diff --stat`, `git diff --name-only`, `git diff --check` and the
+staged scope. Exactly **11 §6 B files**: app entry routing, Workspace href, authorised route/DOM/browser tests,
+two READMEs, architecture, parity checklist, CURRENT_STATE and this report. No classic application code,
+engine, journal, adapter, schema, permissions, privacy or D7 changes. Main remains untouched. Commit/push
+only `feature/chat-first-redesign`, then stop for Opus review. Classic stays supported; no retirement or merge.
+Android Chrome remains the owner's accepted untested gap, not a passing test. Native surfaces and persistent
+bots remain deferred, as does the intentionally excluded in-flight skill-fetch race.

@@ -1,4 +1,4 @@
-"""M1 static routes preserve classic and API authentication."""
+"""M9 entry cutover preserves classic, pop-outs and API authentication."""
 import threading
 import unittest
 import urllib.error
@@ -30,13 +30,18 @@ class ChatRoutesTests(unittest.TestCase):
         return self.opener.open(self.url + path)
 
     def test_entries_and_security_headers(self):
-        with self.get('/') as response:
-            classic = response.read()
-        with self.get('/classic') as response:
-            self.assertEqual(response.read(), classic)
-        for path in ('/chat', '/chat/'):
+        for path in ('/', '/?run=example', '/?notpopout=coder-1', '/chat', '/chat/'):
             with self.subTest(path=path), self.get(path) as response:
                 self.assertEqual(response.read(), (ROOT / 'chat/index.html').read_bytes())
+                self.assertEqual(response.headers['Content-Type'], 'text/html; charset=utf-8')
+                self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        for path in ('/classic', '/classic/', '/classic?popout=coder-1&run=example',
+                     '/?popout=coder-1&run=example', '/?run=example&popout=',
+                     '/?%70opout=coder-1&run=example'):
+            with self.subTest(path=path), self.get(path) as response:
+                self.assertEqual(response.read(), (ROOT / 'index.html').read_bytes())
                 self.assertEqual(response.headers['Content-Type'], 'text/html; charset=utf-8')
                 self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
                 self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
@@ -49,6 +54,11 @@ class ChatRoutesTests(unittest.TestCase):
             with self.subTest(asset=asset.name), self.get('/chat/' + asset.name + '?v=1') as response:
                 self.assertEqual(response.read(), asset.read_bytes())
                 kind = 'text/css' if asset.suffix == '.css' else 'text/javascript'
+                self.assertEqual(response.headers['Content-Type'], kind + '; charset=utf-8')
+        for name in ('app.js', 'app.css', 'themes.css', 'workspace.js', 'workspace.css'):
+            with self.subTest(asset=name), self.get('/' + name) as response:
+                self.assertEqual(response.read(), (ROOT / name).read_bytes())
+                kind = 'text/css' if name.endswith('.css') else 'text/javascript'
                 self.assertEqual(response.headers['Content-Type'], kind + '; charset=utf-8')
 
     def test_invalid_assets(self):

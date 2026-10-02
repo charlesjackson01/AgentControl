@@ -71,9 +71,10 @@ def handler(controller, key):
 
         def do_GET(self):
             path = urllib.parse.urlsplit(self.path)
-            if path.path in ('/', '/classic'):
+            if path.path in ('/classic', '/classic/') or (path.path == '/' and
+                    'popout' in urllib.parse.parse_qs(path.query, keep_blank_values=True)):
                 return self.reply(200, (ROOT / 'index.html').read_text(), 'text/html; charset=utf-8')
-            if path.path in ('/chat', '/chat/'):
+            if path.path in ('/', '/chat', '/chat/'):
                 return self.reply(200, (ROOT / 'chat' / 'index.html').read_bytes(), 'text/html; charset=utf-8')
             if path.path.startswith('/chat/'):
                 import re

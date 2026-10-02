@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (G3 cleared by the owner; M9 Part B authorised; not started).
+**Last updated:** 2026-10-02, by Codex (M9 Part B cutover complete and verified; awaiting Opus review).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` §5, Part B (authorised; not started) |
+| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` §5–§7, Part B cutover (complete; awaiting Opus review) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -37,15 +37,16 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
-| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 cleared (Android Chrome accepted as not performed); Part B authorised, not started** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
-| **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; app and sheets follow the visible area above the keyboard, frozen while pinch-zoomed; rail waiting line and visible Workspace links; isolated device fixture confined to its temporary folder; reliable focus return. **Physical-device checks: Not performed** |
+| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **Part B complete and verified, awaiting Opus review** | Codex, then the owner | All owner gates cleared at `ae4bcb8`; G2 (a) retains classic surfaces, G3 accepts Android Chrome as not performed. Plain `/` is chat; `/chat` aliases it; `/classic` and `/classic/` retain classic; root pop-out URLs remain compatible. 72 parity rows retain their statuses (17 Native, 54 Linked, 1 not ported, 0 Missing). No merge into main |
+| **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; keyboard viewport handling with pinch-zoom freeze; visible waiting/Workspace links; isolated fixture; reliable focus return. **Owner-reported iPhone 17 Pro / Safari checklist passed; Android Chrome not performed (owner-accepted gap)** |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
-`/chat` shows real project sessions, members and Connections, with authenticated SSE and polling fallback.
+`/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
 The room composer starts sessions and follow-ups, sends notes and offers the M4 controls through existing endpoints.
 Actionable cards now expose the M5 permission, question, team, research, skill and outcome decisions in the room.
-Classic remains the fallback for truncated or unsupported review; `/` and `/classic` serve the unchanged classic UI.
+Classic remains the fallback for truncated or unsupported review at `/classic` and `/classic/`. Root URLs with a
+`popout` query retain classic compatibility; chat Workspace pop-outs use `/classic?popout=…&run=…`.
 The new read-only endpoints project the journal with bounded messages, stable ids/revisions and cursor paging.
 The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` supplies live members and Connections; a guarded historical read supplies selected team details. The rail combines live runs with loaded thread sessions. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
 M4.1 cleans legacy stored titles/checks, preserves per-session fields on failed starts, and clears them after success
@@ -132,9 +133,9 @@ Every failing test passed in isolation; the fifth unchanged full run passed (259
 checks alongside it. Exact names, outcomes and preserved logs are in the M7 report. No runtime setting or skip
 was changed.
 
-## The app today (classic UI)
+## The app today
 
-- **Server:** `agent-autonomy/app.py`, standard-library HTTP. It serves classic at `/` and `/classic`, chat at `/chat`, and every `/api/*` route needs `Authorization: Bearer <dashboard key>`.
+- **Server:** `agent-autonomy/app.py`, standard-library HTTP. Chat is at `/` and `/chat`; classic is at `/classic` and `/classic/`, with root `popout` compatibility. Every `/api/*` route needs `Authorization: Bearer <dashboard key>`.
   - The key is in `agent-autonomy/state/dashboard.key`, which is gitignored.
   - Live updates: `GET /api/events` (SSE change notices), then re-read `GET /api/state`.
 - **Engine:** `agent-autonomy/engine.py` (`Controller`). Hermes plans each turn, and OpenCode agents carry it out. It supports:
@@ -186,8 +187,9 @@ was changed.
 - **M9 gates (updated 2026-10-02).**
   - **G1 is cleared** (17 Native, 54 Linked, 1 not ported; classic stays at `/classic`; C1 approved).
   - **G2 is approved: (a).**
-  - **G3 is pending.**
-  - **The cutover (Part B) must not start** until the owner explicitly clears G3.
+  - **G3 is cleared by the owner:** iPhone 17 Pro / Safari passed; Android Chrome accepted as not performed.
+  - **Part B is complete and verified**, awaiting Opus review; no main merge or
+    classic retirement is authorised.
 - **M8 rail disclosure approved by the owner (2026-10-01).**
   - The behaviour:
     - "Showing X of N sessions" is hidden when every session is listed (X = N).
@@ -243,18 +245,14 @@ was changed.
    - **G2:** (a) approved
    - **G3:** cleared. iPhone 17 Pro / Safari passed; **Android Chrome was accepted by the owner as not performed**
      (no device).
-2. **Codex implements M9 Part B**, exactly per `docs/handoffs/M9_PARITY_AND_CUTOVER.md` §5–§7:
-   - routing `/` → chat, `/chat` as an alias, `/classic` and `/classic/` → classic
-   - the C1 `/?popout=…` → classic compatibility rule
-   - the chat pop-out href → `/classic?popout=…`
-   - the README and architecture route updates
-   - the tests, and the real-server walkthrough at `/`
-3. Opus reviews Part B. **Merging into `main` and retiring classic remain separate owner decisions**, and neither is
+2. **Opus reviews M9 Part B.** The completion report records route,
+   compatibility, shared-key smoke and real-server walkthrough evidence.
+3. **Merging into `main` and retiring classic remain separate owner decisions**, and neither is
    authorised.
 
 Still deferred:
 - native surface viewing and input (G2)
-- native phone-keyboard and assistive-technology testing (G3)
+- physical Android Chrome keyboard and assistive-technology testing (owner-accepted untested gap)
 - the in-flight skill-fetch race (the D7 boundary)
 - R1 persistent bots (the roadmap, architecture §12.1)
 
@@ -335,3 +333,26 @@ Separately, for the owner: the timing-sensitive backend tests keep needing rerun
   active Workspace reads, recorded output growth/diff/passed verification, Back/refresh/Escape/summary focus,
   **36 GET / zero browser POST / zero page errors**, and shutdown cleanup. Actual desktop, tablet, portrait and
   landscape renders inspected. Native device results remain **Not performed**; stop for Opus re-review.
+
+## M9 Part B cutover verification (2026-10-02)
+
+- Started clean, pulled to owner-gate commit `ae4bcb8`. G1 cleared; G2 (a) retains classic surfaces; G3 cleared
+  on the owner's iPhone 17 Pro / Safari report, with Android Chrome accepted as not performed.
+- Only `do_GET` entry routing and the chat Workspace pop-out prefix change in product code: plain `/` is chat;
+  `/chat` and `/chat/` are aliases; `/classic` and `/classic/` serve classic; root `popout` queries preserve C1.
+  Assets, security headers, API/auth/SSE, engine, journal, approvals, D7 and classic application code are unchanged.
+- Focused routes **4/4**, classic **82/82**, chat **255/255**. Only two earlier exact pop-out href assertions
+  change, listed by name in the completion report. Final Python **424, OK (skipped=3), 390.184 s**, full retry
+  run alone. First run hit the documented unchanged VM console-log race; isolated test passed (1.179 s).
+  Logs/exact assertion are recorded. Container, desktop-preview and KVM skips are environment gates, not passes;
+  real-OpenCode tests run and pass. No backend/test/runtime setting or skip changed to resolve the failure.
+- Browser **672 combinations + 66 regressions, 1,168 screenshots**, first full attempt: existing 61 cases plus
+  five real HTTP cutover smoke cases. Root sign-in, shared remembered key, both classic paths and new/old
+  pop-outs pass. Existing keyboard/accessibility/contrast checks and **57/105 px** phone footers remain intact.
+- Real `/` walkthrough **8/8**: **67 GET (64 API fetches + three SSE) / eight POST**; fully paged waiting/actions
+  and cards/outcomes invariant at every checkpoint. Separate `/classic` same-key smoke **10 GET / zero POST**.
+  No classic loads during the eight steps, no page errors; recorded Workspace output, Verify, confirmed Apply
+  and inherited follow-up pass. Disposable projects/state cleaned after final checks; actual renders inspected.
+- READMEs and architecture routes updated; parity stays **17 Native / 54 Linked / one not ported / zero Missing**.
+  Final results, harness corrections and evidence are in the appended M9 Part B report. Await Opus review;
+  no merge into main, classic retirement, native surfaces or persistent bots.

@@ -1,7 +1,8 @@
 # M9 Part A parity checklist
 
 **Audit date:** 2026-10-02. **Product audited:** `568534e` (separate M9 Part 0 N1 commit), on
-`feature/chat-first-redesign`. This is an audit, not owner parity sign-off or a route cutover.
+`feature/chat-first-redesign`. The tables retain the original Part A audit evidence; Part B cutover status is
+recorded below without reclassifying classic-linked features as native.
 
 | Status | Rows |
 |---|---:|
@@ -16,11 +17,12 @@ Counts include deliberate overlapping feature/view/facet rows; they are not uniq
 
 **Owner decision (2026-10-02): G1 cleared.** The owner accepts these 17 Native, 54 Linked to classic and
 1 Intentionally not ported rows. Classic stays accessible at `/classic` for linked functionality, and C1
-pop-out compatibility is approved. G3 (physical devices) is still pending, so the cutover is not authorised.
+pop-out compatibility is approved. **G2 (a) is approved and G3 is cleared by the owner:** iPhone 17 Pro / Safari
+passed; Android Chrome was accepted as not performed. Part B implements the authorised route cutover.
 
 **Missing:** none found with the documented classic fallbacks available. This does not mean full native parity.
-The owner must decide whether the linked functionality is sufficient for G1. Physical-device behavior is not
-classified as verified by this browser audit; G3 remains pending.
+The owner accepted the linked functionality for G1. Physical-device behavior is not classified as verified by
+this browser audit; the owner's G3 report is in `docs/DEVICE_CHECKLIST.md`.
 
 **Linked to classic (complete row list):**
 
@@ -33,8 +35,8 @@ classified as verified by this browser audit; G3 remains pending.
 **Link navigation matters.** The six More items all have the exact href `/classic`. They do not deep-link
 or select their named classic views. After following one, select that view in classic. Composer fallback links
 also use `/classic`. Workspace's **Open in classic pop-out** currently has the exact href
-`/?popout=<encoded agent>&run=<encoded session>`; it opens a standalone classic view today because `/` still
-serves classic. Part B must later change it, under the gates. “Linked” never means native in this document.
+`/classic?popout=<encoded agent>&run=<encoded session>` after Part B; it opens a standalone classic view.
+Old root `/?popout=…` links also remain compatible. “Linked” never means native in this document.
 
 Product paths in tables are relative to `agent-autonomy/` unless another root is named. Evidence codes are
 expanded below into exact passing test names and actual screenshot/real-server paths. No product/test file
@@ -309,7 +311,7 @@ W7 checks recorded workspace state plus actual base-checkout files. Apply merges
 project's base branch; AgentControl's `main` is untouched. W8 checks the recorded parent relation.
 No local receipt or waiting-count update is used as proof of success.
 
-## Cutover-readiness findings — documentation only
+## Cutover-readiness findings — original Part A inventory
 
 Searched all `chat/*`, classic `index.html`, `app.js`, `workspace.js`, CSS, both READMEs and the tests for
 root navigation, pop-out links, pathname usage, route assumptions and dashboard tutorials. The raw search
@@ -367,16 +369,40 @@ The app.py route swap, `/classic/` behavior, any href updates and README edits a
 
 ## Owner gates and remaining limitations
 
-- **G1 pending:** owner accepts this 72-row checklist, including all 54 Linked rows and zero Missing rows, as
+- **G1 cleared:** owner accepts this 72-row checklist, including all 54 Linked rows and zero Missing rows, as
   sufficient for cutover. Zero Missing means reachable functionality, not full native parity.
 - **G2 choice (a) already recorded by owner:** interactive surfaces remain in the standalone classic pop-out
   through cutover. Native surfaces require their own later handoff.
-- **G3 pending:** physical iOS Safari and Android Chrome checks in `docs/DEVICE_CHECKLIST.md` remain blank.
-  Native keyboards, rotation with those keyboards and VoiceOver/TalkBack have not been verified by emulation.
+- **G3 cleared by the owner:** iPhone 17 Pro / Safari passed; Android Chrome remains **Not performed**, an
+  owner-accepted gap. OS/browser/reader versions were not supplied. Emulation does not verify native behavior.
 - Classic stays supported. Retirement and any merge into `main` require separate owner decisions.
 - The intentionally excluded in-flight skill-fetch race remains outside D7. Persistent bots remain roadmap R1.
-- No feature is added or corrected in Part A. Any owner-refused parity/device gate needs the architect's
-  corrective handoff before Part B.
+- Part B changes only routes, the pop-out href, tests and documentation; it ports no further functionality.
+
+## Part B cutover status — 2026-10-02
+
+All three gates are recorded at `ae4bcb8`. The route cutover implements chat at `/`, keeps `/chat` and `/chat/`
+as aliases, and retains classic at `/classic` and `/classic/`. Root URLs with a `popout` parameter still serve
+classic (C1); chat Workspace links now use `/classic?popout=…&run=…`. No further broken chat link was found in
+the Part A inventory. Classic code and all existing asset/API paths remain unchanged.
+
+The **17 Native / 54 Linked / 1 intentionally not ported / 0 Missing** classifications remain unchanged.
+Both READMEs distinguish default chat from classic-only controls, themes and interactive surfaces. The source
+assumptions and evidence above describe the original audit; its deferred routing/href/doc dispositions are now
+implemented and verified by the Part B checks.
+
+Repeated the eight-step real-server walkthrough at `/`, with the existing test fakes and one disposable git
+project. **8/8 steps passed**, **67 GETs (64 API fetches plus three SSE reads) / eight POSTs**, no classic document
+loads during those steps. Waiting equals actionable non-outcome messages at every fully paged checkpoint;
+cards equal those actions plus the single actionable outcome. The separate same-key `/classic` smoke is
+**HTTP 200, 10 GET / zero POST**, with no second sign-in or page errors. Temporary data is removed on shutdown.
+Evidence: `/tmp/ac-m9b-real-results.json`, `/tmp/ac-m9b-real-check-retry.log` and `/tmp/ac-m9b-step-1.png` through
+`step-8.png`. The dedicated real HTTP browser smoke also opens both the new linked pop-out and C1 root pop-out
+as standalone classic views, using the shared remembered key and no browser POSTs.
+
+Final suite results and publication are recorded in the appended Part B completion report in
+`docs/handoffs/M9_PARITY_AND_CUTOVER.md`. Android Chrome remains explicitly **Not performed**; the owner's
+iPhone report is not a Codex device test. Await Opus review; neither main nor classic retirement is authorised.
 
 ## Final Part A verification — 2026-10-02
 

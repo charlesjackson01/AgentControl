@@ -269,7 +269,20 @@
     sheet.addEventListener('click',event=>{const node=event.target.closest('button');if(node?.id==='close-settings'){closeSettings();input.focus();}if(node?.id==='add-goal-check' && (currentSettings().goal_checks || []).length<limits.checks){setSetting('goal_checks',[...(currentSettings().goal_checks || []),'']);renderChecks();$('goal-checks').lastElementChild?.querySelector('input').focus();}if(node?.dataset.removeCheck!==undefined){setSetting('goal_checks',currentSettings().goal_checks.filter((_,i)=>i!==Number(node.dataset.removeCheck)));renderChecks();}});
     $('settings-scrim').addEventListener('click',()=>{closeSettings();input.focus();});
     sheet.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeSettings();input.focus();}if(event.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,input,select,summary,a')].filter(n=>!n.disabled && !n.closest('[hidden]') && (!n.closest('#settings-advanced') || $('settings-advanced').open || n.tagName==='SUMMARY'));const i=nodes.indexOf(document.activeElement);if(event.shiftKey && i===0 || !event.shiftKey && i===nodes.length-1){event.preventDefault();nodes[event.shiftKey?nodes.length-1:0]?.focus();}}});
-    if(root.visualViewport){const viewport=()=>{document.documentElement.style.setProperty('--viewport-height',root.visualViewport.height+'px');resize();};root.visualViewport.addEventListener('resize',viewport);root.visualViewport.addEventListener('scroll',viewport);viewport();}
+    if(root.visualViewport){
+      const viewport=()=>{
+        const vv=root.visualViewport,room=$('timeline'),scroll=room.scrollTop;
+        const following=room.scrollHeight-scroll-room.clientHeight<=32;
+        document.documentElement.style.setProperty('--viewport-height',vv.height+'px');
+        document.documentElement.style.setProperty('--viewport-top',(Math.abs((vv.scale || 1)-1)<0.01?vv.offsetTop || 0:0)+'px');
+        resize();
+        const focused=document.activeElement;
+        if(Math.abs((vv.scale || 1)-1)<0.01 && focused?.matches('input,textarea,select') && focused.closest('#decision-dialog,#settings-sheet'))focused.scrollIntoView?.({block:'nearest'});
+        // Read layout after resizing before the browser dispatches the timeline's scroll event.
+        room.scrollTop=following?room.scrollHeight:scroll;
+      };
+      root.visualViewport.addEventListener('resize',viewport);root.visualViewport.addEventListener('scroll',viewport);viewport();
+    }
     return {render,submit,control,reply,openSettings,closeSettings,activeTitle,getView:view,getBusy:()=>busy || !!previewTask || !!core.getState().writeOwner};
   }
   const composer={composerState,parseSlash,parseMention,runBody,noteBody,followUpDefaults,limits,mount};root.AC=root.AC || {};root.AC.composer=composer;

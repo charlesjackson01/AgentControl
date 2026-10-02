@@ -15,6 +15,7 @@ async function harness(state = fixture(), options = {}) {
   for(const [k,v] of Object.entries(options.local || {}))local.set(k,v);
   for(const [k,v] of Object.entries(options.session || {}))session.set(k,v);
   window.matchMedia=()=>({matches:!!options.coarse});
+  window.visualViewport=options.visualViewport || null;
   // linkedom's select.value has no setter; mirror the browser for dynamic Settings forms.
   Object.defineProperty(window.HTMLSelectElement.prototype,'value',{configurable:true,get(){return (this.querySelector('option[selected]') || this.querySelector('option'))?.value || '';},set(value){for(const option of this.querySelectorAll('option')){if(option.value===String(value))option.setAttribute('selected','');else option.removeAttribute('selected');}}});
   let activeElement=null;Object.defineProperty(document,'activeElement',{get:()=>activeElement,configurable:true});window.HTMLElement.prototype.focus=function(){if(activeElement!==this){activeElement=this;this.dispatchEvent(new window.Event('focusin',{bubbles:true}));}};
@@ -1318,6 +1319,34 @@ test('M9 N1 cached sessions exceeding the server total do not show an incomplete
 
 test('M8 E empty final history page retains button focus and cannot trigger another read',async()=>{
   const pages=fx.threadLong(),h=await harness(richCompleted(),{thread:pages[0],respond:url=>url.includes('before=')?{...pages[1],messages:[],before:null}:undefined}),button=h.document.querySelector('#load-earlier'),ids=[...h.core.getState().thread.ids];button.focus();button.click();await tick();await tick();assert(button.isConnected,'An empty page must retain its focus target');assert(h.document.activeElement===button,'Focus stays on the original paging control');assert.equal(button.getAttribute('aria-busy'),'false');assert.equal(button.getAttribute('aria-disabled'),'true');assert.equal(h.core.getState().thread.before,null);assert.deepEqual([...h.core.getState().thread.ids],ids);const reads=h.calls.length;button.click();await tick();assert.equal(h.calls.length,reads);h.document.querySelector('#composer').focus();h.options.respond=url=>url.startsWith('/api/thread')?{...pages[0],before:null}:undefined;await h.core.refresh();assert.equal(!!h.document.querySelector('#load-earlier'),false);assert.equal(posts(h).length,0);
+});
+
+
+test('M9.1 A visual viewport resize and scroll project height and scale-gated top',async()=>{
+  const vv=new EventTarget();Object.assign(vv,{width:390,height:844,offsetTop:0,offsetLeft:0,scale:1});
+  const h=await harness(fixture(),{visualViewport:vv}),style=h.document.documentElement.style;
+  assert.equal(style.getPropertyValue('--viewport-height'),'844px');assert.equal(style.getPropertyValue('--viewport-top'),'0px');
+  vv.height=480;vv.offsetTop=260;vv.dispatchEvent(new Event('resize'));
+  assert.equal(style.getPropertyValue('--viewport-height'),'480px');assert.equal(style.getPropertyValue('--viewport-top'),'260px');
+  vv.offsetTop=180;vv.dispatchEvent(new Event('scroll'));assert.equal(style.getPropertyValue('--viewport-top'),'180px');
+  vv.scale=2;vv.offsetTop=300;vv.dispatchEvent(new Event('scroll'));assert.equal(style.getPropertyValue('--viewport-top'),'0px');
+  vv.scale=1.005;vv.dispatchEvent(new Event('resize'));assert.equal(style.getPropertyValue('--viewport-top'),'300px');
+  vv.height=844;vv.scale=1;vv.offsetTop=0;vv.dispatchEvent(new Event('resize'));assert.equal(style.getPropertyValue('--viewport-height'),'844px');assert.equal(style.getPropertyValue('--viewport-top'),'0px');assert.equal(posts(h).length,0);
+});
+test('M9.1 A viewport changes preserve following newest and a scrolled-up position',async()=>{
+  const vv=new EventTarget();Object.assign(vv,{height:844,offsetTop:0,scale:1});const h=await harness(fixture(),{visualViewport:vv}),node=h.timeline;
+  let height=400,top=600;Object.defineProperties(node,{scrollHeight:{value:1000,configurable:true},clientHeight:{get:()=>height,configurable:true},scrollTop:{get:()=>top,set:v=>top=Math.min(v,1000-height),configurable:true}});
+  // Applying the CSS variable forces a smaller viewport in the browser; simulate that layout here.
+  let nextHeight=480;Object.defineProperty(vv,'height',{get(){height=nextHeight-200;return nextHeight;},configurable:true});
+  vv.dispatchEvent(new Event('resize'));assert.equal(top,720,'Following keeps the newest message visible');
+  top=120;nextHeight=400;vv.dispatchEvent(new Event('resize'));assert.equal(top,120,'Scrolled-up history must not jump to newest');assert.equal(posts(h).length,0);
+});
+test('M9.1 A missing visualViewport leaves existing layout fallbacks untouched',async()=>{
+  const h=await harness();assert.equal(h.document.documentElement.style.getPropertyValue('--viewport-height'),'');assert.equal(h.document.documentElement.style.getPropertyValue('--viewport-top'),'');assert.equal(posts(h).length,0);
+});
+test('M9.1 A viewport meta enables keyboard layout resize while preserving user zoom',async()=>{
+  const h=await harness(),meta=h.document.querySelector('meta[name="viewport"]').content;
+  assert.match(meta,/interactive-widget=resizes-content/);assert(!/maximum-scale|user-scalable/.test(meta));
 });
 
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

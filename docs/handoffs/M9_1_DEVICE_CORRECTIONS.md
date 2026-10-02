@@ -231,3 +231,57 @@ B routing.
 If this handoff conflicts with `docs/REDESIGN_ARCHITECTURE.md`, stop and record the conflict instead of choosing silently.
 
 ---
+
+## Part A completion report — 2026-10-02
+
+Part A is complete before Parts B/C begin. Synced the clean feature branch to `3012231`; the product frontend
+is byte-identical to `62cf3cc` (`git diff 62cf3cc 3012231 -- agent-autonomy/chat` empty).
+
+### Changes
+
+- Added `--type-input: 16px`, expressed relative to root text size. All visible inputs except checkbox/radio,
+  textareas and selects compute at least 16 px, including sign-in, custom answers, Settings and decision fields.
+  Root text zoom remains supported; no maximum-scale/user-scalable restriction. Assets use `?v=9` and the
+  viewport meta includes `interactive-widget=resizes-content`.
+- Existing visualViewport resize/scroll handler sets height and top, with offset applied only within 0.01 of
+  scale 1. Pinch scale 2/offset 300 leaves app top 0. No handler/variable writes without visualViewport.
+- Fixed app frame follows that viewport. Sheet maximum height is 75% and composer growth 40% of its height.
+  Portrait sheets use its bottom; landscape keeps the existing horizontally centred, ≤560 px cards at that
+  bottom. Tablet portrait cards centre in both axes inside it. Stop and context are covered as well.
+- Focused sheet text fields remain reachable; the Settings header and decision buttons stay available when
+  scrolling. The timeline follows newest across shrinkage only when already following; scrolled-up position stays.
+- The first full matrix caught the literal-note font wrapping at 129 px (`/tmp/ac-m91-a-browser.log`). Reduced
+  portrait composer horizontal padding using existing spacing tokens; the same note now fits, with no smaller
+  font or relaxed footer budget.
+
+### Regression proof and verification
+
+New tests were written before product fixes. Preserved frontend plus final new tests are under
+`/tmp/ac-m91-before-a/` (no reset/restore). DOM baseline: **241/244**, only the new missing top, timeline follow
+anchor and viewport-meta defect tests fail; the separate fallback-preservation check passes. Log:
+`/tmp/ac-m91-a-before-dom-final.log`. Browser baseline: all **6** portrait/landscape/tablet × light/dark cases
+fail for 15 px entry, ignored offset, sheet bounds/focus or newest position;
+`/tmp/ac-m91-a-before-browser-final.log`, `/tmp/chat-shots-m91-a-before-final/device-viewport-results.json`.
+Before-fix out-of-view Close controls also prevent normal cleanup in four cases, as recorded in that artifact.
+
+After-fix DOM **244/244**, classic **82/82**: `/tmp/ac-m91-a-dom-final.log`, `/tmp/ac-m91-a-classic.log`.
+Full browser **672 combinations + 57 regressions**, **1,151 screenshots**:
+`/tmp/ac-m91-a-browser-final.log`, `/tmp/chat-shots-m91-a-final/`. All six fake-viewport cases pass 14 checks each:
+keyboard height 480 (portrait/tablet) or 240 (landscape), offsets 0/260, focused confirmation/Settings, Stop/context,
+scale 2, close/restore, scrolled-up history and growth. Portrait footer bottoms are exactly 480/740;
+landscape 240/500. These are geometry checks with the layout viewport unchanged, not native keyboard claims.
+
+Footer remains **57 px idle / 105 px waiting**, portrait conversation ≥ **70.0829%**, landscape ≥ **58.3333%**.
+The matrix audits every visible text entry at each M8 size and appearance, including 200% root text zoom;
+minimum font is 16 px. All existing footer, target, contrast, accessibility, focus and privacy checks pass.
+Full Python verification is reserved for the final Part C gate (no Python file changed in Part A).
+
+Actual inspected renders: `composerLiteral-phone-light.png`, `device-critical-phone-light.png`,
+`device-critical-landscape-light.png`, `device-critical-tablet-dark.png`, `device-settings-phone-dark.png`
+under `/tmp/chat-shots-m91-a-final/` or its focused predecessor `/tmp/chat-shots-m91-a-focus2/`.
+The confirmation field and safe buttons remain in view; the short card may scroll its title, retaining the
+complete review in the room and scrollable confirmation content.
+
+**Earlier assertion rewrites: none.** No permission/decision semantics, API, Python product, classic, schema,
+engine, data, routes or `decisions.js` change. Checked status/stat/names/whitespace before the separate commit.
+G3 remains pending; M9 Part B, native surfaces, R1 and the in-flight skill-fetch race remain excluded.

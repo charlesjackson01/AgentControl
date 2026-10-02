@@ -17,6 +17,7 @@ const keyboardOnly=process.argv.includes('--keyboard-only');
 const viewports=keyboardOnly?{}:viewportFilter?{[viewportFilter]:matrixViewports[viewportFilter]}:matrixViewports;
 const focusMeasurements=[],targetMeasurements=[];
 const accessibilityMeasurements=[];
+const inputFontMeasurements=[];
 async function accessibilityAudit(page,name,size){
  const findings=await page.evaluate(()=>{
   const errors=[],all=[...document.querySelectorAll('*')],ids=new Set();
@@ -34,8 +35,55 @@ async function accessibilityAudit(page,name,size){
   if(document.querySelectorAll('#live').length!==1 || document.querySelectorAll('#waiting-live').length!==1)errors.push('Missing stable live regions');
   return errors;
  });
+ const inputs=await page.locator('input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),textarea,select').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length && getComputedStyle(n).visibility!=='hidden').map(n=>({id:n.id || n.name || n.className,font:parseFloat(getComputedStyle(n).fontSize)})));
+ inputFontMeasurements.push({name,size,inputs});assert(inputs.every(n=>n.font>=16),name+'/'+size+' text entry must compute at least 16 px: '+JSON.stringify(inputs));
  accessibilityMeasurements.push({name,size,findings});assert.deepEqual(findings,[],name+'/'+size+' accessibility audit');
 }
+
+// The layout viewport stays fixed: this reproduces keyboard panning, unlike setViewportSize().
+async function deviceViewportCases(browser,out){
+ const results=[];let shots=0;
+ for(const [size,[width,height]] of Object.entries({phone:[390,844],landscape:[844,390],tablet:[768,1024]}))for(const colorScheme of ['light','dark']){
+  const page=await browser.newPage({viewport:{width,height},colorScheme}),record={size,colorScheme,checks:[],failures:[]};let f=fx.decisionFixture('critical');const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  page.setDefaultTimeout(4000);
+  const check=async(name,fn)=>{try{const evidence=await fn();record.checks.push({name,...evidence});}catch(e){record.failures.push({name,error:e.message});}};
+  try{
+   f.thread.messages.unshift(fx.threadMessage('ev:device-history','goal',Array.from({length:90},(_,i)=>'Recorded history line '+i).join('\n')));
+   await page.addInitScript(({width,height})=>{const vv=new EventTarget();Object.assign(vv,{width,height,offsetTop:0,offsetLeft:0,scale:1});Object.defineProperty(window,'visualViewport',{value:vv,configurable:true});window.setTestViewport=(values,event='resize')=>{Object.assign(vv,values);vv.dispatchEvent(new Event(event));};},{width,height});
+   await page.route('**/*',async route=>{const u=new URL(route.request().url());assert.notEqual(route.request().method(),'POST','Device geometry must not make decisions');if(u.pathname.startsWith('/api/'))return route.fulfill({status:u.pathname==='/api/events'?503:200,contentType:'application/json',body:JSON.stringify(u.pathname==='/api/state'?f.state:u.pathname==='/api/channels'?f.channels:u.pathname==='/api/thread'?f.thread:u.pathname==='/api/workspace/preflight'?fx.composerPreflight:{})});const file=u.pathname==='/chat'?'index.html':u.pathname.slice('/chat/'.length);return route.fulfill({path:path.join(root,file),contentType:{'.html':'text/html','.js':'text/javascript','.css':'text/css'}[path.extname(file)]});});
+   await page.goto('http://agentcontrol.test/chat');await check('sign-in input font',async()=>{await accessibilityAudit(page,'device-sign-in',size);});await page.evaluate(()=>AC.core.connect('test-key',false));await page.locator('[data-decision="approve"]').waitFor();await page.evaluate(()=>AC.core.stop());
+   await check('viewport meta and input font',async()=>{const meta=await page.locator('meta[name="viewport"]').getAttribute('content');assert(meta.includes('interactive-widget=resizes-content'));assert(!/maximum-scale|user-scalable/.test(meta));await accessibilityAudit(page,'device-room',size);});
+   const originalFooter=await page.locator('#room-footer').boundingBox(),keyboardHeight=Math.min(480,height-150);
+   for(const offsetTop of [0,260])await check('keyboard composer offset '+offsetTop,async()=>{
+    await page.evaluate(({height,offsetTop})=>{const t=document.getElementById('timeline');t.scrollTop=t.scrollHeight;setTestViewport({height,offsetTop,scale:1});},{height:keyboardHeight,offsetTop});await page.evaluate(()=>new Promise(requestAnimationFrame));
+    for(const selector of ['#composer','#send-message','#composer-target']){const b=await page.locator(selector).boundingBox();assert(b.y>=offsetTop-1 && b.y+b.height<=offsetTop+keyboardHeight+1,selector+' outside visual viewport');}
+    const footer=await page.locator('#room-footer').boundingBox();assert(Math.abs(footer.y+footer.height-(offsetTop+keyboardHeight))<=1,'Footer bottom must equal visual viewport bottom');const bottom=await page.locator('#timeline').evaluate(n=>n.scrollHeight-n.scrollTop-n.clientHeight);assert(bottom<=1,'Newest message stays visible');return {footerBottom:footer.y+footer.height,height:keyboardHeight,offsetTop,bottom};
+   });
+   await check('scrolled-up history survives keyboard resize',async()=>{await page.evaluate(h=>{setTestViewport({height:h,offsetTop:0});const t=document.getElementById('timeline');t.scrollTop=120;},height);await page.evaluate(()=>new Promise(requestAnimationFrame));const before=await page.locator('#timeline').evaluate(n=>n.scrollTop);await page.evaluate(h=>setTestViewport({height:h,offsetTop:260}),keyboardHeight);const after=await page.locator('#timeline').evaluate(n=>n.scrollTop);assert.equal(after,before);return {before,after};});
+   await check('pinch zoom applies no top compensation',async()=>{await page.evaluate(()=>setTestViewport({scale:2,offsetTop:300},'scroll'));const b=await page.locator('#app').boundingBox();assert.equal(b.y,0);assert.equal(await page.locator('html').evaluate(n=>n.style.getPropertyValue('--viewport-top')),'0px');});
+   await page.evaluate(h=>setTestViewport({height:h,offsetTop:0,scale:1}),height);
+   await page.locator('[data-decision="approve"]').click();await page.locator('#decision-dialog[open]').waitFor();assert(await page.evaluate(()=>document.activeElement.hasAttribute('data-cancel-decision')));await page.locator('#decision-dialog [name="confirm"]').focus();
+   for(const offsetTop of [0,260])await check('focused critical sheet offset '+offsetTop,async()=>{
+    await page.evaluate(({height,offsetTop})=>setTestViewport({height,offsetTop,scale:1}),{height:keyboardHeight,offsetTop});const sheet=await page.locator('#decision-dialog').boundingBox();assert(sheet.height<=keyboardHeight*.75+1);
+    if(size==='tablet')assert(Math.abs(sheet.y+sheet.height/2-(offsetTop+keyboardHeight/2))<=1,'Tablet card centred in visual viewport');else assert(Math.abs(sheet.y+sheet.height-(offsetTop+keyboardHeight))<=1,'Decision sheet bottom follows visual viewport');
+    for(const sel of ['[name="confirm"]','[data-cancel-decision]','[data-confirm-decision]']){const b=await page.locator('#decision-dialog '+sel).boundingBox();assert(b.y>=offsetTop-1 && b.y+b.height<=offsetTop+keyboardHeight+1,'Confirmation controls outside viewport');}
+    await accessibilityAudit(page,'device-confirm',size);return {sheet};
+   });
+   await page.evaluate(()=>setTestViewport({offsetTop:0}));await page.screenshot({path:path.join(out,'device-critical-'+size+'-'+colorScheme+'.png')});shots++;await page.locator('[data-cancel-decision]').click();
+   await page.evaluate(h=>setTestViewport({height:h,offsetTop:0}),height);await page.locator('#session-menu > summary').click();await page.locator('[data-session-control="stop"]').click();
+   await check('Stop sheet above panned keyboard',async()=>{await page.evaluate(h=>setTestViewport({height:h,offsetTop:260}),keyboardHeight);const b=await page.locator('#stop-dialog').boundingBox();assert(b.y>=260-1 && b.y+b.height<=260+keyboardHeight+1);if(size!=='tablet')assert(Math.abs(b.y+b.height-(260+keyboardHeight))<=1);});await page.evaluate(()=>setTestViewport({offsetTop:0}));await page.locator('#cancel-stop').click();
+   await page.evaluate(h=>setTestViewport({height:h,offsetTop:0}),height);await page.evaluate(()=>{location.hash='#/s/run_test';AC.shell.route();});await page.locator('#context:not([hidden])').waitFor();
+   await check('context sheet within panned viewport',async()=>{await page.evaluate(h=>setTestViewport({height:h,offsetTop:260}),keyboardHeight);const b=await page.locator('#context').boundingBox();assert(b.height<=keyboardHeight*.75+1);if(size==='tablet')assert(Math.abs(b.y+b.height/2-(260+keyboardHeight/2))<=1);else assert(Math.abs(b.y+b.height-(260+keyboardHeight))<=1);});await page.evaluate(h=>setTestViewport({height:h,offsetTop:0}),height);await page.locator('#close-context').click();
+   f=fx.composerFixture('new');await page.evaluate(()=>{location.hash='#/';AC.shell.route();});await page.evaluate(()=>AC.core.refresh());await page.evaluate(h=>setTestViewport({height:h,offsetTop:0}),height);await page.locator('#composer-settings').click();await page.locator('#settings-sheet:not([hidden])').waitFor();await page.locator('#settings-advanced > summary').click();await page.locator('[data-setting="max_steps"]').focus();
+   for(const offsetTop of [0,260])await check('focused Settings offset '+offsetTop,async()=>{await page.evaluate(({height,offsetTop})=>setTestViewport({height,offsetTop}),{height:keyboardHeight,offsetTop});const sheet=await page.locator('#settings-sheet').boundingBox();assert(sheet.height<=keyboardHeight*.75+1);if(size==='tablet')assert(Math.abs(sheet.y+sheet.height/2-(offsetTop+keyboardHeight/2))<=1);else assert(Math.abs(sheet.y+sheet.height-(offsetTop+keyboardHeight))<=1);await page.locator('[data-setting="max_steps"]').scrollIntoViewIfNeeded();for(const selector of ['[data-setting="max_steps"]','#close-settings']){const b=await page.locator(selector).boundingBox();assert(b.y>=offsetTop-1 && b.y+b.height<=offsetTop+keyboardHeight+1,selector+' outside viewport');}await accessibilityAudit(page,'device-settings',size);return {sheet};});
+   await page.evaluate(()=>setTestViewport({offsetTop:0}));await page.screenshot({path:path.join(out,'device-settings-'+size+'-'+colorScheme+'.png')});shots++;await page.locator('#close-settings').click();
+   await check('close keyboard restores footer geometry',async()=>{await page.evaluate(h=>setTestViewport({height:h,offsetTop:0,scale:1}),height);const footer=await page.locator('#room-footer').boundingBox();assert(Math.abs(footer.y+footer.height-height)<=1);assert(footer.height<=72);return {waitingFooter:originalFooter.height,idleFooter:footer.height};});
+   await check('six-line growth uses visual height',async()=>{await page.evaluate(h=>setTestViewport({height:h,offsetTop:0}),keyboardHeight);await page.locator('#composer').fill('Multiline draft\n'.repeat(12));const b=await page.locator('#composer').boundingBox();assert(b.height<=keyboardHeight*.4+1);});assert.deepEqual(errors,[]);
+  }catch(e){record.failures.push({name:'setup/workflow',error:e.message});}finally{results.push(record);await page.close();}
+ }
+ fs.writeFileSync(path.join(out,'device-viewport-results.json'),JSON.stringify(results,null,2));const failures=results.flatMap(r=>r.failures.map(f=>({size:r.size,colorScheme:r.colorScheme,...f})));assert.deepEqual(failures,[]);return {shots,cases:results.length};
+}
+
 async function accessibilitySpots(browser,out){
  const failures=[];let count=0;
  for(const mode of ['reduced-motion','forced-colors'])for(const colorScheme of ['light','dark']){
@@ -177,12 +225,13 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  const longTitle='Long project '+('wide-title-' .repeat(80))+'<img src=x>';
  const longRoom=fx.composerFixture('active');longRoom.state.run.title=longTitle;longRoom.thread.sessions[0].title=longTitle;longRoom.channels=fx.threadChannels(longRoom.thread,1);longRoom.channels.channels[0].title=longTitle;composerCases.longRoom=longRoom;
  const longWorkspace=fx.workspaceDetails('workspaceHistorical');longWorkspace.state.run.title=longTitle;longWorkspace.thread.sessions[0].title=longTitle;longWorkspace.state.run.workspace.agents['coder-1'].branch='agent/'+('branch/'.repeat(100));longWorkspace.state.agents.find(a=>a.name==='coder-1').task=longTitle;workspaceCases.workspaceLong=longWorkspace;
- const measurements=[];let keyboardCases=0;
+ const measurements=[];let keyboardCases=0,deviceCases=0;
+ if(process.argv.includes('--device-viewport-only')){try{console.log((await deviceViewportCases(browser,out)).cases+' device viewport cases passed');}finally{await browser.close();}return;}
  if(process.argv.includes('--phone-panels-only')){try{console.log(await phonePanelCases(browser,out)+' phone panel cases passed');}finally{await browser.close();}return;}
  if(process.argv.includes('--empty-history-only')){try{console.log(await emptyHistoryCases(browser,out)+' empty history cases passed');}finally{await browser.close();}return;}
  if(process.argv.includes('--accessibility-spots-only')){try{const shots=await accessibilitySpots(browser,out);console.log(shots+' accessibility spot checks passed');}finally{await browser.close();}return;}
  const contrast=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));fs.writeFileSync(path.join(out,'contrast-measurements.json'),JSON.stringify(contrast,null,2));assert.deepEqual(contrast.filter(v=>v.ratio<v.minimum),[]);
- try {count+=await accessibilitySpots(browser,out);count+=await emptyHistoryCases(browser,out);count+=await phonePanelCases(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
+ try {const device=await deviceViewportCases(browser,out);count+=device.shots;deviceCases=device.cases;count+=await accessibilitySpots(browser,out);count+=await emptyHistoryCases(browser,out);count+=await phonePanelCases(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['light','dark']){
   combinations++;
   const pages=workspaceCases[name]?[workspaceCases[name].thread]:membersCases[name] ? [membersCases[name].thread,...(membersCases[name].older?[membersCases[name].older]:[])] : decisionCases[name] ? [decisionCases[name].thread] : composerCases[name] ? [composerCases[name].thread] : name==='threadLong' ? fx.threadLong() : [name==='empty' ? fx.threadResponse([],[]) : name==='threadTeam'||name==='team' ? fx.threadTeam() : name==='completed' ? fx.threadSingle() : fx.threadActive()];
   const page=await browser.newPage({viewport:{width,height},colorScheme,...(width<1200?{hasTouch:true,...(width<768 || size==='phone-landscape'?{isMobile:true}:{})}:{})});const errors=[];page.on('pageerror',err=>errors.push(err.message));
@@ -332,9 +381,10 @@ await page.locator('#composer').fill(Array.from({length:10},()=>"A full line of 
   await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#thread-items article').first().waitFor();await page.evaluate(()=>AC.core.stop());
   hold=true;await page.evaluate(()=>{window.pendingLiveRead=AC.core.refresh();});await held;const before=stateReads;await page.evaluate(()=>{location.hash='#/w/run_test/coder-1';AC.shell.route();});await page.locator('#workspace-terminal').waitFor();assert.equal(stateReads,before,'Opening during a live read must not add a read');f.state.steps[1].transcript.push({type:'text',text:'BROWSER-RACE-RECORDED-OUTPUT'});hold=false;release();await page.evaluate(()=>pendingLiveRead);assert((await page.locator('#workspace-terminal').textContent()).includes('BROWSER-RACE-RECORDED-OUTPUT'));await page.screenshot({path:path.join(out,'regression-workspace-live-focus-phone.png')});count++;await page.close();
  }
+ fs.writeFileSync(path.join(out,'input-font-measurements.json'),JSON.stringify(inputFontMeasurements,null,2));
  fs.writeFileSync(path.join(out,'accessibility-measurements.json'),JSON.stringify(accessibilityMeasurements,null,2));
  fs.writeFileSync(path.join(out,'target-measurements.json'),JSON.stringify(targetMeasurements,null,2));
  fs.writeFileSync(path.join(out,'focus-measurements.json'),JSON.stringify(focusMeasurements,null,2));
  fs.writeFileSync(path.join(out,'footer-measurements.json'),JSON.stringify(measurements,null,2));
- }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${19+keyboardCases} regression cases passed`);
+ }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${19+keyboardCases+deviceCases} regression cases passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Opus (G3 round 1 failed on devices; M9.1 corrective handoff written; Part B not authorised).
+**Last updated:** 2026-10-02, by Codex (M9.1 Part A complete; discoverability and isolated device tooling next; G3 pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -37,8 +37,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
-| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G2 choice (a) recorded; G1 and G3 pending |
-| **M9.1 Device corrections** | 📝 handoff ready | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Part A, composer and viewport (16 px inputs, visual-viewport pinning, sheets above the keyboard); Part B, mobile discoverability of approvals and Workspaces; Part C, the device-test fixture and checklist update |
+| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **G1 cleared, G2 (a) approved, G3 round 1 failed; M9.1 corrections; Part B not authorised** | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G1 cleared, G2 choice (a) recorded; G3 pending |
+| **M9.1 Device corrections** | 🚧 Part A complete | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: Part A, composer and viewport (16 px inputs, visual-viewport pinning, sheets above the keyboard); Part B, mobile discoverability of approvals and Workspaces; Part C, the device-test fixture and checklist update |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -261,3 +261,16 @@ Still deferred:
 - R1 persistent bots (the roadmap, architecture §12.1)
 
 Separately, for the owner: the timing-sensitive backend tests keep needing reruns (M7, M8).
+
+## M9.1 Part A verification (2026-10-02)
+
+- Synced clean `feature/chat-first-redesign` to approved handoff commit `3012231`.
+- Text entry uses a root-zoom-responsive 16 px token; app height/top and sheet bounds follow the visual viewport,
+  with top compensation disabled outside scale 1 ± 0.01. Following and scrolled-up timeline positions are preserved.
+- Regression proof against the unchanged `62cf3cc`/`3012231` frontend: 241/244 DOM (three new defect tests fail;
+  the no-visualViewport preservation test passes). All six new fake-viewport browser cases fail before fixes.
+- After fixes: chat 244/244, classic 82/82; full browser matrix 672 combinations + 57 regressions, 1,151 renders.
+  Portrait/landscape idle/waiting footers remain 57/105 px. All existing budget, contrast, accessibility, zoom
+  and privacy assertions remain; no earlier assertion rewrite. Full Python verification runs at the final Part C gate.
+- Real iOS/Android keyboard, pinch zoom and assistive technology still require the owner's device re-test.
+  M9 cutover remains unauthorised; G1 cleared, G2 (a) recorded, G3 pending.

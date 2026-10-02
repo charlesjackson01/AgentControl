@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Codex (M9 Part 0 N1 complete and verified; Part A next; Part B remains gated).
+**Last updated:** 2026-10-02, by Codex (M9 Part A complete; awaiting owner gates G1–G3; G2 choice (a) already recorded).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` (Part 0 complete; Part A next; Part B waits for owner gates G1–G3) |
+| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` (Part 0 and Part A complete; Part B waits for owner gates G1–G3) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -36,8 +36,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M5 Decisions in the room** | ✅ **accepted (Parts A `e6e6ebf` and B `b12e88a`; review 2026-10-01)** | Codex | every room decision uses its existing endpoint with server-authoritative state. Owner authorized only the awaiting-fetch skill Reject endpoint exception. F1 (fast verification reconciliation) is corrected in M6 Part A. The review is in `docs/handoffs/M5_DECISIONS.md` |
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
-| **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. One should-fix (N1: the rail shows "Showing X of N" when X > N) is M9 Part 0 |
-| **M9 Parity and cutover** | 🚧 Part 0 complete; Part A next | Codex, then the owner | `docs/handoffs/M9_PARITY_AND_CUTOVER.md`: Part 0 (N1), then Part A (evidenced parity checklist and chat-only walkthrough; docs only), then a **stop for owner gates G1 parity, G2 surfaces, G3 device checklist**, then Part B (routing `/` → chat, `/classic` → classic, and the pop-out href) |
+| **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
+| **M9 Parity and cutover** | ✅ Part 0 + A complete; awaiting owner gates G1–G3 | Codex, then the owner | Separate Part 0 `568534e` fixes N1 with its sole owner-approved earlier assertion replacement. Part A adds `docs/PARITY_CHECKLIST.md`: 72 rows (17 Native, 54 Linked, 1 intentionally not ported, 0 Missing), real `/chat` walkthrough and readiness findings. Completion reports in `M9_PARITY_AND_CUTOVER.md`. **Stopped before Part B:** G2 choice (a) recorded; G1 and G3 pending |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
@@ -215,9 +215,28 @@ was changed.
   established flakiness; no backend, protected test, runtime setting or skip was changed. Logs and exact names are
   retained in the M9 handoff report.
 
+## M9 Part A verification (2026-10-02)
+
+- Completed after the separately committed/pushed Part 0 `568534e`; Part A changes **docs only**.
+- Complete parity checklist: **72 feature/view/facet rows**, including all **15 README bullets** and **12 classic
+  views/navigation surfaces**. **17 Native / 54 Linked to classic / 1 intentionally not ported (D4) / 0 Missing**.
+  Generic More links open `/classic`, then the user selects the destination. Zero Missing does not claim full native parity.
+- Real `app.py`/controller with existing fakes and one disposable git project: **8/8 `/chat`-only steps**, zero classic
+  document loads and page errors. Start, critical typed approval, question, team approval, growing Workspace,
+  Verify, confirmed Apply and Reply follow-up all use recorded server state. Waiting/non-outcome actions and
+  cards/outcomes match at every fully paged checkpoint. Actual counts: **67 GET (64 API) / 8 POST**; separate Auto
+  evidence check **2 GET / 1 POST**. Exact bodies and per-step counts are in the checklist/report.
+- Fresh final suites: Python **423, OK (skipped=3), 319.958 s**; classic **82/82**; chat **240/240**;
+  browser **672 combinations + 51 regressions**, **1,139 screenshots**. Desktop/phone renders inspected;
+  footer budgets preserved and accessibility/contrast/keyboard checks pass. No further Python failures in Part A.
+- Readiness inventory documents the current root pop-out href and every located route/test/doc assumption; no
+  link, route, backend, schema, approval, privacy, D7 or protected test changed in Part A.
+- **M9 Part A complete; awaiting owner gates G1–G3.** G2 choice (a) is already recorded. G1 parity and G3 physical
+  devices remain pending. No Part B, native surfaces, classic retirement, R1 work or merge into `main`.
+
 ## Next step
 
-1. M9 **Part 0** (N1) is complete. Codex commits it separately, then completes **Part A** (the parity checklist and walkthrough), then stops.
+1. M9 **Part 0** and **Part A** are complete. Codex stops. Owner reviews `docs/PARITY_CHECKLIST.md` and the appended reports.
 2. **Owner gates.**
    - **G2 is chosen: (a).** Switch to chat first, and keep classic pop-outs for interactive surfaces.
    - **G1** (parity sign-off on the Part A checklist) is **pending**.

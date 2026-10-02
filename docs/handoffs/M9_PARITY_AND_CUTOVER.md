@@ -370,3 +370,139 @@ Before commit, inspected status, diff stat, file names and whitespace. Exactly t
 changed: `chat/model.js`, `tests/test_chat_ui.cjs`, this handoff and `CURRENT_STATE.md`.
 The in-flight skill-fetch race and R1 remain excluded. Owner gates are unchanged: G2 choice (a) recorded;
 G1 and G3 pending.
+
+## Part A completion report — 2026-10-02
+
+**M9 Part A complete; awaiting owner gates G1–G3.** G2 choice (a) is already recorded; G1 and G3 remain pending.
+Part 0 was completed, verified, committed and pushed separately as **`568534e`** before Part A began.
+This Part A commit changes only `docs/PARITY_CHECKLIST.md`, this handoff and `CURRENT_STATE.md`.
+Part B, the route cutover, native surfaces, classic retirement and any merge into `main` remain unstarted.
+
+### Checklist summary
+
+[The complete parity checklist](../PARITY_CHECKLIST.md) contains **72 feature/view/facet rows**:
+**17 Native · 54 Linked to classic · 1 Intentionally not ported · 0 Missing**.
+It covers every one of the 15 README bullets, every required classic view (12 rows including Settings,
+Switch project and keyboard shortcuts), all M5 §2.7 functionality, six interactive-surface facets,
+18 additional classic-only actions and 11 explicit native subsets.
+
+The README rows classify six core features Native, eight full features Linked, and themes intentionally not
+ported under D4. Composite/classic-view rows identify their native subsets separately. Each Native row has
+an exact freshly passing test plus actual screenshot or real-server-step evidence. Each Linked row cites its
+link test. The summary lists all 54 Linked rows and states how to reach them.
+
+**Missing list: empty with the documented fallbacks.** This is not full native parity and does not clear G1.
+All six More labels open the same `/classic` entry, without selecting a view. Users must then choose the classic
+view. Paid models/watch/internet have explicit Settings fallback links. Workspace uses the existing standalone
+classic root pop-out today; no native frames, tickets or input are implied. Physical-device behavior is not
+claimed Native from emulation.
+
+### Chat-only walkthrough
+
+Real `app.py` handler/controller, existing test fakes, one disposable git project, one browser page and server.
+S1 is a UI-created single-agent session for the critical permission and question. W4 finishes S1 using the
+existing fake and starts/approves a Team session S2 through chat; W5–W7 use S2. W8 creates its follow-up S3.
+All session creation and decisions use the real UI and existing endpoints, with no direct journal seeding.
+Apply touches only the disposable project's base branch; AgentControl's `main` remains untouched.
+
+GET counts are actual server observations, checked against browser API fetches. Initial boot and separate
+Auto-preview evidence are outside the eight steps. The harness stops recurring browser reads after live boot
+and calls the existing refresh cycle after the fake records its update, keeping counts reproducible without
+any product refresh modification. The checklist contains every GET path/count and exact recorded POST shape.
+
+| Step | Requests: GET total (API) / POST | Recorded result and complete-thread invariant `(waiting, actions excluding outcomes, outcomes, cards)` |
+|---|---|---|
+| W1 Start session | **8 (8) / 1** | Real `/api/runs`; R3 request recorded; `(1,1,0,1)` |
+| W2 Critical approval | **3 (3) / 1** | Blank word sends no POST; typed displayed `approve`, Cancel initially focused; journal confirmed receipt; `(0,0,0,0)` |
+| W3 Question | **6 (6) / 1** | JSON answer confirmed by server; pending `(1,1,0,1)` → recorded `(0,0,0,0)` |
+| W4 Team proposal | **21 (20) / 2** | Extra `/api/runs`, then `/api/control approve_team`; coder-2 absent from live roster before approval, recorded after; pending `(1,1,1,2)` → recorded `(0,0,1,1)` |
+| W5 Growing coder Workspace | **8 (6) / 0** | Two ordinary refreshes grow recorded transcript. Opening adds **0 GET / 0 POST**; escaped tool output stays in Workspace, reasoning absent; `(0,0,1,1)` |
+| W6 Verify now | **10 (10) / 1** | Recorded outcome status/time shows passed; journal/manual verification agrees; `(0,0,1,1)` |
+| W7 Apply | **3 (3) / 1** | Confirmation, Cancel focus; recorded applied workspace and API/UI/wire files in disposable base checkout; `(0,0,1,1)` |
+| W8 Reply in session | **8 (8) / 1** | Recorded S3 `parent_run=S2` and inherited Team settings; new proposal waiting; `(1,1,1,2)` |
+
+**8/8 passed; 67 GET (64 API), 8 POST; zero classic document loads, zero page errors.**
+The other three GETs are `/favicon.ico` (one W4, two W5). Every before/after checkpoint and pending question/team
+checkpoint has `before=null`, `waiting=actionable non-outcome messages`, and `cards=waiting+0/1 outcome`.
+The existing newest terminal outcome can coexist with an active session; the walkthrough preserves it.
+No browser-manufactured receipt, waiting-count change or verification success is used as evidence.
+
+Additional real-server checks passed:
+- **E1 Auto explanation:** 2 GET / 1 POST using existing mode preview; actual explanation screenshot.
+- **L1 More links:** all six label/href pairs are exactly `/classic`.
+- **L2 Settings links:** both fallback anchors are exactly `/classic`.
+
+Evidence: `/tmp/ac-m9-real-check.log`, `/tmp/ac-m9-real-results.json`, temporary scripts
+`/tmp/ac-m9-real-server.py` and `/tmp/ac-m9-real-check.cjs` (outside git). Screenshot evidence includes
+`/tmp/ac-m9-critical-dialog.png`, `/tmp/ac-m9-auto-preview.png`, `/tmp/ac-m9-proposed-team.png`,
+`/tmp/ac-m9-live-workspace-desktop.png`, `/tmp/ac-m9-live-workspace-phone.png` and `/tmp/ac-m9-apply-dialog.png`.
+Raw tool output and reasoning sentinel checks distinguish Workspace-only material from the accepted bounded
+M3 public `result_tail`, whose existing projection remains unchanged.
+
+### Readiness findings
+
+The complete source/line inventory is in the checklist's **Cutover-readiness findings** section.
+The only identified chat product href needing the later routing swap is `chat/workspace.js:5`, used by its
+header at `:23` and surface section at `:101`: `/?popout=…&run=…`. Classic's own `workspace.js:337` uses
+`location.pathname`, so it retains `/classic` without a classic-code edit.
+
+The search also found these root/classic assumptions, all unchanged:
+- Current entry routing: `app.py:74–77`.
+- Exact chat pop-out assertions: `tests/test_chat_ui.cjs:1049,1185`.
+- Root/classic route expectations: `tests/test_chat_routes.py:33–36`.
+- Classic-only mock pathname/pop-out: `tests/test_ui.cjs:28,1303`.
+- Classic mock root entry/navigation: `tests/screenshots.cjs:276,282`.
+- Printed address/classic feature descriptions: `README.md:24,35–79`.
+- Root address and classic-start tutorial: `agent-autonomy/README.md:12–20,44–51`.
+- Further classic UI descriptions: project switching `:90`, Mission/default phone tabs `:119,132`, Workspace
+  tabs/shortcuts/splits/surfaces/windows/pop-outs `:136,155,165,172,190,203`, Approvals `:224`, themes/keys `:365`,
+  skill library/git/removal `:455,472`, model usage `:642`, paid selectors/caps/Usage `:711,717,720`, watch `:732`,
+  Project preview `:768` and named follow-up control `:791`.
+
+Root-relative assets/API/SSE and the separate preview-origin ticket URLs are intentional and remain unchanged.
+Part B owns routing/href/README corrections; this report implements none of them.
+
+### Fresh final verification
+
+| Suite / check | Result | Evidence |
+|---|---|---|
+| Full Python | **423, OK (skipped=3), 319.958 s**, first Part A attempt | `/tmp/ac-m9-a-python.log` |
+| Classic DOM | **82/82** unchanged | `/tmp/ac-m9-a-classic.log` |
+| Chat DOM | **240/240** unchanged after Part 0 | `/tmp/ac-m9-a-chat.log` |
+| Full browser matrix | **672 combinations + 51 regressions**, **1,139 screenshots** | `/tmp/ac-m9-a-browser.log`, `/tmp/chat-shots-m9-a/` |
+| Real-server walkthrough | **8/8**, plus E1/L1/L2 | `/tmp/ac-m9-real-check.log`, `/tmp/ac-m9-real-results.json` |
+| Checklist consistency | **72 classified rows**, 15 README, 12 views; exact tests and real screenshot paths resolved | read-only temporary check |
+
+Commands: `python3 -m unittest discover -s agent-autonomy/tests`; with
+`NODE_PATH=/tmp/ac-tests/node_modules`, `node agent-autonomy/tests/test_ui.cjs`,
+`node agent-autonomy/tests/test_chat_ui.cjs`,
+`node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-m9-a`, and
+`node /tmp/ac-m9-real-check.cjs`. Socket/Chromium checks used the approved execution permissions.
+No runtime setting, protected test or skip changed.
+
+The three unchanged skips are `test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`,
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`, and
+`test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`. The OpenCode trio ran and passed.
+Part A had no Python failures. Part 0's two failed full attempts, exact lifecycle/VM races, comparison to
+established M7/M8 flakiness, isolated results and final passing 423-test run are preserved in its report above.
+
+Fresh matrix footer measurements: **57 px idle / 105 px waiting**, portrait conversation minimum **70.0829%**,
+landscape **58.3333%**. **1,624** accessibility audits have zero findings; **52** contrast pairs pass;
+**32** keyboard workflows and **4** reduced-motion/forced-colors cases pass. Actual desktop/phone live Workspace,
+critical review, proposed team, Apply, Auto, historical diff/failed verification and researcher-log renders
+were inspected. Browser emulation does not fill the physical-device checklist.
+
+### Scope, exceptions and stop
+
+Before commit, inspected status, diff stat, names and whitespace. The Part A diff is **exactly three docs**:
+`docs/PARITY_CHECKLIST.md`, this handoff and `CURRENT_STATE.md`. No product, Python, classic, test, schema,
+engine or API file changes. D7 and all accepted M1–M8 contracts remain intact.
+
+The only earlier assertion replacement is the separately committed, explicitly owner-approved Part 0 M3.1
+X > N exception; its original and replacement are reproduced in the Part 0 completion report. No Part A test
+assertion was changed or weakened.
+
+**Stopped after Part A.** G1 parity and G3 physical-device checklist remain owner decisions; G2 choice (a) is
+already recorded. Interactive surfaces remain in classic and require a later native-surfaces handoff.
+The in-flight skill-fetch race stays intentionally excluded, and persistent bots remain future R1.
+Classic retirement, route cutover and merging into `main` have not been performed.

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (owner design review of N1: D13 approved; N1.2 Projects screen ready for Codex).
+**Last updated:** 2026-10-03, by Claude Code (interim N1.2 implementer): N1.2 Projects screen implemented and verified; Opus review pending.
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_SHELL_AND_NAVIGATION.md`, **N1.1 corrections implemented and verified; Opus re-review pending**. `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
+| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_2_PROJECTS_SCREEN.md`, **implemented and verified (`f135bb3`); Opus review pending**. N1/N1.1 technically accepted. `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
 | Persistent agents (proposal; approved parts recorded as D8–D12 and §12.2 in the architecture) | `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`; inputs `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and `docs/inputs/agentcontrol-ui.html` (visual reference only; not served, not reused) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
@@ -43,8 +43,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | R1 Persistent bots | roadmap; **N series proposed** | owner | architecture §12.1. Realised by the proposed N series (N1–N7, N-ORCH separate) |
 | **N0 Persistent agents: architecture and requirements** | ✅ **N1-gating decisions approved 2026-10-03**; P-2 to P-10, P-15 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. Approved: P-1 (D8 scope), P-11 (a) (D9 dark-only), P-12 (D10 N1 test policy), P-13 (D11 vocabulary and routes), P-14 (D12 handoff over mock), and the N sequence (§12.2). No code, schema or database changes |
 | **N1 Shell and navigation** | ✅ **technically accepted (N1 `8be5d62`, N1.1 `99b4c7d`)**; ⚠️ **design reopened by the owner, corrected in N1.2** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section dark shell from existing data and endpoints; Turn details unchanged; native project switch and create; honest unavailable states. Both required matrix passes (normal and 0.06em wide-font) green: 540 + 61 each, 1,642 screenshots. Optional O1, O3, O4, O6, O7 carried. No physical-device testing of the new shell yet |
-| **N1.2 Projects screen** | 📋 **ready for Codex** (owner design review, 2026-10-03) | Codex, then Opus | `docs/handoffs/N1_2_PROJECTS_SCREEN.md` (D13; implementer: a separate Claude Code session while Codex is out of usage; walkthrough replaced by fixture, cutover and DOM POST checks per owner option (a)): rail, project list, team thread, composer; approval once on its card plus a Projects count; panel sessions list, summary card, waiting strip and most classic links retired; composer per the mock; rail labels whole words; details on demand. Frontend only |
-| **N1.1 Bounded corrections** | **implemented and verified; Opus re-review pending** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
+| **N1.2 Projects screen** | ✅ **implemented and verified (`f135bb3`); Opus review pending** | Claude Code (interim, for Codex), then Opus | `docs/handoffs/N1_2_PROJECTS_SCREEN.md` (D13; implementer: a separate Claude Code session while Codex is out of usage; walkthrough replaced by fixture, cutover and DOM POST checks per owner option (a)): rail, project list, team thread, composer; approval once on its card plus a Projects count; panel sessions list, summary card, waiting strip and most classic links retired; composer per the mock; rail labels whole words; details on demand. Frontend only |
+| **N1.1 Bounded corrections** | ✅ **accepted (Opus re-review, `99b4c7d`)** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `sections.js`, `shell.js`.
 `/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -258,9 +258,10 @@ was changed.
    `f45c112`. The merge-status record was then merged as well (`main` = `d1f4733`).
 4. **N0: the owner approved P-1, P-11 (a), P-12, P-13, P-14 and the N sequence (2026-10-03).** They are recorded as
    D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. N1 applies the §9 and §11 amendments and rewrites §10.
-5. **Owner design review of N1 (2026-10-03): D13 approved.** The screen read as three dashboards in one frame. **Next: Codex
-   implements N1.2** (`docs/handoffs/N1_2_PROJECTS_SCREEN.md`), then Opus reviews it, including the named renders against the
-   owner's layout. N2 waits for N1.2, and for the owner's approval of P-2, P-4, P-6, P-8, P-9 and P-15.
+5. **Owner design review of N1 (2026-10-03): D13 approved.** The screen read as three dashboards in one frame. **N1.2 is
+   implemented and verified (`f135bb3`; report appended to `docs/handoffs/N1_2_PROJECTS_SCREEN.md`). Next: Opus reviews it**,
+   including the named `n12-*` renders against the owner's layout and its own real-server probe. N2 waits for N1.2's
+   acceptance, and for the owner's approval of P-2, P-4, P-6, P-8, P-9 and P-15.
 6. **Still the owner's:**
    - P-2 to P-10 and P-15, needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards
    - Q1–Q3 (model registry, Primary's endpoint, projects root), needed before N3
@@ -427,3 +428,26 @@ N2 and all unapproved persistent-agent backend work remain out of scope. Stop fo
   are in the appended report; no backend/test/timeout/runtime workaround. Container, desktop-preview and
   KVM skips are environment gates, not passes; all three real-OpenCode tests ran and passed.
 - No new physical-device testing, N2 or main merge. Stop for independent Opus re-review.
+
+## N1.2 Projects screen verification (2026-10-03)
+
+- From `c26c882`; implementation `f135bb3`. Frontend, frontend tests and the listed docs only; no `.py`, Python test,
+  classic file, state, endpoint, request type or approval semantics changed.
+- D13 shipped: an approval appears once (its card) plus the **Projects count** (`! N`, "Projects, N waiting for you",
+  every section, focuses the first actionable card); the waiting strip/pointer, panel waiting link, channel count,
+  summary card and generic per-card classic link are gone. The panel lists projects only (current first, git
+  projects in the root; "+" → Create project / Open folder…). Session details is closed by default, opens only
+  from Details, is an overlay at every width, and nothing persists `acx-context-open`. Classic links only in
+  Settings (new Settings › Classic dashboard), unreviewable cards, `#composer-classic` and Turn details pop-outs.
+  Rail 5.25 rem with one-line whole-word labels; phone bar shows all labels or only the active one. Composer one
+  row at a room ≥ 600 px, two rows below. "Reconnecting…" shows only while not live.
+- Chat DOM **278/278** (6 listed rail/summary/waiting-link tests retired, moved assertions relocated, 9 new);
+  classic **82/82**; routes **4/4**. Full matrix **normal 540 + 157, 830 screenshots; wide 0.06em 540 + 157, 830**
+  (96 new N1.2 cases per pass). Cutover **5/5** and isolated fixture **9/9** in each pass. Python **424, OK
+  (skipped=6: container, desktop preview, KVM and three real-OpenCode gates)**, 120.1 s, first attempt.
+- Walkthrough replaced per owner option (a): fixture/cutover pass, POST bodies pinned by DOM tests, boot/steady GET
+  counts identical to `c26c882` (5/4/4 boot, 3 steady). Footers: portrait 103 px (two-row composer; ≥ 73% conversation),
+  landscape 59 px; equal with and without waiting cards. Named `n12-*` renders inspected in both passes.
+- Deviations for review are listed in the report (unsupported-action cards keep their classic fallback; Details
+  describes the active session; route changes close Session details; portrait footer budget). No N2, no merge.
+

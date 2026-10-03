@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (N1 reviewed at `8be5d62`: not yet accepted; N1.1 corrections specified).
+**Last updated:** 2026-10-03, by Codex (N1.1 corrections implemented and verified; Opus re-review pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_SHELL_AND_NAVIGATION.md`, **implemented and verified; Opus review pending** (start conditions met 2026-10-03). `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
+| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_SHELL_AND_NAVIGATION.md`, **N1.1 corrections implemented and verified; Opus re-review pending**. `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
 | Persistent agents (proposal; approved parts recorded as D8–D12 and §12.2 in the architecture) | `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`; inputs `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and `docs/inputs/agentcontrol-ui.html` (visual reference only; not served, not reused) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
@@ -43,6 +43,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | R1 Persistent bots | roadmap; **N series proposed** | owner | architecture §12.1. Realised by the proposed N series (N1–N7, N-ORCH separate) |
 | **N0 Persistent agents: architecture and requirements** | ✅ **N1-gating decisions approved 2026-10-03**; P-2 to P-10, P-15 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. Approved: P-1 (D8 scope), P-11 (a) (D9 dark-only), P-12 (D10 N1 test policy), P-13 (D11 vocabulary and routes), P-14 (D12 handoff over mock), and the N sequence (§12.2). No code, schema or database changes |
 | **N1 Shell and navigation** | ⚠️ **implemented `8be5d62`; review 2026-10-03: not yet accepted** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md` review: **B1** 200% text zoom clips the waiting pointer with Session details open (fatal check; pre-N1 passes in the same environment); **S1** invalid skills labelled Low risk; **S3** nav labels truncate with wide fallback fonts; S2 (§10 rule) fixed in the review. **N1.1 corrections specified**: frontend and tests only |
+| **N1.1 Bounded corrections** | **implemented and verified; Opus re-review pending** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `sections.js`, `shell.js`.
 `/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -396,7 +397,7 @@ Primary, persistent Agents, Direct conversations, file browsing, skill assignmen
 are visibly unavailable. The former per-agent Workspace is Turn details; its routes, identifiers, data, privacy
 boundaries and classic pop-out behavior remain. No Python, schema, engine, journal or classic product file changed.
 
-Final verification: Python **424 tests, OK (3 environment-gated skips), 260.354 s**, first N1 full attempt;
+Original N1 verification: Python **424 tests, OK (3 environment-gated skips), 260.354 s**, first N1 full attempt;
 classic **82/82**, chat **273/273**, unchanged routes **4/4**. Browser **540 combinations + 46 regression cases,
 814 screenshots**; all ten widths, keyboard/zoom/contrast checks and five cutover smoke cases pass.
 Real-server tour retains **67 GET (64 API + 3 SSE) / 8 POST**; fully paged waiting/card invariants pass.
@@ -404,3 +405,25 @@ The isolated fixture passes all six sections, real project create/switch-back an
 Exact commands, logs, authorized assertion replacements and gated tests are in the N1 completion report.
 New physical-device testing has not occurred.
 N2 and all unapproved persistent-agent backend work remain out of scope. Stop for Opus review; no merge into main.
+
+## N1.1 correction verification (2026-10-03)
+
+- Pulled clean to approved review `65b07e2`. Implemented only C1–C5 and the rail zoom improvement O2;
+  optional O1/O3/O4/O6 remain unchanged. Backend, classic, counts/data sources, authorization and decision
+  semantics are unchanged. The review's restored one-place-per-control architecture rule is preserved.
+- Regressions fail before fixes: waiting pointer **226 > 190px** at 200% wide text; Workspace label
+  **71 > 53px** at 320px and **71 > 67px** in the rail; two new DOM cases catch invalid Low risk and
+  `1 sessions`. No earlier DOM assertion or behavioral threshold weakened.
+- Chat **275/275**, classic **82/82**, routes **4/4**. The complete command requires both fatal matrices:
+  **540 combinations + 61 regressions / 821 screenshots per pass**, **1,642 screenshots total**.
+  The 0.06em glyph-spacing pass exceeds the reported fallback-font widths. Cutover **5/5** and isolated
+  fixture **9/9** pass in each matrix. All five affected 200% renders and 390/320px bars inspected in both.
+  Portrait footer **57px idle / 105px waiting**, landscape **59px / 107px**; existing limits preserved.
+- Real-server repeat **8/8**, **67 GET (64 API + 3 SSE) / 8 POST**; fully paged actionability/count/card
+  invariants, server receipts and disposable cleanup pass.
+- Final unchanged Python **424 tests, OK (skipped=3), 260.249 s**. Three earlier full attempts hit known
+  lifecycle sampling, asynchronous VM log and fixed-five-second workflow timing failures. Every failed case
+  passed unchanged in isolation, followed by this green full run. Exact cases, assertions, timings and logs
+  are in the appended report; no backend/test/timeout/runtime workaround. Container, desktop-preview and
+  KVM skips are environment gates, not passes; all three real-OpenCode tests ran and passed.
+- No new physical-device testing, N2 or main merge. Stop for independent Opus re-review.

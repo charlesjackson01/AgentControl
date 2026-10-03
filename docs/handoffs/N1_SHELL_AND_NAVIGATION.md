@@ -643,3 +643,207 @@ Every rule of this handoff and of `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and
 - Inspect renders of the five B1 states at 200% zoom, and of the bottom bar at 390 and 320, in both passes.
 - List every changed or added assertion.
 - Then stop for Opus re-review. N2 is not started, and nothing is merged into `main`.
+
+
+---
+
+## N1.1 completion report — Codex, 2026-10-03
+
+Started clean at `65b07e2`, the approved N1 review/corrections, after pulling only
+`feature/chat-first-redesign`. End: the N1.1 implementation commit containing this report; the publication
+response supplies its exact hash. N1 remains subject to independent Opus re-review. No N2 or main merge.
+
+### Corrections
+
+- **C1:** the waiting strip permits wrapping, and neither its pointer nor classic link shrinks below its
+  text. At 200% zoom they can occupy separate lines. The pointer remains one control with the same text,
+  location handler and server-derived count. Normal phone text/link alignment and all D10 limits remain fatal.
+- **C2:** navigation labels wrap within their existing rail/bar widths, without ellipsis. The phone bar
+  retains 12px label type, 40px targets and its 64px maximum; a 15px icon leaves room for two full label lines
+  above the tested safe-area inset. Rail controls do not flex-shrink their wrapped text at 200% zoom.
+- **C3:** clipped-control detection includes navigation anchors, their label spans and both composer chips,
+  in addition to every previously checked control. It checks horizontal and vertical fit. Chips wrap, and
+  the follow-up chip gets a 30% width allowance, leaving a 40px input and room for its Cancel control.
+  Phone note chips wrap within 20%, with compact line spacing/padding and unchanged 12px type; this keeps
+  the original literal draft on one textarea line at 390px even with the wider text. Automatic growth remains.
+  A complete browser invocation automatically runs a second **fatal** full matrix with `--wide-font`;
+  it cannot report success if that child fails. No optional/non-fatal scratch check is used.
+- **C4:** only validated entries with `risk: low` or `risk: sensitive` show Low/Sensitive. Invalid entries,
+  even if they carry a stale risk field, and entries without an assessed risk show **Risk: not assessed**.
+  Server validation errors remain escaped and visible word for word.
+- **C5:** Projects' header and summary use **1 session**, otherwise the recorded count with **sessions**.
+  Server counts, the rail's union/disclosure, pagination and all data sources are unchanged.
+
+Only `chat/chat.css`, `chat/sections.js`, `chat/shell.js`, `tests/test_chat_ui.cjs`,
+`tests/chat_screenshots.cjs`, `CURRENT_STATE.md` and this appended report change. No Python/Python test,
+classic, state, endpoint, schema, engine, approval, authentication, journal or privacy change.
+The review's restored architecture §10 one-place-per-control rule is retained unchanged.
+
+### Reproduction and strengthened assertions
+
+Tests were added before product fixes. On the `65b07e2` product:
+
+| Regression | Actual failure / evidence |
+|---|---|
+| Wide text, Session details open, 1280×800 at 200% zoom | `n11-singleMembers zoom clipped control waiting-pointer`: scrollWidth **226**, clientWidth **190**; `/tmp/ac-n11-before-pointer.log` |
+| Wide text, 320×640 navigation | `n11-narrow clipped control Workspace`: scrollWidth **71**, clientWidth **53**; `/tmp/ac-n11-before-phone.log` |
+| Wide text, normal desktop rail | Workspace **71 > 67**; `/tmp/ac-n11-before-nav.log` |
+| Invalid skill DOM case | Card showed `Problem: Invalid <manifest>Low`, not `Risk: not assessed`; `/tmp/ac-n11-dom-before.log` |
+| Singular count DOM case | Header/summary included `1 sessions`; same log. **273/275 passed**, the two new cases failed |
+
+The width stress adds **0.06em letter spacing to every glyph**, through a test-only injected stylesheet;
+no installed-font choice or downloaded font is required. Calibration records both widths in
+`n11-layout-results.json`: here Workspace at 12px grows **64.09 → 70.58px**, exceeding the review's
+66px DejaVu Sans case; the waiting pointer at 24px grows **198.38 → 225.73px**, exceeding its reported
+220px requirement. This reproduces the observed common-fallback-width difference with margin, and runs
+on whatever local font the browser resolves. Product font stacks and user zoom remain unchanged.
+
+**Every assertion added/changed:**
+
+1. New DOM `N1.1 invalid and unassessed skills never claim an assessed risk`: invalid, unassessed and
+   invalid-with-stale-risk cards require Risk: not assessed and exclude Low/Sensitive; valid low/sensitive
+   cards retain their labels; hostile error text remains text and no POST occurs.
+2. New DOM `N1.1 Projects header and summary use the recorded singular and plural session counts`:
+   both surfaces require 0 sessions, 1 session (excluding 1 sessions), and 2 sessions.
+3. `zoomCheck`: replace its existing button/summary/select/input width-only loop with the same fatal
+   width threshold (scrollWidth ≤ clientWidth + 1), plus vertical fit and navigation anchors/labels/chips.
+   Actual font doubling, overflow, reachable composer, accessibility and focus checks are unchanged.
+4. `layoutCheck`: add the new navigation/chip fit checks at every existing state/width.
+5. `n1Sections`: add the same full-label checks for all six sections at every width; require no ellipsis.
+6. New `n11Layout`: five named B1 states (`singleMembers`, `teamProposed`, `teamReview`, `teamRunning`,
+   `teamUnusable`) explicitly open Session details and pass 200% zoom; all ten widths check navigation
+   and chips with the sheet closed. Fifteen fatal cases, seven additional screenshots per pass.
+7. Complete matrix entry/exit: install the stress style in every wide-pass page/context; normal full
+   invocation requires the wide child to exit zero. Counts include the fifteen added cases per pass.
+8. New optional `--state=<name>` diagnostic filter validates the named state, then runs its unchanged
+   fatal cases and the five retained stale/live races, saving layout geometry and a pre-check screenshot.
+   It suppresses unrelated fixture/section setup only in this explicitly focused mode. Neither complete
+   matrix pass uses a state/viewport filter, and neither can skip any carried-over case.
+
+No carried-over DOM assertion was replaced or removed. The 273 accepted cases are preserved. No footer,
+target, contrast, input, alignment, waiting-count, focus, request-shape or other behavior threshold is relaxed.
+All 46 N1 regression cases and all 540 N1 combinations carry over into each pass.
+
+### Verification and inspected renders
+
+All verification is fresh against N1.1. The normal full command automatically launches the mandatory
+wide-font full command only after closing its browser. Neither invocation uses a state/viewport filter.
+
+| Check | Command / evidence | Result |
+|---|---|---|
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`; `/tmp/ac-n11-chat-final.log` | **275/275**: all 273 carried over plus two new regressions |
+| Classic DOM, unchanged | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs`; `/tmp/ac-n11-classic-final.log` | **82/82** |
+| Routes, unchanged | `PYTHONPATH=agent-autonomy:agent-autonomy/tests python3 -m unittest -v test_chat_routes`; `/tmp/ac-n11-routes.log` | **4/4**, 4.752 s |
+| Full normal + required wide browser | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-n11-final6`; `/tmp/ac-n11-browser-final6.log` | **Each pass: 540 combinations + 61 regression cases, 821 screenshots**; total **1,080 combinations, 122 cases, 1,642 screenshots** |
+| Cutover smoke | Included, unchanged, in each full pass | **5/5 per pass** |
+| Isolated fixture | Included, unchanged, in each full pass; each `n1-fixture-results.json` | **9/9 per pass**: six sections, create real git project, switch back, Forget/reconnect; disposable roots removed |
+| Real server | `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-n11-real-check.cjs`; `/tmp/ac-n11-real.log` | **8/8**, **67 GET (64 API + 3 SSE) / 8 POST** |
+| Python, unchanged | `python3 -m unittest discover -s agent-autonomy/tests -v`; `/tmp/ac-n11-python-verified.log` | **424 tests, OK (skipped=3), 260.249 s**; exact failed attempts and isolated retries below |
+
+All original contrast pairs, target/input bounds, keyboard/focus paths, forced colours, reduced motion,
+200% text zoom, server-authoritative decisions and waiting/count tests remain fatal and pass in **both**
+matrices. The 26 contrast pairs and all ten viewport sizes are unchanged. The fifteen additional layout
+cases explain **46 → 61** regressions; no earlier case was removed.
+
+Inspected final renders in both `/tmp/chat-shots-n11-final6` and `/tmp/chat-shots-n11-final6-wide`:
+all five `n11-<B1-state>-text-zoom-dark.png` files at **1280×800 / 200%**, and
+`n11-navigation-phone.png` / `n11-navigation-narrow.png` at **390×844 / 320×640**.
+The full names fit; wider waiting text and the recovery link occupy separate rows. Turn details preserves
+its existing desktop one-flex-row assertion, with its pointer/link text allowed to wrap internally.
+Phone `footer-measurements.json` is identical across the two final passes (47 cases per orientation):
+**57px idle / 105px waiting**, conversation **≥68.95%** at 390×844; landscape **59px / 107px**,
+conversation **≥57.82%**. The bar remains ≤64px with its safe-area check and hides for the normal-zoom
+keyboard. Actual native keyboard/assistive-technology/device testing is not claimed.
+
+The real-server repeat uses the same M9/N1 harness and fakes, copied only to fresh `/tmp/ac-n11-*`
+paths. Per-step GET/POST remain **8/1, 3/1, 6/1, 21/2, 8/0, 10/1, 3/1, 8/1**. Every fully paged
+checkpoint preserves waiting = actionable non-outcome messages and cards = actions + actionable outcomes.
+Critical typed permission, question, team approval, live Turn details, recorded Verify, confirmed Apply and
+inherited follow-up pass. Boot **21 GET / 0 POST**, separate Auto **2 GET / 1 POST**, shared-key classic
+smoke **9 GET / 0 POST**. `/tmp/ac-n11-real-results.json` contains receipts/counts; cleanup passed.
+
+**Development retries (no weakened assertions):**
+
+- The first normal matrix exposed waiting text/link alignment differing by **11px**;
+  `/tmp/ac-n11-browser-normal.log`. Restored vertical alignment of the classic link.
+- Follow-up wrapping initially made the phone idle footer **79px**; `/tmp/ac-n11-browser-final.log`.
+  A first width adjustment squeezed the narrow composer to **16.67px**;
+  `/tmp/ac-n11-browser-final2.log`. The final 30% follow-up width and compact phone chip spacing
+  preserve the existing 40px target and footer assertions.
+- `/tmp/ac-n11-browser-final3.log` hit the unchanged **45-second cutover fixture startup timeout**.
+  The unchanged five-case smoke passed alone (`/tmp/ac-n11-cutover-retry.log`), then in both final
+  full matrices. No timeout, backend, fixture or runtime setting was changed; no leftover test process remained.
+- `/tmp/ac-n11-browser-final4.log` caught the existing Turn details one-flex-row assertion after the
+  initial universal wrap rule. That assertion is unchanged: Turn details now keeps one flex row while
+  permitting text wrapping inside its two controls.
+- The normal pass in `/tmp/ac-n11-browser-final5.log` passed fully; the mandatory wide child correctly
+  failed on **composerLiteral footer 129px**, so the parent failed too. The focused case reproduced it
+  (`/tmp/ac-n11-literal-before.log`, `/tmp/ac-n11-literal-probe.log`). Wrapping the phone note chip and
+  removing its extra horizontal padding gave the same literal draft enough width; the focused case then
+  passed (`/tmp/ac-n11-literal-after.log`). Final compact chip spacing restores **105px** waiting footers.
+  Draft text, slash/mention handling, textarea growth and the **112px** assertion are unchanged.
+- Diagnostic wide-font runs for `composerLiteral`, `composerFollow`, `composerTarget` each passed
+  **10 widths + five stale/live races** before the final complete runs; `/tmp/ac-n11-<state>-wide.log`.
+  These focused checks are additional evidence, never a substitute for the unfiltered normal/wide matrices.
+
+Python ran after both browser passes and real-server checks finished. The first unchanged full run was
+**424 tests, FAILED (failures=1, skipped=3), 262.696 s**, `/tmp/ac-n11-python.log`.
+Its only failure was `test_agents.ControllerLifecycleTests.test_a_turn_records_join_work_approval_and_finish`
+at `test_agents.py:209`: expected `('coder-1', 'working', 'finished')`, observed
+`('coder-1', 'idle', 'finished')`. This is the exact pre-redesign lifecycle sampling failure documented in
+`CURRENT_STATE.md` (reproduced on `af4da89`; a short working state can fall between the 0.5s samples),
+not a new frontend-dependent assertion. No backend, protected test, timeout, runtime flag or skip was changed.
+The same unchanged test passed alone: **1 test, OK, 2.575 s**,
+`/tmp/ac-n11-python-isolated.log`.
+
+The second full run was **424 tests, FAILED (failures=1, skipped=3), 261.038 s**,
+`/tmp/ac-n11-python-retry.log`. `test_vm.VMRunTests.test_console_input_is_checked_and_audited`
+failed at `test_vm.py:255`: expected the last three events to be
+`[('click', 10, 5, 640, 400), ('type', 'ls'), ('key', 'Return')]`; instead the background
+`('push', '/tmp/tmpnq6d9it_/state/worktrees/1b2c8772a36e/coder-1')` displaced `click`, leaving
+`type`, `key`, `push`. This is the same asynchronous VM log race documented in the accepted M9 Part B
+report. The lifecycle and VM tests passed unchanged together: **2 tests, OK, 3.783 s**,
+`/tmp/ac-n11-python-isolated-both.log`.
+
+The third full run was **424 tests, FAILED (failures=6, skipped=3), 406.135 s**,
+`/tmp/ac-n11-python-final.log`. All six failed at the unchanged `test_workflow.py:149` assertion,
+**Timed out waiting for workflow condition**, within its fixed five-second wait:
+
+| `test_workflow.WorkflowTests` case | Condition / caller |
+|---|---|
+| `test_deny_redirect_is_saved_once_before_dispatch` | `bool(c.state()['inbox'])`; line 560 → `review_run`, line 402 |
+| `test_double_tap_sends_only_one_decision` | Same inbox condition; line 450 → `review_run`, line 402 |
+| `test_failed_verification_triggers_correction_same_session` | Terminal run; line 172 → `done`, line 152 |
+| `test_full_http_cli_and_notification_path` | Terminal run; line 367 → `done`, line 152 |
+| `test_goal_check_added_midrun_is_saved_and_forwarded` | `len(api.prompts) == 1`; line 552 |
+| `test_goal_checks_time_limit_and_followup_context` | Terminal run; line 532 → `done`, line 152 |
+
+These six passed in both earlier full attempts, then passed unchanged together in isolation:
+**6 tests, OK, 6.551 s**, `/tmp/ac-n11-python-workflow-isolated.log`. The delayed-worker/fixed-five-second
+wait mechanism is already documented in M5, M7 and M9.1a verification; this comparison does not claim
+every one of these exact case names previously failed. All full Python runs were started after the browser
+and real-server work finished. No concurrent heavy browser test, backend change, test weakening, timeout
+increase, new skip or runtime workaround was used. Acceptance §A2 requires the full unchanged retry as
+well as isolated passing tests. The fourth full run passed unchanged: **424 tests, OK (skipped=3),
+260.249 s**, `/tmp/ac-n11-python-verified.log`. Nonfatal unclosed-socket ResourceWarnings remain;
+they were not suppressed or changed.
+
+The same three skips in every full run were gates, never passes:
+`test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container`
+(requires `AGENTCONTROL_CONTAINER_TESTS=1`, runtime and image),
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input`
+(desktop tools missing), and `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone`
+(requires `AGENTCONTROL_VM_TESTS=1` on a KVM host). All three real-OpenCode tests ran and passed.
+The final full run passed all previously failing cases. These gate labels are distinct from the
+**421 executed, passing tests**; no physical-device result is inferred from browser emulation.
+
+### Optional findings and limits
+
+O2 is addressed by the same rail-label wrapping and zoom checks. O5 is required C5 above.
+O1 (redundant Sign-in button), O3 (Escape during an in-flight project write can hide the later refusal),
+O4 (positional panel HTML extraction) and O6 (duplicate Channels block) are deliberately left unchanged;
+this correction concentrates on the required layout, risk and count fixes. No project/decision delivery
+or authorization behavior was redesigned. The existing in-flight skill-fetch race remains excluded.
+Physical iOS/Android and assistive-technology testing is not claimed. Persistent Primary/Agents/Direct,
+Memory and project files remain unavailable; interactive surfaces remain in classic.
+Stop for Opus re-review after pushing only the feature branch.

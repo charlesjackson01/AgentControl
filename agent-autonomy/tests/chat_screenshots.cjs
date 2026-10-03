@@ -12,12 +12,39 @@ for (const base of browserRoots) if (fs.existsSync(base)) for (const dir of fs.r
 const executablePath = process.env.CHROMIUM_PATH || candidates.find(p=>fs.existsSync(p) && fs.statSync(p).isFile());
 const matrixViewports={desktop:[1440,900],'desktop-workspace':[1200,800],handoff:[1280,800],boundary:[720,900],'boundary-phone':[719,900],laptop:[1024,768],tablet:[768,1024],phone:[390,844],'phone-landscape':[844,390],narrow:[320,640]};
 const viewportFilter=process.argv.find(arg=>arg.startsWith('--viewport='))?.slice(11);
+const stateFilter=process.argv.find(arg=>arg.startsWith('--state='))?.slice(8);
 if(viewportFilter)assert(Object.hasOwn(matrixViewports,viewportFilter),'Unknown focused-test viewport');
 const keyboardOnly=process.argv.includes('--keyboard-only');
 const viewports=keyboardOnly?{}:viewportFilter?{[viewportFilter]:matrixViewports[viewportFilter]}:matrixViewports;
 const focusMeasurements=[],targetMeasurements=[];
 const accessibilityMeasurements=[];
 const inputFontMeasurements=[];
+const wideFont=process.argv.includes('--wide-font');
+const wideFontCSS='* { letter-spacing: 0.06em !important; }';
+// Add spacing to each glyph rather than depending on an installed font. At 12px,
+// Workspace gains 6.5px; this covers the review's 66px DejaVu Sans label here.
+async function installWideFont(target){await target.addInitScript(css=>{const install=()=>{if(!document.head || document.getElementById('wide-font-regression'))return;const style=document.createElement('style');style.id='wide-font-regression';style.textContent=css;document.head.append(style);};new MutationObserver(install).observe(document,{childList:true,subtree:true});install();},wideFontCSS);}
+async function clippedControls(page,name,zoom=false){
+ const selectors=zoom?'button,summary,select,input:not([type="checkbox"]):not([type="radio"]),#section-nav a,#bottom-nav a,.target-chip':'#section-nav a,#bottom-nav a,.target-chip';
+ const boxes=await page.locator(selectors).evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length).flatMap(n=>[n,...n.querySelectorAll('[data-section] > span:not(.projects-badge)')]).map(n=>({name:n.id || n.dataset.section || n.textContent.slice(0,30),scroll:n.scrollWidth,width:n.clientWidth,height:n.clientHeight,scrollHeight:n.scrollHeight})));
+ boxes.sort((a,b)=>(b.name==='waiting-pointer')-(a.name==='waiting-pointer'));
+ for(const box of boxes){assert(box.scroll<=box.width+1,name+' clipped control '+box.name+' '+JSON.stringify(box));assert(box.scrollHeight<=box.height+1,name+' vertically clipped control '+box.name+' '+JSON.stringify(box));}
+ const labels=await page.locator('#section-nav [data-section] > span:not(.projects-badge),#bottom-nav [data-section] > span:not(.projects-badge)').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length).map(n=>({name:n.textContent,width:n.clientWidth,scroll:n.scrollWidth,height:n.clientHeight,scrollHeight:n.scrollHeight,ellipsis:getComputedStyle(n).textOverflow})));
+ for(const label of labels){assert(label.scroll<=label.width+1 && label.scrollHeight<=label.height+1,name+' clipped navigation label '+JSON.stringify(label));assert.notEqual(label.ellipsis,'ellipsis',name+' must show the full navigation label '+label.name);}
+}
+async function n11Layout(browser,out){
+ let shots=0,cases=0;const records=[],calibration=[],which=process.argv.find(arg=>arg.startsWith('--n11-case='))?.split('=')[1];
+ for(const name of which==='nav'?['teamRunning']:['singleMembers','teamProposed','teamReview','teamRunning','teamUnusable']){
+  const f=fx.membersFixture(name),page=await browser.newPage({viewport:{width:1280,height:800}});
+  await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.pathname.startsWith('/api/'))return route.fulfill({status:u.pathname==='/api/events'?503:200,contentType:'application/json',body:JSON.stringify(u.pathname==='/api/state'?f.state:u.pathname==='/api/channels'?f.channels:u.pathname==='/api/thread'?f.thread:{})});return route.fulfill({path:path.join(root,u.pathname==='/chat'?'index.html':u.pathname.slice(6))});});
+  await page.addInitScript(()=>localStorage.setItem('ac-dashboard-key','test-key'));await page.goto('http://agentcontrol.test/chat');await page.locator('#room-header h1').waitFor();await page.evaluate(()=>{AC.core.stop();location.hash='#/s/'+AC.core.getState().state.run.id;AC.shell.route();});
+  if(!calibration.length)calibration.push(...await page.evaluate(()=>['Workspace','! 1 waiting for you'].map(text=>{const probe=document.createElement('span');probe.textContent=text;probe.style.cssText='position:fixed;left:-10000px;white-space:nowrap;font-size:'+(text==='Workspace'?'12':'24')+'px;letter-spacing:0!important';document.body.append(probe);const normal=probe.getBoundingClientRect().width,font=getComputedStyle(probe).fontFamily;probe.style.setProperty('letter-spacing','0.06em','important');const inflated=probe.getBoundingClientRect().width;probe.remove();return {text,font,normal,inflated};})));
+  if(which!=='nav'){await zoomCheck(page,'n11-'+name,'dark',out);shots++;cases++;}
+  if(name==='teamRunning' && which!=='zoom'){await page.evaluate(()=>AC.shell.setContext(false));for(const [size,[width,height]] of Object.entries(matrixViewports).reverse()){await page.setViewportSize({width,height});await clippedControls(page,'n11-'+size);if(size==='phone' || size==='narrow'){await page.screenshot({path:path.join(out,'n11-navigation-'+size+'.png')});shots++;}records.push({size,width,height});cases++;}}
+  await page.close();
+ }
+ fs.writeFileSync(path.join(out,'n11-layout-results.json'),JSON.stringify({wideFont,letterSpacingEm:wideFont?.06:0,cases,shots,records,calibration},null,2));return {cases,shots};
+}
 // M9 entry smoke uses real routing and the disposable fixture, without request mocks.
 async function cutoverSmoke(browser,out){
  const {spawn}=require('node:child_process'),{createInterface}=require('node:readline');
@@ -63,6 +90,7 @@ async function n1Sections(browser,out){
    await page.evaluate(name=>{location.hash='#/'+name;AC.shell.route();},name);await page.locator((name==='projects'?'#room-header':'#section-stage')+' h1').waitFor();if(name==='skills')await page.locator('.skill-card').first().waitFor();
    assert.equal(threadReads(),before,'Sections must reuse thread');assert.equal(await page.locator('#section-nav [aria-current="page"]').getAttribute('data-section'),name);assert.equal(await page.locator('[data-locate-waiting]').count(),2);
    await layoutCheck(page,'section-'+name,size,width);assert(await page.locator(width<720?'#bottom-nav [data-section] svg':'#section-nav [data-section] svg').evaluateAll(nodes=>nodes.length===6 && nodes.every(n=>getComputedStyle(n).opacity==='1' && getComputedStyle(n).visibility!=='hidden')));assert.equal(await page.locator('html').evaluate(n=>getComputedStyle(n).colorScheme),'dark');
+   await clippedControls(page,'section-'+name+'-'+size);
    if(width<720){assert(await page.locator('#bottom-nav').isVisible());assert((await page.locator('#bottom-nav').boundingBox()).height<=64);if(size==='phone'){const css=fs.readFileSync(path.join(root,'chat.css'),'utf8').replace(/env\(safe-area-inset-(?:bottom|left|right|top)\)/g,'20px'),style=await page.addStyleTag({content:css});assert((await page.locator('#bottom-nav').boundingBox()).height<=64);for(const box of await page.locator('#bottom-nav [data-section]').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().toJSON()))){assert(box.height>=40);assert(box.bottom<=height-20);}await style.evaluate(n=>n.remove());}}
    else{assert.equal((await page.locator('#section-nav').boundingBox()).width,76);if(width>=1200)assert.equal((await page.locator('#rail').boundingBox()).width,300);}
    if(name==='settings'){await page.evaluate(()=>document.querySelector('[data-setting="Memory"]').click());assert.equal(await page.locator('.memory-scope').count(),3);await layoutCheck(page,'section-memory',size,width);await page.evaluate(()=>document.querySelector('[data-setting="Connections"]').click());}
@@ -275,6 +303,7 @@ async function keyboardPaths(browser,out){
  fs.writeFileSync(path.join(out,'keyboard-results.json'),JSON.stringify({cases,failures},null,2));assert.equal(failures.length,0,JSON.stringify(failures));return {cases,screenshots:shots.length};
 }
 async function layoutCheck(page,name,size,width){
+ await clippedControls(page,name+'/'+size);
  await accessibilityAudit(page,name,size);
  await focusCheck(page,name,size);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${name}/${size}: page overflow`);
@@ -304,7 +333,7 @@ async function zoomCheck(page,name,colorScheme,out){
  assert(Math.abs(after-before*2)<.1,'M8 text zoom must actually double the text');
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,name+' zoom overflow');
  if(await page.locator('#room-footer').isVisible()){const b=await page.locator('#composer').boundingBox();assert(b.y+b.height<=800 && b.height>=40,`${name} M8 zoom composer reachable: ${JSON.stringify(b)}`);}
- for(const box of await page.locator('button,summary,select,input:not([type="checkbox"]):not([type="radio"])').evaluateAll(nodes=>nodes.filter(n=>n.getClientRects().length).map(n=>({name:n.id || n.textContent.slice(0,30),scroll:n.scrollWidth,width:n.clientWidth}))))assert(box.scroll<=box.width+1,name+' zoom clipped control '+box.name);
+ await clippedControls(page,name+' zoom',true);
  await accessibilityAudit(page,name,'text-zoom');await focusCheck(page,name,'text-zoom');
  await page.screenshot({animations:'disabled',path:path.join(out,`${name}-text-zoom-${colorScheme}.png`)});
  await page.evaluate(()=>document.documentElement.style.fontSize='');await page.setViewportSize(viewport);
@@ -314,6 +343,8 @@ const active = fx.richActive();active.agents=[{name:'hermes',type:'orchestrator'
 const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2',type:'coder',state:'working',task:'Build the CLI'},{name:'reviewer-1',type:'reviewer',state:'idle'});
 (async()=>{
  fs.mkdirSync(out,{recursive:true});const browser=await chromium.launch({executablePath,headless:true,args:['--no-sandbox']});let count=0,combinations=0,cutoverCases=0;
+ if(wideFont){const newPage=browser.newPage.bind(browser),newContext=browser.newContext.bind(browser);browser.newPage=async options=>{const page=await newPage(options);await installWideFont(page);return page;};browser.newContext=async options=>{const context=await newContext(options);await installWideFont(context);return context;};}
+ if(process.argv.includes('--n11-layout-only')){try{console.log(JSON.stringify(await n11Layout(browser,out)));}finally{await browser.close();}return;}
  const composerCases={composerIdle:fx.composerFixture('new'),composerNote:fx.composerFixture('active'),composerPaused:fx.composerFixture('paused'),composerFollow:fx.composerFixture('finished'),composerBasic:fx.composerFixture('new'),composerAdvanced:fx.composerFixture('new'),composerStop:fx.composerFixture('active'),composerLiteral:fx.composerFixture('active'),composerTarget:fx.composerFixture('active'),composerCleanSettings:fx.composerFixture('new'),composerRestored:fx.composerFixture('finished')};
  const decisionCases=Object.fromEntries([['decisionCritical','critical'],['decisionQuestion','question'],['decisionTeam','proposal'],['decisionResearch','research'],['decisionInstall','skillInstall'],['decisionApply','outcome'],['decisionSent','low'],['decision409','low']].map(([name,kind])=>[name,fx.decisionFixture(kind)]));
  const membersCases=Object.fromEntries(['teamProposing','teamProposed','teamUnusable','teamRunning','teamReview','teamFinished','singleMembers','connections'].map(name=>[name,fx.membersFixture(name)]));membersCases.railPaged=fx.membersHistory();for(const name of ['teamStopping','teamExpired'])membersCases[name]=fx.endedPlan(name);
@@ -321,7 +352,7 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  const longTitle='Long project '+('wide-title-' .repeat(80))+'<img src=x>';
  const longRoom=fx.composerFixture('active');longRoom.state.run.title=longTitle;longRoom.thread.sessions[0].title=longTitle;longRoom.channels=fx.threadChannels(longRoom.thread,1);longRoom.channels.channels[0].title=longTitle;composerCases.longRoom=longRoom;
  const longWorkspace=fx.workspaceDetails('workspaceHistorical');longWorkspace.state.run.title=longTitle;longWorkspace.thread.sessions[0].title=longTitle;longWorkspace.state.run.workspace.agents['coder-1'].branch='agent/'+('branch/'.repeat(100));longWorkspace.state.agents.find(a=>a.name==='coder-1').task=longTitle;workspaceCases.workspaceLong=longWorkspace;
- const measurements=[];let keyboardCases=0,deviceCases=0,discoveryCases=0;
+ const measurements=[];let keyboardCases=0,deviceCases=0,discoveryCases=0,n11Cases=0;
  if(process.argv.includes('--n1-fixture-only')){try{console.log(JSON.stringify(await n1Fixture(browser,out)));}finally{await browser.close();}return;}
  if(process.argv.includes('--n1-sections-only')){try{const result=await n1Sections(browser,out);console.log(JSON.stringify(result));}finally{await browser.close();}return;}
  if(process.argv.includes('--cutover-only')){try{console.log((await cutoverSmoke(browser,out)).cases+' cutover smoke cases passed');}finally{await browser.close();}return;}
@@ -331,7 +362,7 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
  if(process.argv.includes('--empty-history-only')){try{console.log(await emptyHistoryCases(browser,out)+' empty history cases passed');}finally{await browser.close();}return;}
  if(process.argv.includes('--accessibility-spots-only')){try{const shots=await accessibilitySpots(browser,out);console.log(shots+' accessibility spot checks passed');}finally{await browser.close();}return;}
  const contrast=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));fs.writeFileSync(path.join(out,'contrast-measurements.json'),JSON.stringify(contrast,null,2));assert.deepEqual(contrast.filter(v=>v.ratio<v.minimum),[]);
- try {const fixture=await n1Fixture(browser,out);count+=fixture.shots;const n1=await n1Sections(browser,out);count+=n1.shots;combinations+=n1.combinations;const cutover=await cutoverSmoke(browser,out);count+=cutover.shots;cutoverCases=cutover.cases;const discovery=await deviceDiscoveryCases(browser,out);count+=discovery.shots;discoveryCases=discovery.cases;const device=await deviceViewportCases(browser,out);count+=device.shots;deviceCases=device.cases;count+=await accessibilitySpots(browser,out);count+=await emptyHistoryCases(browser,out);count+=await phonePanelCases(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;for(const [name,state] of Object.entries({empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))}))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['dark']){
+ try {if(!stateFilter){const n11=await n11Layout(browser,out);count+=n11.shots;n11Cases=n11.cases;const fixture=await n1Fixture(browser,out);count+=fixture.shots;const n1=await n1Sections(browser,out);count+=n1.shots;combinations+=n1.combinations;const cutover=await cutoverSmoke(browser,out);count+=cutover.shots;cutoverCases=cutover.cases;const discovery=await deviceDiscoveryCases(browser,out);count+=discovery.shots;discoveryCases=discovery.cases;const device=await deviceViewportCases(browser,out);count+=device.shots;deviceCases=device.cases;count+=await accessibilitySpots(browser,out);count+=await emptyHistoryCases(browser,out);count+=await phonePanelCases(browser,out);const keyboard=await keyboardPaths(browser,out);count+=keyboard.screenshots;keyboardCases=keyboard.cases;}const allStates={empty,active,completed:fx.richCompleted(),team,threadActive:active,threadTeam:team,threadLong:fx.richCompleted(),...Object.fromEntries(Object.entries({...composerCases,...decisionCases,...membersCases,...workspaceCases}).map(([name,f])=>[name,f.state]))};if(stateFilter)assert(Object.hasOwn(allStates,stateFilter),'Unknown focused-test state');for(const [name,state] of Object.entries(allStates).filter(([name])=>!stateFilter || name===stateFilter))for(const [size,[width,height]] of Object.entries(viewports))for(const colorScheme of ['dark']){
   combinations++;
   const pages=workspaceCases[name]?[workspaceCases[name].thread]:membersCases[name] ? [membersCases[name].thread,...(membersCases[name].older?[membersCases[name].older]:[])] : decisionCases[name] ? [decisionCases[name].thread] : composerCases[name] ? [composerCases[name].thread] : name==='threadLong' ? fx.threadLong() : [name==='empty' ? fx.threadResponse([],[]) : name==='threadTeam'||name==='team' ? fx.threadTeam() : name==='completed' ? fx.threadSingle() : fx.threadActive()];
   const page=await browser.newPage({viewport:{width,height},colorScheme,...(width<1200?{hasTouch:true,...(width<720 || size==='phone-landscape'?{isMobile:true}:{})}:{})});const errors=[];page.on('pageerror',err=>errors.push(err.message));
@@ -426,6 +457,7 @@ const team=fx.clone(active);team.run.mode='team';team.agents.push({name:'coder-2
     if(size==='desktop'){await zoomCheck(page,name,colorScheme,out);count++;}
     await page.locator('#workspace [data-back-room]').click();await page.waitForFunction(()=>document.querySelector('#workspace').hidden);assert.equal(await overflow(),false);
   }
+  if(stateFilter){fs.writeFileSync(path.join(out,'focused-layout.json'),JSON.stringify(await page.locator('#room-footer,.composer-row,.target-chip,#composer,#composer-settings,#send-message').evaluateAll(nodes=>nodes.map(n=>({id:n.id,text:n.textContent,rect:n.getBoundingClientRect().toJSON(),scrollHeight:n.scrollHeight,font:getComputedStyle(n).font,lineHeight:getComputedStyle(n).lineHeight}))),null,2));await page.screenshot({path:path.join(out,'focused-layout.png')});count++;}
   if(size==='phone' && (name==='composerNote'||name==='composerPaused'||name==='composerTarget'||name==='composerLiteral'))assert.equal(await page.locator('#composer-target').evaluate(node=>node.scrollWidth<=node.clientWidth),true,'Note target must be fully visible');
   if(size==='phone' && name!=='connections'){const heights=await page.evaluate(()=>({footer:document.getElementById('room-footer').getBoundingClientRect().height,waiting:document.querySelector('#waiting .waiting-strip')?.getBoundingClientRect().height || 0,timeline:document.getElementById('timeline').getBoundingClientRect().height,viewport:innerHeight}));measurements.push({name,size,colorScheme,...heights});assert(heights.footer <= (heights.waiting?112:72),`${name} footer ${heights.footer}`);assert(heights.waiting<=40 && (!heights.waiting || heights.waiting>=32),`${name} waiting row ${heights.waiting}`);if(heights.waiting){const baseline=await page.evaluate(()=>{const textTop=node=>{const range=document.createRange();range.selectNodeContents(node);return range.getBoundingClientRect().top;};return Math.abs(textTop(document.getElementById('waiting-pointer'))-textTop(document.querySelector('#waiting a')));});assert(baseline<1,`${name} waiting text/link misaligned by ${baseline}px`);}assert(heights.timeline>=heights.viewport*.55,`${name} timeline ${heights.timeline}`);}
   await layoutCheck(page,name,size,width);
@@ -486,5 +518,7 @@ await page.locator('#composer').fill(Array.from({length:10},()=>"A full line of 
  fs.writeFileSync(path.join(out,'target-measurements.json'),JSON.stringify(targetMeasurements,null,2));
  fs.writeFileSync(path.join(out,'focus-measurements.json'),JSON.stringify(focusMeasurements,null,2));
  fs.writeFileSync(path.join(out,'footer-measurements.json'),JSON.stringify(measurements,null,2));
- }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${20+keyboardCases+deviceCases+discoveryCases+cutoverCases} regression cases passed`);
+ }finally{await browser.close();}console.log(`${count} screenshots; ${combinations} state/viewport/appearance combinations and ${stateFilter?5:20+keyboardCases+deviceCases+discoveryCases+cutoverCases+n11Cases} regression cases passed (${wideFont?'wide font, 0.06em':'normal font'})`);
+ // A complete invocation requires both passes; a failed child is fatal too.
+ if(!wideFont && !viewportFilter && !keyboardOnly && !stateFilter){const result=require('node:child_process').spawnSync(process.execPath,[__filename,out+'-wide','--wide-font'],{stdio:'inherit',env:process.env});assert.equal(result.status,0,'Required wide-font matrix failed');}
 })().catch(error=>{console.error(error);process.exitCode=1;});

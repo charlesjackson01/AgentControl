@@ -134,14 +134,15 @@ body:has(#app:not([hidden])) { overflow: hidden; }
 #composer-host { position: relative; }
 .composer-row { display: flex; align-items: center; gap: var(--s1); min-width: 0; }
 #composer { flex: 1; min-width: 0; width: 0; height: var(--target); min-height: var(--target); max-height: calc(var(--viewport-height) * 0.4); margin: 0; padding: var(--s2); font-size: calc(var(--type-input) / var(--s4) * 1rem); overflow-y: auto; }
-.target-chip { background: var(--accent-soft); color: var(--accent); border-radius: var(--r1); padding: var(--s1) var(--s2); font-size: calc(var(--type-xs) / var(--s4) * 1rem); max-width: 25%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.target-chip { background: var(--accent-soft); color: var(--accent); border-radius: var(--r1); padding: var(--s1) var(--s2); font-size: calc(var(--type-xs) / var(--s4) * 1rem); max-width: 25%; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .target-chip[data-kind="note"] { max-width: 40%; }
+.target-chip[data-kind="follow-up"] { max-width: 30%; }
 .composer-row button { padding: var(--s2); font-size: calc(var(--type-sm) / var(--s4) * 1rem); flex-shrink: 0; }
 #send-message { background: var(--accent); color: var(--bg); }
 button:disabled { opacity: .6; cursor: default; }
 #composer-status, #composer-blocked { font-size: calc(var(--type-xs) / var(--s4) * 1rem); margin: var(--s1) 0 0; overflow-wrap: anywhere; }
 #composer-classic { font-size: calc(var(--type-xs) / var(--s4) * 1rem); }
-#waiting .waiting-strip { padding: 0 var(--s2); min-height: var(--target); margin-bottom: var(--s2); display: flex; flex-wrap: nowrap; align-items: baseline; gap: var(--s1); white-space: nowrap; }
+#waiting .waiting-strip { padding: 0 var(--s2); min-height: var(--target); margin-bottom: var(--s2); display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1); white-space: normal; }
 #waiting .waiting-strip button, #waiting .waiting-strip a { display: inline-flex; align-items: center; min-height: var(--target); line-height: var(--line-height); padding: 0; font-size: calc(var(--type-xs) / var(--s4) * 1rem); }
 #waiting-pointer [aria-hidden] { display: contents; }
 #waiting .waiting-strip span { font-size: calc(var(--type-xs) / var(--s4) * 1rem); }
@@ -276,7 +277,8 @@ select { font: inherit; color: var(--text); background: var(--bg); border: var(-
   .workspace-open #room-header .heading { flex-basis: 100%; }
   .workspace-open .composer-row { flex-wrap: wrap; }
   .workspace-open #composer { flex-basis: 100%; order: -1; }
-  .workspace-open #waiting .waiting-strip { flex-wrap: nowrap; white-space: nowrap; }
+  .workspace-open #waiting .waiting-strip { flex-wrap: nowrap; white-space: normal; }
+  .workspace-open #waiting .waiting-strip button, .workspace-open #waiting .waiting-strip a { flex-shrink: 1; min-width: 0; }
   .workspace-open .target-chip { max-width: none; }
 }
 @media (min-width: 720px) and (max-width: 1199px) {
@@ -378,6 +380,7 @@ input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: 
 #section-nav a, #bottom-nav a { color: var(--muted); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s1); min-height: var(--target); min-width: var(--target); font-size: calc(var(--type-xs) / var(--s4) * 1rem); border-radius: var(--r1); padding: var(--s2) 0; }
 #section-nav a[aria-current], #bottom-nav a[aria-current] { color: var(--text); background: var(--accent-soft); }
 #section-nav #key-avatar { margin-top: auto; }
+#section-nav > a, #section-nav > button { flex-shrink: 0; }
 #bottom-nav { display: none; }
 .nav-project { position: relative; }
 .projects-badge { position: absolute; top: 0; right: 0; min-width: var(--target); min-height: var(--target); padding: 0; font-size: calc(var(--type-xs) / var(--s4) * 1rem); color: var(--warning); background: var(--rail); transform: translateY(calc(var(--s1) * -1)); }
@@ -435,6 +438,7 @@ input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: 
   #section-nav { display: none; }
   #bottom-nav { grid-row: 2; display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); background: var(--rail); padding-bottom: env(safe-area-inset-bottom); height: var(--bottom-height); border-top: var(--line) solid var(--separator); }
   #bottom-nav a { gap: 0; padding: 0; height: 100%; }
+  #bottom-nav a svg { width: calc(var(--s4) - var(--line)); height: calc(var(--s4) - var(--line)); flex-shrink: 0; }
   #bottom-nav .projects-badge { top: calc(var(--s1) * -1); right: 0; transform: none; }
   #bottom-nav .nav-project:has(.projects-badge) a { padding-top: var(--s6); }
   #bottom-nav .nav-project:has(.projects-badge) svg { visibility: hidden; }
@@ -460,7 +464,10 @@ input:not([type="checkbox"]):not([type="radio"]), textarea, select { font-size: 
   #room-header .heading p { display: none; }
 }
 #section-nav [data-section], #bottom-nav [data-section] { position: relative; }
-#section-nav [data-section] > span:not(.projects-badge), #bottom-nav [data-section] > span:not(.projects-badge) { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#section-nav [data-section] > span:not(.projects-badge), #bottom-nav [data-section] > span:not(.projects-badge) { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: center; line-height: var(--line-height); }
+#bottom-nav [data-section] > span:not(.projects-badge) { line-height: calc(var(--type-xs) / var(--s4) * 1rem + var(--focus)); }
+#waiting .waiting-strip button, #waiting .waiting-strip a { display: block; flex-shrink: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+#waiting .waiting-strip a { display: inline-flex; align-items: center; }
 .projects-badge { min-width: 0; min-height: 0; top: var(--s1); right: var(--s1); padding: 0 var(--s1); border-radius: var(--r1); transform: none; }
 @media (max-height: 480px) {
   #timeline { padding: var(--s2); }
@@ -478,6 +485,9 @@ button:disabled, textarea:disabled { opacity: 1; }
   .composer-row { gap: var(--line); }
   .composer-row button { padding: var(--s1); }
   .target-chip { padding-left: 0; padding-right: 0; }
+  .target-chip { padding-top: var(--focus); padding-bottom: var(--focus); line-height: calc(var(--type-xs) / var(--s4) * 1rem + var(--focus)); }
+  #team-chip { padding-left: 0; padding-right: 0; }
+  .target-chip[data-kind="note"] { max-width: 20%; }
   #composer { padding-left: var(--line); padding-right: var(--line); }
 }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }

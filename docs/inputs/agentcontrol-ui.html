@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AgentControl</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root { --bg:#070708; --panel:#101012; --surface:#161618; --line:rgba(255,255,255,.07); --line-strong:rgba(255,255,255,.12); --text:#f4f4f5; --muted:#8b8b93; --faint:#5c5c66; }
+  * { box-sizing:border-box; } html,body { height:100%; margin:0; }
+  body { font-family:Inter,sans-serif; background:var(--bg); color:var(--text); overflow:hidden; }
+  button,input,textarea { font-family:inherit; color:inherit; } button { cursor:pointer; }
+  .app { display:grid; grid-template-columns:76px 300px 1fr; height:100%; }
+  .rail { background:#0b0b0d; border-right:1px solid var(--line); display:flex; flex-direction:column; align-items:center; padding:14px 10px; gap:6px; }
+  .mark { width:38px; height:38px; border-radius:12px; background:#fff; color:#111; display:grid; place-items:center; font-weight:700; font-size:12px; margin-bottom:8px; border:0; }
+  .rail-btn { width:54px; border:0; background:transparent; color:var(--muted); border-radius:12px; padding:7px 2px; display:flex; flex-direction:column; align-items:center; gap:4px; font-size:9px; font-weight:600; }
+  .rail-btn.active { background:rgba(255,255,255,.08); color:#fff; } .rail-spacer { flex:1; }
+  .side { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  .side-head { padding:16px 16px 10px; display:flex; justify-content:space-between; align-items:center; } .side-head h2 { margin:0; font-size:15px; }
+  .search { margin:0 14px 10px; background:var(--surface); border:1px solid var(--line); border-radius:10px; height:34px; display:flex; align-items:center; padding:0 10px; }
+  .search input { border:0; outline:0; background:transparent; width:100%; }
+  .list { overflow:auto; padding:0 10px 16px; } .label { font-size:11px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase; padding:10px 8px 6px; font-weight:600; }
+  .item { width:100%; text-align:left; border:0; background:transparent; border-radius:12px; padding:9px 8px; display:flex; gap:10px; align-items:center; }
+  .item.active,.item:hover { background:rgba(255,255,255,.06); }
+  .dot { width:34px; height:34px; border-radius:11px; display:grid; place-items:center; font-weight:700; flex:none; }
+  .meta b { display:block; font-size:13.5px; } .meta em { display:block; font-style:normal; color:var(--muted); font-size:12px; margin-top:2px; }
+  .main { display:flex; flex-direction:column; min-width:0; } .topbar { height:62px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; padding:0 18px; }
+  .topbar h1 { margin:0; font-size:15px; } .topbar p { margin:2px 0 0; color:var(--muted); font-size:12px; }
+  .ghost,.solid { border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:9px; height:30px; padding:0 10px; font-size:12px; } .solid { background:#fff; color:#111; border-color:#fff; }
+  .stage { flex:1; overflow:auto; } .canvas { padding:22px 26px 36px; } .sub { color:var(--muted); margin:0 0 16px; font-size:13.5px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:12px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:14px; text-align:left; color:inherit; } .card h4 { margin:6px 0 4px; } .card p { margin:0; color:var(--muted); font-size:12.5px; line-height:1.45; }
+  .kicker { font-size:11px; color:var(--faint); letter-spacing:.06em; text-transform:uppercase; font-weight:600; }
+  .thread { width:min(780px,calc(100% - 40px)); margin:22px auto; display:flex; flex-direction:column; gap:14px; }
+  .msg { display:flex; gap:10px; } .bubble { font-size:14.5px; line-height:1.5; } .user { justify-content:flex-end; } .user .bubble { background:#1f1f23; border:1px solid var(--line); border-radius:16px 16px 6px 16px; padding:10px 12px; }
+  .composer { width:min(780px,calc(100% - 40px)); margin:0 auto 16px; background:var(--surface); border:1px solid var(--line-strong); border-radius:18px; padding:10px 12px; }
+  .composer textarea { width:100%; border:0; outline:0; background:transparent; resize:none; min-height:40px; font-size:14.5px; }
+  .row { display:flex; justify-content:space-between; gap:8px; align-items:center; } .pills { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:8px; }
+  .pills button,.pill { border:1px solid var(--line); background:transparent; color:var(--muted); border-radius:999px; height:26px; padding:0 9px; font-size:12px; } .pills button.on { background:#fff; color:#111; }
+  .send { width:32px; height:32px; border-radius:50%; border:0; background:#fff; color:#111; }
+  .split { display:grid; grid-template-columns:260px 1fr; min-height:calc(100vh - 62px); } .tree { border-right:1px solid var(--line); padding:12px; } .file { width:100%; text-align:left; border:0; background:transparent; color:inherit; border-radius:8px; padding:8px; } .file.on { background:rgba(255,255,255,.06); }
+  pre { background:#101012; border:1px solid var(--line); border-radius:12px; padding:14px; font-size:12.5px; line-height:1.55; }
+  .setting { display:flex; justify-content:space-between; gap:12px; align-items:center; background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px 14px; margin-bottom:8px; } .setting p { margin:3px 0 0; color:var(--muted); font-size:12.5px; }
+  .modal-back { position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; place-items:center; } .modal-back.show { display:grid; }
+  .modal { width:min(480px,calc(100% - 24px)); background:#141416; border:1px solid var(--line-strong); border-radius:16px; padding:16px; } .field { display:flex; flex-direction:column; gap:6px; margin:10px 0; } .field input,.field textarea { border:1px solid var(--line-strong); background:#0e0e10; border-radius:10px; padding:8px 10px; }
+  @media (max-width:900px) { .app { grid-template-columns:1fr; } .rail { flex-direction:row; overflow:auto; } .side { display:none; } .split { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="rail">
+    <button class="mark" id="home">AC</button>
+    <button class="rail-btn active" data-nav="primary">Primary</button>
+    <button class="rail-btn" data-nav="agents">Agents</button>
+    <button class="rail-btn" data-nav="projects">Projects</button>
+    <button class="rail-btn" data-nav="workspace">Workspace</button>
+    <button class="rail-btn" data-nav="skills">Skills</button>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" data-nav="settings">Settings</button>
+  </aside>
+  <section class="side"><div class="side-head"><h2 id="sideTitle">Primary</h2><button class="solid" id="plus">+</button></div><div class="search"><input id="filter" placeholder="Search" /></div><div class="list" id="list"></div></section>
+  <main class="main"><header class="topbar"><div><h1 id="title">Primary</h1><p id="sub">Everyday conversation. Persistent across projects.</p></div><div id="actions"></div></header><div class="stage" id="stage"></div></main>
+</div>
+<div class="modal-back" id="modal"></div>
+<script>
+let nav="primary", agentId="atlas", projectId="console", file="room.md";
+const library=[
+  {id:"atlas",name:"Atlas",role:"Research",model:"research"},
+  {id:"codex",name:"Codex",role:"Builder",model:"coder"},
+  {id:"muse",name:"Muse",role:"Design",model:"design"},
+  {id:"sentinel",name:"Sentinel",role:"Ops",model:"ops"}
+];
+let projects=[
+  {id:"console",name:"AgentControl",dir:"~/AgentControl",members:["muse","codex"]},
+  {id:"parking",name:"Parking lot model",dir:"~/lots/austin",members:["atlas","sentinel"]},
+  {id:"hermes",name:"Hermes local",dir:"~/hermes",members:["codex"]}
+];
+const skills=[
+  {name:"Web research",who:"Atlas",perm:"ask"},
+  {name:"Workspace files",who:"Codex",perm:"allow"},
+  {name:"Shell",who:"Sentinel",perm:"deny"}
+];
+const $=id=>document.getElementById(id);
+const agent=id=>library.find(a=>a.id===id);
+const project=()=>projects.find(p=>p.id===projectId);
+function item(title,sub,on,fn){const b=document.createElement("button"); b.className="item"+(on?" active":""); b.innerHTML=`<div class="dot" style="background:#1b1b1f">${title[0]}</div><div class="meta"><b>${title}</b><em>${sub}</em></div>`; b.onclick=fn; return b;}
+function side(){
+  $("list").innerHTML=""; $("plus").style.visibility = nav==="agents"||nav==="projects" ? "visible" : "hidden";
+  const titles={primary:"Primary",agents:"Agent library",projects:"Projects",workspace:"Workspace",skills:"Skills",settings:"Settings"};
+  $("sideTitle").textContent=titles[nav];
+  if(nav==="primary") $("list").appendChild(item("Primary","Everyday · persistent",true,()=>go("primary")));
+  if(nav==="agents") library.forEach(a=>$("list").appendChild(item(a.name,a.role+" · "+a.model,a.id===agentId,()=>{agentId=a.id; render();})));
+  if(nav==="projects") projects.forEach(p=>$("list").appendChild(item(p.name,p.dir,p.id===projectId,()=>{projectId=p.id; render();})));
+  if(nav==="workspace") ["room.md","team.json","ui.html"].forEach(f=>$("list").appendChild(item(f,project().dir,f===file,()=>{file=f; render();})));
+  if(nav==="skills") skills.forEach(s=>$("list").appendChild(item(s.name,s.who+" · "+s.perm,false,()=>{})));
+  if(nav==="settings") ["Primary memory","Specialist memory","Project context","Approval gates"].forEach(s=>$("list").appendChild(item(s,"separate store",false,()=>{})));
+}
+function go(name){ nav=name; document.querySelectorAll(".rail-btn").forEach(b=>b.classList.toggle("active",b.dataset.nav===name)); render(); }
+function render(){
+  side();
+  if(nav==="primary"){
+    $("title").textContent="Primary"; $("sub").textContent="Everyday conversation. Not cleared by a project switch."; $("actions").innerHTML="";
+    $("stage").innerHTML=`<div class="thread"><div class="msg"><div class="dot">G</div><div class="bubble"><b>Primary</b><br>This thread stays available across projects. Specialist and project memory are separate.</div></div></div><div class="composer"><textarea placeholder="Message the primary agent"></textarea><div class="row"><span class="pill">primary memory</span><button class="send">↑</button></div></div>`;
+  }
+  if(nav==="agents"){
+    const a=agent(agentId); $("title").textContent=a.name; $("sub").textContent="Library agent · Direct · "+a.model; $("actions").innerHTML=`<button class="ghost" id="cfg">Configure</button>`;
+    $("stage").innerHTML=`<div class="canvas"><div class="grid"><div class="card"><div class="kicker">Skills assigned</div><h4>None until assigned</h4><p>Assignment does not grant a tool.</p></div><div class="card"><div class="kicker">Tool permission</div><h4>Ask</h4><p>Uses the existing approval gate.</p></div><div class="card"><div class="kicker">Memory</div><h4>Specialist store</h4><p>Not written into Primary.</p></div></div></div><div class="thread"><div class="msg"><div class="bubble"><b>${a.name}</b> <span class="pill">direct</span><br>Private thread. This does not post to a project team.</div></div></div><div class="composer"><textarea placeholder="Message ${a.name} only"></textarea><div class="row"><span class="pill">DM</span><button class="send">↑</button></div></div>`;
+  }
+  if(nav==="projects"){
+    const p=project(); $("title").textContent=p.name; $("sub").textContent=p.dir+" · team is this membership"; $("actions").innerHTML=`<button class="solid" id="newp">New project</button>`;
+    $("stage").innerHTML=`<div class="canvas"><div class="grid">${projects.map(pr=>`<button class="card" data-id="${pr.id}"><div class="kicker">${pr.dir}</div><h4>${pr.name}</h4><p>${pr.members.map(id=>agent(id).name).join(", ")}</p></button>`).join("")}</div></div><div class="composer"><div class="pills"><button class="on">Team</button>${p.members.map(id=>`<button data-dm="${id}">${agent(id).name}</button>`).join("")}</div><textarea placeholder="Message the ${p.name} team"></textarea><div class="row"><span class="pill">project context</span><button class="send">↑</button></div></div>`;
+    $("stage").querySelectorAll(".card").forEach(c=>c.onclick=()=>{projectId=c.dataset.id; render();});
+    $("stage").querySelectorAll("[data-dm]").forEach(b=>b.onclick=()=>{agentId=b.dataset.dm; go("agents");});
+    $("newp").onclick=openProject;
+  }
+  if(nav==="workspace"){
+    const p=project(); $("title").textContent="Workspace"; $("sub").textContent=p.dir+" · shared by members"; $("actions").innerHTML="";
+    $("stage").innerHTML=`<div class="split"><div class="tree">${["room.md","team.json","ui.html"].map(f=>`<button class="file ${f===file?"on":""}" data-f="${f}">${f}</button>`).join("")}</div><div class="canvas"><div class="kicker">${p.dir}/${file}</div><pre>${file==="team.json"?"members: "+p.members.join(", "):"Project file. Selecting it does not change the thread."}</pre></div></div>`;
+    $("stage").querySelectorAll(".file").forEach(b=>b.onclick=()=>{file=b.dataset.f; render();});
+  }
+  if(nav==="skills"){
+    $("title").textContent="Skills"; $("sub").textContent="Shared catalog. Assignment and tool permission are separate."; $("actions").innerHTML="";
+    $("stage").innerHTML=`<div class="canvas"><div class="grid">${skills.map(s=>`<div class="card"><div class="kicker">Assigned to ${s.who}</div><h4>${s.name}</h4><p>Tool permission: ${s.perm}. Ask still uses the approval gate.</p></div>`).join("")}</div></div>`;
+  }
+  if(nav==="settings"){
+    $("title").textContent="Settings"; $("sub").textContent="Memory stays split. Orchestration is a later milestone."; $("actions").innerHTML="";
+    $("stage").innerHTML=`<div class="canvas"><div class="setting"><div><b>Primary memory</b><p>Everyday thread only. Survives project switches.</p></div></div><div class="setting"><div><b>Specialist memory</b><p>One store per library agent.</p></div></div><div class="setting"><div><b>Project context</b><p>Scoped to the project directory and its members.</p></div></div><div class="setting"><div><b>Approval gates</b><p>Preserved. Native orchestration is not in this pass.</p></div></div></div>`;
+  }
+}
+function openProject(){
+  $("modal").classList.add("show");
+  $("modal").innerHTML=`<form class="modal"><h3>New project</h3><p class="sub">Creates a directory, chooses library agents, opens the team thread.</p><div class="field"><label>Name</label><input id="n" required placeholder="Field notes"></div><div class="field"><label>Directory</label><input id="d" required placeholder="~/notes"></div><div id="pick"></div><div class="row"><button type="button" class="ghost" id="cancel">Cancel</button><button class="solid">Create project</button></div></form>`;
+  const picked=new Set(["atlas"]);
+  const draw=()=>$("pick").innerHTML=library.map(a=>`<button type="button" class="item" data-id="${a.id}"><b>${picked.has(a.id)?"✓":""} ${a.name}</b></button>`).join("");
+  draw();
+  $("pick").onclick=e=>{const id=e.target.closest("button")?.dataset.id; if(!id) return; picked.has(id)?picked.delete(id):picked.add(id); draw();};
+  $("cancel").onclick=()=>$("modal").classList.remove("show");
+  $("modal").querySelector("form").onsubmit=e=>{e.preventDefault(); projects.unshift({id:$("n").value,name:$("n").value,dir:$("d").value,members:[...picked]}); projectId=$("n").value; $("modal").classList.remove("show"); go("projects");};
+}
+$("plus").onclick=()=> nav==="agents" ? alert("Create agent adds a library entry only.") : openProject();
+$("home").onclick=()=>go("primary");
+document.querySelectorAll(".rail-btn").forEach(b=>b.onclick=()=>go(b.dataset.nav));
+render();
+</script>
+</body>
+</html>

@@ -675,3 +675,6 @@ person's.
 - 2026-10-03 (M9 Part B review): **M9 is accepted.** Routes, C1 compatibility, the `/classic?popout=` Workspace link,
   docs and tests verified independently, with no Blocking or Should-fix findings. Merging into `main`, retiring classic,
   native surfaces (G2) and R1 remain separate owner decisions.
+- 2026-10-03 (N0 proposal): `docs/PERSISTENT_AGENTS_ARCHITECTURE.md` proposes the N series that would realise §12.1 R1,
+  with 15 decisions pending in `docs/handoffs/N0_DECISIONS.md`. **Nothing in this contract is amended by the proposal.**
+  Each amendment (invariants 1, 2 and 8 as scoped there, D4, §11) applies only once the owner approves its decision.

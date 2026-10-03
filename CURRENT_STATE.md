@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (owner-authorised merge into `main` at `1e1d1b4`; classic not retired).
+**Last updated:** 2026-10-03, by Opus (N0 persistent-agents proposal drafted; every decision pending the owner; N1 not authorised).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -9,11 +9,12 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | | |
 |---|---|
 | Working branch | `feature/chat-first-redesign`. All redesign work goes here; **merge into `main` only with the owner's explicit authorisation** |
-| `main` | `1e1d1b4`: owner-authorised `--no-ff` merge (2026-10-03) of accepted `f45c112` into `9c20d73`; tree identical to `f45c112` |
+| `main` | `d1f4733`: owner-authorised merges (2026-10-03) of accepted `f45c112` (`1e1d1b4`, tree identical to `f45c112`) and of the merge-status record `a3905d9` |
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Latest:** `M9_PARITY_AND_CUTOVER.md`, accepted 2026-10-03. No milestone is currently authorised |
+| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Proposed, not authorised:** `N0_DECISIONS.md` (15 pending decisions) and `N1_SHELL_AND_NAVIGATION.md` (draft) |
+| Persistent agents (proposed, not binding) | `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`; inputs `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and `docs/inputs/agentcontrol-ui.html` (visual reference only; not served, not reused) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -39,7 +40,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
 | **M9 Parity and cutover** | ✅ **accepted (Part 0 `568534e`, A `1025518`, B `6068f2d`; review 2026-10-03)** | Codex, then the owner | All owner gates cleared at `ae4bcb8`; G2 (a) retains classic surfaces, G3 accepts Android Chrome as not performed. Plain `/` is chat; `/chat` aliases it; `/classic` and `/classic/` retain classic; root pop-out URLs remain compatible. 72 parity rows retain their statuses (17 Native, 54 Linked, 1 not ported, 0 Missing). No merge into main |
 | **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; keyboard viewport handling with pinch-zoom freeze; visible waiting/Workspace links; isolated fixture; reliable focus return. **Owner-reported iPhone 17 Pro / Safari checklist passed; Android Chrome not performed (owner-accepted gap)** |
-| R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
+| R1 Persistent bots | roadmap; **N series proposed** | owner | architecture §12.1. Realised by the proposed N series (N1–N7, N-ORCH separate) |
+| **N0 Persistent agents: architecture and requirements** | 📝 **proposed 2026-10-03; all 15 decisions pending** | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. N1 needs P-1, P-11, P-12, P-13, P-14 and the sequence approved. No code, schema or database changes |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
 `/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -250,9 +252,12 @@ was changed.
    `f45c112`. Routing is preserved (chat `/`, alias `/chat`, classic `/classic` and `/classic/`, root
    `/?popout=` compatibility). Post-merge on `1e1d1b4`: Python **424, OK (skipped=6, all gates)**, classic **82/82**,
    chat **255/255**, cutover smoke **5/5**, and a real-server route probe. The full matrix ran on the identical tree at
-   `f45c112`. `main`'s own copy of this file predates the merge record.
-4. **The next step is the owner's.** No milestone is authorised. Retiring classic, native surfaces (G2), R1 and the
-   VM test-robustness change each need a separate owner decision.
+   `f45c112`. The merge-status record was then merged as well (`main` = `d1f4733`).
+4. **N0 is proposed (Opus, 2026-10-03), and the next step is the owner's.** Review `docs/handoffs/N0_DECISIONS.md`
+   and approve, change or refuse each of P-1 to P-15, plus the milestone sequence. N1 (`N1_SHELL_AND_NAVIGATION.md`)
+   starts only after P-1, P-11, P-12, P-13 and P-14 are approved. Q1–Q3 (model registry, Primary's endpoint, projects
+   root) are needed before N3. No milestone is authorised. Retiring classic, native surfaces (G2) and the VM
+   test-robustness change still each need a separate owner decision.
 
 Still deferred:
 - native surface viewing and input (G2)

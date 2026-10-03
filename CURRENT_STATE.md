@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (N1.2 accepted at `450165e`; the Projects screen matches D13. N2 needs owner decisions).
+**Last updated:** 2026-10-03, by Opus (owner approved P-2, P-4, P-6, P-8, P-9, P-15 as D14–D19; visual fidelity to the mock raised).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -258,9 +258,9 @@ was changed.
    `f45c112`. The merge-status record was then merged as well (`main` = `d1f4733`).
 4. **N0: the owner approved P-1, P-11 (a), P-12, P-13, P-14 and the N sequence (2026-10-03).** They are recorded as
    D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. N1 applies the §9 and §11 amendments and rewrites §10.
-5. **N1.2 is accepted (Opus, 2026-10-03).** The Projects screen matches D13. No milestone is authorised. N2 (library,
-   projects and membership records) needs a handoff and the owner's approval of P-2, P-4, P-6, P-8, P-9 and P-15. The
-   owner may also choose to address optional O8–O10, and to recheck the new screen on a phone.
+5. **N1.2 is accepted (Opus, 2026-10-03).** The owner then approved **P-2, P-4, P-6, P-8, P-9 and P-15** (D14–D19), which
+   are N2's decisions. The owner also asked when the UI will match the mock. Opus proposed a visual-fidelity milestone
+   (N1.3) before N2, and it awaits one owner decision on bundled fonts. No milestone is authorised yet.
 6. **Still the owner's:**
    - P-2 to P-10 and P-15, needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards
    - Q1–Q3 (model registry, Primary's endpoint, projects root), needed before N3

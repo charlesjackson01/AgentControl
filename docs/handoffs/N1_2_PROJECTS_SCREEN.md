@@ -214,8 +214,14 @@ Opus compares them against §2 before accepting.
 - Full browser matrix, both passes.
 - Chat DOM, classic **82/82**, routes **4/4**, cutover smoke **5/5**, the isolated fixture cases.
 - One full Python run (unchanged files; gates labelled).
-- The eight-step real-server walkthrough. Same POST bodies and counts; GETs equal to or fewer than N1's, with any difference
-  explained.
+- **Walkthrough substitution (owner decision, 2026-10-03, option (a)).** The M9/N1 eight-step real-server walkthrough script
+  was never committed, so it is **not required for N1.2**. N1.2 changes no request path. In its place:
+  - the committed isolated fixture cases and cutover smoke must pass
+  - DOM tests must show that every approval, decision, composer and project POST keeps its exact endpoint and body
+  - the report lists any change in GET counts at boot or in the steady state
+
+  Opus adds its own real-server fixture probe at review. Rebuilding and committing the walkthrough under
+  `agent-autonomy/tests/` is deferred to N2's harness work.
 
 ## 5. When you finish
 

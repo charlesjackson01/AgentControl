@@ -72,17 +72,17 @@ test('401 returns server error to sign-in and clears stored key',async()=>{
   const h=await harness(fixture(),{unauthorized:true});assert.equal(h.document.querySelector('#app').hidden,true);assert.match(h.document.querySelector('#sign-in-error').textContent,/Key rejected by server/);assert.equal(h.local.size,0);
 });
 test('sessions ordered, deep links focus and open context',async()=>{
-  const h=await harness(richActive());const rail=[...h.document.querySelectorAll('#session-list a')];assert.match(rail[0].getAttribute('href'),/run_test/);
+  const h=await harness(richActive());
   const timeline=[...h.document.querySelectorAll('[data-session]')];assert.equal(timeline[0].dataset.session,'run_old');
   h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);
-  assert.equal(h.document.querySelector('#context').hidden,false);assert.equal(h.document.querySelector('.focused [data-session]').dataset.session,'run_test');assert(h.calls.some(c=>/scope=current&run=run_test/.test(c.url)));
-  h.shell.setContext(false);assert.equal(h.local.get('acx-context-open'),'false');
+  assert.equal(h.document.querySelector('#context').hidden,true);h.document.querySelector('#open-context').click();assert.equal(h.document.querySelector('#context').hidden,false);assert.equal(h.document.querySelector('.focused [data-session]').dataset.session,'run_test');assert(h.calls.some(c=>/scope=current&run=run_test/.test(c.url)));
+  h.shell.setContext(false);assert.equal(h.local.has('acx-context-open'),false);
   h.window.location.hash='#/unknown';h.shell.route();assert.equal(h.window.location.hash,'#/');
 });
 test('unknown fresh session recovers and never fetches agents',async()=>{
   const h=await harness(richActive(),{hash:'#/s/bogus'});
   assert.equal(h.window.location.hash,'#/');assert.equal(h.core.getState().focused,'');
-  assert.equal(h.document.querySelectorAll('#session-list a').length,2);
+  assert.equal(h.timeline.querySelectorAll('.session-divider[data-session]').length,2);
   assert.match(h.document.querySelector('#banner-text').textContent,/That session is not in this project's history/);
   assert.equal(h.document.querySelector('#context').hidden,true);assert.equal(h.document.querySelector('#scrim').hidden,true);
   h.document.querySelector('#dismiss-error').click();assert.equal(h.document.querySelector('#banner').hidden,true);
@@ -94,13 +94,14 @@ test('stale link and failed refresh preserve later live updates',async()=>{
   h.window.location.hash='#/s/bogus';h.shell.route();await h.runTimers(0);
   options.fail=true;await h.core.refresh();options.fail=false;
   state.runs[0].title='Updated session';await h.emit('event: change\ndata: {}\n\n');await h.runTimers(0);
-  assert.match(h.document.querySelector('#session-list').textContent,/Updated session/);
+  h.document.querySelector('#open-context').click();assert.match(h.document.querySelector('#context').textContent,/Updated session/);
   assert.equal(h.calls.filter(c=>c.url.startsWith('/api/agents')).length,0);
 });
 test('saved context and return to room leave no scrim',async()=>{
   const h=await harness(richActive(),{contextOpen:true});
   for(const id of ['scrim','context'])assert.equal(h.document.getElementById(id).hidden,true);
   h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);
+  assert.equal(h.document.getElementById('context').hidden,true);h.document.querySelector('#open-context').click();
   assert.equal(h.document.getElementById('context').hidden,false);
   h.window.location.hash='#/';h.shell.route();
   for(const id of ['scrim','context'])assert.equal(h.document.getElementById(id).hidden,true);
@@ -108,15 +109,15 @@ test('saved context and return to room leave no scrim',async()=>{
 test('every presence state has a symbol and label, Hermes first',async()=>{
   const states=['working','waiting_on_you','needs_attention','paused','idle','finished','failed','stopped','blocked','limit_reached'];
   const state=fixture();state.agents=states.map((state,i)=>({name:'coder-'+i,type:'coder',state,task:'Task '+i,since:'2026-09-28T16:00:00Z'}));state.agents.push({name:'hermes',state:'working',type:'orchestrator'});
-  const h=await harness(state);const members=model.membersFromState(state);assert.equal(members[0].name,'hermes');for(const member of members){assert(member.symbol);assert.match(h.document.querySelector('#rail').textContent,new RegExp(member.stateLabel));}
-  h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);h.document.querySelector('#members-tab').click();assert.match(h.document.querySelector('#context').textContent,/Task 9/);
+  const h=await harness(state);const members=model.membersFromState(state);assert.equal(members[0].name,'hermes');
+  h.window.location.hash='#/s/run_test';h.shell.route();await h.runTimers(0);h.document.querySelector('#open-context').click();h.document.querySelector('#members-tab').click();for(const member of members){assert(member.symbol);assert.match(h.document.querySelector('#context').textContent,new RegExp(member.stateLabel));}assert.match(h.document.querySelector('#context').textContent,/Task 9/);
 });
 test('waiting pointer and room composer, controls only on actionable messages',async()=>{
-  const h=await harness();assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 1 waiting for you');assert.equal(h.document.querySelector('#waiting a').getAttribute('href'),'/classic');
+  const h=await harness();assert.equal(h.document.querySelector('#section-nav [data-locate-waiting]').getAttribute('aria-label'),'Projects, 1 waiting for you');assert.equal(h.document.querySelector('#section-nav .projects-badge').textContent,'! 1');assert.equal(h.document.querySelector('#waiting'),null);
   assert(!h.document.querySelector('#composer').hasAttribute('disabled'));assert.match(h.document.querySelector('#composer').getAttribute('placeholder'),/Message Hermes/);
   assert.equal(h.document.querySelectorAll('[data-decision="approve"]').length,1);
   assert.equal(h.document.querySelectorAll('[data-message]:not(:has(.waiting-state)) [data-decision]').length,0);
-  const done=await harness(richCompleted());assert.equal(done.document.querySelector('#waiting').textContent,'');
+  const done=await harness(richCompleted());assert.equal(done.document.querySelectorAll('[data-locate-waiting],.projects-badge').length,0);
 });
 test('API strings cannot inject markup',async()=>{
   const state=fixture();const attack='<img src=x onerror=alert(1)>';state.project='/tmp/'+attack;state.runs[0].title=attack;state.run.summary=attack;state.run.goal=attack;state.agents=[{name:attack,state:'working',task:attack}];state.health.agents.hermes.label=attack;
@@ -162,7 +163,7 @@ test('M3 kinds, progressive detail, roles, receipts and unknown kinds',async()=>
 test('M3 actions link once to classic; M5 controls are scoped and hide fingerprints',async()=>{
   for(const data of [fx.threadSingle(),fx.threadActive(),fx.threadTeam()]){
     const h=await harness(fixture(),{thread:data});
-    for(const message of data.messages.filter(m=>m.action)){const node=h.timeline.querySelector(`[data-message="${message.id}"]`);assert.equal(node.querySelectorAll('a[href="/classic"]').length,1);assert(node.textContent.includes('Waiting for you'));}
+    for(const message of data.messages.filter(m=>m.action)){const node=h.timeline.querySelector(`[data-message="${message.id}"]`);assert.equal(node.querySelectorAll('a[href="/classic"]').length,node.querySelector('.review-unavailable')?1:0);assert(node.textContent.includes('Waiting for you'));}
     for(const node of h.timeline.querySelectorAll('[data-decision]'))assert(data.messages.find(m=>m.id===node.closest('[data-message]').dataset.message)?.action);
     assert.equal(h.timeline.querySelectorAll('[data-message]:not(:has(.waiting-state)) [data-decision]').length,0);
     assert(!h.document.toString().includes('NEVER-SHOW-FINGERPRINT'));assert(h.calls.every(c=>c.request.method==='GET' || c.url==='/api/events'));
@@ -247,8 +248,8 @@ test('M3 live phases and pending note hint use thread only',async()=>{
   data.messages.push(fx.threadMessage('later','decision','Recorded decision'));await h.core.refresh();assert(!h.timeline.textContent.includes('Hermes reads this before the next turn'));data.live.session=null;await h.core.refresh();assert(h.timeline.querySelector('#thread-live').hidden);
 });
 test('M3 waiting count is from channels and pointer finds first action',async()=>{
-  const data=fx.threadActive(),h=await harness(richCompleted(),{thread:data,channels:fx.threadChannels(data,2)});assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 2 waiting for you');h.document.querySelector('#waiting-pointer').click();await tick();assert(h.timeline.querySelector('[data-message="req:permission:p1"]').classList.contains('focused'));
-  h.options.channels.channels[0].waiting=1;await h.core.refresh();assert.equal(h.document.querySelector('#waiting-pointer').textContent,'! 1 waiting for you');assert(!h.document.querySelector('#waiting').textContent.includes('requests'));
+  const data=fx.threadActive(),h=await harness(richCompleted(),{thread:data,channels:fx.threadChannels(data,2)});assert.equal(h.document.querySelector('#section-nav [data-locate-waiting]').getAttribute('aria-label'),'Projects, 2 waiting for you');h.document.querySelector('#section-nav [data-locate-waiting]').click();await tick();assert(h.timeline.querySelector('[data-message="req:permission:p1"]').classList.contains('focused'));
+  h.options.channels.channels[0].waiting=1;await h.core.refresh();assert.equal(h.document.querySelector('#section-nav [data-locate-waiting]').getAttribute('aria-label'),'Projects, 1 waiting for you');assert(!h.document.querySelector('#section-nav').textContent.includes('requests'));
 });
 test('M3 one change refreshes all three endpoints with known and handles their 401',async()=>{
   const h=await harness(fixture(),{stream:true});const n=h.calls.length;await h.emit('event: change\ndata: {}\n\n');await h.runTimers(0);const calls=h.calls.slice(n);assert.equal(calls.length,3);assert(calls.some(c=>c.url.startsWith('/api/thread?channel=main&limit=200&known=')));assert(calls.some(c=>c.url==='/api/channels'));assert(calls.some(c=>c.url.startsWith('/api/state')));assert(!h.calls.some(c=>c.url.startsWith('/api/agents')));
@@ -308,20 +309,12 @@ test('M3.1 waiting line separates summary, marker and link in every layout',asyn
   const h=await harness(fixture(),{thread:fx.threadResponse(messages,[fx.threadSession()])});
   for(const [i,type] of ['quiet','line','bubble','request-card'].entries()){
     const node=h.timeline.querySelector(`[data-message="layout:${i}"] .${type}`),line=node.querySelector(':scope > .waiting-line');
-    assert(line,'separate waiting line in '+type);assert.equal(line.textContent,'! Waiting for you · Open in classic dashboard');
-    assert.equal(line.querySelector('a').getAttribute('href'),'/classic');
+    assert(line,'separate waiting line in '+type);assert.equal(line.textContent,'! Waiting for you');
+    assert.equal(line.querySelector('a'),null);
     assert(line.previousElementSibling);assert(!line.previousElementSibling.textContent.includes('Waiting for you'));
   }
 });
-test('M3.1 rail counts use the M6 session union and current count wording',async()=>{
-  const state=fixture();state.runs=Array.from({length:30},(_,i)=>({...state.run,id:'rail:'+i}));
-  const channels=fx.threadChannels(fx.threadActive(),1);channels.channels[0].sessions=47;
-  const h=await harness(state,{channels});assert.equal(h.document.querySelectorAll('#session-list a').length,31);
-  assert(h.document.querySelector('#session-list a[href="#/s/run_test"]'));
-  const note=h.document.querySelector('#session-list + .muted');assert(note);assert.equal(note.textContent,'Showing 31 of 47 sessions');
-  state.runs=state.runs.slice(0,2);await h.core.refresh();assert.equal(h.document.querySelector('#session-list + .muted').textContent,'Showing 3 of 47 sessions');
-  for(const total of [3,2]){channels.channels[0].sessions=total;await h.core.refresh();if(total===3)assert.equal(!!h.document.querySelector('#session-list + .muted'),false);else assert.equal(!!h.document.querySelector('#session-list + .muted'),false);}
-});
+// Retired by D13 (N1.2): M3.1 rail counts use the M6 session union and current count wording — the rail sessions list and its X of N note are retired by D13 (2); session history lives in the thread
 function revalidationPages(kind='skill') {
   const s=fx.threadSession(), action=fx.threadMessage('stale',kind,'Needs a decision',{state:'proposed'}, {action:{endpoint:'/api/skills/decide'}}), overlap=fx.threadMessage('overlap','decision','Latest recorded update');
   const initial=fx.threadResponse([action,overlap],[s]);
@@ -493,7 +486,7 @@ test('M4 key rules distinguish fine/touch pointers, modifiers and composition',a
 });
 test('M4 Basic/Advanced Settings and unavailability reasons disclose progressively',async()=>{
   const h=await composerHarness('new');await h.composer.openSettings();assert(!h.document.querySelector('#settings-sheet').hidden);assert(h.document.querySelector('#settings-basic'));assert(!h.document.querySelector('#settings-advanced').open);
-  assert(h.document.querySelector('input[value="container"]').disabled);assert(h.document.querySelector('input[value="vm"]').disabled);assert(h.document.querySelector('#isolation-options').textContent.includes('No container runtime installed'));assert(h.document.querySelector('#isolation-options').textContent.includes('KVM unavailable on this server'));assert.equal(h.document.querySelectorAll('#isolation-options details').length,2);assert(!h.document.querySelector('option[value="internet"]'));assert(h.document.querySelector('#settings-sheet').textContent.includes('Paid models and the stuck watch: set them in the classic dashboard'));
+  assert(h.document.querySelector('input[value="container"]').disabled);assert(h.document.querySelector('input[value="vm"]').disabled);assert(h.document.querySelector('#isolation-options').textContent.includes('No container runtime installed'));assert(h.document.querySelector('#isolation-options').textContent.includes('KVM unavailable on this server'));assert.equal(h.document.querySelectorAll('#isolation-options details').length,2);assert(!h.document.querySelector('option[value="internet"]'));assert(h.document.querySelector('#settings-sheet').textContent.includes('Paid models and the stuck watch: set in Settings › Classic dashboard'));assert.equal(h.document.querySelectorAll('#settings-sheet a[href^="/classic"]').length,0);assert(h.document.querySelectorAll('#settings-sheet a[href="#/settings"][data-setting-link="Classic dashboard"]').length>=1);
   assert(h.document.querySelector('#isolated-fields').hidden);setting(h,'mode','team','change');assert(!h.document.querySelector('#team-size-field').hidden);assert.equal(h.document.querySelector('#setting-team_size').value,'3');
   h.document.querySelector('#add-goal-check').click();const check=h.document.querySelector('[data-check="0"]');check.value='Reload saved data';check.dispatchEvent(new h.window.Event('input',{bubbles:true}));h.document.querySelector('[data-remove-check="0"]').click();assert.equal(h.document.querySelectorAll('[data-check]').length,0);
   key(h,'Escape',{},h.document.querySelector('#close-settings'));assert(h.document.querySelector('#settings-sheet').hidden);assert.equal(h.document.activeElement.id,'composer');
@@ -727,7 +720,7 @@ for(const [name,choice,inputs,expected,expectedEndpoint] of catalogueCases)test(
 test('M5 no controls on historical, expired, decided or unsupported actions',async()=>{
   const f=fx.decisionFixture('all');for(const message of f.thread.messages.filter(m=>m.action)){message.action=null;message.detail.expired=true;}
   const unknown=fx.decisionMessages().low;unknown.id='m5:unknown';unknown.action.endpoint='/api/not-allowed';f.thread.messages.push(unknown);
-  const h=await harness(f.state,{thread:f.thread});assert.equal(h.timeline.querySelectorAll('[data-decision]').length,0);assert.equal(decisionCard(h,'m5:unknown').querySelector('a[href="/classic"]').textContent,'Open in classic dashboard');assert.equal(posts(h).length,0);
+  const h=await harness(f.state,{thread:f.thread});assert.equal(h.timeline.querySelectorAll('[data-decision]').length,0);assert.equal(decisionCard(h,'m5:unknown').querySelector('a[href="/classic"]').textContent,'Open in classic');assert.match(decisionCard(h,'m5:unknown').querySelector('.review-unavailable').textContent,/^Cannot review this approval here · Open in classic$/);assert.equal(posts(h).length,0);
 });
 test('M5 truncation blocks approvals but keeps safe refusal choices',async()=>{
   for(const [name,blocked,safe] of [['low','approve','reject'],['question','answer','reject'],['proposal','approve_team','single_agent'],['research','approve','reject'],['skillInstall','approve','reject'],['outcome','apply','discard_workspace']]) {
@@ -817,7 +810,7 @@ test('M5 complete decision-card count follows waiting plus the server outcome',a
   }
 });
 test('M5 waiting pointer prefers the first non-outcome actionable card',async()=>{
-  const h=await decisionHarness('all');assert.equal(await h.core.locateWaiting(),'m5:low');h.document.querySelector('#waiting-pointer').click();await tick();assert(decisionCard(h,'m5:low').classList.contains('focused'));
+  const h=await decisionHarness('all');assert.equal(await h.core.locateWaiting(),'m5:low');h.document.querySelector('[data-locate-waiting]').click();await tick();assert(decisionCard(h,'m5:low').classList.contains('focused'));
 });
 test('M5 slash aliases use the exact same controls and confirmations',async()=>{
   for(const [text,name,choice,note] of [['/verify','outcome','verify'],['/apply','outcome','apply'],['/discard','outcome','discard_workspace'],['/team approve','proposal','approve_team'],['/team single','proposal','single_agent'],['/team repropose Keep the team small','proposal','repropose','Keep the team small']]) {
@@ -917,7 +910,7 @@ test('M5 a decision in the single-session fallback gets its own fresh server rea
 
 const memberModel=()=>require(path.join(root,'model.js'));
 async function membersHarness(kind='teamRunning',options={}) {const f=fx.membersFixture(kind),h=await harness(f.state,{thread:f.thread,channels:f.channels,...options});h.f=f;return h;}
-async function openMembers(h,id='run_test') {h.window.location.hash='#/s/'+id;h.shell.route();await h.runTimers(0);await tick();await tick();h.document.querySelector('#members-tab').click();await tick();}
+async function openMembers(h,id='run_test') {h.window.location.hash='#/s/'+id;h.shell.route();await h.runTimers(0);await tick();await tick();if(h.document.querySelector('#context').hidden)h.document.querySelector('#open-context').click();h.document.querySelector('#members-tab').click();await tick();}
 const contextText=h=>h.document.querySelector('#context-content').textContent;
 const detailCalls=(h,id)=>h.calls.filter(c=>c.url==='/api/state?scope=current&run='+id);
 test('M6 roster helpers preserve join order, labels, raw unknown states and activity',()=>{
@@ -940,7 +933,7 @@ test('M6 rail union dedupes with live precedence, orders history and counts actu
   const m=memberModel(),state={runs:[{id:'a',title:'Live title',created:'2026-10-01',status:'coding'}]},cache={sessions:{a:{id:'a',title:'Old title',created:'2026-09-01',status:'completed'},b:{id:'b',title:'Older',created:'2026-09-30',status:'completed'}}};const rail=m.railSessions(state,cache,5);assert.deepEqual(rail.sessions.map(s=>s.id),['a','b']);assert.equal(rail.sessions[0].status,'coding');assert.equal(rail.note,'Showing 2 of 5 sessions');
 });
 test('M6 proposed agents never become live members and the panel has no decisions',async()=>{
-  const h=await membersHarness('teamProposed');await openMembers(h);assert.equal(h.document.querySelector('#members-tab').textContent,'Team');assert.equal(h.document.querySelectorAll('#live-members [data-member]').length,1);assert(!h.document.querySelector('#rail .members').textContent.includes('coder-'));assert(h.document.querySelector('#rail').textContent.includes('Team plan pending'));assert(contextText(h).includes('Proposed team · not running yet'));assert(contextText(h).includes('Build the API'));assert(contextText(h).includes('Proposal 2'));assert.equal(h.document.querySelectorAll('#context [data-decision]').length,0);assert(!/Approve team|Run as one agent|Ask for another plan/.test(contextText(h)));assert.equal(posts(h).length,0);
+  const h=await membersHarness('teamProposed');await openMembers(h);assert.equal(h.document.querySelector('#members-tab').textContent,'Team');assert.equal(h.document.querySelectorAll('#live-members [data-member]').length,1);assert.equal(h.document.querySelector('#rail .members'),null);assert(!h.document.querySelector('#rail').textContent.includes('coder-'));assert(contextText(h).includes('Proposed team · not running yet'));assert(contextText(h).includes('Build the API'));assert(contextText(h).includes('Proposal 2'));assert.equal(h.document.querySelectorAll('#context [data-decision]').length,0);assert(!/Approve team|Run as one agent|Ask for another plan/.test(contextText(h)));assert.equal(posts(h).length,0);
 });
 test('M6 every team-plan state, finished expiry and Auto render from recorded state',async()=>{
   for(const [kind,text] of [['teamProposing','Hermes is proposing a team'],['teamProposed','Proposed team · not running yet'],['teamUnusable','Missing task owner'],['teamRunning','Team · 1 of 5 tasks done'],['teamReview','Hermes reviews the merged result'],['teamFinished','Team · 1 of 5 tasks done'],['singleMembers','Members']]) {const h=await membersHarness(kind);await openMembers(h);assert(contextText(h).includes(text),kind);assert.equal(h.document.querySelector('#members-tab').textContent,kind==='singleMembers'?'Members':'Team');}
@@ -1007,9 +1000,7 @@ test('M6 Connections check is disabled by decisions and composer writes and show
   for(const owner of ['decision','composer']){let release;const h=await membersHarness('teamProposed',{post:async()=>new Promise(resolve=>release=()=>resolve({ok:true}))});if(owner==='decision'){h.timeline.querySelector('[data-decision="approve_team"]').click();}else{type(h,'A note');h.composer.submit();}await tick();h.window.location.hash='#/settings';h.shell.route();assert(h.document.querySelector('#rail-check-connections').disabled);h.document.querySelector('#rail-check-connections').click();assert.equal(posts(h).length,1);release();await tick();await tick();}
   const h=await membersHarness('connections',{post:async()=>({error:'Check refused by server'})});h.window.location.hash='#/settings';h.shell.route();h.document.querySelector('#rail-check-connections').click();await tick();await tick();assert.equal(h.document.querySelector('#connections-error').textContent,'Check refused by server');assert.equal(posts(h)[0].url,'/api/check');
 });
-test('M6 rail paging grows the shared room cache and reports exact X/N counts',async()=>{
-  const f=fx.membersHistory(),h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url.includes('before=members%3Aolder')?f.older:undefined});assert.equal(h.document.querySelectorAll('#session-list a').length,30);assert.equal(h.document.querySelector('#session-count').textContent,'Showing 30 of 35 sessions');h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(h.document.querySelectorAll('#session-list a').length,35);assert.equal(!!h.document.querySelector('#session-count'),false);assert.equal(h.core.getState().thread.sessions['history:34'].id,'history:34');assert.equal(h.document.querySelector('#load-earlier-sessions'),null);assert.equal(posts(h).length,0);
-});
+// Retired by D13 (N1.2): M6 rail paging grows the shared room cache and reports exact X/N counts — the rail sessions list, its X of N count and 'Load earlier sessions' are retired by D13 (2); thread paging of the same shared cache keeps its M3/M8 tests
 test('M6 keyed updates preserve every More link and focus the latest recorded task turn',async()=>{
   const h=await membersHarness();await openMembers(h);const before=[...h.document.querySelectorAll('#section-nav [data-section]')].map(a=>a.textContent);assert.equal(before.length,6);
   const button=h.document.querySelector('[data-message-id="turn:api-new"]');button.focus();h.f.state.run.team.tasks[1].steps.push('api-last');h.f.state.run.team.tasks[1].depends_on=[];h.f.thread.messages.push(fx.threadMessage('turn:api-last','turn','Recorded retry',{number:2,status:'running',files:[]}));await h.core.refresh();assert.deepEqual([...h.document.querySelectorAll('#section-nav [data-section]')].map(a=>a.textContent),before);assert.equal(h.document.activeElement,h.document.querySelector('[data-message-id="turn:api-last"]'));
@@ -1232,12 +1223,7 @@ test('M8 A recorded outcome verification uses ended time or running created time
   for(const status of ['passed','failed','running']){message.detail.verification={status,created:'2026-09-29T12:00:00Z',ended:status==='running'?null:'2026-09-30T12:00:00Z'};message.rev++;await h.core.refresh();const at=message.detail.verification.ended || message.detail.verification.created;assert(decisionCard(h,message.id).textContent.includes('Verification (on demand) · '+status+' · '+h.window.AC.model.relTime(at)));}
   assert.equal(posts(h).length,0);
 });
-test('M8 A rail disclosure is accurate while incomplete and disappears only at completion including paging',async()=>{
-  const f=fx.membersHistory();f.channels.channels[0].sessions=40;f.older.before='members:last';const sessions=Array.from({length:5},(_,i)=>fx.threadSession('history:'+(35+i),{created:new Date(Date.UTC(2026,8,30,0,0,-35-i)).toISOString()})),last=fx.threadResponse(sessions.map(s=>fx.threadMessage('run:'+s.id,'session_start',s.title,{}, {session:s.id,at:s.created})),sessions);
-  const h=await harness(f.state,{thread:f.thread,channels:f.channels,respond:url=>url.includes('before=members%3Aolder')?f.older:url.includes('before=members%3Alast')?last:undefined});assert.equal(h.document.querySelector('#session-count').textContent,'Showing 30 of 40 sessions');
-  h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(h.document.querySelector('#session-count').textContent,'Showing 35 of 40 sessions');assert.equal(h.document.querySelectorAll('#session-list a').length,35);assert.equal(h.core.getState().thread.before,'members:last');
-  h.document.querySelector('#load-earlier-sessions').click();await tick();await tick();assert.equal(!!h.document.querySelector('#session-count'),false);assert.equal(h.document.querySelectorAll('#session-list a').length,40);assert.equal(h.core.getState().channels.channels[0].sessions,40);assert.equal(h.core.getState().thread.before,null);assert.equal(posts(h).length,0);
-});
+// Retired by D13 (N1.2): M8 A rail disclosure is accurate while incomplete and disappears only at completion including paging — the rail sessions list, its disclosure and 'Load earlier sessions' are retired by D13 (2); thread paging keeps its own tests
 test('M8 A member state time is explicitly labelled since and absent when unrecorded',async()=>{
   const h=await membersHarness(),member=h.f.state.agents.find(a=>a.name==='coder-1');await openMembers(h);assert.equal(h.document.querySelector('#live-members [data-member="coder-1"] small').textContent,'since '+h.window.AC.model.relTime(member.since));delete member.since;await h.core.refresh();assert(!h.document.querySelector('#live-members [data-member="coder-1"]').textContent.includes('since '));
 });
@@ -1259,8 +1245,8 @@ test('M8 B truncated room and rail titles retain the full server value',async()=
   f.thread.sessions[0].title=title;f.state.run.title=title;f.state.runs[0].title=title;
   const channels=fx.threadChannels(f.thread,1);channels.channels[0].title=title;
   const h=await harness(f.state,{thread:f.thread,channels});
-  assert.equal(h.document.querySelector('#room-header h1').title,title);assert.equal(h.document.querySelector('#room-header .heading p').title,title);
-  assert.equal(h.document.querySelector('#session-list .truncate').title,title);assert.equal(h.document.querySelectorAll('#room-header img,#session-list img').length,0);assert.equal(posts(h).length,0);
+  assert.equal(h.document.querySelector('#room-header h1').title,title);assert.equal(h.document.querySelector('#room-header .room-context .directory').title,h.core.getState().state.project);
+  assert.equal(h.timeline.querySelector('.session-divider .session-title').textContent,title);assert.equal(h.document.querySelectorAll('#room-header img,#rail img,#timeline .session-divider img').length,0);assert.equal(posts(h).length,0);
 });
 
 // M8 Part C: focus behaviour, with no decision/body or server-state changes.
@@ -1282,7 +1268,7 @@ test('M8 C decision focus trap and Cancel restoration preserve review and confir
   const h=await decisionHarness('critical'),opener=button(h,'approve');opener.focus();opener.click();const dialog=h.document.querySelector('#decision-dialog'),cancel=dialog.querySelector('[data-cancel-decision]'),confirm=dialog.querySelector('[name="confirm"]'),submit=dialog.querySelector('[data-confirm-decision]');assert(h.document.activeElement===cancel,'Focus should be on '+cancel.id);assert(h.document.querySelector('#room').hasAttribute('inert'));confirm.focus();key(h,'Tab',{shiftKey:true},confirm);assert(h.document.activeElement===submit,'Focus should be on '+submit.id);key(h,'Tab',{},submit);assert(h.document.activeElement===confirm,'Focus should be on '+confirm.id);cancel.click();assert(h.document.activeElement===opener,'Focus should be on '+opener.id);assert(!dialog.hasAttribute('open'));assert.equal(posts(h).length,0);assert.equal(h.core.getState().channels.channels[0].waiting,1);
 });
 test('M8 C phone rail and context sheets trap focus and restore visible openers',async()=>{
-  const h=await membersHarness('teamRunning',{coarse:true}),railOpen=h.document.querySelector('#open-rail');railOpen.focus();railOpen.click();const close=h.document.querySelector('#close-rail'),last=h.document.querySelector('#refresh-folders');assert(h.document.activeElement===close,'Focus should be on '+close.id);assert(h.document.querySelector('#room').hasAttribute('inert'));last.focus();key(h,'Tab',{},last);assert(h.document.activeElement===close,'Focus should be on '+close.id);key(h,'Escape',{},close);assert.equal(h.document.activeElement.id,'open-rail');assert(!h.document.querySelector('#room').hasAttribute('inert'));
+  const h=await membersHarness('teamRunning',{coarse:true}),railOpen=h.document.querySelector('#open-rail');railOpen.focus();railOpen.click();const close=h.document.querySelector('#close-rail'),last=h.document.querySelector('#panel-search');assert(h.document.activeElement===close,'Focus should be on '+close.id);assert(h.document.querySelector('#room').hasAttribute('inert'));last.focus();key(h,'Tab',{},last);assert(h.document.activeElement===close,'Focus should be on '+close.id);key(h,'Escape',{},close);assert.equal(h.document.activeElement.id,'open-rail');assert(!h.document.querySelector('#room').hasAttribute('inert'));
   await openMembers(h);h.document.querySelector('#close-context').click();const opener=h.document.querySelector('#open-context');opener.focus();opener.click();assert.equal(h.document.activeElement.id,'close-context');assert(h.document.querySelector('#room').hasAttribute('inert'));key(h,'Escape',{},h.document.activeElement);assert.equal(h.document.activeElement,h.document.querySelector('#open-context'));assert(h.document.querySelector('#context').hidden);assert(!h.document.querySelector('#room').hasAttribute('inert'));assert.equal(posts(h).length,0);
 });
 test('M8 C Workspace toolbar arrows and terminal keys navigate recorded material without requests',async()=>{
@@ -1297,7 +1283,7 @@ test('M8 D connection and waiting announcements retain nodes and announce only c
   const h=await decisionHarness('low'),live=h.document.querySelector('#live'),waiting=h.document.querySelector('#waiting-live');assert(waiting,'A dedicated polite waiting announcement is required');assert.equal(live.getAttribute('aria-live'),'polite');assert.equal(waiting.getAttribute('aria-live'),'polite');const first=live.firstChild,waitText=waiting.firstChild;await h.core.refresh();assert(h.document.querySelector('#live')===live);assert(live.firstChild===first);assert(waiting.firstChild===waitText);assert.equal(waiting.textContent,'1 waiting for you');h.f.channels.channels[0].waiting=2;await h.core.refresh();assert.equal(waiting.textContent,'2 waiting for you');assert(waiting.firstChild!==waitText);assert.equal(h.document.querySelectorAll('#live').length,1);h.shell.render({...h.core.getState(),live:'Connected'});assert.equal(live.textContent,'Connected');const changed=live.firstChild;h.shell.render({...h.core.getState(),live:'Connected'});assert(live.firstChild===changed);assert.equal(posts(h).length,0);
 });
 test('M8 D decorative state symbols are hidden while recorded labels and list semantics remain',async()=>{
-  const h=await membersHarness('teamRunning');await openMembers(h);assert.equal(h.document.querySelector('#session-list').getAttribute('role'),'list');assert.equal(h.document.querySelector('#thread-items').getAttribute('role'),'list');assert(h.document.querySelector('#waiting-pointer [aria-hidden="true"]'));assert(h.document.querySelector('#live-members [aria-hidden="true"]'));assert(h.document.querySelector('.task-graph [aria-hidden="true"]'));assert.equal(h.document.querySelector('#context h2').textContent,'Members');assert(h.timeline.querySelector('[data-message] h2'));assert.equal(posts(h).length,0);
+  const h=await membersHarness('teamRunning');await openMembers(h);assert.equal(h.document.querySelector('#project-list').getAttribute('role'),'list');assert.equal(h.document.querySelector('#thread-items').getAttribute('role'),'list');assert(h.document.querySelector('#section-nav .projects-badge[aria-hidden="true"]'));assert(h.document.querySelector('#live-members [aria-hidden="true"]'));assert(h.document.querySelector('.task-graph [aria-hidden="true"]'));assert.equal(h.document.querySelector('#context h2').textContent,'Members');assert(h.timeline.querySelector('[data-message] h2'));assert.equal(posts(h).length,0);
 });
 test('M8 D all token text, boundary and focus colour contrasts meet their measured thresholds',()=>{
   const ratios=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));assert.equal(ratios.length,26);const failures=ratios.filter(v=>v.ratio<v.minimum);assert.deepEqual(failures,[]);
@@ -1309,15 +1295,7 @@ test('M8 D singular rail counts use session without changing counts or paginatio
   assert.equal(model.railSessions({runs:[]},null,1).note,'Showing 0 of 1 session');assert.equal(model.railSessions({runs:[]},null,2).note,'Showing 0 of 2 sessions');
 });
 
-test('M9 N1 cached sessions exceeding the server total do not show an incomplete-history disclosure',async()=>{
-  const state=fixture(),channels=fx.threadChannels(fx.threadActive(),0);
-  state.runs=[{...state.run,id:'live-project-session'}];channels.channels[0].sessions=1;
-  const h=await harness(state,{channels}),snapshot=h.core.getState(),ids=[...h.document.querySelectorAll('#session-list a')].map(a=>a.getAttribute('href'));
-  assert.equal(ids.length,2);assert(ids.includes('#/s/live-project-session'));assert(ids.includes('#/s/run_test'));
-  assert.equal(snapshot.channels.channels[0].sessions,1);assert.equal(snapshot.thread.before,null);
-  assert.equal(!!h.document.querySelector('#session-count'),false);
-  assert.equal(!!h.document.querySelector('#load-earlier-sessions'),false);assert.equal(posts(h).length,0);
-});
+// Retired by D13 (N1.2): M9 N1 cached sessions exceeding the server total do not show an incomplete-history disclosure — the rail sessions-list disclosure is retired by D13 (2)
 
 test('M8 E empty final history page retains button focus and cannot trigger another read',async()=>{
   const pages=fx.threadLong(),h=await harness(richCompleted(),{thread:pages[0],respond:url=>url.includes('before=')?{...pages[1],messages:[],before:null}:undefined}),button=h.document.querySelector('#load-earlier'),ids=[...h.core.getState().thread.ids];button.focus();button.click();await tick();await tick();assert(button.isConnected,'An empty page must retain its focus target');assert(h.document.activeElement===button,'Focus stays on the original paging control');assert.equal(button.getAttribute('aria-busy'),'false');assert.equal(button.getAttribute('aria-disabled'),'true');assert.equal(h.core.getState().thread.before,null);assert.deepEqual([...h.core.getState().thread.ids],ids);const reads=h.calls.length;button.click();await tick();assert.equal(h.calls.length,reads);h.document.querySelector('#composer').focus();h.options.respond=url=>url.startsWith('/api/thread')?{...pages[0],before:null}:undefined;await h.core.refresh();assert.equal(!!h.document.querySelector('#load-earlier'),false);assert.equal(posts(h).length,0);
@@ -1352,27 +1330,25 @@ test('M9.1 A viewport meta enables keyboard layout resize while preserving user 
 });
 
 
-test('M9.1 B rail waiting is always findable and exactly matches channel counts',async()=>{
- const h=await decisionHarness('critical');for(const count of [0,1,2]){h.f.channels.channels[0].waiting=count;await h.core.refresh();const line=h.document.querySelector('#rail-waiting');assert(line,'Waiting line remains present');assert.equal(line.textContent,count?'! '+count+' waiting for you':'Nothing is waiting for you');assert.equal(!!line.querySelector('a'),count>0);assert.equal(h.core.getState().channels.channels[0].waiting,count);}assert.equal(h.document.querySelectorAll('#rail [data-decision]').length,0);assert.equal(posts(h).length,0);
-});
+// Retired by D13 (N1.2): M9.1 B rail waiting is always findable and exactly matches channel counts — the panel waiting line (#rail-waiting) is retired by D13 (1); the Projects count equals the channel count in N1.2 approval-once and badge tests
 test('M9.1 B rail waiting uses locateWaiting and reveals the room after closing the phone drawer',async()=>{
- const h=await decisionHarness('critical',{coarse:true});let located=0;h.core.locateWaiting=async()=>{located++;return h.f.thread.messages.find(m=>m.action).id;};h.document.querySelector('#open-rail').click();const link=h.document.querySelector('#rail-waiting a');assert(link);link.click();await tick();assert.equal(located,1);assert(!h.document.querySelector('#app').classList.contains('rail-open'));assert(h.timeline.querySelector('.focused[data-message]'));assert.equal(posts(h).length,0);
+ const h=await decisionHarness('critical',{coarse:true});let located=0;h.core.locateWaiting=async()=>{located++;return h.f.thread.messages.find(m=>m.action).id;};section(h,'settings');const link=h.document.querySelector('#bottom-nav [data-locate-waiting]');assert(link);link.click();await tick();assert.equal(located,1);assert(!h.document.querySelector('#app').classList.contains('rail-open'));assert(h.timeline.querySelector('.focused[data-message]'));assert.equal(posts(h).length,0);
 });
 test('M9.1 B each turn has one visible summary Workspace link with its exact route',async()=>{
  const h=await harness(richCompleted());for(const turn of h.publicThread.messages.filter(m=>m.kind==='turn')){const card=h.timeline.querySelector('[data-message="'+turn.id+'"]'),links=card.querySelectorAll('[data-workspace-link]');assert.equal(links.length,1);assert(!links[0].closest('details'),'Workspace link must be outside Details');assert.equal(links[0].getAttribute('href'),'#/w/'+encodeURIComponent(turn.session)+'/'+encodeURIComponent(turn.refs.agent || turn.actor));assert.equal(links[0].textContent,'Open turn details');}assert.equal(posts(h).length,0);
 });
 test('M9.1 B rail and session menu link only the active recorded members to their Workspaces',async()=>{
- const h=await membersHarness('teamRunning'),run=h.f.state.run.id;for(const member of h.f.state.agents){const href='#/w/'+encodeURIComponent(run)+'/'+encodeURIComponent(member.name),rail=h.document.querySelector('#rail [data-member="'+member.name+'"] [data-workspace-link]'),menu=[...h.document.querySelectorAll('#session-menu [data-workspace-link]')].find(a=>a.getAttribute('href')===href);assert(rail && menu,member.name+' must have both entry links');assert.equal(rail.getAttribute('href'),href);assert.equal(rail.textContent,member.name==='hermes'?'Open log':'Open turn details');}assert.match(h.document.querySelector('#session-menu').textContent,/Turn details/);assert(!h.document.querySelector('#rail').textContent.includes('youOpen'));assert.equal(h.document.querySelectorAll('#rail [data-decision],#session-menu [data-decision]').length,0);assert.equal(posts(h).length,0);
+ const h=await membersHarness('teamRunning'),run=h.f.state.run.id;await openMembers(h);assert.equal(h.document.querySelectorAll('#rail [data-member]').length,0);for(const member of h.f.state.agents){const href='#/w/'+encodeURIComponent(run)+'/'+encodeURIComponent(member.name),rail=h.document.querySelector('#context [data-member="'+member.name+'"] [data-workspace-link]'),menu=[...h.document.querySelectorAll('#session-menu [data-workspace-link]')].find(a=>a.getAttribute('href')===href);assert(rail && menu,member.name+' must have both entry links');assert.equal(rail.getAttribute('href'),href);assert.equal(rail.textContent,member.name==='hermes'?'Open log':'Open turn details');}assert.match(h.document.querySelector('#session-menu').textContent,/Turn details/);assert(!h.document.querySelector('#context').textContent.includes('youOpen'));assert.equal(h.document.querySelectorAll('#rail [data-decision],#context [data-decision],#session-menu [data-decision]').length,0);assert.equal(posts(h).length,0);
 });
 test('M9.1 B proposed-only, stopping and never-approved expired agents get no entry links',async()=>{
- for(const name of ['teamProposed','teamStopping','teamExpired']){const f=name==='teamProposed'?fx.membersFixture(name):fx.endedPlan(name),h=await harness(f.state,{thread:f.thread,channels:f.channels});assert(h.document.querySelector('#rail-waiting'));for(const agent of ['coder-1','coder-2'])assert.equal(h.document.querySelectorAll('#rail a[href$="/'+agent+'"],#session-menu a[href$="/'+agent+'"]').length,0);await openMembers(h);assert.equal(h.document.querySelectorAll('.proposed-members [data-workspace-link]').length,0);assert.equal(posts(h).length,0);}
+ for(const name of ['teamProposed','teamStopping','teamExpired']){const f=name==='teamProposed'?fx.membersFixture(name):fx.endedPlan(name),h=await harness(f.state,{thread:f.thread,channels:f.channels});for(const agent of ['coder-1','coder-2'])assert.equal(h.document.querySelectorAll('#rail a[href$="/'+agent+'"],#session-menu a[href$="/'+agent+'"]').length,0);await openMembers(h);assert.equal(h.document.querySelectorAll('.proposed-members [data-workspace-link]').length,0);assert.equal(posts(h).length,0);}
 });
 test('M9.1 B empty and quiet rooms explain the existing decision cards without another decision surface',async()=>{
- const guidance='Approvals and questions from agents appear here as cards, with a "waiting for you" bar above the message box.';
+ const guidance='Approvals and questions from agents appear here as cards. The count on Projects takes you to the first one.';
  for(const state of [fx.empty(),richCompleted()]){const h=await harness(state);assert(h.timeline.textContent.includes(guidance));assert.equal(h.document.querySelectorAll('.room-guidance [data-decision],.room-guidance button,.room-guidance a').length,0);assert.equal(posts(h).length,0);}
 });
 test('M9.1 B Workspace navigation from the drawer restores its visible opening link without a write',async()=>{
- const h=await membersHarness('teamRunning',{coarse:true});h.document.querySelector('#open-rail').click();await tick();await tick();const opener=h.document.querySelector('#rail [data-member="coder-1"] [data-workspace-link]');assert(opener);opener.focus();const n=h.calls.length;opener.click();await tick();assert.equal(h.window.location.hash,'#/w/run_test/coder-1');assert(!h.document.querySelector('#app').classList.contains('rail-open'));h.document.querySelector('[data-back-room]').click();await tick();assert(h.document.querySelector('#app').classList.contains('rail-open'));assert(h.document.activeElement===opener);assert.equal(h.calls.length,n);assert.equal(posts(h).length,0);
+ const h=await membersHarness('teamRunning',{coarse:true});await openMembers(h);const opener=h.document.querySelector('#context [data-member="coder-1"] [data-workspace-link]');assert(opener);opener.focus();const n=h.calls.length;opener.click();await tick();assert.equal(h.window.location.hash,'#/w/run_test/coder-1');assert(h.document.querySelector('#context').hidden);h.document.querySelector('[data-back-room]').click();await tick();assert(!h.document.querySelector('#context').hidden);assert(h.document.activeElement===opener);assert.equal(h.calls.length,n);assert.equal(posts(h).length,0);
 });
 
 test('M9.1a F2 pinch shrinking freezes both viewport variables and composer sizing until unzoomed',async()=>{
@@ -1387,7 +1363,7 @@ test('M9.1a F3 a closed menu or removed Workspace entry returns focus to the vis
  for(const missing of [false,true]){const h=await membersHarness('teamRunning',{coarse:true});h.document.querySelector('#session-menu').open=true;const opener=h.document.querySelector('#menu-workspace-hermes');opener.focus();opener.click();await tick();h.document.querySelector('#session-menu').open=missing;if(missing){h.f.state.agents=h.f.state.agents.filter(a=>a.name!=='hermes');await h.core.refresh();assert.equal(h.document.querySelector('#menu-workspace-hermes'),null);}h.document.querySelector('[data-back-room]').click();await tick();const summary=h.document.querySelector('#session-menu > summary');assert(summary.isConnected);assert(h.document.activeElement===summary,'Return to the available menu summary, never a hidden/detached entry or session fallback');assert.equal(h.document.querySelector('#session-menu').open,missing);assert.equal(posts(h).length,0);}
 });
 test('M9.1a F3 returning to a selected session preserves its previously closed context sheet',async()=>{
- const f=fx.membersFixture('teamRunning'),old=fx.threadSession('run_old',{status:'completed',created:'2026-09-27T10:00:00Z'});f.state.runs.push({...old,parent_run:null});f.thread.sessions.unshift(old);f.thread.messages.unshift(fx.threadMessage('run:run_old','session_start',old.title,{}, {session:'run_old',at:old.created}));f.channels.channels[0].sessions=2;const h=await harness(f.state,{thread:f.thread,channels:f.channels,coarse:true,hash:'#/s/run_old'});h.shell.setContext(false);assert(h.document.querySelector('#context').hidden);h.document.querySelector('#session-menu').open=true;const opener=h.document.querySelector('#session-menu [data-workspace-link]');assert(opener);opener.focus();opener.click();await tick();h.document.querySelector('[data-back-room]').click();await tick();assert.equal(h.window.location.hash,'#/s/run_old');assert(h.document.querySelector('#context').hidden,'Back must not open a previously closed modal context');assert.equal(h.local.get('acx-context-open'),'false');assert.equal(posts(h).length,0);
+ const f=fx.membersFixture('teamRunning'),old=fx.threadSession('run_old',{status:'completed',created:'2026-09-27T10:00:00Z'});f.state.runs.push({...old,parent_run:null});f.thread.sessions.unshift(old);f.thread.messages.unshift(fx.threadMessage('run:run_old','session_start',old.title,{}, {session:'run_old',at:old.created}));f.channels.channels[0].sessions=2;const h=await harness(f.state,{thread:f.thread,channels:f.channels,coarse:true,hash:'#/s/run_old'});h.shell.setContext(false);assert(h.document.querySelector('#context').hidden);h.document.querySelector('#session-menu').open=true;const opener=h.document.querySelector('#session-menu [data-workspace-link]');assert(opener);opener.focus();opener.click();await tick();h.document.querySelector('[data-back-room]').click();await tick();assert.equal(h.window.location.hash,'#/s/run_old');assert(h.document.querySelector('#context').hidden,'Back must not open a previously closed modal context');assert.equal(h.local.has('acx-context-open'),false);assert.equal(posts(h).length,0);
 });
 
 
@@ -1416,7 +1392,8 @@ test('N1 real skill library only, hostile values escaped, descriptions available
 });
 async function folders(h){h.document.querySelector('#open-rail').click();await tick();await tick();}
 test('N1 Projects current pinned, escaped browse, breadcrumb requests and client-only search',async()=>{
- const attack='<img src=x onerror=alert(1)>',h=await harness(fixture(),{browse:{root:'/tmp',path:'/tmp',parent:null,entries:[{name:attack,path:'/tmp/'+attack,git:false},{name:'safe',path:'/tmp/safe',git:true}]}});await folders(h);assert.equal(h.document.querySelectorAll('#project-folders img').length,0);assert(h.document.querySelector('#current-project'));assert.match(h.document.querySelector('#project-folders').textContent,/Team sessions need git/);const before=h.calls.length,input=h.document.querySelector('#panel-search');input.value='safe';input.dispatchEvent(new h.window.Event('input',{bubbles:true}));assert(h.document.querySelector('[data-select-project="0"]').parentElement.hidden);assert.equal(h.calls.length,before);h.document.querySelector('[data-browse-path="/tmp/safe"]').click();await tick();assert(h.calls.some(c=>c.url==='/api/projects/browse?path=%2Ftmp%2Fsafe'));
+ const attack='<img src=x onerror=alert(1)>',h=await harness(fixture(),{browse:{root:'/tmp',path:'/tmp',parent:null,entries:[{name:attack,path:'/tmp/'+attack,git:false},{name:'safe',path:'/tmp/safe',git:true}]}});await folders(h);assert.equal(h.document.querySelectorAll('#rail img').length,0);assert(h.document.querySelector('#current-project'));assert.equal(h.document.querySelector('#project-list').firstElementChild.id,'current-project');assert(!h.document.querySelector('#rail').textContent.includes('Team sessions need git'));assert.equal(h.document.querySelector('[data-select-project="0"]'),null);assert(h.document.querySelector('[data-select-project="1"]'));const before=h.calls.length,input=h.document.querySelector('#panel-search');input.value='safe';input.dispatchEvent(new h.window.Event('input',{bubbles:true}));assert(h.document.querySelector('#current-project').hidden);assert(!h.document.querySelector('[data-select-project="1"]').parentElement.hidden);assert.equal(h.calls.length,before);
+ h.document.querySelector('#project-add-button').click();h.document.querySelector('#open-folder').click();const dialog=h.document.querySelector('#project-dialog');assert.equal(h.calls.length,before);assert.equal(dialog.querySelectorAll('img').length,0);assert.match(dialog.textContent,/Team sessions need git/);for(const label of ['Root','Refresh'])assert([...dialog.querySelectorAll('button')].some(b=>b.textContent===label));dialog.querySelector('[data-browse-path="/tmp/safe"]').click();await tick();assert(h.calls.some(c=>c.url==='/api/projects/browse?path=%2Ftmp%2Fsafe'));
 });
 test('N1 project Switch confirms exact path once and preserves server refusal verbatim',async()=>{
  let release;const h=await harness(fixture(),{browse:{root:'/tmp',path:'/tmp',entries:[{name:'safe',path:'/tmp/safe',git:true}]},post:async()=>new Promise(resolve=>release=()=>resolve({error:'Active session: cannot switch <now>.'}))});await folders(h);h.document.querySelector('[data-select-project="0"]').click();assert.equal(posts(h).length,0);assert.match(h.document.querySelector('#project-dialog').textContent,/Switch to safe\?/);assert.match(h.document.querySelector('#project-dialog').textContent,/sessions stay in its history/);h.document.querySelector('#confirm-project').click();h.document.querySelector('#confirm-project').click();await tick();assert.deepEqual(posts(h),[{url:'/api/projects/select',body:{path:'/tmp/safe'}}]);assert.equal(h.core.getState().writeOwner,'project');release();await tick();await tick();assert.equal(h.document.querySelector('#project-dialog-error').textContent,'Active session: cannot switch <now>.');assert(h.document.querySelector('#project-dialog').hasAttribute('open'));assert.equal(h.document.querySelectorAll('#project-dialog img').length,0);
@@ -1443,7 +1420,7 @@ test('N1 keyboard baseline hides the phone bar with both viewports shrinking and
  const vv=new EventTarget();Object.assign(vv,{width:390,height:844,offsetTop:0,scale:1});const h=await harness(fixture(),{visualViewport:vv}),app=h.document.querySelector('#app');h.window.innerHeight=480;vv.height=480;vv.dispatchEvent(new Event('resize'));assert(app.classList.contains('keyboard-open'));vv.height=240;vv.scale=2;vv.dispatchEvent(new Event('resize'));assert(app.classList.contains('keyboard-open'));vv.scale=1;vv.height=844;h.window.innerHeight=844;vv.dispatchEvent(new Event('resize'));assert(!app.classList.contains('keyboard-open'));h.window.innerHeight=390;vv.width=844;vv.height=390;vv.dispatchEvent(new Event('resize'));assert(!app.classList.contains('keyboard-open'));assert.equal(posts(h).length,0);
 });
 test('N1 project confirmation traps focus, Escape restores its live panel opener and writes nothing',async()=>{
- const h=await harness(fixture(),{coarse:true});await folders(h);const opener=h.document.querySelector('#create-project');opener.focus();opener.click();const dialog=h.document.querySelector('#project-dialog'),cancel=dialog.querySelector('[data-cancel-project]');assert(h.document.activeElement===cancel);const first=dialog.querySelector('#project-name');first.focus();key(h,'Tab',{shiftKey:true},first);assert(h.document.activeElement===cancel);key(h,'Escape',{},cancel);assert(!dialog.hasAttribute('open'));assert(h.document.activeElement===opener,'Actual focus '+h.document.activeElement?.id+' connected '+opener.isConnected+' open '+h.document.querySelector('#app').className);assert.equal(posts(h).length,0);
+ const h=await harness(fixture(),{coarse:true});await folders(h);h.document.querySelector('#project-add-button').click();const opener=h.document.querySelector('#project-add-button'),choice=h.document.querySelector('#create-project');choice.focus();choice.click();assert(h.document.querySelector('#project-add-menu').hidden,'the + menu closes on a choice');const dialog=h.document.querySelector('#project-dialog'),cancel=dialog.querySelector('[data-cancel-project]');assert(h.document.activeElement===cancel);const first=dialog.querySelector('#project-name');first.focus();key(h,'Tab',{shiftKey:true},first);assert(h.document.activeElement===cancel);key(h,'Escape',{},cancel);assert(!dialog.hasAttribute('open'));assert(h.document.activeElement===opener,'Actual focus '+h.document.activeElement?.id+' connected '+opener.isConnected+' open '+h.document.querySelector('#app').className);assert.equal(posts(h).length,0);
 });
 test('N1 skip link targets visible section content without routing or fetching',async()=>{const h=await harness();for(const name of ['primary','agents','workspace','settings']){section(h,name);const reads=h.calls.length;h.document.querySelector('#skip-conversation').click();assert.equal(h.document.activeElement.id,'section-stage');assert(!h.document.activeElement.hidden);assert.equal(h.window.location.hash,'#/'+name);assert.equal(h.calls.length,reads);}});
 test('N1 hidden desktop project panel does not browse until first opened and never polls',async()=>{const h=await harness(fixture(),{width:1280,hash:'#/w/run_test/coder-1'});assert.equal(h.calls.filter(c=>c.url.startsWith('/api/projects/browse')).length,0);h.document.querySelector('[data-back-room]').click();await tick();await tick();assert.equal(h.calls.filter(c=>c.url.startsWith('/api/projects/browse')).length,1);await h.core.refresh();await h.core.refresh();assert.equal(h.calls.filter(c=>c.url.startsWith('/api/projects/browse')).length,1);assert.equal(posts(h).length,0);});
@@ -1451,7 +1428,119 @@ test('N1.1 invalid and unassessed skills never claim an assessed risk',async()=>
  const h=await harness(fixture(),{skills:{library_path:'/tmp/skills',library:[{folder:'bad',name:'bad',error:'Invalid <manifest>'},{name:'unassessed'},{name:'stale-risk',error:'Validation failed',risk:'sensitive'},{name:'safe',risk:'low'},{name:'sensitive',risk:'sensitive'}]}});section(h,'skills');await tick();await tick();
  for(const i of [0,1,2]){const card=h.document.querySelector('#skill-card-'+i);assert.match(card.textContent,/Risk: not assessed/);assert(!card.textContent.includes('Low'));assert(!card.textContent.includes('Sensitive'));}assert.match(h.document.querySelector('#skill-card-0').textContent,/Problem: Invalid <manifest>/);assert.equal(h.document.querySelectorAll('#section-stage manifest').length,0);assert.match(h.document.querySelector('#skill-card-3').textContent,/Low/);assert.match(h.document.querySelector('#skill-card-4').textContent,/Sensitive/);assert.equal(posts(h).length,0);
 });
-test('N1.1 Projects header and summary use the recorded singular and plural session counts',async()=>{
- const h=await harness();for(const count of [1,2,0]){h.core.getState().channels.channels[0].sessions=count;h.shell.render(h.core.getState());for(const selector of ['#room-header .heading p','#project-summary']){const text=h.document.querySelector(selector).textContent;assert(text.includes(count+' '+(count===1?'session':'sessions')));if(count===1)assert(!text.includes('1 sessions'));}}
+// Retired by D13 (N1.2): N1.1 Projects header and summary use the recorded singular and plural session counts — the summary card is retired by D13 (3), and the header context is the project directory (§2), so neither shows a session count
+// N1.2 (D13): rail, project list, team thread and composer; details open on demand.
+const ownText=node=>[...node.childNodes].filter(child=>child.nodeType===3).map(child=>child.nodeValue).join('');
+const shown=(h,exclude='')=>[...h.document.querySelectorAll('#app *')].filter(node=>!node.closest('[hidden],dialog:not([open])'+(exclude?','+exclude:'')));
+test('N1.2 an approval appears once: one card per action and only the Projects count elsewhere',async()=>{
+ const cases=[['all',fx.decisionFixture('all')],['critical',fx.decisionFixture('critical')],['outcome',fx.decisionFixture('outcome')],['active',{state:fixture(),thread:fx.threadActive()}],['team',{state:fixture(),thread:fx.threadTeam()}],['completed',{state:richCompleted(),thread:fx.threadSingle()}]];
+ for(const [name,f] of cases){
+  const channels=f.channels || fx.threadChannels(f.thread,f.thread.messages.filter(m=>m.action && m.kind!=='outcome').length),h=await harness(f.state,{thread:f.thread,channels}),waiting=channels.channels[0].waiting;
+  const actions=f.thread.messages.filter(m=>m.action).map(m=>m.id).sort(),cards=[...h.timeline.querySelectorAll('[data-message]')].filter(node=>node.querySelector('.waiting-line'));
+  assert.deepEqual(cards.map(node=>node.dataset.message).sort(),actions,name+': exactly one card per action');
+  assert.equal(h.timeline.querySelectorAll('.decision-host[data-actionable]').length,actions.length,name);
+  for(const marker of h.timeline.querySelectorAll('.waiting-state,.waiting-line'))assert(cards.includes(marker.closest('[data-message]')),name+': marker outside its card');
+  for(const id of ['waiting','waiting-pointer','rail-waiting','rail-waiting-link','project-summary'])assert.equal(h.document.getElementById(id),null,name+': #'+id);
+  for(const node of shown(h,'#timeline')){
+   assert(!/waiting|approv/i.test(ownText(node)),name+': '+node.tagName+'#'+node.id+' shows "'+ownText(node)+'"');
+   for(const attr of ['title','aria-label'])if(!node.hasAttribute('data-locate-waiting'))assert(!/waiting|approv/i.test(node.getAttribute(attr) || ''),name+': '+attr+' on '+node.tagName+'#'+node.id);
+  }
+  const badges=[...h.document.querySelectorAll('.projects-badge')],locators=[...h.document.querySelectorAll('[data-locate-waiting]')];
+  assert.equal(badges.length,waiting?2:0,name);assert.equal(locators.length,waiting?2:0,name);
+  for(const badge of badges){assert.equal(badge.textContent,'! '+waiting);assert.equal(badge.getAttribute('aria-hidden'),'true');}
+  for(const link of locators)assert.equal(link.getAttribute('aria-label'),'Projects, '+waiting+' waiting for you');
+  assert.equal(posts(h).length,0);
+ }
+});
+test('N1.2 sessions render once in the thread, again only in open Session details, and the panel lists only projects',async()=>{
+ for(const h of [await harness(richActive()),await membersHarness('teamRunning'),await harness(richCompleted())]){
+  const snapshot=h.core.getState(),titles=[...new Set([...Object.values(snapshot.thread.sessions).map(s=>s.title),...(snapshot.state.runs || []).map(r=>r.title)].filter(Boolean))];assert(titles.length);
+  for(const title of titles){
+   assert(h.timeline.querySelectorAll('.session-divider .session-title').length>=1);
+   for(const node of shown(h,'#timeline')){assert(!ownText(node).includes(title),'"'+title+'" repeated in '+node.tagName+'#'+node.id);for(const attr of ['title','aria-label'])assert(!(node.getAttribute(attr) || '').includes(title),'"'+title+'" repeated in '+attr+' of '+node.tagName+'#'+node.id);}
+  }
+  for(const s of Object.values(snapshot.thread.sessions))assert.equal([...h.timeline.querySelectorAll('.session-title')].filter(a=>a.textContent===s.title && a.getAttribute('href')==='#/s/'+encodeURIComponent(s.id)).length,1,s.title);
+  const rail=h.document.querySelector('#rail');assert.deepEqual([...rail.children].filter(node=>node.tagName!=='P').map(node=>node.tagName.toLowerCase()+(node.id?'#'+node.id:'')),['header','label','input#panel-search','div#project-list']);
+  assert.deepEqual([...rail.querySelector('header').querySelectorAll('button')].filter(b=>!b.closest('[hidden]')).map(b=>b.id),['close-rail','project-add-button']);
+  for(const row of rail.querySelector('#project-list').children)assert(row.id==='current-project' || row.querySelector('[data-select-project]'));
+  assert.equal(rail.querySelectorAll('a[href^="#/s/"],[data-session],[data-member],.members,#session-list,#connections,#more').length,0);
+  for(const word of ['Channels','Sessions','In this session','Members','Root','Parent folder','Refresh'])assert(!rail.textContent.includes(word),word);
+  const details=h.document.querySelector('#open-context');if(details.disabled)continue;details.click();
+  const context=h.document.querySelector('#context');assert(!context.hidden);assert(titles.some(title=>context.textContent.includes(title)));
+ }
+});
+test('N1.2 Session details is closed on load and after a session link, opens only from Details and restores focus there',async()=>{
+ for(const options of [{width:1280},{width:1024},{coarse:true}]){
+  const h=await harness(richActive(),{...options,local:{'acx-context-open':'true'}}),context=h.document.querySelector('#context'),details=()=>h.document.querySelector('#open-context');
+  assert.equal(context.hidden,true);assert.equal(details().textContent,'Details');assert.equal(details().disabled,false);assert.equal(details().getAttribute('aria-expanded'),'false');assert.equal(h.document.querySelector('#scrim').hidden,true);
+  h.window.location.hash='#/s/run_old';h.shell.route();await h.runTimers(0);await tick();
+  assert.equal(context.hidden,true,'a session link never opens Session details');assert.equal(h.core.getState().focused,'run_old');assert.equal(h.document.querySelector('.focused [data-session]').dataset.session,'run_old');
+  details().focus();details().click();assert.equal(context.hidden,false);assert.equal(details().getAttribute('aria-expanded'),'true');assert.equal(h.document.activeElement.id,'close-context');assert(h.document.querySelector('#room').hasAttribute('inert'));assert.match(context.querySelector('h2').textContent,/Describe the files/);
+  key(h,'Escape',{},h.document.activeElement);assert.equal(context.hidden,true);assert.equal(h.document.activeElement,details());assert(!h.document.querySelector('#room').hasAttribute('inert'));
+  details().click();h.document.querySelector('#close-context').click();assert.equal(context.hidden,true);assert.equal(h.document.activeElement,details());
+  details().click();h.window.location.hash='#/';h.shell.route();assert.equal(context.hidden,true,'leaving the session closes Session details');
+  assert.equal(h.local.get('acx-context-open'),'true','the old preference is neither read into state nor rewritten');assert.equal(posts(h).length,0);
+ }
+ const none=await harness(fx.empty());assert.equal(none.document.querySelector('#open-context').disabled,true);none.document.querySelector('#open-context').click();assert.equal(none.document.querySelector('#context').hidden,true);
+ for(const file of fs.readdirSync(root))assert(!fs.readFileSync(path.join(root,file),'utf8').includes('acx-context-open'),file);
+});
+test('N1.2 classic links appear only in Settings, unreviewable cards, the composer fallback and Turn details pop-outs',async()=>{
+ function scan(h,label){
+  const section=h.document.querySelector('#app').dataset.section;
+  for(const link of h.document.querySelectorAll('a[href^="/classic"]')){
+   const ok=link.closest('.review-unavailable') || link.id==='composer-classic' || link.closest('#workspace') && link.hasAttribute('data-popout') && link.getAttribute('href').startsWith('/classic?popout=') || section==='settings' && link.closest('#rail,#section-stage');
+   assert(ok,label+': unexpected classic link "'+link.textContent+'" in '+(link.parentElement?.id || link.parentElement?.className));
+  }
+ }
+ const h=await decisionHarness('all');scan(h,'projects');assert(h.timeline.querySelector('.review-unavailable a[href="/classic"]'),'the unreviewable card keeps its link');assert(h.document.querySelector('#composer-classic'));
+ h.document.querySelector('#session-menu').open=true;h.shell.render(h.core.getState());scan(h,'session menu');assert(!/classic/i.test(h.document.querySelector('#session-menu').textContent));
+ h.document.querySelector('#open-context').click();scan(h,'Session details');assert(!/classic/i.test(h.document.querySelector('#context').textContent));h.document.querySelector('#close-context').click();
+ await h.composer.openSettings();scan(h,'composer Settings (session)');h.document.querySelector('#close-settings').click();section(h,'settings');assert.equal(h.document.querySelector('#section-stage h1').textContent,'Settings');h.document.querySelector('[data-setting="Classic dashboard"]').click();assert.match(h.document.querySelector('#section-stage .section-content').textContent,/classic dashboard keeps the controls/);assert(h.document.querySelector('#section-stage a[href="/classic"]'));
+ for(const name of ['primary','agents','workspace','skills'])
+ {section(h,name);await tick();scan(h,name);}
+ section(h,'settings');for(const button of [...h.document.querySelectorAll('#rail [data-setting]')]){h.document.querySelector('[data-setting="'+button.dataset.setting+'"]').click();scan(h,'settings '+button.dataset.setting);}
+ assert.equal(h.document.querySelectorAll('#rail a[href^="/classic"]').length,0,'Classic dashboard is a Settings entry');
+ const c=await composerHarness('new');await c.composer.openSettings();scan(c,'composer Settings (new)');const sheetLinks=[...c.document.querySelectorAll('#settings-sheet [data-setting-link]')];assert(sheetLinks.length>=1);for(const link of sheetLinks){assert.equal(link.getAttribute('href'),'#/settings');assert.equal(link.textContent,'Settings › Classic dashboard');}
+ sheetLinks[0].click();assert(c.document.querySelector('#settings-sheet').hidden,'the sheet closes');section(c,'settings');assert.equal(c.document.querySelector('#section-stage h1').textContent,'Settings');assert.match(c.document.querySelector('#section-stage .section-content').textContent,/classic dashboard keeps the controls/);assert.equal(posts(c).length,0);
+ const w=await wsHarness();await openWorkspace(w);scan(w,'Turn details');assert(w.document.querySelector('#workspace [data-popout][href^="/classic?popout="]'));assert.equal(posts(h).length,0);
+});
+test('N1.2 navigation labels are whole words on one line in a rem-sized rail',()=>{
+ const css=fs.readFileSync(path.join(root,'chat.css'),'utf8'),tokens=fs.readFileSync(path.join(root,'tokens.css'),'utf8');
+ assert.match(tokens,/--nav-width:\s*[\d.]+rem;/);
+ const rules=[...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([,selector])=>/nav-label|#section-nav a|#bottom-nav a|#section-nav \[data-section\]|#bottom-nav \[data-section\]/.test(selector));
+ assert(rules.some(([,selector,body])=>/\.nav-label/.test(selector) && /white-space:\s*nowrap/.test(body)));
+ for(const [,selector,body] of rules)assert(!/overflow-wrap:\s*anywhere|text-overflow:\s*ellipsis|hyphens:\s*auto|word-break:\s*break-all/.test(body),selector);
+});
+test('N1.2 navigation items keep full names, one label each and aria-current',async()=>{
+ const h=await decisionHarness('critical');
+ for(const bar of ['#section-nav','#bottom-nav']){const links=[...h.document.querySelectorAll(bar+' [data-section]')];assert.deepEqual(links.map(a=>a.querySelector('.nav-label').textContent),['Primary','Agents','Projects','Workspace','Skills','Settings']);assert.deepEqual(links.map(a=>a.getAttribute('aria-label')),['Primary','Agents','Projects, 1 waiting for you','Workspace','Skills','Settings']);assert.deepEqual(links.filter(a=>a.getAttribute('aria-current')==='page').map(a=>a.dataset.section),['projects']);for(const a of links)assert(!/­|&shy;/.test(a.innerHTML));}
+});
+test('N1.2 connection status is hidden while live and quiet text when not live',async()=>{
+ const off=await harness(fixture());const label=off.document.querySelector('#connection-label');assert(label);assert.equal(label.textContent,'Reconnecting…');assert(label.closest('#room-header .room-context'));assert.equal(label.getAttribute('aria-hidden'),null);
+ const on=await harness(fixture(),{stream:true});await tick();assert.equal(on.core.getState().live,'Live');on.shell.render(on.core.getState());assert.equal(on.document.querySelector('#connection-label'),null);assert(!/\bLive\b/.test(on.document.querySelector('#room-header').textContent));
+ section(on,'skills');assert(!/\bLive\b/.test(on.document.querySelector('#section-stage .section-header').textContent));section(on,'projects');
+ await on.drop();assert.equal(on.document.querySelector('#connection-label').textContent,'Reconnecting…');assert.equal(on.document.querySelector('#live').textContent,'Reconnecting…');
+});
+test('N1.2 the Projects count is in every section and its activation focuses the first actionable card',async()=>{
+ const h=await decisionHarness('all'),waiting=h.f.channels.channels[0].waiting;assert(waiting>1);
+ for(const name of ['primary','agents','projects','workspace','skills','settings']){section(h,name);await tick();for(const bar of ['#section-nav','#bottom-nav']){const link=h.document.querySelector(bar+' [data-locate-waiting]');assert(link,name+bar);assert.equal(link.getAttribute('aria-label'),'Projects, '+waiting+' waiting for you');assert.equal(link.querySelector('.projects-badge').textContent,'! '+waiting);assert.equal(link.querySelector('.nav-label').textContent,'Projects');}}
+ section(h,'skills');await tick();const cache=h.core.getState().thread,expected=cache.ids.find(id=>cache.messages[id].action!=null && cache.messages[id].kind!=='outcome');
+ h.document.querySelector('#section-nav [data-locate-waiting]').click();await tick();await tick();
+ assert.equal(h.window.location.hash,'#/');assert(!h.document.querySelector('#room').hidden);const card=h.timeline.querySelector('[data-message="'+expected+'"]');assert(card.classList.contains('focused'));assert.equal(h.document.activeElement,card);assert.equal(posts(h).length,0);
+});
+test('N1.2 + offers Create project and Open folder…, which browses inside the root and confirms one exact switch',async()=>{
+ const browse={root:'/tmp',path:'/tmp',parent:null,entries:[{name:'plain',path:'/tmp/plain',git:false},{name:'repo',path:'/tmp/repo',git:true}]};
+ const h=await harness(fixture(),{browse,post:async()=>({ok:true}),respond:url=>url==='/api/projects/browse?path=%2Ftmp%2Fplain'?{root:'/tmp',path:'/tmp/plain',parent:'/tmp',entries:[{name:'inner <b>',path:'/tmp/plain/inner',git:true}]}:undefined});
+ await folders(h);const plus=()=>h.document.querySelector('#project-add-button');
+ assert(h.document.querySelector('#project-add-menu').hidden);assert.equal(plus().getAttribute('aria-expanded'),'false');assert.equal(plus().getAttribute('aria-label'),'Add project');
+ assert(!h.document.querySelector('#rail').textContent.includes('plain'),'non-git folders appear only in Open folder…');assert(h.document.querySelector('#rail').textContent.includes('repo'));
+ plus().focus();plus().click();assert(!h.document.querySelector('#project-add-menu').hidden);assert.equal(plus().getAttribute('aria-expanded'),'true');assert.deepEqual([...h.document.querySelectorAll('#project-add-menu button')].map(b=>b.textContent),['Create project','Open folder…']);
+ key(h,'Escape',{},h.document.querySelector('#create-project'));assert(h.document.querySelector('#project-add-menu').hidden);assert.equal(h.document.activeElement,plus());
+ const reads=()=>h.calls.filter(c=>c.url.startsWith('/api/projects/browse')).length,before=reads();
+ plus().click();h.document.querySelector('#open-folder').click();const dialog=h.document.querySelector('#project-dialog');assert(dialog.hasAttribute('open'));assert.equal(dialog.querySelector('h2').textContent,'Open folder');assert.equal(h.document.activeElement,dialog.querySelector('[data-cancel-project]'));assert.equal(reads(),before,'Open folder… reuses the panel root listing');
+ assert.match(dialog.textContent,/plainNo git · Team sessions need git/);assert.match(dialog.textContent,/repoGit project/);
+ dialog.querySelector('[data-browse-path="/tmp/plain"]').click();await tick();await tick();assert.equal(reads(),before+1);assert.equal(dialog.querySelector('#folder-path').textContent,'/tmp/plain');assert(dialog.querySelector('[data-browse-path="/tmp"]'));assert.equal(dialog.querySelectorAll('b').length,0);
+ dialog.querySelector('[data-folder-select="0"]').click();assert.match(dialog.textContent,/Switch to inner <b>\?/);assert.equal(posts(h).length,0);
+ dialog.querySelector('#confirm-project').click();dialog.querySelector('#confirm-project')?.click();await tick();assert.deepEqual(posts(h),[{url:'/api/projects/select',body:{path:'/tmp/plain/inner'}}]);
 });
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

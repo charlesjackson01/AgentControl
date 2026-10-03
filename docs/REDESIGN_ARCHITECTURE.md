@@ -368,40 +368,65 @@ real work, and the content comes first.
 N1 has six sections, in order: **Primary, Agents, Projects, Workspace, Skills, Settings**. Projects contains the
 existing team thread; `#/` remains its default route. Primary, persistent Agents, Direct conversations, project
 file browsing and Memory have honest unavailable states. All existing request and session controls stay in Projects.
+**N1.2 (D13) shipped the Projects screen as rail, project list, team thread and composer. Details open on demand and
+never sit open beside a copy of themselves.**
 
-- **Desktop (≥ 1200 px):** a 76 px navigation rail, a 300 px secondary panel and the stage. Session details is a
-  collapsible 360 px right pane inside the stage; the secondary panel remains visible.
-- **Tablet (720–1199 px):** the 76 px rail and stage. A top-bar button opens the secondary panel as an overlay drawer
-  of at most 320 px. Session details is a centred overlay of at most 560 px.
+- **Desktop (≥ 1200 px):** a navigation rail of 5.25 rem (it grows with text zoom), a 300 px project list and the
+  stage. Session details is an overlay pane of at most 360 px over the right of the stage, with focus trapped, the
+  background inert and a scrim; the thread does not reflow under it.
+- **Tablet (720–1199 px):** the rail and stage. A top-bar button opens the project list as an overlay drawer of at
+  most 320 px. Session details is a centred overlay of at most 560 px.
 - **Phone (< 720 px):** the stage and a safe-area-aware bottom bar with the same six items. The bar is at most 64 px
-  and hides while the keyboard is open at normal zoom. The secondary panel opens as a sheet; Session details is
-  a full-screen sheet. Dialogs retain the accepted bottom-sheet positioning and Cancel-first focus.
+  and hides while the keyboard is open at normal zoom. The project list opens as a sheet; Session details is a
+  full-screen sheet. Dialogs retain the accepted bottom-sheet positioning and Cancel-first focus.
+- **Rail and bottom bar labels** are whole words on one line: no ellipsis, no mid-word breaks, no hyphenation. The
+  bottom bar shows every label when all six fit in equal cells, and otherwise icons for all items with only the
+  active item's label (measured, so it follows text zoom and the font). Every item keeps its full accessible name,
+  a target of at least 40 × 40 px and `aria-current`.
+- **Project list (the Projects panel):** title, search and "+". The current project first (name, directory,
+  marked current), then the git projects in the projects root from `GET /api/projects/browse`; activating a row
+  opens the existing switch confirmation. "+" offers **Create project** (the existing dialog) and **Open folder…**,
+  a dialog that browses inside the root with Root, Parent folder and Refresh; non-git folders appear only there,
+  labelled "Team sessions need git". The panel has no channels, sessions, members or waiting link; the run's roster
+  is in Session details until library agents arrive (N2).
+- **Stage top bar:** the project name; the project directory, plus a quiet "Reconnecting…" only while the
+  connection is not live; **Details** (enabled when a session is selected or active) and the session menu ⋯
+  (Pause, Resume, Stop… and Turn details links for active members; no classic link).
+- **Team thread:** the existing timeline with session blocks, messages, collapsed turns, "Open turn details",
+  "Load earlier" and the decision cards. Session history lives here (`#/s/<id>` focuses a session with the
+  existing guarded read and does not open Session details). There is no summary card and no waiting strip.
 - **Turn details (`#/w/<run>/<agent>`):** the existing read-only per-agent inspection. At ≥ 1200 px it hides the
-  secondary panel and uses a right pane of `min(960px, 100vw − 76px − 420px)`, preserving at least 420 px for
+  project list and uses a right pane of `min(960px, 100vw − rail − 420px)`, preserving at least 420 px for
   the thread. At 720–1199 px it is a centred overlay of at most 560 px; below 720 px it is a full-screen sheet.
   Its legacy `#workspace`/`workspace-*` identifiers, recorded content and classic pop-out links are preserved.
   Back and Escape restore the prior route and a visible opening control. Waiting links return to room cards.
 - **Keyboard and reflow:** the first-focusable skip link, roving Session details tabs and Turn details toolbar,
-  focus traps/inert backgrounds, Cancel/Close initial focus and focus restoration remain. Essential focus rings
-  are inset and meet 3:1. Text zoom to 200%, reduced motion and forced colours remain supported. There is no
-  page overflow; touch targets on tablet/phone are at least 40 × 40 px and text inputs at least 16 px.
-> **Superseded by D13 when N1.2 ships:** the waiting pointer and Projects panel session list below are removed; an approval
-> appears once as its card, with only a Projects count that locates it; Session details opens only on demand.
-
-- **One place per control** (unchanged since M5, restored in the N1 review): an approval appears **once**, as a card in the
-  Projects team thread, plus one pinned "waiting" pointer above the composer and the Projects waiting badge that
-  locates it. Pause, Resume and Stop live in the active session's menu in the Projects top bar, and are also available as
-  slash commands. Turn details has no decisions or input.
-- **Composer:** one unchanged decision/session interaction surface with a static Team chip before its current
-  target. Phone portrait conversation occupies at least 55% with the bar shown; landscape at least 45%.
-  Idle footers are at most 72 px and footers with waiting at most 112 px. Existing six-line draft growth remains.
-  Normal-zoom keyboard resizing follows the visual viewport; pinch zoom preserves the last normal-zoom layout
-  and never disables user zoom. Safe-area padding applies to footers and sheets. Native keyboard behavior is
-  physical-device verification, not a browser-emulation claim.
-- **Reachability:** project sessions, live roster and waiting link are in Projects' panel; Connections and its
-  check are in Settings; the real skills library has its own section. Full management/Usage/Activity and
-  interactive surfaces remain linked to `/classic`. Native project creation/switching uses the existing
-  endpoints, shared write lock and confirmations. No decisions appear in placeholder sections.
+  focus traps/inert backgrounds, Cancel/Close initial focus and focus restoration (Session details returns to
+  Details) remain. Essential focus rings are inset and meet 3:1. Text zoom to 200%, reduced motion and forced
+  colours remain supported. There is no page overflow; touch targets on tablet/phone are at least 40 × 40 px and
+  text inputs at least 16 px.
+- **One place per control** (amended by D13): an approval appears **once**, as its card in the Projects team
+  thread. The only other cue is the **Projects count** on the rail and bottom-bar item (symbol and number, accessible
+  name "Projects, N waiting for you", the channel's server count), visible in every section; activating it opens
+  Projects and focuses the first actionable card (`locateWaiting`, ten-page budget). Pause, Resume and Stop live in
+  the session menu and as slash commands. Turn details has no decisions or input.
+- **Composer:** one unchanged decision/session interaction surface. With a room at least 600 px wide it is one row:
+  Team chip, target chip, input, ⚙ Settings, Send. Below 600 px (phones, or beside Turn details) it is two rows:
+  Team chip, target chip, Cancel follow-up and Resume when present, then ⚙ Settings; then the full-width input and
+  Send (a CSS container query on the room). No control overlaps or clips another. Phone portrait conversation
+  occupies at least 55% with the bar shown and the footer at most 112 px; landscape at least 45% with the footer at
+  most 72 px, the same with or without waiting cards. Existing six-line draft growth remains. Normal-zoom keyboard
+  resizing follows the visual viewport; pinch zoom preserves the last normal-zoom layout and never disables user
+  zoom. Safe-area padding applies to footers and sheets. Native keyboard behavior is physical-device verification,
+  not a browser-emulation claim.
+- **Classic links** appear only in **Settings** (Settings › Classic dashboard, Approvals, Usage and activity), on a
+  card that cannot be reviewed here ("Too large to review here / Cannot review this approval here · Open in
+  classic"), in the composer's blocked-state `#composer-classic`, and in Turn details' `/classic?popout=` links.
+  In-app references elsewhere point to Settings › Classic dashboard (`#/settings`).
+- **Reachability:** Connections and its check are in Settings; the real skills library has its own section.
+  Full management/Usage/Activity and interactive surfaces remain linked to `/classic` through Settings. Native project
+  creation/switching uses the existing endpoints, shared write lock and confirmations. No decisions appear in
+  placeholder sections.
 
 ## 11. Vocabulary (UI copy)
 

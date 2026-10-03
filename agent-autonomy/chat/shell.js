@@ -2,10 +2,11 @@
   'use strict';
   const {core,model:m} = root.AC, e = m.esc, $ = id=>document.getElementById(id);
   let focused = '', tab = 'session', locating = false, located = '', routedHash=null;
-  let connectionsError='',pagingSessions=false,workspaceRoute=null,roomRoute='#/',workspaceOpener=null,workspaceContextOpen=false;
+  let connectionsError='',workspaceRoute=null,roomRoute='#/',workspaceOpener=null,workspaceContextOpen=false;
   const workspace=root.AC.workspace.mount($('workspace'));
   const members=root.AC.members.mount(()=>render(core.getState()));
-  let contextOpen = core.read('localStorage','acx-context-open') === 'true';
+  // D13: Session details is closed on load and opens only from the Details button; nothing is persisted.
+  let contextOpen = false;
   const decisions=root.AC.decisions.mount($('timeline'),$('decision-dialog'));
   const timeline = root.AC.thread.mount($('timeline'),{older:()=>core.loadOlder(),decisions});
   let menuError='', stopTarget=null, stopDraft=false, stopFocus=null;
@@ -34,7 +35,8 @@
     if($('app').hidden)return null;
     for(const id of ['decision-dialog','stop-dialog','project-dialog'])if($(id).hasAttribute('open'))return $(id);
     if(!$('settings-sheet').hidden)return $('settings-sheet');
-    if(root.matchMedia?.('(max-width: 1199px)').matches){if($('app').classList.contains('rail-open'))return $('rail');if(!$('workspace').hidden)return $('workspace');if(!$('context').hidden)return $('context');}
+    if(root.matchMedia?.('(max-width: 1199px)').matches){if($('app').classList.contains('rail-open'))return $('rail');if(!$('workspace').hidden)return $('workspace');}
+    if(!$('context').hidden)return $('context');
     return null;
   }
   function safeFocus(host){return host.querySelector('[data-cancel-project],[data-cancel-decision],#cancel-stop,#close-settings,#close-rail,#close-context,[data-back-room]') || focusNodes(host)[0];}
@@ -56,12 +58,12 @@
   document.addEventListener('focusin',event=>{const prior=previousFocus;previousFocus=event.target;syncModal(prior);if(modal && !modal.contains(event.target) && !syncingFocus)safeFocus(modal)?.focus({preventScroll:true});});
   function controlBusy(value) {document.querySelectorAll('[data-session-control],#confirm-stop').forEach(node=>node.disabled=value);}
   const sessionHref = id=>'#/s/'+encodeURIComponent(id);
-  function setContext(open) { contextOpen = open; core.write('localStorage','acx-context-open',String(open)); render(core.getState()); }
+  function setContext(open) { contextOpen = open; render(core.getState()); }
   function panels() {for(const node of document.querySelectorAll('#open-rail,#open-section-panel'))node.setAttribute('aria-expanded',String($('app').classList.contains('rail-open')));$('scrim').hidden = !$('app').classList.contains('rail-open') && $('context').hidden; }
   function render(snapshot) {
     if($('live').textContent!==snapshot.live)$('live').textContent=snapshot.live;
     decisions.update(snapshot);
-    members.update(snapshot,focused);
+    members.update(snapshot,focused || snapshot.channels?.channels?.[0]?.active_session || '');
     $('skip-conversation').hidden=!snapshot.authenticated;
     $('sign-in').hidden = snapshot.authenticated; $('app').hidden = !snapshot.authenticated;
     $('sign-in-error').textContent = snapshot.authError;
@@ -71,21 +73,22 @@
     const state = snapshot.state;
     if (!state) { $('room-header').textContent = 'Connecting…'; return; }
     composer.render(snapshot);const controlState=composer.getView();
-    const railData=m.railSessions(state,snapshot.thread,snapshot.channels?.channels?.[0]?.sessions),sessions=railData.sessions,roster=m.membersFromState({...state,agents:state.agents || []}),connections=m.connectionsFromState(state),team=m.teamFromRun(state.run);
+    const railData=m.railSessions(state,snapshot.thread,snapshot.channels?.channels?.[0]?.sessions),sessions=railData.sessions,roster=m.membersFromState({...state,agents:state.agents || []});
     const channel = snapshot.channels?.channels?.[0], roomSession = snapshot.thread?.sessions[channel?.active_session];
-    const name = channel?.title || m.projectName(state), active = roomSession && m.sessionsFromState({runs:[roomSession]})[0], threadSession = (snapshot.single || snapshot.thread)?.sessions[focused], selected = sessions.find(s=>s.id === focused) || (threadSession && m.sessionsFromState({runs:[{...threadSession,parent_run:threadSession.parent}]})[0]);
+    // Details describes the selected session, or the active one when nothing is selected.
+    const detailsId = focused || channel?.active_session || '';
+    const name = channel?.title || m.projectName(state), active = roomSession && m.sessionsFromState({runs:[roomSession]})[0], threadSession = (snapshot.single || snapshot.thread)?.sessions[detailsId], selected = detailsId && (sessions.find(s=>s.id === detailsId) || (threadSession && m.sessionsFromState({runs:[{...threadSession,parent_run:threadSession.parent}]})[0]));
     const liveRun=channel?.active_session===state.run?.id?state.run.id:'';
     const menuOpen = $('session-menu')?.open;
-    const detailsOpen = $('connections')?.open, moreOpen = $('more')?.open;
-    const railScroll = $('rail').scrollTop, contextScroll = $('context').scrollTop;
+    const contextScroll = $('context').scrollTop;
     const focusedElement = document.activeElement, focusId = focusedElement?.id, focusHref = focusedElement?.getAttribute('href');
-    const oldPanel=`<header><strong title="${e(state.project)}">${e(name)}</strong><button id="close-rail" aria-label="Close navigation"><span aria-hidden="true">×</span></button></header><section><h2>Channels</h2>${(snapshot.channels?.channels || m.channelsFromState(state)).map(channel=>`<a class="selected" href="#/" aria-current="page"># ${e(channel.title)}${channel.waiting ? `<span class="badge">${e(channel.waiting)}</span>` : ''}</a>`).join('')}<div id="rail-waiting">${channel?.waiting?`<a id="rail-waiting-link" href="#/">${m.symbolHTML('!')} ${e(channel.waiting)} waiting for you</a>`:'<p class="muted">Nothing is waiting for you</p>'}</div></section><section><h2>Sessions</h2><div id="session-list" role="list">${sessions.map(s=>`<div role="listitem"><a aria-label="${e(s.title+' · '+s.statusLabel)}" href="${e(sessionHref(s.id))}" class="${s.id === focused ? 'selected' : ''}" ${s.id === focused ? 'aria-current="true"' : ''}>${m.symbolHTML(s.symbol)}<span class="truncate" title="${e((state.runs || []).find(r=>r.id===s.id)?.title || snapshot.thread?.sessions[s.id]?.title || s.title)}">${e(s.title)}<small>${e(m.relTime(s.created))}</small></span></a></div>`).join('') || '<p class="muted">No sessions yet</p>'}</div>${railData.note?`<p id="session-count" class="muted">${e(railData.note)}</p>`:''}${channel?.sessions>sessions.length && snapshot.thread?.before?`<button id="load-earlier-sessions" ${pagingSessions?'disabled':''}>Load earlier sessions</button>`:''}</section><section><h2>Members</h2><ul class="members">${root.AC.members.rosterHTML(roster,false,liveRun)}</ul>${team.pending && state.run?.mode==='team'?'<p class="muted">Team plan pending</p>':''}</section><div class="rail-bottom"><details id="connections" ${detailsOpen ? 'open' : ''}><summary>${m.symbolHTML(connections.ready ? '●' : '!')} ${e(connections.label)}</summary><ul>${connections.items.map(item=>`<li data-member="service:${e(item.name)}"><strong>${e(item.name)}</strong><small>${m.statusMarkup(item.status)}</small><small>${e(item.label)}</small></li>`).join('')}</ul>${connections.message?`<p class="connection-message">${e(connections.message)}</p>`:''}<button id="rail-check-connections" ${snapshot.writeOwner?'disabled':''}>Check connections</button><p id="connections-error" role="status" ${connectionsError?'':'hidden'}>${e(connectionsError)}</p></details><details id="more" ${moreOpen ? 'open' : ''}><summary>More</summary>${['Skills','Usage','Activity','Settings','Switch project','Classic dashboard'].map(label=>`<a href="/classic">${label}</a>`).join('')}</details></div>`;
+    const offline = snapshot.live !== 'Live';
     // Keep menu entry identity and focus across the live render that follows Back.
-    root.AC.members.patch($('room-header'),`<button id="open-rail" aria-label="Open navigation" aria-controls="rail" aria-expanded="${$('app').classList.contains('rail-open')}"><span aria-hidden="true">☰</span></button><div class="heading"><h1 title="${e(name)}">${e(name)}</h1><p title="${e(roomSession?.title || active?.title || 'Project room')}">${e(state.project)} · ${e(channel?.sessions ?? sessions.length)} ${(channel?.sessions ?? sessions.length)===1?'session':'sessions'} · ${e(active?.statusLabel || 'No active session')}</p></div><span id="connection-label" aria-hidden="true">${e(snapshot.live)}</span>${selected ? `<button id="open-context" aria-expanded="${contextOpen}">Session details</button>` : ''}<details id="session-menu" ${menuOpen ? 'open' : ''}><summary aria-label="Session menu"><span aria-hidden="true">⋯</span></summary><div>${active && !root.AC.composer.composerState(snapshot).reason ? `<button data-session-control="${controlState.paused ? 'resume' : 'pause'}">${controlState.paused ? 'Resume' : 'Pause'}</button><button data-session-control="stop">Stop…</button>` : ''}${liveRun && roster.length?`<section aria-labelledby="menu-workspaces-title"><h2 id="menu-workspaces-title">Turn details</h2>${roster.slice(0,50).map(member=>`<a id="menu-workspace-${e(encodeURIComponent(member.name))}" data-workspace-link href="${e(root.AC.members.workspaceHref(liveRun,member.name))}">${e(member.displayName)} · ${member.name==='hermes'?'Open log':'Open turn details'}</a>`).join('')}</section>`:''}<a href="/classic">Classic dashboard</a><p id="control-error" role="status" ${menuError ? '' : 'hidden'}>${e(menuError)}</p></div></details>`);
+    root.AC.members.patch($('room-header'),`<button id="open-rail" aria-label="Open projects" aria-controls="rail" aria-expanded="${$('app').classList.contains('rail-open')}"><span aria-hidden="true">☰</span></button><div class="heading"><h1 title="${e(name)}">${e(name)}</h1><p class="room-context"><span class="directory" title="${e(state.project)}">${e(state.project)}</span>${offline?`<span id="connection-label">${e(snapshot.live)}</span>`:''}</p></div><button id="open-context" aria-controls="context" aria-expanded="${!!selected && contextOpen}" ${selected?'':'disabled'}>Details</button><details id="session-menu" ${menuOpen ? 'open' : ''}><summary aria-label="Session menu"><span aria-hidden="true">⋯</span></summary><div>${active && !root.AC.composer.composerState(snapshot).reason ? `<button data-session-control="${controlState.paused ? 'resume' : 'pause'}">${controlState.paused ? 'Resume' : 'Pause'}</button><button data-session-control="stop">Stop…</button>` : ''}${liveRun && roster.length?`<section aria-labelledby="menu-workspaces-title"><h2 id="menu-workspaces-title">Turn details</h2>${roster.slice(0,50).map(member=>`<a id="menu-workspace-${e(encodeURIComponent(member.name))}" data-workspace-link href="${e(root.AC.members.workspaceHref(liveRun,member.name))}">${e(member.displayName)} · ${member.name==='hermes'?'Open log':'Open turn details'}</a>`).join('')}</section>`:''}${active || liveRun && roster.length?'':'<p class="muted">No active session</p>'}<p id="control-error" role="status" ${menuError ? '' : 'hidden'}>${e(menuError)}</p></div></details>`);
     const cache = snapshot.single || snapshot.thread;
-    const count = snapshot.channels?.channels?.[0]?.waiting || 0;
+    const count = channel?.waiting || 0;
+    // D13: the card is the only waiting surface; this stable announcement mirrors the Projects count.
     const waitingText=count+' waiting for you';if($('waiting-live').textContent!==waitingText)$('waiting-live').textContent=waitingText;
-    $('waiting').innerHTML = count ? `<div class="waiting-strip"><button id="waiting-pointer">${m.symbolHTML("!")} ${e(count)} waiting for you</button><span aria-hidden="true"> · </span><a href="/classic">Open classic dashboard</a></div>` : '';
     if(!workspaceRoute && focused && cache && located !== focused && !locating) {
       locating=true;const id=focused;
       Promise.resolve().then(()=>core.locateSession(id)).then(()=>{if(focused===id){timeline.reveal(id);located=id;}}).catch(()=>{}).finally(()=>{locating=false;if(focused!==id)render(core.getState());});
@@ -98,24 +101,24 @@
       const detail=members.getState().data;
       const run = detail?.run?.id===selected.id?detail.run:state.run?.id === selected.id ? {...(state.runs || []).find(r=>r.id === selected.id),...state.run} : {...(threadSession || selected),...(state.runs || []).find(r=>r.id === selected.id)};
       const goalOpen = $('goal-details')?.open;
-      root.AC.members.patch($('context'),`<header><div role="tablist" aria-label="Session context"><button id="session-tab" role="tab" aria-selected="${tab === 'session'}" tabindex="${tab==='session'?0:-1}" aria-controls="context-content">Session</button><button id="members-tab" role="tab" aria-selected="${tab === 'members'}" tabindex="${tab==='members'?0:-1}" aria-controls="context-content">${run.mode==='team'?'Team':'Members'}</button></div><button id="close-context" aria-label="Close context"><span aria-hidden="true">×</span></button></header><div id="context-content" role="tabpanel" aria-labelledby="${tab === 'session' ? 'session-tab' : 'members-tab'}">${tab === 'members' ? members.html() : `<h2>${e(selected.title)}</h2><h3>Goal</h3><details id="goal-details" ${goalOpen ? 'open' : ''}><summary>Show more</summary><p>${e(run.goal)}</p></details><p class="goal-preview">${e(run.goal)}</p><dl><dt>Status</dt><dd>${m.symbolHTML(selected.symbol)} ${e(selected.statusLabel)}</dd><dt>Created</dt><dd>${e(m.timeLabel(selected.created))}</dd><dt>Mode</dt><dd>${e(run.mode || 'single')}</dd><dt>Turns</dt><dd>${e(selected.promptCount)}</dd></dl>${run.verifier?.length ? `<h3>Verifier command</h3><pre>${e(Array.isArray(run.verifier) ? run.verifier.join(' ') : run.verifier)}</pre>` : ''}${selected.parent ? `<p>continues <a href="${e(sessionHref(selected.parent))}">${e(sessions.find(s=>s.id === selected.parent)?.title || selected.parent)}</a></p>` : ''}<a href="/classic">View in classic</a>`}</div>`);
+      root.AC.members.patch($('context'),`<header><div role="tablist" aria-label="Session context"><button id="session-tab" role="tab" aria-selected="${tab === 'session'}" tabindex="${tab==='session'?0:-1}" aria-controls="context-content">Session</button><button id="members-tab" role="tab" aria-selected="${tab === 'members'}" tabindex="${tab==='members'?0:-1}" aria-controls="context-content">${run.mode==='team'?'Team':'Members'}</button></div><button id="close-context" aria-label="Close context"><span aria-hidden="true">×</span></button></header><div id="context-content" role="tabpanel" aria-labelledby="${tab === 'session' ? 'session-tab' : 'members-tab'}">${tab === 'members' ? members.html() : `<h2>${e(selected.title)}</h2><h3>Goal</h3><details id="goal-details" ${goalOpen ? 'open' : ''}><summary>Show more</summary><p>${e(run.goal)}</p></details><p class="goal-preview">${e(run.goal)}</p><dl><dt>Status</dt><dd>${m.symbolHTML(selected.symbol)} ${e(selected.statusLabel)}</dd><dt>Created</dt><dd>${e(m.timeLabel(selected.created))}</dd><dt>Mode</dt><dd>${e(run.mode || 'single')}</dd><dt>Turns</dt><dd>${e(selected.promptCount)}</dd></dl>${run.verifier?.length ? `<h3>Verifier command</h3><pre>${e(Array.isArray(run.verifier) ? run.verifier.join(' ') : run.verifier)}</pre>` : ''}${selected.parent ? `<p>continues <a href="${e(sessionHref(selected.parent))}">${e(sessions.find(s=>s.id === selected.parent)?.title || selected.parent)}</a></p>` : ''}`}</div>`);
     }
     if(cache) timeline.render(cache,snapshot.single ? focused : '');
-    $('rail').scrollTop = railScroll; $('context').scrollTop = contextScroll;
+    $('context').scrollTop = contextScroll;
     // Restore focus for replaced controls; the sign-in inputs and composer are never replaced.
     if (focusedElement && !$('app').contains(focusedElement)) {
       const replacement = focusId ? $(focusId) : [...$('app').querySelectorAll('a')].find(a=>a.getAttribute('href') === focusHref);
       if(focusable(replacement))replacement.focus({preventScroll:true});
     }
-    root.AC.sections.render(snapshot,oldPanel);controlBusy(composer.getBusy());panels();syncModal();
+    root.AC.sections.render(snapshot);controlBusy(composer.getBusy());panels();syncModal();
   }
   function route() {
     const hash=root.location.hash || '#/';const sectionMatch=hash.match(/^#\/(primary|agents|projects|workspace|skills|settings)$/);
-    if(sectionMatch){root.AC.sections.go(sectionMatch[1]);{workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open','rail-open');render(core.getState());routedHash=hash;return;}}else root.AC.sections.go('projects');
+    if(sectionMatch){root.AC.sections.go(sectionMatch[1]);{if(hash!==routedHash)contextOpen=false;workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open','rail-open');render(core.getState());routedHash=hash;return;}}else root.AC.sections.go('projects');
     const next=root.AC.workspace.parseRoute(hash),returning=!!workspaceRoute && !next;let id='';
     if(next){if(!workspaceRoute){workspaceContextOpen=contextOpen;roomRoute=/^#\/s\/[^/]+$/.test(lastRoomRoute)?lastRoomRoute:'#/';workspaceOpener=document.activeElement?.matches('a,button,input,textarea,summary,[tabindex]')?document.activeElement:null;}workspaceRoute=next;id=next.run;}
-    else{workspaceRoute=null;if(returning)contextOpen=workspaceContextOpen;try{const match=hash.match(/^#\/s\/([^/]+)$/);if(match)id=decodeURIComponent(match[1]);else if(!['#/','#/projects'].includes(hash))root.location.hash='#/';}catch{root.location.hash='#/';}lastRoomRoute=root.location.hash || '#/';}
-    if(id!==focused){focused=id;located='';if(id && !next && !returning){contextOpen=true;core.write('localStorage','acx-context-open','true');}core.focus(id,!workspaceRoute);}
+    else{workspaceRoute=null;if(returning)contextOpen=workspaceContextOpen;else if(hash!==routedHash)contextOpen=false;try{const match=hash.match(/^#\/s\/([^/]+)$/);if(match)id=decodeURIComponent(match[1]);else if(!['#/','#/projects'].includes(hash))root.location.hash='#/';}catch{root.location.hash='#/';}lastRoomRoute=root.location.hash || '#/';}
+    if(id!==focused){focused=id;located='';core.focus(id,!workspaceRoute);}
     $('app').classList.remove('rail-open');render(core.getState());routedHash=root.location.hash;
   }
   let lastRoomRoute=/^#\/s\/[^/]+$/.test(root.location.hash)?root.location.hash:'#/';
@@ -132,7 +135,7 @@
     if(event.target.closest('#skip-conversation')){event.preventDefault();$(root.AC.sections.getSection()==='projects'?'timeline':'section-stage').focus({preventScroll:true});return;}
     const workspaceLink=event.target.closest('[data-workspace-link]');if(workspaceLink){if(event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)return;event.preventDefault();workspaceOpener=workspaceLink;root.location.hash=workspaceLink.getAttribute('href');route();workspaceOpener=workspaceLink;$('workspace').querySelector('[data-back-room]')?.focus?.({preventScroll:true});return;}
     if(event.target.closest('[data-back-room]')){event.preventDefault();closeWorkspace();return;}
-    const link=event.target.closest('[data-room-link]');if(link){event.preventDefault();if(workspaceRoute)closeWorkspace();if(root.matchMedia?.('(max-width: 1199px)').matches)setContext(false);locateRoomLink(link).catch(()=>{});return;}
+    const link=event.target.closest('[data-room-link]');if(link){event.preventDefault();if(workspaceRoute)closeWorkspace();setContext(false);locateRoomLink(link).catch(()=>{});return;}
     const reply=event.target.closest('[data-reply]');if(reply){event.preventDefault();composer.reply(reply.dataset.reply);}
     const action=event.target.closest('[data-session-control]')?.dataset.sessionControl;
     if(action==='stop')openStop({id:root.AC.composer.composerState(core.getState()).run,title:composer.activeTitle()});else if(action)composer.control(action);
@@ -140,9 +143,8 @@
     if(id==='cancel-stop')closeStop();
     if(id==='retry-team')members.retry();
     if(id==='rail-check-connections')checkConnections();
-    if(id==='load-earlier-sessions' && !pagingSessions){pagingSessions=true;render(core.getState());core.loadOlder().catch(()=>{}).finally(()=>{pagingSessions=false;render(core.getState());});}
     if(id==='confirm-stop' && stopTarget){const target=stopTarget;if(root.AC.composer.composerState(core.getState()).run!==target.id){closeStop();menuError='The active session changed. Read its current state before stopping.';render(core.getState());}else composer.control('stop',stopDraft,target.id).then(ok=>{if(ok)closeStop();});}
-    if (id === 'waiting-pointer' || event.target.closest('#rail-waiting-link,[data-locate-waiting]')) { event.preventDefault();$('app').classList.remove('rail-open');panels();syncModal(); if(root.location.hash !== '#/') {root.location.hash='#/';route();} core.locateWaiting().then(id=>{if(id)timeline.reveal(id);}).catch(()=>{}); }
+    if (event.target.closest('[data-locate-waiting]')) { event.preventDefault();$('app').classList.remove('rail-open');panels();syncModal(); if(root.location.hash !== '#/') {root.location.hash='#/';route();} core.locateWaiting().then(id=>{if(id)timeline.reveal(id,true);}).catch(()=>{}); }
     if (id === 'open-rail') {$('app').classList.add('rail-open');panels();}
     if (id === 'close-rail') {$('app').classList.remove('rail-open');panels();}
     if (id === 'open-context') setContext(!contextOpen);

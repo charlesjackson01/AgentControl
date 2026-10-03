@@ -38,7 +38,7 @@
   }
   function mount(host, controls) {
     const m = root.AC.model, e = m.esc, expanded = {}, nodes = new Map(), disclosures = new Map();
-    const guidance='Approvals and questions from agents appear here as cards, with a "waiting for you" bar above the message box.';
+    const guidance='Approvals and questions from agents appear here as cards. The count on Projects takes you to the first one.';
     let cache = emptyCache(), initial = true, follow = true, unseen = 0, mode = '', paging = false, emptyPageFocused = false;
     host.innerHTML = '<div id="thread-mode"></div><div id="thread-history"></div><div id="thread-items" role="list"></div><p id="thread-live" role="status"></p><div id="thread-guidance" class="room-guidance muted" hidden></div>';
     const $ = id=>host.querySelector('#'+id), items = $('thread-items');
@@ -65,7 +65,7 @@
     }
     function body(message, hint) {
       const d = message.detail || {}, action = message.action != null;
-      const decisionLink = action ? '<div class="waiting-line"><span class="waiting-state"><span aria-hidden="true">!</span> Waiting for you</span> · <a class="decision-classic" href="/classic">Open in classic dashboard</a></div>' : '';
+      const decisionLink = action ? '<div class="waiting-line"><span class="waiting-state"><span aria-hidden="true">!</span> Waiting for you</span></div>' : '';
       let summary = '', detail = '', type = 'line';
       switch (message.kind) {
         case 'goal': case 'note':

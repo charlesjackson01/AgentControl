@@ -8,7 +8,7 @@
   --type-xs: 12px; --type-sm: 13px; --type-body: 15px; --type-input: 16px; --type-md: 17px; --type-lg: 22px;
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s6: 24px; --s8: 32px;
   --r1: 8px; --r2: 12px; --r3: 16px; --line: 1px; --focus: 2px; --target: 40px;
-  --rail-width: 300px; --nav-width: 76px; --bottom-height: 64px; --context-width: 360px; --signin-width: 400px; --room-width: 840px;
+  --rail-width: 300px; --nav-width: 5.25rem; --bottom-height: 64px; --context-width: 360px; --signin-width: 400px; --room-width: 840px;
   --composer-height: 80px; --sheet-height: calc(var(--viewport-height) * 0.75); --drawer-width: 85vw; --viewport-height: 100dvh;
   --motion: 160ms; --no-motion: 0ms; --line-height: 1.5; --scrim: #00000038;
 }

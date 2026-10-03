@@ -184,8 +184,8 @@
           controls.innerHTML+='<div class="decision-buttons">'+catalogue.map(c=>'<button type="button" data-decision="'+c.choice+'" class="'+(c.primary?'decision-primary':'')+'" aria-label="'+escape(c.label.replace(/…$/,'')+': '+message.text)+'">'+escape(c.label)+'</button>').join('')+'</div>';
           if(catalogue.some(c=>c.disabled))controls.innerHTML+='<p class="muted review-unavailable">'+(d.review_truncated?'Too large to review here':'Cannot review this approval here')+' · <a href="/classic">Open in classic</a></p>';
         }
-        // The existing quiet classic link stays on the card. Reuse it for the fallback.
-        const fallback=controls.querySelector('.review-unavailable a');if(fallback){fallback.replaceWith(document.createTextNode('Open in classic dashboard below'));}
+        // D13: a waiting item this room cannot act on keeps its own classic fallback on the card.
+        else if(message.action && !inFlightReceipt(message))controls.innerHTML='<p class="muted review-unavailable">'+(d.review_truncated?'Too large to review here':'Cannot review this approval here')+' · <a href="/classic">Open in classic</a></p>';
         record.controls=controls;container.append(controls,record.statusNode,record.refresh);
       }
       render(record);

@@ -1,0 +1,1403 @@
+/* AgentControl Workspaces: structure first, then one block per theme.
+   Colors come only from the --ac-* tokens in themes.css. */
+
+/* ---------------------------------------------------------------------------
+   Structure
+   --------------------------------------------------------------------------- */
+.ws-bar {
+  display:flex;
+  align-items:flex-end;
+  gap:6px;
+  margin-bottom:12px;
+  border-bottom:1px solid var(--ac-border);
+  position:relative;
+}
+
+.ws-tabs {
+  display:flex;
+  align-items:flex-end;
+  gap:4px;
+  min-width:0;
+  flex:1;
+  position:relative;
+  overflow-x:auto;
+  scrollbar-width:thin;
+  scroll-snap-type:x proximity;   /* a scrolled strip starts on a whole tab, never half a label */
+}
+
+.ws-tabs > * {
+  scroll-snap-align:start;
+}
+
+.ws-tab {
+  display:inline-flex;
+  align-items:center;
+  flex:0 0 auto;
+  border:1px solid var(--ac-border);
+  border-bottom:0;
+  border-radius:var(--ac-radius-sm) var(--ac-radius-sm) 0 0;
+  background:var(--ac-surface-2);
+  color:var(--ac-text-muted);
+  font:inherit;
+  font-size:var(--ac-text-sm);
+  white-space:nowrap;
+}
+
+.ws-tab > button {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:0;
+  background:none;
+  color:inherit;
+  font:inherit;
+  padding:7px 4px 7px 10px;
+  cursor:pointer;
+}
+
+button.ws-tab {
+  padding:7px 12px;
+  cursor:pointer;
+}
+
+.ws-tab.active {
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  font-weight:600;
+  margin-bottom:-1px;
+  padding-bottom:1px;
+}
+
+.ws-close {
+  border:0;
+  background:none;
+  color:var(--ac-text-muted);
+  font:inherit;
+  padding:4px 8px 4px 2px;
+  cursor:pointer;
+  line-height:1;
+}
+
+/* In split view, the tab whose agent is in the other (unfocused) pane. */
+.ws-tab.shown {
+  color:var(--ac-text);
+  box-shadow:inset 0 -2px 0 var(--ac-border-strong);
+}
+
+.ws-close:hover,
+.ws-close:focus-visible {
+  color:var(--ac-danger);
+}
+
+.ws-mark {
+  font-size:var(--ac-text-xs);
+  width:1em;
+  text-align:center;
+}
+
+.completed > .ws-mark,
+.ws-tab.completed .ws-mark { color:var(--ac-success); }
+.attention > .ws-mark,
+.ws-tab.attention .ws-mark { color:var(--ac-warning); }
+.failed > .ws-mark,
+.ws-tab.failed .ws-mark { color:var(--ac-danger); }
+.running > .ws-mark,
+.ws-tab.running .ws-mark { color:var(--ac-accent); }
+
+.ws-new {
+  font-size:var(--ac-text-xs);
+  font-weight:600;
+  color:var(--ac-on-accent);
+  background:var(--ac-accent);
+  border-radius:var(--ac-radius-round);
+  padding:0 6px;
+}
+
+/* An agent that changed state (now waiting, failed, finished…) while its tab was in the background. */
+.ws-changed {
+  display:inline-block;
+  width:8px;
+  height:8px;
+  border-radius:var(--ac-radius-circle);
+  background:var(--ac-warning);
+}
+
+.ws-since {
+  font-weight:400;
+}
+
+.ws-subhead {
+  margin:8px 0 4px;
+  color:var(--ac-text-muted);
+}
+
+.ws-add-wrap {
+  position:relative;
+  flex:0 0 auto;
+}
+
+.ws-add {
+  position:relative;
+  border:1px solid var(--ac-border);
+  border-bottom:0;
+  border-radius:var(--ac-radius-sm) var(--ac-radius-sm) 0 0;
+  background:var(--ac-surface-2);
+  color:var(--ac-text);
+  font:inherit;
+  font-weight:600;
+  padding:6px 12px;
+  cursor:pointer;
+}
+
+.ws-new-dot {
+  position:absolute;
+  top:3px;
+  right:3px;
+  width:7px;
+  height:7px;
+  border-radius:var(--ac-radius-circle);
+  background:var(--ac-accent);
+}
+
+.ws-menu {
+  position:absolute;
+  right:0;
+  top:100%;
+  z-index:30;
+  display:grid;
+  min-width:240px;
+  max-width:min(320px, calc(100vw - 32px));
+  padding:6px;
+  background:var(--ac-surface);
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius);
+  box-shadow:var(--ac-shadow-dialog);
+}
+
+.ws-menu.hidden {
+  display:none;
+}
+
+.ws-menu button {
+  display:grid;
+  grid-template-columns:1.2em 1fr;
+  gap:0 6px;
+  text-align:left;
+  border:0;
+  background:none;
+  color:var(--ac-text);
+  font:inherit;
+  padding:6px 8px;
+  border-radius:var(--ac-radius-sm);
+  cursor:pointer;
+}
+
+.ws-menu button small {
+  grid-column:2;
+}
+
+.ws-menu button:hover,
+.ws-menu button:focus-visible {
+  background:var(--ac-surface-2);
+}
+
+.ws-head {
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px 24px;
+  justify-content:space-between;
+  margin-bottom:12px;
+}
+
+.ws-id {
+  display:flex;
+  gap:12px;
+  align-items:flex-start;
+  min-width:0;
+}
+
+.ws-id h1 {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+  margin:0;
+  font-size:var(--ac-text-lg);
+}
+
+.ws-id p {
+  margin:2px 0 0;
+}
+
+.ws-now {
+  overflow-wrap:anywhere;
+}
+
+.ws-facts {
+  display:grid;
+  grid-template-columns:auto minmax(0, 1fr);
+  gap:2px 12px;
+  margin:0;
+  max-width:560px;
+}
+
+.ws-facts dt {
+  color:var(--ac-text-muted);
+}
+
+.ws-facts dd {
+  margin:0;
+  overflow-wrap:anywhere;
+}
+
+.ws-grid {
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) minmax(260px, 340px);
+  gap:12px;
+  align-items:start;
+}
+
+.ws-main,
+.ws-side {
+  display:grid;
+  gap:12px;
+  min-width:0;
+}
+
+.ws-side .ac-panel {
+  margin:0;
+}
+
+.ws-side > div:empty {
+  display:none;
+}
+
+.ws-side:empty {
+  display:none;
+}
+
+.ws-turn-chips {
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px;
+}
+
+.ws-chip {
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-round);
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  font:inherit;
+  font-size:var(--ac-text-xs);
+  padding:2px 10px;
+  cursor:pointer;
+}
+
+.ws-chip.active {
+  background:var(--ac-accent);
+  border-color:var(--ac-accent);
+  color:var(--ac-on-accent);
+}
+
+.ws-log {
+  display:grid;
+  gap:6px;
+  padding:12px;
+  max-height:var(--ac-term-height, 460px);
+  overflow:auto;
+  background:var(--ac-term-bg);
+  color:var(--ac-term-text);
+  border:1px solid var(--ac-term-border);
+  border-radius:var(--ac-radius);
+  font-family:var(--ac-font-mono);
+  font-size:var(--ac-text-xs);
+}
+
+.ws-log.hidden {
+  display:none;
+}
+
+.ws-log .muted,
+.ws-log-note {
+  color:var(--ac-term-muted);
+}
+
+.ws-log-note {
+  margin:0 0 4px;
+  font-family:var(--ac-font-ui);
+}
+
+.ws-log-item summary {
+  cursor:pointer;
+  overflow-wrap:anywhere;
+}
+
+.ws-log-item pre {
+  margin:6px 0 0 16px;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  max-height:320px;
+  overflow:auto;
+}
+
+.ws-log-item p,
+.ws-log-item ul {
+  margin:4px 0 0 16px;
+}
+
+.ws-approvals {
+  display:grid;
+  gap:8px;
+}
+
+.ws-task {
+  display:grid;
+  gap:2px;
+  padding:6px 8px;
+  margin-bottom:6px;
+  border-left:3px solid var(--ac-border-strong);
+  background:var(--ac-surface-2);
+  border-radius:var(--ac-radius-sm);
+}
+
+.ws-task.done { border-left-color:var(--ac-success); }
+.ws-task.running { border-left-color:var(--ac-accent); }
+.ws-task.failed,
+.ws-task.blocked { border-left-color:var(--ac-danger); }
+
+.ws-notes {
+  margin-top:12px;
+}
+
+.ws-list {
+  list-style:none;
+  margin:0 0 8px;
+  padding:0;
+  display:grid;
+  gap:4px;
+  max-height:280px;
+  overflow:auto;
+}
+
+.ws-list li {
+  overflow-wrap:anywhere;
+}
+
+.ws-note {
+  display:flex;
+  gap:8px;
+}
+
+.ws-note input {
+  flex:1;
+  min-width:0;
+  font:inherit;
+  padding:6px 10px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface);
+  color:var(--ac-text);
+}
+
+.ws-preview {
+  margin-top:12px;
+}
+
+.ws-preview summary {
+  cursor:pointer;
+  font-weight:600;
+}
+
+.ws-empty {
+  max-width:560px;
+}
+
+.agent-card__foot [data-workspace] {
+  margin-left:auto;
+}
+
+.task-item {
+  display:grid;
+  gap:2px;
+}
+
+.task-ws {
+  justify-self:end;
+}
+
+/* ---------------------------------------------------------------------------
+   Preview surfaces (W6): the viewer inside a pane, and its expanded overlay
+   --------------------------------------------------------------------------- */
+.ws-preview summary {
+  display:flex;
+  align-items:baseline;
+  gap:8px;
+}
+
+.ws-surface-pick {
+  display:flex;
+  flex-wrap:wrap;
+  gap:4px;
+  margin:8px 0;
+}
+
+.ws-surface-bar {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  margin:8px 0;
+}
+
+.ws-surface-bar .mono {
+  overflow-wrap:anywhere;
+}
+
+.ws-surface-frame {
+  display:block;
+  width:100%;
+  height:420px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface);
+}
+
+.ws-surface-output {
+  margin:0 0 8px;
+  padding:10px 12px;
+  min-height:120px;
+  max-height:320px;
+  overflow:auto;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  background:var(--ac-term-bg);
+  color:var(--ac-term-text);
+  border:1px solid var(--ac-term-border);
+  border-radius:var(--ac-radius-sm);
+  font-family:var(--ac-font-mono);
+  font-size:var(--ac-text-xs);
+}
+
+.ws-surface-screen {
+  display:block;
+  max-width:100%;
+  min-height:60px;
+  margin-bottom:8px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-term-bg);
+  cursor:crosshair;
+}
+
+.ws-surface-type {
+  margin-bottom:6px;
+}
+
+/* Expanded: the viewer lives in a modal dialog (see wsExpand) and takes most of the window. */
+.ws-viewer-dialog {
+  width:min(1280px, calc(100vw - 32px));
+  max-width:none;
+}
+
+.ws-viewer-dialog .ws-surface-frame {
+  height:calc(100vh - 230px);
+}
+
+.ws-viewer-dialog .ws-surface-output {
+  max-height:calc(100vh - 320px);
+}
+
+.ws-viewer-dialog .ws-surface-screen {
+  max-height:calc(100vh - 330px);
+  margin-inline:auto;
+}
+
+@media (max-width:699px) {
+  .ws-viewer-dialog {
+    width:100vw;
+    max-height:100vh;
+    margin:0;
+  }
+  .ws-surface-frame {
+    height:320px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Windows (W5): a desk of movable, resizable workspace windows
+   --------------------------------------------------------------------------- */
+.ws-desk {
+  position:relative;
+  height:max(560px, calc(100vh - 190px));
+  overflow:hidden;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius);
+  background:var(--ac-surface-2);
+}
+
+.ws-desk.hidden {
+  display:none;
+}
+
+.ws-window {
+  position:absolute;
+  display:flex;
+  flex-direction:column;
+  min-width:360px;
+  min-height:260px;
+  background:var(--ac-surface);
+  border:1px solid var(--ac-border-strong);
+  border-radius:var(--ac-radius);
+  box-shadow:var(--ac-shadow-card);
+  overflow:hidden;
+}
+
+.ws-window.hidden {
+  display:none;
+}
+
+.ws-window.focused {
+  box-shadow:var(--ac-shadow-dialog);
+}
+
+.ws-window.max {
+  border-radius:0;
+}
+
+.ws-win-bar {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex:0 0 auto;
+  padding:4px 8px;
+  background:var(--ac-surface-2);
+  border-bottom:1px solid var(--ac-border);
+  cursor:move;
+  user-select:none;
+  touch-action:none;
+}
+
+.ws-window.max .ws-win-bar {
+  cursor:default;
+}
+
+.ws-win-title {
+  flex:1;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:var(--ac-text-sm);
+  font-weight:600;
+  color:var(--ac-text-muted);
+}
+
+.ws-window.focused .ws-win-title {
+  color:var(--ac-text);
+}
+
+.ws-win-controls {
+  display:inline-flex;
+  gap:6px;
+}
+
+.ws-win-btn {
+  display:inline-grid;
+  place-items:center;
+  width:14px;
+  height:14px;
+  padding:0;
+  border:0;
+  border-radius:var(--ac-radius-circle);
+  background:var(--ac-border-strong);
+  color:var(--ac-surface);
+  font:inherit;
+  font-size:10px;
+  line-height:1;
+  cursor:pointer;
+}
+
+.ws-win-btn span {
+  visibility:hidden;
+}
+
+.ws-win-bar:hover .ws-win-btn span,
+.ws-win-btn:focus-visible span {
+  visibility:visible;
+}
+
+.ws-win-pop,
+.ws-popout {
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  font:inherit;
+  font-size:var(--ac-text-xs);
+  padding:2px 8px;
+  cursor:pointer;
+}
+
+.ws-popout {
+  flex:0 0 auto;
+  align-self:center;
+  margin:0 4px 4px 0;
+}
+
+.ws-popout.hidden {
+  display:none;
+}
+
+.ws-win-body {
+  flex:1;
+  min-height:0;
+  overflow:auto;
+  padding:10px;
+}
+
+/* A window is narrow: stack its output and side column, like a split pane. */
+.ws-win-body .ws-grid {
+  grid-template-columns:minmax(0, 1fr);
+}
+
+.ws-win-body .ws-head {
+  flex-direction:column;
+}
+
+.ws-win-grip {
+  position:absolute;
+  right:0;
+  bottom:0;
+  width:16px;
+  height:16px;
+  cursor:nwse-resize;
+  touch-action:none;
+  background:linear-gradient(135deg, transparent 50%, var(--ac-border-strong) 50%, transparent 60%, transparent 70%, var(--ac-border-strong) 70%, transparent 80%);
+}
+
+.ws-window.max .ws-win-grip {
+  display:none;
+}
+
+.ws-window.dragging {
+  opacity:.92;
+}
+
+.ws-dock {
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  z-index:100000;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:6px;
+  padding:6px 10px;
+}
+
+.ws-dock:empty {
+  display:none;
+}
+
+.ws-dock-item {
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  font:inherit;
+  font-size:var(--ac-text-sm);
+  padding:4px 10px;
+  cursor:pointer;
+  box-shadow:var(--ac-shadow-card);
+}
+
+.ws-popped {
+  font-size:var(--ac-text-xs);
+  color:var(--ac-accent);
+}
+
+/* A pop-out window shows one workspace, without the dashboard around it. */
+body.popout .sidebar,
+body.popout .toolbar,
+body.popout .addressbar,
+body.popout .xp-titlebar,
+body.popout .xp-menu,
+body.popout .xp-taskbar,
+body.popout .tabbar,
+body.popout .terminal-keybar,
+body.popout .ws-bar,
+body.popout .ws-pane-bar {
+  display:none !important;
+}
+
+body.popout .app-layout {
+  display:block;
+}
+
+body.popout .workspace {
+  max-width:none;
+  padding:12px 16px;
+}
+
+/* ---------------------------------------------------------------------------
+   Layout switch and split view (W4)
+   --------------------------------------------------------------------------- */
+.ws-modes {
+  display:inline-flex;
+  flex:0 0 auto;
+  align-self:center;
+  margin:0 4px 4px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  overflow:hidden;
+}
+
+.ws-modes button {
+  border:0;
+  background:var(--ac-surface);
+  color:var(--ac-text-muted);
+  font:inherit;
+  font-size:var(--ac-text-xs);
+  padding:4px 10px;
+  cursor:pointer;
+}
+
+.ws-modes button[aria-pressed=true] {
+  background:var(--ac-accent);
+  color:var(--ac-on-accent);
+}
+
+.ws-panes.split {
+  display:grid;
+  grid-template-columns:minmax(0, var(--ws-left, 1fr)) 10px minmax(0, var(--ws-right, 1fr));
+  align-items:start;
+}
+
+.ws-pane {
+  min-width:0;
+}
+
+.ws-pane-bar {
+  display:none;
+}
+
+.ws-panes.split .ws-pane-bar {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  width:100%;
+  margin-bottom:8px;
+  padding:4px 10px;
+  border:1px solid var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-surface-2);
+  color:var(--ac-text-muted);
+  font:inherit;
+  font-size:var(--ac-text-sm);
+  text-align:left;
+  cursor:pointer;
+}
+
+.ws-panes.split .ws-pane.focused .ws-pane-bar {
+  border-color:var(--ac-accent);
+  color:var(--ac-text);
+  font-weight:600;
+}
+
+/* Two panes are narrow: stack each pane's output and side column, and drop the facts grid. */
+.ws-panes.split .ws-grid {
+  grid-template-columns:minmax(0, 1fr);
+}
+
+.ws-panes.split .ws-head {
+  flex-direction:column;
+}
+
+.ws-divider {
+  align-self:stretch;
+  cursor:col-resize;
+  touch-action:none;
+  position:relative;
+  min-height:120px;
+}
+
+.ws-divider::before {
+  content:"";
+  position:absolute;
+  top:0;
+  bottom:0;
+  left:4px;
+  width:2px;
+  background:var(--ac-border);
+  border-radius:var(--ac-radius-sm);
+}
+
+.ws-divider:hover::before,
+.ws-divider:focus-visible::before,
+.ws-divider.dragging::before {
+  background:var(--ac-accent);
+}
+
+.ws-narrow {
+  margin:0 0 8px;
+}
+
+@media (max-width:999px) {
+  .ws-modes button[data-ws-mode=split] {
+    opacity:.6;
+  }
+}
+
+@media (max-width:699px) {
+  .ws-modes {
+    display:none;
+  }
+}
+
+/* The XP taskbar buttons for open workspaces flash while their agent waits for you. */
+.xp-flash {
+  animation:ws-flash 1.2s steps(2, jump-none) infinite;
+}
+
+@keyframes ws-flash {
+  from { background:var(--ac-warning); color:var(--ac-on-warning); }
+  to { background:var(--ac-accent); color:var(--ac-chrome-text); }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .xp-flash {
+    animation:none;
+    background:var(--ac-warning);
+    color:var(--ac-on-warning);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Laptop and phone
+   --------------------------------------------------------------------------- */
+@media (max-width:1099px) {
+  .ws-grid {
+    grid-template-columns:minmax(0, 1fr);
+  }
+}
+
+@media (max-width:699px) {
+  /* The bottom tab bar already has Mission; the strip keeps its room for agents. */
+  .ws-tabs .ws-home {
+    display:none;
+  }
+  /* Things that need you come first, then the output, then the rest. */
+  .ws-grid {
+    display:flex;
+    flex-direction:column;
+  }
+  .ws-side {
+    display:contents;
+  }
+  #ws-approvals { order:0; }
+  .ws-main { order:1; }
+  #ws-task { order:2; }
+  #ws-files { order:3; }
+  .ws-tab > button,
+  button.ws-tab,
+  .ws-close {
+    min-height:40px;
+  }
+  .ws-menu {
+    position:fixed;
+    left:16px;
+    right:16px;
+    top:auto;
+    max-width:none;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   macOS: segmented tabs in a toolbar
+   --------------------------------------------------------------------------- */
+:root[data-theme=mac] .ws-bar {
+  border-bottom:0;
+  align-items:center;
+}
+
+:root[data-theme=mac] .ws-tabs {
+  align-items:center;
+  gap:2px;
+  padding:3px;
+  background:var(--ac-surface-2);
+  border-radius:var(--ac-radius);
+  flex:0 1 auto;
+}
+
+:root[data-theme=mac] .ws-tab {
+  border:0;
+  border-radius:var(--ac-radius-sm);
+  background:none;
+}
+
+:root[data-theme=mac] .ws-tab.active {
+  background:var(--ac-surface);
+  box-shadow:var(--ac-shadow-card);
+  margin:0;
+  padding:0;
+}
+
+:root[data-theme=mac] button.ws-tab.active {
+  padding:7px 12px;
+}
+
+:root[data-theme=mac] .ws-modes {
+  border:0;
+  padding:2px;
+  background:var(--ac-surface-2);
+  border-radius:var(--ac-radius);
+}
+
+:root[data-theme=mac] .ws-modes button {
+  background:none;
+  border-radius:var(--ac-radius-sm);
+}
+
+:root[data-theme=mac] .ws-modes button[aria-pressed=true] {
+  background:var(--ac-surface);
+  color:var(--ac-text);
+  box-shadow:var(--ac-shadow-card);
+}
+
+:root[data-theme=mac] .ws-panes.split .ws-pane.focused .ws-pane-bar {
+  box-shadow:0 0 0 1px var(--ac-accent);
+}
+
+:root[data-theme=mac] .ws-window {
+  border-radius:var(--ac-radius-lg);
+  border-color:var(--ac-border);
+}
+
+:root[data-theme=mac] .ws-win-bar {
+  justify-content:flex-start;
+  background:var(--ac-surface);
+}
+
+:root[data-theme=mac] .ws-win-close { background:var(--ac-danger); }
+:root[data-theme=mac] .ws-win-min { background:var(--ac-warning); }
+:root[data-theme=mac] .ws-win-max { background:var(--ac-success); }
+
+:root[data-theme=mac] .ws-window:not(.focused) .ws-win-btn {
+  background:var(--ac-border-strong);
+}
+
+:root[data-theme=mac] .ws-win-title {
+  text-align:center;
+}
+
+:root[data-theme=mac] .ws-add {
+  border:0;
+  border-radius:var(--ac-radius-circle);
+  width:30px;
+  height:30px;
+  padding:0;
+}
+
+/* ---------------------------------------------------------------------------
+   Terminal: a tmux status line, "1:coder-1*"
+   --------------------------------------------------------------------------- */
+:root[data-theme=terminal] .ws-bar {
+  align-items:stretch;
+  border:1px solid var(--ac-term-border);
+  background:var(--ac-surface-2);
+  gap:0;
+}
+
+:root[data-theme=terminal] .ws-tabs {
+  align-items:stretch;
+  gap:0;
+}
+
+:root[data-theme=terminal] .ws-tab {
+  border:0;
+  border-radius:0;
+  background:none;
+  color:var(--ac-text-muted);
+  font-family:var(--ac-font-mono);
+  margin:0;
+  padding:0;
+}
+
+:root[data-theme=terminal] .ws-tab[data-index]::before {
+  content:attr(data-index) ":";
+  padding-left:10px;
+}
+
+:root[data-theme=terminal] .ws-tab > button {
+  padding-left:2px;
+}
+
+:root[data-theme=terminal] .ws-tab.active {
+  background:var(--ac-accent);
+  color:var(--ac-on-accent);
+  font-weight:400;
+}
+
+:root[data-theme=terminal] .ws-tab.active > button:first-child::after {
+  content:"*";
+}
+
+/* tmux marks the last window with "-"; here, the agent in the other pane. */
+:root[data-theme=terminal] .ws-tab.shown > button:first-child::after {
+  content:"-";
+}
+
+:root[data-theme=terminal] .ws-tab.shown {
+  box-shadow:none;
+}
+
+:root[data-theme=terminal] .ws-tab.active .ws-mark,
+:root[data-theme=terminal] .ws-tab.active .ws-close {
+  color:inherit;
+}
+
+:root[data-theme=terminal] .ws-home::before {
+  content:"[";
+}
+
+:root[data-theme=terminal] .ws-home::after {
+  content:"]";
+}
+
+:root[data-theme=terminal] button.ws-tab {
+  padding:6px 10px;
+}
+
+:root[data-theme=terminal] .ws-add {
+  border:0;
+  border-left:1px solid var(--ac-term-border);
+  border-radius:0;
+  background:none;
+  height:100%;
+  font-family:var(--ac-font-mono);
+}
+
+/* tmux: panes are separated by a line; the active pane's border is green. */
+:root[data-theme=terminal] .ws-modes {
+  border-radius:0;
+  border-color:var(--ac-term-border);
+  font-family:var(--ac-font-mono);
+}
+
+:root[data-theme=terminal] .ws-modes button {
+  background:none;
+}
+
+:root[data-theme=terminal] .ws-modes button[aria-pressed=true] {
+  background:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-panes.split .ws-pane-bar {
+  border-radius:0;
+  border-color:var(--ac-term-border);
+  font-family:var(--ac-font-mono);
+  background:none;
+}
+
+:root[data-theme=terminal] .ws-panes.split .ws-pane.focused .ws-pane-bar {
+  border-color:var(--ac-accent);
+  color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-divider::before {
+  border-radius:0;
+  width:1px;
+  left:5px;
+  background:var(--ac-term-border);
+}
+
+:root[data-theme=terminal] .ws-divider:hover::before,
+:root[data-theme=terminal] .ws-divider:focus-visible::before,
+:root[data-theme=terminal] .ws-divider.dragging::before {
+  background:var(--ac-accent);
+}
+
+/* tmux zoom (prefix z): the expanded viewer says so. */
+:root[data-theme=terminal] .ws-viewer-dialog h2::after {
+  content:" [Z]";
+  color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-surface-frame,
+:root[data-theme=terminal] .ws-surface-screen,
+:root[data-theme=terminal] .ws-surface-output {
+  border-radius:0;
+}
+
+/* Terminal windows: plain boxes; the focused one has the accent border, like tmux's active pane. */
+:root[data-theme=terminal] .ws-desk {
+  border-radius:0;
+  background:var(--ac-surface);
+}
+
+:root[data-theme=terminal] .ws-window {
+  border-radius:0;
+  border-color:var(--ac-term-border);
+  box-shadow:none;
+}
+
+:root[data-theme=terminal] .ws-window.focused {
+  border-color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-win-bar {
+  background:none;
+  font-family:var(--ac-font-mono);
+  border-bottom-color:var(--ac-term-border);
+}
+
+:root[data-theme=terminal] .ws-win-title::before { content:"["; }
+:root[data-theme=terminal] .ws-win-title::after { content:"]"; }
+
+:root[data-theme=terminal] .ws-window.focused .ws-win-title {
+  color:var(--ac-accent);
+}
+
+:root[data-theme=terminal] .ws-win-controls {
+  order:3;
+}
+
+:root[data-theme=terminal] .ws-win-btn {
+  width:auto;
+  height:auto;
+  border-radius:0;
+  background:none;
+  color:var(--ac-text-muted);
+  font-family:var(--ac-font-mono);
+  font-size:var(--ac-text-xs);
+}
+
+:root[data-theme=terminal] .ws-win-btn span {
+  visibility:visible;
+}
+
+:root[data-theme=terminal] .ws-win-pop,
+:root[data-theme=terminal] .ws-popout,
+:root[data-theme=terminal] .ws-dock-item {
+  border-radius:0;
+  box-shadow:none;
+  font-family:var(--ac-font-mono);
+}
+
+/* tmux marks a window with activity with "#". */
+:root[data-theme=terminal] .ws-changed {
+  width:auto;
+  height:auto;
+  border-radius:0;
+  background:none;
+  color:var(--ac-warning);
+}
+
+:root[data-theme=terminal] .ws-changed::before {
+  content:"#";
+}
+
+:root[data-theme=terminal] .ws-tab.active .ws-changed {
+  color:inherit;
+}
+
+:root[data-theme=terminal] .ws-new {
+  border-radius:0;
+}
+
+:root[data-theme=terminal] .ws-menu {
+  border-radius:0;
+  box-shadow:none;
+  font-family:var(--ac-font-mono);
+}
+
+/* ---------------------------------------------------------------------------
+   Windows XP: property-sheet tabs; open workspaces also sit on the taskbar
+   --------------------------------------------------------------------------- */
+:root[data-theme=xp] .ws-bar {
+  border-bottom:1px solid var(--ac-border-strong);
+  gap:0;
+}
+
+:root[data-theme=xp] .ws-tabs {
+  gap:0;
+  padding-top:3px;
+}
+
+:root[data-theme=xp] .ws-tab {
+  border:1px solid var(--ac-border-strong);
+  border-bottom:0;
+  border-radius:var(--ac-radius-sm) var(--ac-radius-sm) 0 0;
+  background:var(--ac-surface-2);
+  color:var(--ac-text);
+  margin-right:-1px;
+}
+
+:root[data-theme=xp] .ws-tab.active {
+  background:var(--ac-surface);
+  border-top:3px solid var(--ac-warning);
+  margin-top:-3px;
+  padding-bottom:2px;
+  position:relative;
+  z-index:1;
+  font-weight:400;
+}
+
+:root[data-theme=xp] .ws-close {
+  width:18px;
+  height:18px;
+  padding:0;
+  margin-right:6px;
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-xp-close);
+  color:var(--ac-chrome-text);
+  font-weight:700;
+}
+
+:root[data-theme=xp] .ws-add {
+  border:1px solid var(--ac-xp-button-border);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-xp-button);
+  margin:0 0 4px 6px;
+  padding:2px 10px;
+}
+
+:root[data-theme=xp] .ws-menu {
+  border-radius:0;
+  border-color:var(--ac-xp-frame);
+}
+
+:root[data-theme=xp] .ws-menu button:hover,
+:root[data-theme=xp] .ws-menu button:focus-visible {
+  background:var(--ac-selection-bg);
+  color:var(--ac-selection-text);
+}
+
+:root[data-theme=xp] .ws-modes {
+  border-color:var(--ac-xp-button-border);
+}
+
+:root[data-theme=xp] .ws-modes button {
+  background:var(--ac-xp-button);
+  color:var(--ac-text);
+}
+
+:root[data-theme=xp] .ws-modes button[aria-pressed=true] {
+  background:var(--ac-surface-2);
+  box-shadow:inset 1px 1px 2px var(--ac-border-strong);
+}
+
+/* Each pane gets a window title bar: bright blue while focused, faded otherwise. */
+:root[data-theme=xp] .ws-panes.split .ws-pane-bar {
+  border:1px solid var(--ac-xp-frame);
+  border-radius:var(--ac-radius-sm) var(--ac-radius-sm) 0 0;
+  background:var(--ac-xp-titlebar);
+  color:var(--ac-chrome-text);
+  font-weight:700;
+  opacity:.6;
+}
+
+:root[data-theme=xp] .ws-panes.split .ws-pane.focused .ws-pane-bar {
+  opacity:1;
+  color:var(--ac-chrome-text);
+}
+
+:root[data-theme=xp] .ws-divider::before {
+  left:2px;
+  width:6px;
+  border-radius:0;
+  background:var(--ac-surface-2);
+  border-left:1px solid var(--ac-surface);
+  border-right:1px solid var(--ac-border-strong);
+}
+
+/* XP windows: blue title bar with minimize, maximize and close on the right; faded when inactive. */
+:root[data-theme=xp] .ws-desk {
+  border-radius:0;
+  background:var(--ac-surface-2);
+}
+
+:root[data-theme=xp] .ws-window {
+  border:3px solid var(--ac-xp-frame);
+  border-radius:var(--ac-radius-lg) var(--ac-radius-lg) 0 0;
+  background:var(--ac-surface-2);
+}
+
+:root[data-theme=xp] .ws-win-bar {
+  background:var(--ac-xp-titlebar);
+  border-bottom:0;
+}
+
+:root[data-theme=xp] .ws-window:not(.focused) .ws-win-bar {
+  opacity:.7;
+}
+
+:root[data-theme=xp] .ws-win-title,
+:root[data-theme=xp] .ws-window.focused .ws-win-title {
+  color:var(--ac-chrome-text);
+  font-weight:700;
+}
+
+:root[data-theme=xp] .ws-win-controls {
+  order:3;
+  gap:2px;
+}
+
+:root[data-theme=xp] .ws-win-btn {
+  width:21px;
+  height:21px;
+  border:1px solid var(--ac-chrome-text);
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-accent);
+  color:var(--ac-chrome-text);
+  font-size:var(--ac-text-sm);
+  font-weight:700;
+}
+
+:root[data-theme=xp] .ws-win-btn span {
+  visibility:visible;
+}
+
+:root[data-theme=xp] .ws-win-close {
+  order:3;
+  background:var(--ac-xp-close);
+}
+
+:root[data-theme=xp] .ws-win-min { order:1; }
+:root[data-theme=xp] .ws-win-max { order:2; }
+
+:root[data-theme=xp] .ws-win-pop {
+  background:var(--ac-xp-button);
+  border-color:var(--ac-xp-button-border);
+}
+
+:root[data-theme=xp] .ws-dock-item {
+  border-radius:var(--ac-radius-sm);
+  background:var(--ac-xp-button);
+  border-color:var(--ac-xp-button-border);
+}
+
+:root[data-theme=xp] .xp-ws-task {
+  width:auto;
+  max-width:170px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  margin-left:3px;
+}
+
+:root[data-theme=xp] .xp-ws-task.active {
+  filter:brightness(.85);
+}
+
+@media (max-width:699px) {
+  :root[data-theme=xp] .ws-tab.active {
+    margin-top:0;
+  }
+}

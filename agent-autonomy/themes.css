@@ -208,3 +208,94 @@
   --ac-xp-start:linear-gradient(180deg,#347D34 0%,#267426 20%,#267426 70%,#1B5A1B 100%);
   --ac-xp-tray:linear-gradient(180deg,#126FA2,#075C99 20%,#075C99 80%,#084E83);
 }
+
+/* ---------- Live OpenCode terminal (always dark, in every theme) ---------- */
+:root {
+  --ac-term-bg: #15171C;
+  --ac-term-bar: #22252C;
+  --ac-term-border: #2E323B;
+  --ac-term-text: #D8DCE2;
+  --ac-term-muted: #8C939E;
+  --ac-term-prompt: #7EE787;
+  --ac-term-tool: #79C0FF;
+  --ac-term-warn: #F2CC60;
+  --ac-term-error: #FF7B72;
+  --ac-term-held-bg: #3A3014;
+  --ac-term-height: 380px;
+}
+:root[data-theme="terminal"] {
+  --ac-term-bg: #070807;
+  --ac-term-bar: #151A16;
+  --ac-term-border: #33403A;
+  --ac-term-text: #D4D8D2;
+  --ac-term-muted: #7F8A83;
+}
+:root[data-theme="xp"] {
+  --ac-term-bg: #0C0C0C;
+  --ac-term-bar: #1E1E1E;
+  --ac-term-border: #7A7A7A;
+  --ac-term-text: #CCCCCC;
+  --ac-term-muted: #8A8A8A;
+  --ac-term-prompt: #FFFFFF;
+  --ac-term-tool: #61D6D6;
+}
+
+/* ---------- Mac follows the system appearance ---------- */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="terminal"]):not([data-theme="xp"]) {
+    --ac-bg: #1C1C1E;
+    --ac-surface: #2C2C2E;
+    --ac-surface-2: #1F1F21;
+    --ac-sidebar-bg: #242426;
+    --ac-toolbar-bg: #232325;
+    --ac-border: #3A3A3C;
+    --ac-border-strong: #48484A;
+    --ac-text: #F5F5F7;
+    --ac-text-muted: #A1A1A6;
+    --ac-link: #4DA3FF;
+    --ac-accent: #0A84FF;
+    --ac-selection-bg: #0A84FF;
+    --ac-success: #30D158;
+    --ac-success-text: #4BD66F;
+    --ac-danger: #FF453A;
+    --ac-danger-text: #FF6961;
+    --ac-warning: #FF9F0A;
+    --ac-warning-text: #FFB340;
+    --ac-warning-soft: #3A2A12;
+    --ac-hermes: #A48AF0;
+    --ac-hermes-soft: #2D2645;
+    --ac-opencode: #40A9DE;
+    --ac-opencode-soft: #14303F;
+    --ac-opencode-text: #6CC4EE;
+    --ac-button-bg: #3A3A3C;
+    --ac-input-bg: #1F1F21;
+    --ac-shadow-card: 0 0 0 .5px rgba(255,255,255,.08), 0 1px 3px rgba(0,0,0,.4);
+    --ac-shadow-dialog: 0 0 0 .5px rgba(255,255,255,.1), 0 12px 32px rgba(0,0,0,.55);
+    --ac-focus: 0 0 0 3px rgba(10,132,255,.55);
+    --ac-subtle-shadow: 0 2px 8px rgba(0,0,0,.3);
+    --ac-backdrop: rgba(0, 0, 0, .6);
+    --ac-term-bg: #111113;
+    --ac-term-bar: #1C1C1E;
+    --ac-term-border: #3A3A3C;
+  }
+  :root:not([data-theme="terminal"]):not([data-theme="xp"]) { color-scheme: dark; }
+}
+
+/* ---------- Live project preview ---------- */
+:root {
+  --ac-preview-frame-bg: #FFFFFF;
+  --ac-preview-stage-bg: #E9E9EE;
+  --ac-preview-screen-bg: #000000;
+  --ac-preview-height: 70dvh;
+}
+:root[data-theme="terminal"] {
+  --ac-preview-stage-bg: #151A16;
+}
+:root[data-theme="xp"] {
+  --ac-preview-stage-bg: #D4D0C8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="terminal"]):not([data-theme="xp"]) {
+    --ac-preview-stage-bg: #161618;
+  }
+}

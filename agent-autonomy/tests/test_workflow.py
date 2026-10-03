@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from engine import Controller, Hermes, OpenCode, OpenCodeHTTPError, ReviewConflict, Settings, Store, review_packet, validate_answers, snapshot, evidence
+from engine import transcript, Controller, Hermes, OpenCode, OpenCodeHTTPError, ReviewConflict, Settings, Store, review_packet, validate_answers, snapshot, evidence
 from app import handler
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
@@ -61,14 +61,17 @@ class FakeAPI:
         self.decisions = []
         self.keep_pending = False
         self.respond_error = None
+        self.directories = []  # every directory= passed by the engine (worktree runs, M6)
 
     def health(self):
         return {'healthy': True, 'version': 'test'}
 
-    def pending(self, session):
+    def pending(self, session, directory=None):
+        self.directories.append(('pending', directory))
         return copy.deepcopy([p for p in self.pending_items if p.get('sessionID') == session])
 
-    def respond(self, session, request, action, answers=None):
+    def respond(self, session, request, action, answers=None, directory=None):
+        self.directories.append(('respond', directory))
         self.decisions.append((session, request['id'], action, answers))
         if self.respond_error:
             raise self.respond_error
@@ -76,7 +79,8 @@ class FakeAPI:
             self.pending_items = [p for p in self.pending_items if p['id'] != request['id']]
         return True
 
-    def request(self, path, method='GET', data=None):
+    def request(self, path, method='GET', data=None, directory=None):
+        self.directories.append((path.rsplit('/', 1)[-1], directory))
         if self.offline:
             raise OSError('Connection lost')
         if path == '/session' and method == 'POST':
@@ -203,6 +207,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.api.prompts), 1)
         self.assertTrue(self.api.prompts[0]['parts'][0]['text'].startswith('NEW'))
 
+    def test_note_for_an_agent_reaches_hermes_not_the_agent(self):
+        c, manager = self.controller([coding('OLD'), coding('NEW'), complete()])
+        manager.hold = threading.Event()
+        run = c.new('A feature')
+        self.wait(lambda: len(manager.calls)==1)
+        with self.assertRaisesRegex(ValueError, 'no agent named coder-9'):
+            c.control(run['id'], 'instruction', 'Hi', 'coder-9')
+        c.control(run['id'], 'instruction', 'Keep the tests fast', 'coder-1')
+        note = c.store.get('runs', run['id'])['instructions'][-1]
+        self.assertEqual((note['agent'], note['text']), ('coder-1', 'Note for coder-1: Keep the tests fast'))
+        manager.hold.set()
+        self.assertEqual(self.done(c,run['id'])['status'], 'completed')
+        self.assertIn('Note for coder-1: Keep the tests fast', manager.calls[1])
+        self.assertNotIn('Keep the tests fast', self.api.prompts[0]['parts'][0]['text'], 'only Hermes decides what the agent is told')
+
     def test_stop_aborts_only_managed_session(self):
         self.api.hold=True
         c, _ = self.controller([coding()])
@@ -285,7 +304,7 @@ class WorkflowTests(unittest.TestCase):
         helper=Hermes(self.settings)
         helptext='--quiet --query --toolsets --max-turns --query-file --oneshot --ignore-rules stream-json'
         terminal=json.dumps({'type':'result','exit_code':0,'text':json.dumps(complete())})+'\n'
-        with patch('engine.process',side_effect=[(0,helptext,''),(0,terminal,'')]) as mocked:
+        with patch('adapters.hermes.process',side_effect=[(0,helptext,''),(0,terminal,'')]) as mocked:
             result=helper.decide('A goal with `literal text`',lambda:False)
         self.assertEqual(result['action'],'complete')
         argv=mocked.call_args_list[1].args[0]
@@ -579,6 +598,57 @@ else:
         self.assertEqual(stats['added.py']['change'],'new')
         self.assertEqual(stats['removed.py']['change'],'deleted')
 
+    def test_step_records_transcript_and_planning_context(self):
+        c, manager = self.controller([coding('Write useful.py.'), complete()])
+        run = c.new('Build a useful script')
+        self.done(c, run['id'])
+        step = c.store.steps(run['id'])[0]
+        self.assertEqual(step['transcript'][-1], {'type':'text','text':'Implementation done.'})
+        self.assertEqual(step['plan_summary'], 'Implement the next part.')
+        self.assertEqual(step['plan'], ['Implement', 'Verify'])
+        self.assertEqual(step['kind'], 'task')
+
+    def test_verify_now_runs_saved_command_only_at_a_safe_boundary(self):
+        c, manager = self.controller([coding(), complete()])
+        self.api.on_submit = lambda n: (self.project/'ok.py').write_text('print(1)\n')
+        run = c.new('Build ok.py', f'{sys.executable} ok.py')
+        self.done(c, run['id'])
+        c.control(run['id'], 'verify')
+        self.wait(lambda: c.store.get('runs', run['id'])['manual_verification']['status'] != 'running')
+        result = c.store.get('runs', run['id'])['manual_verification']
+        self.assertEqual((result['status'], result['exit_code']), ('passed', 0))
+        self.assertIn('verification (on demand)', [e['kind'] for e in c.store.events(run['id'])])
+        (self.project/'ok.py').write_text('raise SystemExit(3)\n')
+        c.control(run['id'], 'verify')
+        self.wait(lambda: c.store.get('runs', run['id'])['manual_verification']['status'] != 'running')
+        self.assertEqual(c.store.get('runs', run['id'])['manual_verification']['exit_code'], 3)
+
+    def test_verify_now_is_refused_during_work_or_without_a_command(self):
+        c, manager = self.controller([coding(), complete()])
+        self.api.hold = True
+        run = c.new('Build something', f'{sys.executable} -c pass')
+        self.wait(lambda: c.store.get('runs', run['id'])['status'] == 'coding')
+        with self.assertRaisesRegex(ValueError, 'paused or finished'):
+            c.control(run['id'], 'verify')
+        self.api.hold = False
+        self.api.finish()
+        self.done(c, run['id'])
+        c.store.update('runs', run['id'], verifier=[])
+        with self.assertRaisesRegex(ValueError, 'no verification command'):
+            c.control(run['id'], 'verify')
+
+    def test_run_title_is_optional_validated_and_editable(self):
+        c, manager = self.controller([coding(), complete()])
+        with self.assertRaisesRegex(ValueError, '120'):
+            c.new('Goal', title='x' * 121)
+        run = c.new('A long goal that needs a short name', title='  Todo   app ')
+        self.assertEqual(run['title'], 'Todo app')
+        self.assertEqual(c.state(run['id'])['runs'][0]['title'], 'Todo app')
+        c.control(run['id'], 'title', 'Renamed')
+        self.assertEqual(c.store.get('runs', run['id'])['title'], 'Renamed')
+        self.done(c, run['id'])
+        self.assertTrue(c.state()['capabilities']['verify_now'])
+
     def test_agent_readiness_is_independent_and_does_not_claim_model_online(self):
         c,_=self.controller([])
         with patch.object(self.api,'health',side_effect=OSError('Offline')):
@@ -608,6 +678,36 @@ else:
                 self.assertEqual(json.load(response)['state'],'confirmed')
             self.assertEqual(len(self.api.decisions),1)
         finally: server.shutdown();server.server_close()
+
+
+class TranscriptTests(unittest.TestCase):
+    def test_parts_keep_order_and_running_tool_output(self):
+        messages=[{'info':{'id':'a1'},'parts':[
+            {'type':'text','text':'Reading files.'},
+            {'type':'tool','id':'t1','tool':'read','state':{'status':'completed','input':{'filePath':'todo.py'},'output':'x=1'}},
+            {'type':'reasoning','text':'hidden'},
+            {'type':'tool','id':'t2','tool':'bash','state':{'status':'running','input':{'command':'python3 -m unittest'},'metadata':{'output':'test_add ... ok'}}},
+            {'type':'tool','id':'t3','tool':'edit','state':{'status':'error','input':{'filePath':'a.py'},'error':'denied'}}]}]
+        parts,omitted=transcript(messages)
+        self.assertEqual(omitted,0)
+        self.assertEqual([p['type'] for p in parts],['text','tool','tool','tool'])
+        self.assertEqual(parts[1]['summary'],'todo.py')
+        self.assertEqual((parts[2]['status'],parts[2]['summary'],parts[2]['output']),('running','python3 -m unittest','test_add ... ok'))
+        self.assertEqual(parts[3]['output'],'denied')
+        self.assertNotIn('hidden',json.dumps(parts))
+
+    def test_transcript_is_bounded_from_the_start(self):
+        messages=[{'info':{},'parts':[{'type':'text','text':f'line {i} '+'x'*1000} for i in range(400)]}]
+        parts,omitted=transcript(messages,max_parts=300,max_chars=50_000)
+        self.assertLessEqual(sum(len(p['text']) for p in parts),50_000)
+        self.assertTrue(parts[-1]['text'].startswith('line 399'))
+        self.assertEqual(omitted,400-len(parts))
+
+    def test_controller_files_are_not_project_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);(root/'agent-autonomy').mkdir();(root/'agent-autonomy'/'app.py').write_text('x')
+            (root/'main.py').write_text('y')
+            self.assertEqual(list(snapshot(root)['files']),['main.py'])
 
 
 if __name__=='__main__':

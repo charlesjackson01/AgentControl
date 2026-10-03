@@ -79,7 +79,7 @@
           const files=d.files || [], add=files.reduce((n,f)=>n+(Number(f.added)||0),0), remove=files.reduce((n,f)=>n+(Number(f.removed)||0),0);
           const v=d.verification?.status, verification=v==='passed' ? '✓ passed' : v==='failed' ? '✕ failed' : '– not configured';
           summary=text('turn '+d.number+' · '+message.text)+text(statusText(d.status)+' · '+verification+' · '+(files.length+(d.files_omitted || 0))+' files +'+add+'/−'+remove,'',true)+(d.uncertain ? text('! submission uncertain','warning',true) : '');
-          summary+=`<a class="turn-workspace-link" data-workspace-link href="#/w/${e(encodeURIComponent(message.session))}/${e(encodeURIComponent(message.refs?.agent || message.actor))}">Open workspace</a>`;
+          summary+=`<a class="turn-workspace-link" data-workspace-link href="#/w/${e(encodeURIComponent(message.session))}/${e(encodeURIComponent(message.refs?.agent || message.actor))}">Open turn details</a>`;
           // This is the bounded public task from /api/thread, never the Hermes request prompt.
           detail=(d.prompt ? '<h3>Task</h3><details class="task-more"><summary>Show more</summary>'+text(d.prompt)+'</details>'+text(d.prompt,'task-preview') : '')+'<ul class="files">'+files.map(f=>`<li class="plain">${e(f.path)} · ${e(f.change)} +${e(f.added)}/−${e(f.removed)}</li>`).join('')+'</ul>'+(d.files_omitted ? text(d.files_omitted+' more files') : '')+(d.result_tail ? `<pre>${e(d.result_tail)}</pre>` : '')+(d.ended ? text('Ended '+m.timeLabel(d.ended)) : '');break;
         }

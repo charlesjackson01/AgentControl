@@ -10,7 +10,7 @@ another task, a correction, completion, or a blocker. One OpenCode session is
 reused for the entire run.
 
 The default **chat interface at `/`** shows the project room, sessions, recorded decisions and actionable
-requests. Open a turn's Workspace to inspect stages, recorded OpenCode output, changed files, diffs and
+requests. Open a turn's Turn details to inspect stages, recorded OpenCode output, changed files, diffs and
 verification. Members and the task graph live in Session details; proposed teams remain separate from running
 agents. `/chat` and `/chat/` are retained aliases. Hermes's existing
 `push` channel sends step-finished, needs-input, completion, and error alerts.
@@ -22,9 +22,11 @@ and running command output stream in as OpenCode works. **Mac** (following the
 system light/dark setting) is the default theme; **Terminal** and **XP** are in
 the toolbar. Read `UPDATE_REPORT.md` for the change log and known gaps.
 
-Chat's More and Settings links open classic for project browsing/creation/switching, full Activity and audit
-history, skills library/removal, paid models and Usage, the stuck watch, internet during work, and runtime/preview
-controls. Chat Workspaces provide `/classic?popout=…&run=…` for interactive preview, program, VM and desktop
+Chat has six dark sections: Primary, Agents, Projects, Workspace, Skills and Settings. Projects holds the
+team thread and native project creation/switching. Primary, persistent Agents, Direct conversations, project
+file browsing and Memory remain unavailable. Skills shows the shared library, with a link to classic for
+management. Settings links to classic for full Activity/audit history, paid models and Usage, the stuck watch,
+internet during work, and runtime/preview controls. Chat Turn details provides `/classic?popout=…&run=…` for interactive preview, program, VM and desktop
 surfaces. Existing root `/?popout=…` URLs remain compatible. Both interfaces share the dashboard key and server
 state. View-specific instructions below describe **classic** unless explicitly labelled as chat; backend
 execution and safety rules apply to both interfaces.

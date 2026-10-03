@@ -27,9 +27,12 @@ browser. To reach the dashboard from your phone, bind `--host` to your Tailscale
 address and keep it on the tailnet. Do not expose the port publicly without
 HTTPS and authentication.
 
-The classic dashboard remains at **`/classic`**, using the same key. Chat's **More** and Settings links open it
-for project switching, skills management, paid models, Usage, Activity, the stuck watch and runtime/preview
-controls. Workspaces link to a standalone classic pop-out for interactive surfaces. `/chat` remains an alias
+Chat has six dark sections: **Primary, Agents, Projects, Workspace, Skills and Settings**. Projects holds the
+existing team thread, approvals, sessions and native project creation/switching. Primary, persistent Agents,
+Direct conversations, file browsing and Memory are marked unavailable. Skills shows the real shared catalog.
+The classic dashboard remains at **`/classic`**, using the same key. Settings and Skills link to its full
+management, Usage, Activity and runtime controls. **Turn details** links to a standalone classic pop-out for
+interactive surfaces. `/chat` remains an alias
 for the chat interface; existing `/?popout=…` bookmarks keep opening classic.
 
 `python3 agent-autonomy/app.py --doctor --project … --opencode …` checks the
@@ -38,11 +41,11 @@ Hermes CLI and the OpenCode API without starting a model.
 ## What you see
 
 - **Project room and turns.** The default chat interface shows sessions, recorded messages and decision cards.
-  Open a turn's **Workspace** for stages, output, changed files, diffs and verification. Classic retains the
+  Open a turn's **Turn details** for stages, output, changed files, diffs and verification. Classic retains the
   turns rail and horizontal Plan → Prompt → Code → Verify board.
 - **Live OpenCode terminal.** The Code stage streams OpenCode's text, tool
   calls, and command output while it works. It follows new output until you
-  scroll up. Chat Workspaces show recorded output; classic offers Copy and `t` for full screen.
+  scroll up. Chat Turn details shows recorded output; classic offers Copy and `t` for full screen.
 - **Approvals.** Actionable requests appear once as room cards, with a waiting indicator linking to them.
   Approve once, or deny and redirect Hermes. Each request
   carries a risk class (R0–R3). Critical ones need the server's typed confirmation word, and

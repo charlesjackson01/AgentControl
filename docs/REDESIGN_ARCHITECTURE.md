@@ -328,12 +328,11 @@ the same card can offer another decision, as specified in the M5 handoff.
 
 ## 9. Design language (single, token-based)
 
-> **Amended by D9 (approved 2026-10-03), effective when N1 ships.** *Appearance* becomes one dark appearance (the
+> **Amended by D9 (approved 2026-10-03), shipped in N1.** *Appearance* becomes one dark appearance (the
 > near-black token set; no light set); *Type* becomes system stacks naming Inter and IBM Plex Mono first
 > (`Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`; `"IBM Plex Mono", ui-monospace, SFMono-Regular,
 > Menlo, monospace`), with nothing downloaded; active pills and the send button are white with black text. Every
-> accessibility rule below still applies, computed for the dark appearance. Until N1 ships, the text below describes
-> the code as it is.
+> accessibility rule below still applies, computed for the dark appearance.
 
 The direction: the simplicity of modern AI chat apps, with restrained macOS polish. It is calm, dense enough for
 real work, and the content comes first.
@@ -365,46 +364,36 @@ real work, and the content comes first.
 
 ## 10. Layout
 
-```
-┌ rail (260) ───────┬ room ──────────────────────────────────┬ context (360, collapsible) ┐
-│ ac-demo  ▾        │ # ac-demo · 1 session active            │ Session · Members · Changes │
-│ CHANNELS          │ ── Todo CLI · completed · 14:02 ───────  │ …                           │
-│  # ac-demo      1 │ you: Build a todo CLI…                   │                             │
-│ SESSIONS          │ hermes: Plan: storage, CLI, README       │                             │
-│  ● Todo CLI       │ ▸ coder-1 · turn 1 · 3 files · ✓         │                             │
-│  ✓ Storage tests  │ ! coder-1 wants to run `npm i`  [Review] │                             │
-│ MEMBERS           │ ── outcome: completed [Apply] [Reply]    │                             │
-│  ● hermes         ├─────────────────────────────────────────┤                             │
-│  ! coder-1        │ ! 1 request waiting                 (↓)  │                             │
-│ ◦ Connections     │ [ Message Hermes…  @agent  /command ]  ⏎ │                             │
-└───────────────────┴─────────────────────────────────────────┴─────────────────────────────┘
-```
+N1 has six sections, in order: **Primary, Agents, Projects, Workspace, Skills, Settings**. Projects contains the
+existing team thread; `#/` remains its default route. Primary, persistent Agents, Direct conversations, project
+file browsing and Memory have honest unavailable states. All existing request and session controls stay in Projects.
 
-- **Widths:**
-  - at 1200 px and wider: three columns
-  - from 768 to 1199 px: room with a rail drawer and a centred context overlay, at most 560 px wide (M8)
-  - below 768 px: the room only, with the rail as a drawer and the context panel as a bottom sheet
-
-  There is no page-level horizontal scrolling at desktop, laptop, tablet, portrait/landscape phone or 320 px.
-  Every interactive touch target is at least 40 × 40 px on tablet and phone sizes. Dialogs and sheets are
-  centred cards at 768–1199 px; portrait-phone decision sheets retain their bottom-sheet presentation.
-- **Workspace (`#/w/<runId>/<agent>`):** at ≥ 1200 px, a right pane in the context slot, widened to
-  `min(960px, 100vw − rail − 420px)`, with at least 420 px for the room alongside. At normal text size,
-  the waiting strip stays on one line and the composer chip remains untruncated at 1200 and 1440 px. From 768–1199 px it is a room overlay;
-  below 768 px it is a full-screen sheet and the room footer is hidden. Back to room and Escape restore the
-  prior room route and opening focus. No page overflow at 390 or 320 px; long lines scroll within their `<pre>`.
-  M4's footer budgets hold when the sheet is closed. Workspace has no decisions or input; waiting links return
-  to the authoritative room cards.
-- **M8 reflow:** the existing type-token ratios follow root text zoom; at a doubled root font size, views
-  reflow without page overflow or clipped controls and the composer remains reachable. At 844 × 390, the
-  idle footer is ≤ 72 px, waiting footer ≤ 112 px and conversation ≥ 45%. Portrait budgets remain unchanged.
-  Phone footers, sheets and Workspace navigation respect safe-area insets. Native OS keyboard behaviour is
-  still owner-run device verification, not a browser-emulation claim.
-- **One place per control:**
-  - An approval appears **once** in the room, plus one pinned "waiting" pointer above the composer.
-  - Pause, Resume and Stop live in the active session's header menu, and are also available as slash commands.
-- **Secondary pages** go under **More**: Skills, Usage, Activity/Audit and Settings.
-  Until they are rebuilt, they may link to `/classic`.
+- **Desktop (≥ 1200 px):** a 76 px navigation rail, a 300 px secondary panel and the stage. Session details is a
+  collapsible 360 px right pane inside the stage; the secondary panel remains visible.
+- **Tablet (720–1199 px):** the 76 px rail and stage. A top-bar button opens the secondary panel as an overlay drawer
+  of at most 320 px. Session details is a centred overlay of at most 560 px.
+- **Phone (< 720 px):** the stage and a safe-area-aware bottom bar with the same six items. The bar is at most 64 px
+  and hides while the keyboard is open at normal zoom. The secondary panel opens as a sheet; Session details is
+  a full-screen sheet. Dialogs retain the accepted bottom-sheet positioning and Cancel-first focus.
+- **Turn details (`#/w/<run>/<agent>`):** the existing read-only per-agent inspection. At ≥ 1200 px it hides the
+  secondary panel and uses a right pane of `min(960px, 100vw − 76px − 420px)`, preserving at least 420 px for
+  the thread. At 720–1199 px it is a centred overlay of at most 560 px; below 720 px it is a full-screen sheet.
+  Its legacy `#workspace`/`workspace-*` identifiers, recorded content and classic pop-out links are preserved.
+  Back and Escape restore the prior route and a visible opening control. Waiting links return to room cards.
+- **Keyboard and reflow:** the first-focusable skip link, roving Session details tabs and Turn details toolbar,
+  focus traps/inert backgrounds, Cancel/Close initial focus and focus restoration remain. Essential focus rings
+  are inset and meet 3:1. Text zoom to 200%, reduced motion and forced colours remain supported. There is no
+  page overflow; touch targets on tablet/phone are at least 40 × 40 px and text inputs at least 16 px.
+- **Composer:** one unchanged decision/session interaction surface with a static Team chip before its current
+  target. Phone portrait conversation occupies at least 55% with the bar shown; landscape at least 45%.
+  Idle footers are at most 72 px and footers with waiting at most 112 px. Existing six-line draft growth remains.
+  Normal-zoom keyboard resizing follows the visual viewport; pinch zoom preserves the last normal-zoom layout
+  and never disables user zoom. Safe-area padding applies to footers and sheets. Native keyboard behavior is
+  physical-device verification, not a browser-emulation claim.
+- **Reachability:** project sessions, live roster and waiting link are in Projects' panel; Connections and its
+  check are in Settings; the real skills library has its own section. Full management/Usage/Activity and
+  interactive surfaces remain linked to `/classic`. Native project creation/switching uses the existing
+  endpoints, shared write lock and confirmations. No decisions appear in placeholder sections.
 
 ## 11. Vocabulary (UI copy)
 
@@ -417,8 +406,8 @@ real work, and the content comes first.
 | agent | the actor (`coder-1`, `reviewer-1`, and from N2 a library agent); Hermes is the orchestrator. Settled by D11: "agent", not "bot" | "OpenCode" as an actor (it is a runtime); "bot" |
 | request | something an agent asks you (a permission or a question) | "approval" as a noun for the request |
 | note | what you send to Hermes during a session | "instruction" in UI copy |
-| Workspace | until N1: the deep-inspection view for an agent or session. **From N1 (D11): the active project's directory view** | using it for the git worktree |
-| Turn details | from N1 (D11): the per-agent deep-inspection view at `#/w/<run>/<agent>` (formerly "Workspace") | |
+| Workspace | the active project's directory view (D11) | using it for the git worktree |
+| Turn details | the per-agent deep-inspection view (D11) at `#/w/<run>/<agent>` (formerly "Workspace") | |
 | Primary | the one persistent everyday agent and its conversation (handoff; functional from N3) | "team" for Primary |
 | team thread | a project's conversation (the project room) | "team catalogue"; a Teams section |
 | branch | the git worktree a session works in | |

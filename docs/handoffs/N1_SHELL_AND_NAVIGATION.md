@@ -334,3 +334,194 @@ All of `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` **§A (always)** and **§B (N1)**.
 2. Update `CURRENT_STATE.md`.
 3. Commit and push only to `feature/chat-first-redesign`. **Do not merge into `main`.**
 4. Stop for Opus review. Do not start N2.
+
+---
+
+## N1 completion report — Codex, 2026-10-03
+
+**Implementation complete; independent Opus review pending.** Started from clean `49a3fa9` after
+`git pull --ff-only origin feature/chat-first-redesign`; verified that commit is an ancestor of HEAD.
+End: the N1 implementation commit containing this report on `feature/chat-first-redesign` (its exact
+hash is reported with publication). No merge into main and no N2 work.
+
+### Shipped scope
+
+D8–D12 are applied. Six icon/label sections share the accepted room, decisions, composer and inspection
+components. The shell is 76/300/stage on desktop, a secondary drawer at 720–1199 and a six-item bottom
+bar below 720. Session details and Turn details follow the specified pane/overlay/full-screen rules.
+Primary, persistent Agents, Direct conversations, project files, skill assignment and the three separate
+Memory scopes are unavailable; no example records or messages were seeded. Skills renders only the
+actual library and exposes descriptions, risk reasons, review status and classic management.
+
+Projects adds the existing folder browser and name-only creation/selection endpoints. Both writes are
+confirmed, guarded by `writeOwner`, and single activation sends one exact body. Refusal text is preserved.
+Folder/catalog reads are one-shot, serialized with refresh/paging, never polled, and only made on opening
+or explicit refresh. A direct Turn details bookmark does not fetch hidden folder data. Returning to a
+section retains the room cache, selected session, scroll and focus without fetching the thread.
+
+The shared modal mechanism now records the new project dialog's opener explicitly. The skip link targets
+the visible section outside Projects. Normal-zoom keyboard detection handles shrinking visual and layout
+viewports and orientation; zoom keeps the M9.1a layout freeze and does not disable pinch zoom. The phone
+Projects badge retains its SVG icon. Safe-area bottom-bar targets remain above the inset. Composer spacing
+is compacted, with its original literal/mention/slash parsing and automatic multiline growth preserved.
+
+The per-agent view is **Turn details**, with the same `#workspace`, `workspace-*`, `#/w/...`, content, privacy
+filters and `/classic?popout=` URLs. `workspace.js` and `decisions.js` are unchanged. The new project files
+placeholder uses `project-files-empty`. Outcome branch wording such as "Workspace open" is deliberately
+unchanged: it describes the branch outcome, not the renamed inspection view.
+
+### Changed files and boundary review
+
+- `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `composer.js`, `shell.js`,
+  `thread.js`, `members.js`, and new flat `sections.js`.
+- Frontend tests only: `tests/test_chat_ui.cjs`, `tests/chat_screenshots.cjs`, `tests/fixtures.cjs`.
+- `README.md`, `agent-autonomy/README.md`, `CURRENT_STATE.md`, this report.
+- Architecture: only §10 and the authorized shipping notes/vocabulary in §9/§11. D8–D12, all invariants
+  and every backend/API/schema/approval contract are unchanged.
+
+No `.py`, Python test, classic product file, journal, state or fixture backend changed. No new endpoint,
+runtime dependency, external font, engine behavior, interactive surface, agent record or memory store.
+
+### Authorized earlier assertion changes — exact names, before and after
+
+Only D10/P-12 placement/geometry and D11 visible inspection vocabulary were changed. All other assertions
+in these tests remain, including request counts/bodies, identity, focus, privacy, server authority and paging.
+
+| Existing DOM test name | Before | After |
+|---|---|---|
+| `M3 kinds, progressive detail, roles, receipts and unknown kinds` | Inspection link text `Open workspace` | `Open turn details`; identical `#/w/run_test/coder-1` assertion |
+| `M6 keyed panel and rail items retain focus and scroll through recorded updates` | Connections summary inspected in the rail | Navigate `#/settings` before inspecting the same summary; all node identity/scroll/focus assertions retained |
+| `M6 Connections display per-service symbols, labels and exact shared-lock check` | Inspect/check Connections in the rail | Navigate `#/settings`; same labels, shared lock, disabled composer/decisions, duplicate-tap suppression and exact `/api/check {}` |
+| `M6 Connections check is disabled by decisions and composer writes and shows errors` | Check Connections in the rail during each write and refusal | Navigate `#/settings`; same disabled/one-write/error assertions |
+| `M6 keyed updates preserve every More link and focus the latest recorded task turn` | Six stable links under `#more a` | Six stable links under `#section-nav [data-section]`; exact latest-task focus assertion unchanged |
+| `M7 B room, live members and tasks link into Workspace while proposed agents do not` | `Open workspace` / task `Workspace` | `Open turn details` / `Turn details`; all route, proposed-member exclusion and zero-POST assertions unchanged |
+| `M8 C phone rail and context sheets trap focus and restore visible openers` | Last drawer control `#more > summary` | Last drawer control `#refresh-folders`; same trap, inert background, Escape, opener and context-tab behavior |
+| `M8 D all token text, boundary and focus colour contrasts meet their measured thresholds` | 52 pairs in light+dark | 26 pairs in dark only (D9); every text ≥4.5 and boundary/focus ≥3 threshold retained |
+| `M9.1 B each turn has one visible summary Workspace link with its exact route` | `Open workspace` | `Open turn details`; one visible link, outside Details, exact route and no POST unchanged |
+| `M9.1 B rail and session menu link only the active recorded members to their Workspaces` | `Open workspace`, menu `Workspaces` | `Open turn details`, menu `Turn details`; Hermes `Open log`, exact routes, both entry links and decision exclusions unchanged |
+| `M9.1 B Workspace navigation from the drawer restores its visible opening link without a write` | Capture total requests immediately after opening the old drawer | Allow the authorized one-shot browse to settle before capture; subsequent Turn details opening/Back still adds **zero** requests, returns the identical opener and makes zero POST |
+
+Harness additions load `sections.js` and return the real browse/skills response shapes. No earlier Python
+or classic test changed. All M3.1/M6/M8 session union/count/disclosure/paging assertions are unchanged.
+All M9.1a F3 menu identity, closed/removed opener and closed-context assertions are unchanged.
+
+Browser updates, by function/case name:
+
+| Existing function/cases | Before | After |
+|---|---|---|
+| `matrixViewports` and the main state matrix | Seven viewports, light and dark: 672 combinations | Add `handoff` 1280×800, `boundary` 720×900, `boundary-phone` 719×900; dark only: 480 existing combinations plus 60 new section combinations = 540 |
+| `deviceDiscoveryCases` / `device-menu-workspaces` | Visible menu heading includes `Workspaces`; four light/dark rows | `Turn details`; two dark rows. Every request, focus/Back/Escape and recorded-member assertion retained |
+| `deviceViewportCases` / `context sheet within panned viewport` | Phone context height ≤75% of keyboard viewport | Phone full-screen context height ≤100%, tablet remains ≤75%; bottom/centre assertions retained |
+| `deviceViewportCases` / `close keyboard restores footer geometry` | Footer bottom equals full viewport bottom | Below 720, footer bottom equals viewport bottom minus the 64px bar; tablet/landscape unchanged; keyboard-open footer and zoom checks retained |
+| `layoutCheck` | The old rail toggle is `#open-rail` | Visible toggle is `#open-rail` or `#open-section-panel`, according to section; same centred overlays, target, label, focus and overflow assertions |
+| Main matrix / `connections` | Expand Connections in the Projects rail and budget the visible room footer | Open Settings › Connections and retain exact service assertions; room-only budgets run in Projects, whose room is hidden in Settings |
+| Main matrix / desktop `workspace*` geometry | Width formula uses `#rail` width 260 | Uses `#section-nav` width 76; secondary hidden, same ≥420 thread and exact `min(960,width−rail−420)` pane assertion |
+| Main matrix / phone footer, plus `decisionQuestion` command-error recovery | Waiting footer ≤120, portrait conversation ≥65% | Waiting footer ≤112, portrait conversation ≥55% (D10); idle ≤72, waiting row dimensions/baseline, newest-message visibility, overflow and pointer recovery retained |
+| `deviceDiscoveryCases` / initial phone footer | Phone ≤120 | ≤112; landscape ≤112 unchanged |
+| `accessibilitySpots`, `emptyHistoryCases`, `phonePanelCases`, `keyboardPaths`, `deviceViewportCases`, `deviceDiscoveryCases`, main matrix | Light and dark rows | Dark-only rows (D9), with all behavioral cases and thresholds retained. Result counters now report actual dark-only cases |
+
+**Cutover smoke:** still exactly five cases; **no selector changes**. The preserved `#rail`, `#workspace`
+and pop-out controls let its existing selectors and all classic checks carry over unchanged.
+The accepted M9 scratch walkthrough's obsolete six-link More placement check now inspects the six section
+links; composer Settings' two classic fallback link assertions are unchanged. The eight core steps are unchanged.
+
+### New regressions
+
+18 new DOM tests cover six-section order/icons/labels/current route/AC/key avatar; every route and unknown
+fallback; all honest placeholders and absence of sample names or messages; three Memory scopes; hostile
+markup/long/RTL skill descriptions with library-only output; escaped folders/current pin/breadcrumbs/local
+search; exact switch/create bodies, confirmations, required/read-only fields, duplicate taps, shared locks
+and literal refusal text; waiting badge/count/locate recovery in every section; both key stores and stream
+abort on sign-out; Team chip and preserved parsers; room scroll/focus and selected-session return without
+thread GETs; read serialization/no polling; normal-zoom keyboard/orientation and pinch protection; project
+modal trap/Escape/focus return; visible-section skip navigation; hidden-panel read boundaries.
+
+Browser additions cover all six sections at all ten widths; icon visibility, active selection, 200% text zoom,
+forced colours, phone safe-area bar geometry, tablet/phone panel traps, project-dialog Cancel/Escape/focus,
+waiting discovery, keyboard bar hiding and unchanged room behavior. The isolated fixture exercises all six
+sections, real git project creation, switch-back and Forget/reconnect. Its temporary root is removed on exit.
+
+### Verification
+
+All checks below ran against the N1 working tree; no earlier milestone result substitutes for these runs.
+
+| Suite | Command | Result / log |
+|---|---|---|
+| Python, unchanged | `python3 -m unittest discover -s agent-autonomy/tests -v` | **424 tests, OK (skipped=3), 260.354 s**, first N1 full attempt; `/tmp/ac-n1-python.log` |
+| Classic, unchanged | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_ui.cjs` | **82/82**; `/tmp/ac-n1-classic.log` |
+| Chat DOM | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs` | **273/273** (255 carried over + 18 new); `/tmp/ac-n1-chat-final-tree.log` |
+| Routes, unchanged | `PYTHONPATH=agent-autonomy:agent-autonomy/tests python3 -m unittest -v test_chat_routes` | **4/4**, 4.148 s; `/tmp/ac-n1-routes-verified.log` |
+| Complete browser matrix | `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-n1-final-tree` | **540 combinations + 46 regression cases, 814 screenshots**; `/tmp/ac-n1-browser-final-tree.log` |
+| Real-server walkthrough | `NODE_PATH=/tmp/ac-tests/node_modules node /tmp/ac-n1-real-check.cjs` | **8/8** core steps, **67 GET / 8 POST**; `/tmp/ac-n1-real-release.log` |
+| Isolated device fixture | Included in the complete browser command | **9 cases**: all six sections, create, switch-back, Forget/reconnect; `/tmp/chat-shots-n1-final-tree/n1-fixture-results.json` |
+
+**Gates, not passes:** the unchanged Python suite skipped
+`test_container_e2e.ContainerRunE2E.test_agent_works_in_a_locked_down_container` (requires
+`AGENTCONTROL_CONTAINER_TESTS=1`, runtime and image),
+`test_preview.DesktopTests.test_desktop_preview_shows_frames_and_accepts_input` (desktop tools missing),
+and `test_vm_e2e.VMRunE2E.test_agent_works_in_a_kvm_clone` (requires
+`AGENTCONTROL_VM_TESTS=1` on a KVM host). The three real-OpenCode tests ran and passed.
+No Python timing failure occurred in this N1 run; no isolated timing retry or full-suite retry was needed.
+The established lifecycle sampling, fixed-timeout workflow/team and asynchronous VM log races were not
+changed or weakened. Python ran after the browser and fixture runs had ended.
+
+**Retries and corrections:** the first focused routes attempt failed at socket setup with four sandbox
+`PermissionError`s; the same unchanged command passed outside the sandbox. Chromium and socket-based
+checks ran with the required execution permission. This was a permission retry, not an environment skip.
+Development DOM/browser attempts exposed old location/text assumptions and real new-shell defects:
+room scroll restoration, project-dialog opener restoration, short-keyboard timeline padding, phone Team
+chip spacing, footer status/recovery placement, and the obscured Projects icon. These were fixed before
+the final passing runs. The original literal multiline draft, automatic growth and fatal footer assertions
+were retained. No browser failure was made non-fatal or concealed with an arbitrary wait. Final matrix
+checks also require bottom-bar targets to fit above a 20px safe-area inset.
+
+The dark-only main matrix is **48 existing states × 10 viewports = 480**, plus **6 sections × 10 = 60**.
+All 46 remaining regressions are fatal, including five cutover smoke cases and nine isolated fixture cases.
+All **26** contrast pairs retain text ≥4.5:1 and boundary/focus ≥3:1; targets ≥40px and inputs ≥16px,
+keyboard workflows/traps, reduced motion, forced colours and 200% text zoom pass. User pinch zoom is
+preserved, and the bottom bar hides with the keyboard at normal zoom.
+
+Actual screenshots of **every section at 1280×800 and 390×844** were inspected, together with the tablet,
+719/720 boundary, phone landscape, Turn details and 200% text-zoom renders. Final artifacts are in
+`/tmp/chat-shots-n1-final-tree` (`n1-<section>-handoff.png`, `n1-<section>-phone.png`,
+`section-<section>-text-zoom-dark.png`). These renders contain only disposable test data.
+`footer-measurements.json` records 47 room cases per phone orientation: portrait **57px idle / 105px
+waiting**, conversation **≥68.95%**; landscape **59px / 107px**, conversation **≥57.82%**.
+The waiting row is 40px and the bottom bar is 64px; all approved P-12 budgets pass.
+
+### Real-server walkthrough (final run)
+
+Real `app.handler` and `Controller`, existing workflow/team test fakes, one temporary git project/state and
+throwaway key; cleanup verified. `/tmp/ac-n1-real-release.log`, `/tmp/ac-n1-real-results.json` and
+`/tmp/ac-n1-real-server.py` / `/tmp/ac-n1-real-check.cjs` record exact requests and receipts.
+
+| Step | GET | POST |
+|---|---:|---:|
+| Start | 8 | 1 |
+| Critical typed approval | 3 | 1 |
+| Question answer | 6 | 1 |
+| Start team and approve recorded proposal | 21 | 2 |
+| Watch live Turn details grow | 8 | 0 |
+| Verify now | 10 | 1 |
+| Apply | 3 | 1 |
+| Follow-up | 8 | 1 |
+| **Total** | **67 (64 API fetches + 3 event streams)** | **8** |
+
+All fully paged before/after checkpoints preserve waiting = actionable non-outcome messages and decision
+cards = actions + actionable outcomes. Unapproved agents remain proposed, verification is recorded server
+status/time, critical permissions retain typed confirmation, Apply retains explicit confirmation, and
+Turn details opening adds zero requests.
+Reasoning is absent; raw output stays confined to Turn details. Only `/` is loaded during the eight steps.
+Boot is 21 GET/0 POST: M9's 19 plus the flat `sections.js` asset and one authorized desktop panel browse.
+There are no additional steady-state or per-step reads. Auto explanation remains a separate 2 GET/1 POST
+check. Separate same-key classic smoke is 9 GET/0 POST; all five cutover smoke cases remain fatal and passing.
+
+### Limits and exclusions
+
+This implements N1 only. Persistent agent/Primary/Direct backend records, Memory, file browsing, skill
+assignment and new orchestration remain unavailable. Interactive surfaces remain in classic. The intentionally
+excluded in-flight skill-fetch race remains excluded; D7 and M5.0 are unchanged. No new physical iOS/Android
+keyboard or assistive-technology testing is claimed. Historical owner G3 evidence is not new N1 evidence.
+Native device behavior should be rechecked on the new shell before treating it as newly verified.
+No scope or authorization deviation; no backend, classic or protected test was weakened. Stop for independent
+Opus review; do not start N2 or merge into main.

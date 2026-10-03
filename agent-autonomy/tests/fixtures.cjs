@@ -331,7 +331,7 @@ function contrastReport(source) {
   const blocks=[...source.matchAll(/:root\s*\{([^}]+)\}/g)].map(match=>Object.fromEntries([...match[1].matchAll(/(--[\w-]+)\s*:\s*([^;]+)/g)].map(m=>[m[1],m[2].trim()])));
   const luminance=hex=>{const rgb=hex.replace('#','').match(/../g).map(v=>parseInt(v,16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;};
   const result=[];
-  for(const [appearance,tokens] of [['light',blocks[0]],['dark',{...blocks[0],...blocks[1]}]]){
+  for(const [appearance,tokens] of [['dark',blocks[0]]]){
     const pairs=[];for(const fg of ['text','muted','accent','warning','danger','success','border','focus'])for(const bg of ['bg','surface','rail'])pairs.push([fg,bg,['border','focus'].includes(fg)?3:4.5]);pairs.push(['warning','warning-bg',4.5],['accent','accent-soft',4.5]);
     for(const [fg,bg,minimum] of pairs){const a=luminance(tokens['--'+(fg==='focus'?'accent':fg)]),b=luminance(tokens['--'+bg]);result.push({appearance,foreground:fg,background:bg,minimum,ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)});}
   }

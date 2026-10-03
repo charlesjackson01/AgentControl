@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (owner approved P-1, P-11 (a), P-12, P-13, P-14 and the N sequence; N1 ready for Codex).
+**Last updated:** 2026-10-03, by Codex (N1 implemented and verified; independent Opus review pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_SHELL_AND_NAVIGATION.md`, **ready for Codex** (start conditions met 2026-10-03). `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
+| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_SHELL_AND_NAVIGATION.md`, **implemented and verified; Opus review pending** (start conditions met 2026-10-03). `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
 | Persistent agents (proposal; approved parts recorded as D8–D12 and §12.2 in the architecture) | `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`; inputs `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and `docs/inputs/agentcontrol-ui.html` (visual reference only; not served, not reused) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
@@ -42,14 +42,14 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; keyboard viewport handling with pinch-zoom freeze; visible waiting/Workspace links; isolated fixture; reliable focus return. **Owner-reported iPhone 17 Pro / Safari checklist passed; Android Chrome not performed (owner-accepted gap)** |
 | R1 Persistent bots | roadmap; **N series proposed** | owner | architecture §12.1. Realised by the proposed N series (N1–N7, N-ORCH separate) |
 | **N0 Persistent agents: architecture and requirements** | ✅ **N1-gating decisions approved 2026-10-03**; P-2 to P-10, P-15 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. Approved: P-1 (D8 scope), P-11 (a) (D9 dark-only), P-12 (D10 N1 test policy), P-13 (D11 vocabulary and routes), P-14 (D12 handoff over mock), and the N sequence (§12.2). No code, schema or database changes |
-| **N1 Shell and navigation** | 📋 **ready for Codex** (not started) | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section shell from existing data and endpoints only; dark-only tokens; no Python change. Acceptance: `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and §B |
+| **N1 Shell and navigation** | **implemented and verified; Opus review pending** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section shell from existing data and endpoints only; dark-only tokens; no Python change. Acceptance: `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and §B |
 
-The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `shell.js`.
+The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `sections.js`, `shell.js`.
 `/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
 The room composer starts sessions and follow-ups, sends notes and offers the M4 controls through existing endpoints.
 Actionable cards now expose the M5 permission, question, team, research, skill and outcome decisions in the room.
 Classic remains the fallback for truncated or unsupported review at `/classic` and `/classic/`. Root URLs with a
-`popout` query retain classic compatibility; chat Workspace pop-outs use `/classic?popout=…&run=…`.
+`popout` query retain classic compatibility; chat Turn details pop-outs use `/classic?popout=…&run=…`.
 The new read-only endpoints project the journal with bounded messages, stable ids/revisions and cursor paging.
 The timeline and channel rail consume `/api/thread` and `/api/channels`; `/api/state` supplies live members and Connections; a guarded historical read supplies selected team details. The rail combines live runs with loaded thread sessions. The client retains only a page-lifetime read cache, with no writable message store or local submission echoes. Allowed Settings preferences use `acx-settings`; unsent drafts use session-only `acx-draft`.
 M4.1 cleans legacy stored titles/checks, preserves per-session fields on failed starts, and clears them after success
@@ -255,9 +255,8 @@ was changed.
    chat **255/255**, cutover smoke **5/5**, and a real-server route probe. The full matrix ran on the identical tree at
    `f45c112`. The merge-status record was then merged as well (`main` = `d1f4733`).
 4. **N0: the owner approved P-1, P-11 (a), P-12, P-13, P-14 and the N sequence (2026-10-03).** They are recorded as
-   D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. The §9 and §11 amendments take effect when N1 ships, and N1
-   rewrites §10.
-5. **Next: Codex implements N1** (`docs/handoffs/N1_SHELL_AND_NAVIGATION.md`), then stops for Opus review. No backend
+   D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. N1 applies the §9 and §11 amendments and rewrites §10.
+5. **Next: Opus independently reviews N1** (`docs/handoffs/N1_SHELL_AND_NAVIGATION.md`) after verification and push. No backend
    change, and no merge into `main`.
 6. **Still the owner's:**
    - P-2 to P-10 and P-15, needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards
@@ -384,3 +383,22 @@ The VM console test asserts the final three entries of a log that a background p
   cutover smoke **5/5**, full matrix **672 combinations + 66 regressions, 1,168 screenshots**.
 - Codex's documented VM race (unchanged protected test, retried green) is not a Part B defect. Android Chrome
   remains an owner-accepted untested gap. Neither main nor classic retirement is authorised.
+
+## N1 shell and navigation (2026-10-03)
+
+Six dark sections now surround the existing room: Primary, Agents, Projects, Workspace, Skills and Settings.
+Projects retains its timeline, waiting markers/counts, decision cards/dialogs, session controls and composer.
+Sessions and the live roster are in its 300 px panel; Connections is in Settings. The shared skills catalog is
+read-only. Project creation/switching uses the existing endpoints, confirmations and shared write lock.
+Primary, persistent Agents, Direct conversations, file browsing, skill assignment and the three Memory scopes
+are visibly unavailable. The former per-agent Workspace is Turn details; its routes, identifiers, data, privacy
+boundaries and classic pop-out behavior remain. No Python, schema, engine, journal or classic product file changed.
+
+Final verification: Python **424 tests, OK (3 environment-gated skips), 260.354 s**, first N1 full attempt;
+classic **82/82**, chat **273/273**, unchanged routes **4/4**. Browser **540 combinations + 46 regression cases,
+814 screenshots**; all ten widths, keyboard/zoom/contrast checks and five cutover smoke cases pass.
+Real-server tour retains **67 GET (64 API + 3 SSE) / 8 POST**; fully paged waiting/card invariants pass.
+The isolated fixture passes all six sections, real project create/switch-back and Forget/reconnect.
+Exact commands, logs, authorized assertion replacements and gated tests are in the N1 completion report.
+New physical-device testing has not occurred.
+N2 and all unapproved persistent-agent backend work remain out of scope. Stop for Opus review; no merge into main.

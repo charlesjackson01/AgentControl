@@ -6,6 +6,7 @@
   let key = read('localStorage',storageKey) || read('sessionStorage',storageKey) || '';
   let state = null, focused = '', refreshing = false, again = false, scheduled = null, poll = null, retry = null, abort = null, epoch = 0, failures = 0;
   let channels = null, threadCache = null, single = null, olderTask = null;
+  let viewReads=Promise.resolve(), activeView=null, readWaiters=[];
   let writeOwner = '', readSerial = 0, readIds = [];
   const refreshTargets = new Set();
   let live = 'Reconnecting…', error = '', authError = '';
@@ -33,6 +34,7 @@
     poll = setTimeout(async()=>{await refresh(); schedulePoll();},active ? 2000 : 10000);
   }
   async function refresh() {
+    if(activeView)await activeView.catch(()=>{});
     if (!key) return;
     if (refreshing) { again = true; return; }
     refreshing = true;
@@ -91,12 +93,13 @@
       state = stateResult;
       error = '';emit();
     } catch {} finally {
-      refreshing = false;
+      refreshing = false;readWaiters.splice(0).forEach(resolve=>resolve());
       if (again) { again = false; scheduleRefresh(); }
       schedulePoll();
     }
   }
   async function loadOlder() {
+    if(activeView)await activeView.catch(()=>{});
     if (olderTask) return olderTask;
     const target = single || threadCache;
     if (!target?.before) return false;
@@ -190,9 +193,12 @@
     return {update,retry,getState:()=>({data,selected,loading,error,errorStatus})};
   }
   function focus(id, refreshOnChange=true) { if (id !== focused) { focused = id; single = null; if(refreshOnChange)scheduleRefresh(); } }
+  function readView(path) {
+    const task=viewReads.catch(()=>{}).then(async()=>{if(refreshing)await new Promise(resolve=>readWaiters.push(resolve));if(olderTask)await olderTask.catch(()=>{});if(!key)return null;const generation=epoch;activeView=api(path);try{const result=await activeView;return generation===epoch?result:null;}finally{activeView=null;}});viewReads=task;return task;
+  }
   function post(path,body) { return api(path,'POST',body); }
   function refreshNow(messageId) { if(messageId)refreshTargets.add(messageId);clearTimeout(scheduled);scheduled=null;return refresh(); }
-  const core = {selectedSession,api,post,beginWrite,endWrite,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
+  const core = {readView,signOut(){rejectKey('');},selectedSession,api,post,beginWrite,endWrite,refreshNow,loadOlder,locateSession,locateWaiting,subscribe(fn){listeners.add(fn);return ()=>listeners.delete(fn);},getState,start,connect,focus,refresh,scheduleRefresh,handleEventBlock,stop,read,write,dismissError(){error='';emit();}};
   root.AC = root.AC || {}; root.AC.core = core;
   if (typeof module !== 'undefined' && module.exports) module.exports = core;
 })(typeof window !== 'undefined' ? window : globalThis);

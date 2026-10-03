@@ -271,12 +271,16 @@
     sheet.addEventListener('click',event=>{const node=event.target.closest('button');if(node?.id==='close-settings'){closeSettings();input.focus();}if(node?.id==='add-goal-check' && (currentSettings().goal_checks || []).length<limits.checks){setSetting('goal_checks',[...(currentSettings().goal_checks || []),'']);renderChecks();$('goal-checks').lastElementChild?.querySelector('input').focus();}if(node?.dataset.removeCheck!==undefined){setSetting('goal_checks',currentSettings().goal_checks.filter((_,i)=>i!==Number(node.dataset.removeCheck)));renderChecks();}});
     $('settings-scrim').addEventListener('click',()=>{closeSettings();input.focus();});
     sheet.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeSettings();input.focus();}if(event.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,input,select,summary,a')].filter(n=>!n.disabled && !n.closest('[hidden]') && (!n.closest('#settings-advanced') || $('settings-advanced').open || n.tagName==='SUMMARY'));const i=nodes.indexOf(document.activeElement);if(event.shiftKey && i===0 || !event.shiftKey && i===nodes.length-1){event.preventDefault();nodes[event.shiftKey?nodes.length-1:0]?.focus();}}});
+    let keyboardBaseline=0,keyboardWidth=null;
     if(root.visualViewport){
       const viewport=()=>{
         const vv=root.visualViewport;if(Math.abs((vv.scale || 1)-1)>=0.01)return;
         const room=$('timeline'),scroll=room.scrollTop;
         const following=room.scrollHeight-scroll-room.clientHeight<=32;
         viewportHeight=vv.height;
+        const width=root.innerWidth || vv.width;if(width!==keyboardWidth){keyboardWidth=width;keyboardBaseline=0;}
+        keyboardBaseline=Math.max(keyboardBaseline,root.innerHeight || vv.height,vv.height);
+        $('app').classList.toggle('keyboard-open',keyboardBaseline-vv.height>120);
         document.documentElement.style.setProperty('--viewport-height',viewportHeight+'px');
         document.documentElement.style.setProperty('--viewport-top',(vv.offsetTop || 0)+'px');
         resize();

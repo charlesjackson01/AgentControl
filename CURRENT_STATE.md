@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (M9 Part B accepted; M9 complete. No merge into main or classic retirement).
+**Last updated:** 2026-10-03, by Opus (owner-authorised merge into `main` at `1e1d1b4`; classic not retired).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -8,8 +8,8 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
 | | |
 |---|---|
-| Working branch | `feature/chat-first-redesign`. All redesign work goes here; **never merge into `main`** |
-| `main` | `9c20d73`, untouched by the redesign |
+| Working branch | `feature/chat-first-redesign`. All redesign work goes here; **merge into `main` only with the owner's explicit authorisation** |
+| `main` | `1e1d1b4`: owner-authorised `--no-ff` merge (2026-10-03) of accepted `f45c112` into `9c20d73`; tree identical to `f45c112` |
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
@@ -246,9 +246,13 @@ was changed.
      (no device).
 2. **M9 Part B is accepted (Opus, 2026-10-03); M9 is complete.** No Blocking or Should-fix findings. See the
    review section at the end of the M9 handoff.
-3. **The next step is the owner's.** No milestone is authorised. Merging into `main` and retiring classic remain
-   separate owner decisions, and neither is authorised. Opus recommends deciding the `main` merge first, with
-   classic kept at `/classic`.
+3. **Merged into `main` (owner authorisation, 2026-10-03).** `main` is `1e1d1b4`, a `--no-ff` merge of accepted
+   `f45c112`. Routing is preserved (chat `/`, alias `/chat`, classic `/classic` and `/classic/`, root
+   `/?popout=` compatibility). Post-merge on `1e1d1b4`: Python **424, OK (skipped=6, all gates)**, classic **82/82**,
+   chat **255/255**, cutover smoke **5/5**, and a real-server route probe. The full matrix ran on the identical tree at
+   `f45c112`. `main`'s own copy of this file predates the merge record.
+4. **The next step is the owner's.** No milestone is authorised. Retiring classic, native surfaces (G2), R1 and the
+   VM test-robustness change each need a separate owner decision.
 
 Still deferred:
 - native surface viewing and input (G2)

@@ -1300,3 +1300,68 @@ After:
  if(process.argv.includes('--n11-layout-only')){
 ```
 
+
+---
+
+## Review of N1.2 — 2026-10-03 (Opus)
+
+**Verdict: N1.2 is accepted.** The Projects screen now matches the owner's model: rail, project list, team thread,
+composer, with details on demand and each approval rendered once. With this, N1's design acceptance is restored. No
+Blocking or Should-fix findings. Reviewed `f135bb3` and `450165e` against `c26c882`, implemented by a separate Claude Code
+session while Codex was out of usage. **No `.py`, Python test, classic or state file changed.**
+
+| Check | Result (this review) |
+|---|---|
+| Browser matrix, normal pass | **540 combinations + 157 regressions, 830 screenshots** |
+| Browser matrix, required 0.06em wide-font pass | **540 + 157, 830 screenshots** |
+| Chat DOM / classic / routes | **278/278**, **82/82**, **4/4** |
+| Python | **424, OK (skipped=6)**, first attempt; all 6 are gates |
+| Retired tests | 6, each in a category the handoff authorised (sessions list and disclosure, rail waiting link, summary card). The pointer tests were rewritten to use the Projects count, not dropped |
+| New DOM tests | 9, matching the handoff's list |
+
+**Independent real-server probe** (isolated `device_fixture.py`, temporary root and throwaway key, 1280×800 and 390×844):
+- `#waiting`, `#waiting-pointer`, `#rail-waiting-link` and `#project-summary` are absent. The panel contains only "Projects"
+  and project rows.
+- The **only** visible waiting cue outside the cards is the Projects badge, labelled "Projects, 2 waiting for you". The one
+  other "2 waiting for you" text is `#waiting-live`, the 1×1px screen-reader-only polite announcement from M8; it is not
+  drawn and is correct.
+- No visible classic link on the Projects screen.
+- No "Reconnecting…" while live. The harness renders show it only because the harness deliberately fails the live stream.
+- Session details is closed on load **and after following a `#/s/<id>` link**.
+- Zero POSTs and no page errors.
+
+**Renders inspected against handoff §2, in both passes:**
+- `n12-projects-1280-idle`, `-waiting`, `-details-open`
+- `-390-waiting`, `-320-waiting`
+- `-1280-zoom200-waiting`, `-zoom200-details-open`
+- `n12-plus-menu`, `n12-open-folder`
+
+What they show:
+- At 200% the rail grows and labels stay whole words.
+- At 320 and 390 the composer uses two rows and the bar shows icons plus the active label.
+- Details is an overlay that does not reflow the thread.
+- "+" offers Create project and Open folder….
+
+**Decisions the implementer flagged, all accepted:**
+- **Phone portrait footer.** It is 103px (previously 57px idle and 105px waiting), and the old portrait 72px idle limit is
+  now 112px. This follows directly from the handoff's two-row composer below a 600px room. D10's portrait rule
+  (conversation at least 55%) holds at about 73%. Landscape stays at 59px, within D10's 72px. Recorded in the architecture
+  change log.
+- **The "Cannot review this approval here · Open in classic" fallback** appears only on cards whose action this screen
+  cannot perform, as D13 allows.
+- **Details** covers the active session when none is selected. Route changes close it; returning from Turn details restores
+  it.
+- **The Agents section's "Session details" link** now focuses the Details button instead of opening the panel itself.
+
+**Optional, for the owner's judgement; not blocking:**
+- **O8.** A session block's header still shows the session's recorded status, "! Waiting · just now". It is the session
+  state, not the approval, but it can read as a second marker. If preferred, the header could show "Waiting" without the
+  "!" symbol and leave the "!" to the card.
+- **O9.** Session details' Team tab shows "Go to waiting item" for the member awaiting you. It is visible only while the
+  details are open on demand, but it is another pointer.
+- **O10.** The session block's title and status sit flush against its left border (no inner padding). Cosmetic, and it
+  predates N1.2.
+- O1, O3 and O4 from the N1 review remain. O6 and O7 are superseded.
+
+**No physical-device testing is claimed.** A phone recheck of the new screen is advisable before treating native behaviour
+as verified.

@@ -739,3 +739,4 @@ unchanged.
   ships. P-2 to P-10 and P-15 remain pending; invariants 1, 2 and 8 are unchanged.
 - 2026-10-03 (N1 re-review): **N1 accepted** at N1.1 `99b4c7d`. §9 (D9), §10 and §11 (D11) describe the shipped shell. A complete browser run now requires a fatal 0.06em wide-font pass, so text-fit checks no longer depend on installed fonts.
 - 2026-10-03 (owner design review of N1): **D13 approved.** The Projects screen becomes rail, project list, team thread and composer, with details on demand and one rendering per approval (N1.2). N1's technical acceptance stands; its design acceptance is reopened until N1.2 is accepted.
+- 2026-10-03 (N1.2 review): **N1.2 accepted; D13 is implemented.** As a direct consequence of D13's two-row composer below a 600 px room, the phone portrait footer limit is ≤ 112 px (was 72 px idle); D10's portrait rule (conversation ≥ 55 %) and the landscape limits (idle ≤ 72 px) are unchanged.

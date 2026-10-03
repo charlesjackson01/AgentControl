@@ -708,3 +708,4 @@ unchanged.
 - 2026-10-03 (owner decisions): **P-1, P-11 (a), P-12, P-13, P-14 and the N sequence approved**, recorded as D8–D12
   and §12.2. §9 (D9) and §11 (D11) amendments take effect when N1 ships; §10 Layout is rewritten by N1 when the shell
   ships. P-2 to P-10 and P-15 remain pending; invariants 1, 2 and 8 are unchanged.
+- 2026-10-03 (N1 re-review): **N1 accepted** at N1.1 `99b4c7d`. §9 (D9), §10 and §11 (D11) describe the shipped shell. A complete browser run now requires a fatal 0.06em wide-font pass, so text-fit checks no longer depend on installed fonts.

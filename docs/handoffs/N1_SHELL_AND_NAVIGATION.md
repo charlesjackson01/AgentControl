@@ -847,3 +847,46 @@ or authorization behavior was redesigned. The existing in-flight skill-fetch rac
 Physical iOS/Android and assistive-technology testing is not claimed. Persistent Primary/Agents/Direct,
 Memory and project files remain unavailable; interactive surfaces remain in classic.
 Stop for Opus re-review after pushing only the feature branch.
+
+---
+
+## Re-review of N1.1 — 2026-10-03 (Opus)
+
+**Verdict: N1.1 is accepted, and N1 is complete.** B1, S1 and S3 are fixed (S2 was fixed in the first review). No Blocking or
+Should-fix findings remain. Reviewed `99b4c7d` against `65b07e2`: frontend and frontend tests only. **No `.py`, Python test,
+classic or state file changed.**
+
+| Check | Result (this review, same container that exposed B1) |
+|---|---|
+| Full browser matrix, as committed (normal pass, then the required wide-font child pass) | **Normal: 540 + 61, 821 screenshots. Wide (0.06em): 540 + 61, 821 screenshots.** Total 1,642, exit 0 |
+| Chat DOM | **275/275** (adds `N1.1 invalid and unassessed skills never claim an assessed risk` and `N1.1 Projects header and summary use the recorded singular and plural session counts`) |
+| Classic DOM | **82/82** |
+| Chat routes | **4/4** |
+| Python | **424, OK (skipped=6)**, first attempt. The 6 skips are gates (container, desktop preview, KVM, and three real-OpenCode tests with no binary here) |
+
+**How each correction was verified**
+- **C1 (B1).** The waiting strip and its controls may now wrap (`flex-wrap: wrap`, `overflow-wrap: anywhere`), while Turn
+  details keeps its one-row strip. The five B1 states pass the fatal 200% zoom check in both passes. The rendered
+  `n11-teamProposed-text-zoom-dark.png` (wide pass) shows "! 1 waiting for you ·" over "Open classic dashboard", unclipped.
+- **C2 (S3).** Navigation labels wrap instead of ellipsising. Every letter is visible at 320 and 390 in both passes
+  (`n11-navigation-narrow.png`, `n11-navigation-phone.png`).
+- **C3.** Every glyph gets 0.06em extra spacing through a test-only stylesheet, calibrated against "Workspace" and the
+  pointer text. Clip detection now covers `#section-nav a`, `#bottom-nav a` and `.target-chip`. A complete run spawns the
+  wide pass as a required child and fails if the child fails. The design does not depend on installed fonts.
+- **C4 (S1).** Low or Sensitive appears only for validated entries with an assessed `risk`. Invalid or unassessed entries
+  show "Risk: not assessed".
+- **C5.** The Projects header and summary use "1 session".
+
+**Python retries in the report.** Codex needed four full runs: the lifecycle sampling race, the VM console-log race, then six
+fixed-5-second workflow waits. Each failing test passed alone, and the fourth run was clean. No Python changed, and this
+review's single run passed first time. These are the pre-existing timing-sensitive tests already recorded for the owner; they
+are not an N1 regression.
+
+**Optional (carried, not blocking)**
+- **O7 (new).** `overflow-wrap: anywhere` breaks labels mid-word: "Workspac / e" at 390 with DejaVu Sans, and "Prim/ary",
+  "A/C" at 200% zoom. Suggested fix, best folded into the next shell-touching milestone: a soft hyphen in the visible label
+  (`Work&shy;space`), with `overflow-wrap: normal`, so it breaks as "Work-/space" and the accessible name is unaffected.
+- **O1, O3, O4 and O6** remain as recorded in the first review.
+
+**No physical-device testing is claimed.** The owner's G3 iPhone result predates the new shell. A device recheck of the new
+shell is advisable before treating native phone behaviour as verified.

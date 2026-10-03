@@ -890,3 +890,12 @@ are not an N1 regression.
 
 **No physical-device testing is claimed.** The owner's G3 iPhone result predates the new shell. A device recheck of the new
 shell is advisable before treating native phone behaviour as verified.
+
+---
+
+## Owner design review — 2026-10-03
+
+The owner found that the shipped screen reads as three dashboards in one frame: the old room was relocated rather than
+replaced. The tests passed, but the shape was wrong. **D13** was approved, and the correction is
+`docs/handoffs/N1_2_PROJECTS_SCREEN.md`. N1's technical acceptance stands; its design acceptance is reopened until N1.2 is
+accepted. O7 (mid-word label breaks) is superseded by D13's whole-word rule.

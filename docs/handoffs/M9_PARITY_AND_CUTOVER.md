@@ -874,3 +874,88 @@ engine, journal, adapter, schema, permissions, privacy or D7 changes. Main remai
 only `feature/chat-first-redesign`, then stop for Opus review. Classic stays supported; no retirement or merge.
 Android Chrome remains the owner's accepted untested gap, not a passing test. Native surfaces and persistent
 bots remain deferred, as does the intentionally excluded in-flight skill-fetch race.
+
+## Review of Part B — 2026-10-03 (Opus)
+
+**Verdict: Part B is accepted. M9 is complete.** No Blocking or Should-fix findings. Reviewed `6068f2d` against
+`ae4bcb8`; 11 files changed, exactly the §6 B scope.
+
+### Routes and compatibility
+
+- `app.py.do_GET` changes only its two entry conditions. Classic wins for `/classic`, `/classic/`, and `/` when the
+  query *contains* a `popout` key (`parse_qs(..., keep_blank_values=True)`, so empty values and percent-encoded keys
+  count). Plain `/`, `/chat` and `/chat/` serve chat. Both branches still go through `reply()`, so security
+  headers, the chat asset allow-list, API key checks, SSE and the preview origin are untouched.
+- `/classic/` is safe: classic `index.html` references its assets by absolute path (`/app.js`, `/app.css`,
+  `/themes.css`, `/workspace.js`, `/workspace.css`), so the trailing slash does not break relative resolution.
+- Classic's own pop-out builder (`workspace.js:337`) uses `location.pathname`, so it yields `/classic?popout=…`
+  from `/classic`, `/classic/?popout=…` from `/classic/`, and `/?popout=…` from a C1 root tab. All three serve
+  classic. Chat's only pop-out builder (`chat/workspace.js:5`) now emits `/classic?popout=…&run=…` with unchanged
+  encoding, target and rel. Every other chat fallback link is exactly `/classic`, which needs no change.
+- **Independent real-server probe** (disposable `device_fixture.py` on loopback, throwaway key):
+
+  | Request | Result |
+  |---|---|
+  | `/`, `/?run=x`, `/?notpopout=a`, `/chat`, `/chat/` | 200 chat |
+  | `/classic`, `/classic/`, `/classic?popout=coder-1&run=r`, `/classic/?popout=a` | 200 classic |
+  | `/?popout=coder-1&run=r`, `/?run=r&popout=`, `/?%70opout=a` | 200 classic (C1) |
+  | `/index.html`, `/chatx`, `/classicx` | 401, unchanged fall-through |
+  | `/api/state` without / with key | 401 / 200 |
+  | the five classic root assets | 200 with their MIME types |
+
+  The fixture exited 0 on SIGINT and removed its temporary root.
+
+### Tests
+
+- `test_chat_routes.py` meaningfully pins every branch above, including the negative case (`/?notpopout=`),
+  empty and encoded `popout`, security headers on both HTML forms, and classic asset bytes and types.
+- `test_chat_ui.cjs` changes only the two named exact href strings, as authorised. Nothing else in them changed.
+- The new `cutoverSmoke` is fatal and uses real HTTP. It clicks the actual chat Workspace link rather than
+  constructing the URL, checks the old root pop-out lands in classic's pop-out view, and checks the shared key, zero
+  POSTs and fixture cleanup. Its two harness-only corrections, made before it passed, are honestly reported and did
+  not touch product code or earlier assertions.
+
+### Independent results (this review)
+
+| Suite | Result |
+|---|---|
+| Python (`unittest discover`) | **424 tests, OK (skipped=6), 137.5 s**, first attempt |
+| Classic DOM | **82/82** |
+| Chat DOM | **255/255** |
+| Cutover smoke (`--cutover-only`) | **5/5** |
+| Full browser matrix + smoke | **672 combinations + 66 regressions, 1,168 screenshots**, first attempt |
+
+The six skips are gates, not passes: the container, desktop-preview and KVM tests, plus the three real-OpenCode
+tests, because this review container has no OpenCode binary. Codex's environment ran those three, and they passed.
+
+### VM race and Android gap
+
+- **VM console-log race (owner consideration, not a Part B defect).** Codex's first full run failed
+  `test_vm.VMRunTests.test_console_input_is_checked_and_audited` because a background `push(...)` entry landed
+  inside the asserted three-entry suffix. The test is protected and unchanged, it passed alone, and the full retry
+  passed. My full run passed first time. The cutover diff touches nothing on the VM or journal paths. This is now
+  the fourth recurrence (M7, M8, M9 Part 0, M9 Part B). The test asserts a suffix of a log that a background thread
+  also appends to, so a separately authorised test-robustness change should assert order among the console entries
+  rather than the log's final entries. It is not authorised here and does not block M9.
+- **Android Chrome** remains **Not performed**, an owner-accepted untested gap (no device). G3 rests on the owner's
+  iPhone 17 Pro / Safari report. Neither Codex nor this review claims device verification. Chromium emulation of
+  `interactive-widget=resizes-content` is the only Android-side evidence.
+
+### Documentation
+
+Both READMEs, architecture §5.1 and its change log, and the parity checklist describe the implemented routes
+accurately: chat at `/`, `/chat` as an alias, classic at `/classic` (with `/classic/`), the `/classic?popout=`
+Workspace link and C1 root compatibility. Classic-only controls are labelled as such. Parity stays
+17 Native / 54 Linked / 1 not ported / 0 Missing. Older `/?popout=` and "until M9" mentions remain only in
+historical plan text (CHAT-FIRST-PLAN, D3's original wording, the M7 record) and should stay as history.
+
+### Optional
+
+- **O1.** Codex's walkthrough evidence lives in `/tmp` on its machine and is not reproducible from the repo. The
+  route behaviour is independently reproduced above, and the eight-step walkthrough matches Part A's accepted
+  harness. No action is required.
+
+### Still not authorised
+
+Merging into `main`; retiring classic; native surfaces (G2); R1 persistent bots; the VM test-robustness change; the
+in-flight skill-fetch race (D7 boundary). Each needs a separate owner decision.

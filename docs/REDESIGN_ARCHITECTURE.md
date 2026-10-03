@@ -672,3 +672,6 @@ person's.
   Chat Workspace links use `/classic?popout=…`. No API, schema, engine, journal, approval, auth, preview-origin
   or classic-code changes. Android Chrome remains the owner's accepted untested gap. Await Opus review;
   merging into main and retiring classic remain separate decisions.
+- 2026-10-03 (M9 Part B review): **M9 is accepted.** Routes, C1 compatibility, the `/classic?popout=` Workspace link,
+  docs and tests verified independently, with no Blocking or Should-fix findings. Merging into `main`, retiring classic,
+  native surfaces (G2) and R1 remain separate owner decisions.

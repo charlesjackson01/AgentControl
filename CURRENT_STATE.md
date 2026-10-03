@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-02, by Codex (M9 Part B cutover complete and verified; awaiting Opus review).
+**Last updated:** 2026-10-03, by Opus (M9 Part B accepted; M9 complete. No merge into main or classic retirement).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Current:** `M9_PARITY_AND_CUTOVER.md` §5–§7, Part B cutover (complete; awaiting Opus review) |
+| Handoffs | `docs/handoffs/`. **Latest:** `M9_PARITY_AND_CUTOVER.md`, accepted 2026-10-03. No milestone is currently authorised |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
 ## Redesign progress
@@ -37,7 +37,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M6 Members and team** | ✅ **accepted (Part A `813fd9f`, M6 `7134ada`; review 2026-10-01)** | Codex | `docs/handoffs/M6_MEMBERS_AND_TEAM.md`: standalone Part A `813fd9f` fixes verification and alias drafts; recorded roster, separate proposed team, vertical task graph, Connections check and shared-history rail are complete. Final commit contains the completion report. No new APIs or panel decisions. S1 is corrected in M7 Part A: stopping plans are not pending, and every never-approved roster remains explicitly proposed |
 | **M7 Workspaces** | ✅ **accepted (Part A `fb8c90f`, M7 `9b97b51`; review 2026-10-01)** | Codex | `docs/handoffs/M7_WORKSPACES.md`: standalone Part A `fb8c90f` fixes S1; final commit `Add read-only agent Workspaces` contains the completion report. Parts B–D add read-only, POST-free `#/w/<run>/<agent>` Workspaces with turns, classic stages, terminal, changes, verification and recorded logs. Active data adds no read; historical data shares M6's one GET. Surfaces use the classic pop-out; native surfaces need their own handoff before M9 |
 | **M8 Phone and accessibility** | ✅ **accepted (A `68c7cab` … E `2741085`; review 2026-10-02)** | Codex | `docs/handoffs/M8_PHONE_AND_ACCESSIBILITY.md`: deferrals closed, tablet/landscape layouts, keyboard and focus trap, announcements, tested contrast (border tokens only), 672-combination matrix, `docs/DEVICE_CHECKLIST.md`. N1 (the rail disclosure when X > N) is corrected in M9 Part 0 `568534e` |
-| **M9 Parity and cutover** | ✅ Part 0 + A accepted; **Part B complete and verified, awaiting Opus review** | Codex, then the owner | All owner gates cleared at `ae4bcb8`; G2 (a) retains classic surfaces, G3 accepts Android Chrome as not performed. Plain `/` is chat; `/chat` aliases it; `/classic` and `/classic/` retain classic; root pop-out URLs remain compatible. 72 parity rows retain their statuses (17 Native, 54 Linked, 1 not ported, 0 Missing). No merge into main |
+| **M9 Parity and cutover** | ✅ **accepted (Part 0 `568534e`, A `1025518`, B `6068f2d`; review 2026-10-03)** | Codex, then the owner | All owner gates cleared at `ae4bcb8`; G2 (a) retains classic surfaces, G3 accepts Android Chrome as not performed. Plain `/` is chat; `/chat` aliases it; `/classic` and `/classic/` retain classic; root pop-out URLs remain compatible. 72 parity rows retain their statuses (17 Native, 54 Linked, 1 not ported, 0 Missing). No merge into main |
 | **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; keyboard viewport handling with pinch-zoom freeze; visible waiting/Workspace links; isolated fixture; reliable focus return. **Owner-reported iPhone 17 Pro / Safari checklist passed; Android Chrome not performed (owner-accepted gap)** |
 | R1 Persistent bots | roadmap only | owner | architecture §12.1; needs its own owner decisions; not part of M8 or M9 |
 
@@ -188,8 +188,7 @@ was changed.
   - **G1 is cleared** (17 Native, 54 Linked, 1 not ported; classic stays at `/classic`; C1 approved).
   - **G2 is approved: (a).**
   - **G3 is cleared by the owner:** iPhone 17 Pro / Safari passed; Android Chrome accepted as not performed.
-  - **Part B is complete and verified**, awaiting Opus review; no main merge or
-    classic retirement is authorised.
+  - **Part B is accepted (Opus, 2026-10-03)**; no main merge or classic retirement is authorised.
 - **M8 rail disclosure approved by the owner (2026-10-01).**
   - The behaviour:
     - "Showing X of N sessions" is hidden when every session is listed (X = N).
@@ -245,10 +244,11 @@ was changed.
    - **G2:** (a) approved
    - **G3:** cleared. iPhone 17 Pro / Safari passed; **Android Chrome was accepted by the owner as not performed**
      (no device).
-2. **Opus reviews M9 Part B.** The completion report records route,
-   compatibility, shared-key smoke and real-server walkthrough evidence.
-3. **Merging into `main` and retiring classic remain separate owner decisions**, and neither is
-   authorised.
+2. **M9 Part B is accepted (Opus, 2026-10-03); M9 is complete.** No Blocking or Should-fix findings. See the
+   review section at the end of the M9 handoff.
+3. **The next step is the owner's.** No milestone is authorised. Merging into `main` and retiring classic remain
+   separate owner decisions, and neither is authorised. Opus recommends deciding the `main` merge first, with
+   classic kept at `/classic`.
 
 Still deferred:
 - native surface viewing and input (G2)
@@ -256,7 +256,8 @@ Still deferred:
 - the in-flight skill-fetch race (the D7 boundary)
 - R1 persistent bots (the roadmap, architecture §12.1)
 
-Separately, for the owner: the timing-sensitive backend tests keep needing reruns (M7, M8).
+Separately, for the owner: the timing-sensitive backend tests keep needing reruns (M7, M8, M9 Part 0 and Part B).
+The VM console test asserts the final three entries of a log that a background push also appends to.
 
 ## M9.1 Part A verification (2026-10-02)
 
@@ -356,3 +357,16 @@ Separately, for the owner: the timing-sensitive backend tests keep needing rerun
 - READMEs and architecture routes updated; parity stays **17 Native / 54 Linked / one not ported / zero Missing**.
   Final results, harness corrections and evidence are in the appended M9 Part B report. Await Opus review;
   no merge into main, classic retirement, native surfaces or persistent bots.
+
+## M9 Part B review (Opus, 2026-10-03)
+
+- **Accepted; M9 is complete.** No Blocking or Should-fix findings. The `6068f2d` diff is the exact §6 B scope: two
+  entry conditions in `do_GET`, one chat href, the authorised tests, and docs.
+- Independent fixture probe: `/`, `/chat`, `/chat/` and unrelated root queries serve chat. `/classic`, `/classic/`,
+  `/classic?popout=…` and root `popout` queries (empty and encoded included) serve classic. API key checks and
+  classic assets are unchanged. Classic's pathname-based pop-outs work from every classic entry.
+- Independent results: Python **424, OK (skipped=6)** on the first attempt (container, desktop-preview and KVM gates,
+  plus the three real-OpenCode tests, since this container has no OpenCode binary). Classic **82/82**, chat **255/255**,
+  cutover smoke **5/5**, full matrix **672 combinations + 66 regressions, 1,168 screenshots**.
+- Codex's documented VM race (unchanged protected test, retried green) is not a Part B defect. Android Chrome
+  remains an owner-accepted untested gap. Neither main nor classic retirement is authorised.

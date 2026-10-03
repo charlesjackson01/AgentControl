@@ -1,0 +1,263 @@
+# N2: Agent library, projects and membership records
+
+**Status: DRAFT — two start conditions.**
+1. **N1.3 (Match the mock) is accepted**, so N2's screens are built in the final visual language.
+2. **The owner confirms the exact migration in §2.** D14 requires each milestone to restate its migration for confirmation.
+
+Approved decisions this implements: **D14–D19** (`docs/REDESIGN_ARCHITECTURE.md`), from N0's P-2, P-4, P-6, P-8, P-9 and P-15.
+Not approved, so N2 must not depend on them: P-3 (reply path), P-5 (concurrency), P-7 (membership binding) and P-10
+(memory). The implementer works on `feature/chat-first-redesign`, then Opus reviews. No merge into `main`.
+
+**Inputs:**
+- `docs/PERSISTENT_AGENTS_ARCHITECTURE.md` §4, §7, §8 and §10
+- `docs/handoffs/N0_DECISIONS.md` (P-2, P-4, P-6, P-8, P-9, P-15)
+- `docs/inputs/agentcontrol-ui-handoff1.md` (Agents, Projects and Skills sections)
+- the mock, for visuals
+- `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and §C (N2)
+
+## 1. Outcome
+
+The handoff's records exist and can be managed in the chat. Nothing executes differently yet.
+
+- **Agent library:** create, configure and archive specialists. Set up the one **Primary** record.
+- **Projects** become records:
+  - creation takes a directory (nested, inside the root) and members chosen from the library
+  - existing folders can be registered
+  - membership is stored and edited
+- **Skills:** assign catalogue skills to agents, and set **tool policy** (ask or deny per permission type) separately.
+- **Sessions are unchanged.** Hermes still chooses the agents. Membership is labelled **advisory** until N5.
+
+The handoff acceptance items this meets:
+- "Creating an agent adds a library entry and does not create a project."
+- "Creating a project creates a directory, stores membership, and opens the team thread."
+- "Skill assignment and tool permission can differ on the same skill" (stored here; enforced in N5).
+
+## 2. Migration `_v8` (for the owner's confirmation)
+
+**Naming correction.** Architecture §4 named the library table `agents`, but `agents` already exists (`_v2`, the per-run agent
+rows), so the library table is **`library_agents`**. Everything else is as in §4.
+
+Append exactly this as `_v8` to `journal.MIGRATIONS`. Never edit an applied migration.
+
+```sql
+CREATE TABLE IF NOT EXISTS library_agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memberships (id TEXT PRIMARY KEY, project TEXT NOT NULL, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS memberships_project ON memberships(project);
+CREATE TABLE IF NOT EXISTS skill_assignments (id TEXT PRIMARY KEY, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS skill_assignments_agent ON skill_assignments(agent);
+CREATE TABLE IF NOT EXISTS tool_policies (id TEXT PRIMARY KEY, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tool_policies_agent ON tool_policies(agent);
+```
+
+- No existing table, column, index or row changes, and no backfill.
+- An older build opening this journal applies nothing and ignores the tables (verified behaviour of `journal.migrate()`).
+- README: add "back up `state/autonomy.sqlite3` before upgrading" (stop the server first; the journal uses WAL).
+
+**Record values** (JSON in `value`):
+
+| Table | Value |
+|---|---|
+| `library_agents` | `id` (`ag_` plus 12 hex), `kind` (`primary` or `specialist`), `name`, `display_role`, `engine_type` (specialist only: `coder`, `tester`, `reviewer` or `researcher`), `model` (registry endpoint id or `null` for the default), `instructions`, `created`, `updated`, `archived` (`null` or a time) |
+| `projects` | `id` (`pr_` plus 12 hex), `path` (resolved, inside the projects root; also the unique column), `name`, `created`, `updated`, `archived` |
+| `memberships` | `id` = `<project>:<agent>`, `project`, `agent`, `active` (bool), `added`, `removed` |
+| `skill_assignments` | `id` = `<agent>:<skill>`, `agent`, `skill` (catalogue name), `active`, `updated` |
+| `tool_policies` | `id` = `<agent>:<permission>`, `agent`, `permission` (a `permissions.REGISTRY` key or `research`), `mode` (`ask` or `deny`), `updated`. No row means **ask** |
+
+## 3. Backend
+
+All in standard-library Python, following the existing module style. **No change** to `engine.py` run logic, `planner.py`,
+`roles.py`, adapters, `permissions.py` classification, the gateway or the lifecycle (invariant 2 is unchanged in N2).
+
+### 3.1 `journal.py`
+- Add the `_v8` migration and `Store` methods for each table: list, get, put and update. Use the existing JSON-blob style and
+  write lock.
+- Change notices go through `_changed('library', None)` and `_changed('projects', None)`, so the SSE `EventBus` publishes
+  them. Clients re-read; nothing in `events`.
+
+### 3.2 New module `library.py` (validation and operations; pure where possible)
+
+**Agents**
+- `name`: 1–40 characters, trimmed, unique case-insensitively among non-archived agents.
+- `display_role`: at most 40 characters. `instructions`: at most 8,000 characters.
+- `engine_type` is required for specialists, from `coder`, `tester`, `reviewer` or `researcher` (never `orchestrator`).
+  Primary has none.
+- `model`: `null`, or the id of an endpoint in the loaded registry. **A paid endpoint requires the typed confirmation**
+  (`permissions.CONFIRM_WORD`), refused otherwise with the same wording style as `_check_models`.
+- **Exactly one non-archived `primary`.** It is created only by an explicit setup request and is never seeded. It cannot be
+  archived in N2.
+- Archive: sets `archived`, deactivates the agent's memberships and assignments, and keeps the record.
+
+**Projects** (extends `projects.py`, D18)
+- `projects.create(root, path)` accepts a **relative path of 1–4 segments**, each matching `projects.NAME`.
+  - **Refused:** absolute paths, `~`, `..`, empty segments, more than 4 segments, a target that already exists, and any
+    resolved segment outside the root (symlink escapes).
+  - Missing intermediate folders inside the root are created.
+  - Git init and the first commit are unchanged.
+  - On failure, remove **only** the folders this call created.
+- The current single-name call keeps working: a name is a one-segment path.
+- `register(root, path)`: an existing folder inside the root, symlink-safe, not already registered. Creates the record.
+- **Membership:**
+  - at least **one active specialist** when created through the new flow; Primary is optional
+  - removing the last active specialist is refused
+  - archived agents cannot be added
+
+**Skills and policy**
+- Assignment needs a valid, non-error catalogue entry (`skill_library()`) and an active agent. Assignment changes no policy.
+- Policy: `mode` is `ask` or `deny`, and `permission` is a registry key or `research`. **Nothing accepts `allow`** (D17).
+
+**Audit:** every change appends to the existing audit chain with `run = None`, `actor: "you"`, an action name, and ids and field
+names only. **No instructions text and no free text** in the audit or the logs.
+
+### 3.3 `capabilities.py`
+`frontmatter()` additionally reads an **optional** `tools:` list. Each entry must be a registry key or `research`; an unknown
+entry makes the skill invalid, with a clear error. Skills without `tools:` are unchanged. Return the list with the entry.
+Read-only: it grants nothing.
+
+### 3.4 Host permission warning
+From `sandbox.host_permission()`, compute for each permission type whether the host OpenCode config allows it without asking
+(a dict entry, or a global string, equal to `allow`). Expose it read-only for the Configure warning (D17).
+
+### 3.5 Endpoints (`app.py`)
+All are behind the Bearer key, take a JSON object, act as you, and return 400 with the message on validation errors.
+
+| Method and path | Body or result |
+|---|---|
+| `GET /api/library` | `{agents, primary, engine_types, models: [{id, paid}], permissions: [{type, class, host_allows}]}`, with archived agents marked |
+| `POST /api/library/agents/create` | `{kind, name, display_role, engine_type, model, instructions, confirm?}`; `kind: "primary"` only if none exists |
+| `POST /api/library/agents/update` | `{id, …fields, confirm?}` |
+| `POST /api/library/agents/archive` | `{id}` (specialists only) |
+| `POST /api/library/skills/assign` | `{agent, skill, assigned: true|false}` |
+| `POST /api/library/policy` | `{agent, permission, mode: "ask"|"deny"}` |
+| `GET /api/projects` | `{root, projects: [{id, name, path, current, members: [agent ids], member_count}]}` |
+| `POST /api/projects/create` | Today's `{name}` keeps its behaviour (and also creates a record with no members). New: `{name, path, members: [ids]}` creates the directory, the record and the membership, then selects the project. Refused during an active run, as today |
+| `POST /api/projects/register` | `{path}`; creates the record for an existing folder inside the root |
+| `POST /api/projects/members` | `{project, add: [ids], remove: [ids]}`, with the rules in §3.2. Allowed during a run (advisory) |
+
+`/api/state`, `/api/thread` and `/api/channels` are unchanged. No conversation data.
+
+## 4. Frontend (in N1.3's visual language)
+
+**Agents section**
+- The panel lists library specialists as rows: avatar tile, name, then "display role · model" (model in mono). Search and
+  "+".
+- **"+" opens Create agent:** name, role (free text), **engine type** (a select with a one-line explanation of each:
+  edits, tests only, read only, web research with per-task approval), model (registry endpoints, with paid ones labelled and
+  needing the typed confirmation), and system prompt.
+  - Saving adds a library entry and **creates no project**.
+- **Selecting a row opens Configure,** with **five separate sections**:
+  - **Model**
+  - **Prompt**
+  - **Skills:** assigned skills plus an Assign picker
+  - **Tool permissions:** permission types grouped by class (Read only, Low, Sensitive, Critical), each with an Ask/Deny
+    control. No Allow. A per-type note when the host OpenCode config already allows it. A note that policy applies to
+    sessions from N5.
+  - **Memory:** "Not available yet"
+- Below Configure, the **direct thread area** says "Direct conversations aren't available yet." The top bar shows the agent's
+  name and "Library agent".
+- **Archive** is behind a confirmation.
+
+**Primary section**
+- With no primary record: a **Set up Primary** form (name, default "Primary"; model; instructions).
+- Afterwards: Primary's configuration, editable. The conversation stays "Not available yet" (N3).
+
+**Projects section**
+- Panel rows show **member count**. Under the active project, its **members** are listed (avatar and name); each opens
+  `#/agents/<id>`.
+- The composer gains **member pills** after Team. A pill opens that agent's page (its direct thread from N3); it never posts
+  to the team.
+- **Create project:**
+  - Name (required).
+  - **Directory** (required, relative to the root, prefilled from the name, validated as in §3.2, previewed as
+    `<root>/<path>`).
+  - **Member picker:** library specialists, at least one; Primary optional.
+  - The button "Create project" creates the directory, stores membership and opens the team thread.
+- **Open folder… › Use as project** registers an existing folder, then switches to it.
+- **Manage members:** add or remove, with the last-specialist rule.
+- A line: "Sessions still choose agents automatically; members apply from a later update." (D16 and D17 enforcement, and P-7,
+  are later.)
+
+**Skills section**
+- Each card shows its assigned agents and an **Assign** picker (library specialists).
+- Under that, the **tool permission** for each assigned agent, for the skill's declared `tools:` ("Ask" or "Deny"), or "Tools
+  not declared".
+- Assignment never changes a policy.
+
+**Everything is escaped,** with no sample records. The existing approval cards, composer requests and Turn details are
+unchanged.
+
+## 5. The real-server walkthrough (deferred from N1.2, owner option (a))
+
+**Commit** a real-server walkthrough under `agent-autonomy/tests/`: a server harness using the real `app.handler` and
+`Controller` with the existing workflow and team fakes, one temporary git project and state, and a throwaway key.
+- The accepted eight steps must give the same POST bodies and counts as M9 and N1: 67 GETs (64 API, 3 event streams) and
+  8 POSTs, give or take documented asset or boot reads.
+- Add N2 steps: create an agent, set up Primary, create a project with members and a nested directory, register a folder,
+  assign a skill, set a deny policy, and confirm a session still runs exactly as before.
+- It must never touch real projects or state.
+
+## 6. Tests
+
+**Python** (new; existing tests unchanged):
+- **Migration:** a v7 journal migrates to v8 with every existing row identical. An older build (`MIGRATIONS[:7]`) opens a v8
+  journal without error.
+- **Store and library validation,** including the uniqueness, length, engine-type, paid-confirm and single-primary rules.
+- **Projects:**
+  - nested creation
+  - every refusal (absolute, `~`, `..`, too deep, existing, symlink escape)
+  - cleanup removes only what was created
+  - registration and its refusals
+  - the membership rules
+- **Capabilities:** `tools:` parsing and unknown-entry refusal.
+- **Endpoints:** auth, 400s, unchanged legacy `{name}` creation, policy rejecting `allow`.
+- **Audit:** entries contain no instructions or free text.
+- **Unchanged runs:** a session still records `hermes` and `coder-1` per run. Membership has no effect on `Controller.new`.
+
+**Chat DOM and browser** (both passes):
+- the new screens and dialogs
+- hostile names and instructions are escaped
+- engine-type explanations
+- the paid-model confirmation flow
+- Ask/Deny with no Allow anywhere
+- the host-allow note
+- member pills route to agent pages and never POST to the team
+- the existing approval POST bodies are unchanged
+- named renders for Agents, Create agent, Configure, Primary setup, Create project with members, and the Skills Assign picker,
+  at 1280 and 390, inspected
+
+**Regression:**
+- the full matrix in both passes
+- chat DOM, classic **82/82**, routes
+- cutover smoke **5/5**, the isolated fixture
+- the full Python suite
+- the committed walkthrough from §5
+
+## 7. Files
+
+- **May change:**
+  - `agent-autonomy/journal.py` (the `_v8` migration and `Store` methods)
+  - new `agent-autonomy/library.py`
+  - `projects.py` (create, register)
+  - `capabilities.py` (`tools:` parsing)
+  - `sandbox.py` (only a read-only helper for host allow per type, if not done in `library.py`)
+  - `app.py` (the §3.5 endpoints)
+  - new Python tests, and new walkthrough files under `tests/`
+  - `chat/*`, the chat test files
+  - README (the backup note and the chat description), `CURRENT_STATE.md`, this report
+  - architecture §4 (the `library_agents` naming) and §10 (screens)
+- **Must not change:** `engine.py` run logic, `planner.py`, `roles.py`, adapters, `permissions.py` classification, the
+  gateway, the lifecycle, classic files, or existing tests (except additions).
+
+## 8. When you finish
+
+Append a completion report covering:
+- commits and files
+- the exact migration as applied, and the downgrade check
+- every new test and any changed assertion
+- suite results with both pass counts
+- walkthrough counts (old steps and N2 steps)
+- renders inspected
+- deviations
+
+Update `CURRENT_STATE.md`. Push only to `feature/chat-first-redesign`, then stop for Opus review: no N3, no merge, no pull
+request.

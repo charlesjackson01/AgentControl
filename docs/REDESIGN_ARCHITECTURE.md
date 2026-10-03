@@ -749,3 +749,4 @@ unchanged.
 - 2026-10-03 (N1.2 review): **N1.2 accepted; D13 is implemented.** As a direct consequence of D13's two-row composer below a 600 px room, the phone portrait footer limit is ≤ 112 px (was 72 px idle); D10's portrait rule (conversation ≥ 55 %) and the landscape limits (idle ≤ 72 px) are unchanged.
 - 2026-10-03 (owner decisions): **P-2, P-4, P-6, P-8, P-9 and P-15 approved**, recorded as D14–D19. Invariant 1 is amended only as D14 states. Invariant 2 is unchanged until an N5 handoff restates its engine change.
 - 2026-10-03 (owner decision): **D20 approved:** bundled fonts and the one-line font allow-list change. Invariant 8 is amended only as D20 states. N1.3 (match the mock) comes before N2.
+- 2026-10-03 (N2 handoff drafted): **naming correction**. The library table is `library_agents`, because `agents` already holds the per-run rows (`_v2`). The owner confirms the exact `_v8` migration before N2 starts (D14).

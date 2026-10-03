@@ -38,10 +38,15 @@ The priorities, in order:
 | D1 | The redesign is built on the merged backend from `claude/gifted-fermi-rcas2a` (merge `af4da89`). **Never merge into `main`** as part of this work. |
 | D2 | Conversations are **project-scoped**. A run is a *session* inside the project room, not its own conversation. The frontend addresses *channels*, never raw run chains, so the backing model can change without a frontend rewrite. |
 | D3 | The new UI is an **isolated frontend** with its own entry and files. It reuses the backend APIs and execution state, and shares **no JavaScript or CSS** with the classic UI. Routes: `/chat` during development, and `/` after parity (M9). The classic UI stays at `/classic`, and at `/` until M9. |
-| D4 | **No theme system** in the new UI: Mac, Terminal and XP are not ported. There is one design language (§9), built on design tokens so theming *could* return later. |
+| D4 | **No theme system** in the new UI: Mac, Terminal and XP are not ported. There is one design language (§9), built on design tokens so theming *could* return later. *Its appearance is amended by D9.* |
 | D5 | A read-only `/api/thread` (and `/api/channels`) presentation layer over the journal is approved. It changes no orchestration. |
 | D6 | **Approved by the owner, 2026-09-30.** One index, `events_run_id ON events(run, id)`, added by one append-only `journal.py` migration (`_v7`) in M2.1 (`M2_1_CORRECTIONS.md` Part B). It adds no table, no column and no data change. This is a **narrow exception** to invariant 1's no-migration rule, not a precedent: any other schema change, including other indexes, needs its own owner decision. |
 | D7 | **Approved by the owner, 2026-09-30, limited exactly to `M5_0_ACTIONABILITY.md` Part B.** Two guards in `engine.py`: (1) `decide_research` refuses when its owning session is finished or stopping; (2) `fetch_capability` refuses when its owning session is finished. Each refusal happens **before** anything is written, audited, downloaded or otherwise acted on. This does **not** authorise any broader lifecycle, approval, skill, research, API, schema or engine change; any such need requires a new owner decision. |
+| D8 | **Approved by the owner, 2026-10-03 (N0 P-1).** The persistent-agent UI handoff (`docs/inputs/agentcontrol-ui-handoff1.md`) is delivered as a specification across the bounded N series (§12.2), not as one presentation pass. N1 is presentation-only; anything not yet built shows an honest "not available yet" state in plain words, with no milestone codes. The sample agents and projects are **never** seeded as records or shown as data. |
+| D9 | **Approved by the owner, 2026-10-03 (N0 P-11, option (a)); takes effect when N1 ships.** The chat has **one dark appearance**: the handoff's near-black token set (`#070708`, `#101012`, `#161618`), `color-scheme: dark`, with no light set and no switcher. Type uses system stacks that name Inter and IBM Plex Mono first; nothing is downloaded (invariant 8 is unchanged). The accessibility minimums of §9 still apply and override the reference mock. Forced colours and reduced motion stay supported. |
+| D10 | **Approved by the owner, 2026-10-03 (N0 P-12), for N1 only.** N1 may replace or relocate only assertions that pin the old shell's geometry or placement (rail headings and structure, the More list, the 260 px rail, the 768 px and 1200 px breakpoints, footer budgets and conversation ratios, the matrix layout dimension), each listed with before and after. It may not remove or weaken behaviour assertions, accessibility minimums, classic tests or Python tests. New limits: phone portrait conversation ≥ 55 % with the bottom bar shown; phone landscape conversation ≥ 45 %, idle footer ≤ 72 px, waiting footer ≤ 112 px; bottom bar ≤ 64 px and hidden while the on-screen keyboard is open. |
+| D11 | **Approved by the owner, 2026-10-03 (N0 P-13).** Vocabulary and routes as in §11 and §12.1: "agent" is adopted; "Workspace" becomes the active project's directory view; today's per-agent inspection becomes **Turn details** (`#/w/<run>/<agent>` and its `/classic?popout=` link are kept). New hash routes `#/primary`, `#/agents[/<id>]`, `#/projects` (the same as `#/`), `#/workspace`, `#/skills`, `#/settings`. `#/` stays the Projects team thread until a later decision when Primary conversations ship. Server routes are unchanged. |
+| D12 | **Approved by the owner, 2026-10-03 (N0 P-14).** Where the persistent-agent handoff text and the reference mock (`docs/inputs/agentcontrol-ui.html`) differ, the **handoff wins**. The mock guides visuals only where the handoff is silent; where both are silent, this contract applies. **No mock code is reused** (CDN fonts, unescaped `innerHTML`, hard-coded agent messages, `alert()`, sub-40 px targets, 3:1 text). |
 
 ## 3. Invariants (never weakened)
 
@@ -323,6 +328,13 @@ the same card can offer another decision, as specified in the M5 handoff.
 
 ## 9. Design language (single, token-based)
 
+> **Amended by D9 (approved 2026-10-03), effective when N1 ships.** *Appearance* becomes one dark appearance (the
+> near-black token set; no light set); *Type* becomes system stacks naming Inter and IBM Plex Mono first
+> (`Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`; `"IBM Plex Mono", ui-monospace, SFMono-Regular,
+> Menlo, monospace`), with nothing downloaded; active pills and the send button are white with black text. Every
+> accessibility rule below still applies, computed for the dark appearance. Until N1 ships, the text below describes
+> the code as it is.
+
 The direction: the simplicity of modern AI chat apps, with restrained macOS polish. It is calm, dense enough for
 real work, and the content comes first.
 
@@ -402,10 +414,13 @@ real work, and the content comes first.
 | room / channel | a project conversation (`# name`) | |
 | session | one run inside a room | "run" in headings (fine in details) |
 | turn | one unit of agent work (a step) | "prompt" |
-| agent | the actor (`coder-1`, `reviewer-1`); Hermes is the orchestrator | "OpenCode" as an actor (it is a runtime) |
+| agent | the actor (`coder-1`, `reviewer-1`, and from N2 a library agent); Hermes is the orchestrator. Settled by D11: "agent", not "bot" | "OpenCode" as an actor (it is a runtime); "bot" |
 | request | something an agent asks you (a permission or a question) | "approval" as a noun for the request |
 | note | what you send to Hermes during a session | "instruction" in UI copy |
-| Workspace | the deep-inspection view for an agent or session | using it for the git worktree |
+| Workspace | until N1: the deep-inspection view for an agent or session. **From N1 (D11): the active project's directory view** | using it for the git worktree |
+| Turn details | from N1 (D11): the per-agent deep-inspection view at `#/w/<run>/<agent>` (formerly "Workspace") | |
+| Primary | the one persistent everyday agent and its conversation (handoff; functional from N3) | "team" for Primary |
+| team thread | a project's conversation (the project room) | "team catalogue"; a Teams section |
 | branch | the git worktree a session works in | |
 | Connect | the sign-in action | "Connect to workspace" |
 
@@ -458,8 +473,27 @@ person's.
 - the UI derives agent identity only through the model helpers (`agentLabel`, members); it never hard-codes names
   beyond the existing `coder-1` fallback
 - `#/w/<run>/<agent>` stays meaningful as "a bot's instance in a session"
-- `#/b/…` is reserved for a future bot page
-- the vocabulary (§11) defers the choice between "bot" and "agent" to R1
+- `#/b/…` was reserved for a future bot page; **superseded by D11:** a library agent's page is `#/agents/<id>`
+- the vocabulary (§11) deferred the choice between "bot" and "agent" to R1; **settled by D11: "agent"**
+
+### 12.2 N series: persistent agents (sequence approved by the owner, 2026-10-03)
+
+The N series realises R1 from the persistent-agent handoff (D8). Proposal: `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`;
+decisions: `docs/handoffs/N0_DECISIONS.md`; acceptance: `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`. **Approving the sequence
+authorises no milestone beyond N1's start conditions.** Each later milestone needs its own handoff and the owner's approval
+of the decisions that gate it (P-2 to P-10 and P-15 are still pending). Until those are approved, every invariant in §3 holds
+unchanged.
+
+| # | Milestone | Kind | Gated by |
+|---|---|---|---|
+| N1 | Shell and navigation | UI only | D8–D12 (approved) |
+| N2 | Library, projects and membership records | backend, persistence, UI | P-2, P-4, P-6, P-8, P-9, P-15 (pending) |
+| N3 | Primary and Direct conversations | new service, persistence, UI | P-2, P-3, P-4, P-5 (pending); Q1–Q3 |
+| N4 | Memory scopes | persistence, UI | P-2, P-10 (pending) |
+| N5 | Binding to execution | engine exception | P-6, P-7, P-8, P-10 (pending) |
+| N6 | Workspace file tree and preview | read-only backend, UI | P-9, D11 |
+| N7 | Limited "allow" (optional) | security | its own decision |
+| N-ORCH | Native orchestration | architecture only | separate |
 
 **Change log of this contract**
 - 2026-09-30: created with decisions D1–D5 (Opus planning session).
@@ -678,3 +712,6 @@ person's.
 - 2026-10-03 (N0 proposal): `docs/PERSISTENT_AGENTS_ARCHITECTURE.md` proposes the N series that would realise §12.1 R1,
   with 15 decisions pending in `docs/handoffs/N0_DECISIONS.md`. **Nothing in this contract is amended by the proposal.**
   Each amendment (invariants 1, 2 and 8 as scoped there, D4, §11) applies only once the owner approves its decision.
+- 2026-10-03 (owner decisions): **P-1, P-11 (a), P-12, P-13, P-14 and the N sequence approved**, recorded as D8–D12
+  and §12.2. §9 (D9) and §11 (D11) amendments take effect when N1 ships; §10 Layout is rewritten by N1 when the shell
+  ships. P-2 to P-10 and P-15 remain pending; invariants 1, 2 and 8 are unchanged.

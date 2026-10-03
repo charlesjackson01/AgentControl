@@ -1,7 +1,7 @@
 # Persistent agents: acceptance criteria and regression requirements
 
-**Status:** **Proposed** (N0, 2026-10-03, Opus). It becomes binding for each milestone once the owner approves that
-milestone's handoff. §A applies to **every** N milestone. §B is N1's acceptance. §C outlines N2–N7; each milestone's handoff
+**Status:** §A and §B are **binding for N1** (its gating decisions were approved on 2026-10-03: D8–D12). §C is proposed, and
+becomes binding for each later milestone once the owner approves that milestone's handoff and decisions. §A applies to **every** N milestone. §B is N1's acceptance. §C outlines N2–N7; each milestone's handoff
 makes its own section exact before work starts.
 Related: `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/handoffs/N0_DECISIONS.md`, `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`.
 
@@ -43,7 +43,7 @@ All of §A, plus:
 | B10 | `#/`, `#/s/<id>` and `#/w/<run>/<agent>` behave as before (inside Projects). The new section routes work. Switching section never refetches the thread |
 | B11 | The **waiting badge** on Projects is visible in every section, and equals the channel waiting count |
 | B12 | **Usable at 1280×800 and 390×844** (the handoff), and across the existing matrix (1440, 1200, 1024, 768, 844×390, 320) plus 720 and 719. Every A9 check passes, as do the P-12 footer limits (portrait conversation at least 55% with the bar; landscape at least 45%, idle footer at most 72px, waiting footer at most 112px; bar at most 64px, hidden while the keyboard is open) |
-| B13 | The P-11 visual system is applied through tokens: the near-black palette, system font stacks naming Inter and IBM Plex Mono, white active pills and send button. **No mock code** and no CDN |
+| B13 | The D9 visual system (P-11 (a), dark-only) is applied through tokens: the near-black palette with `color-scheme: dark` and no light set, system font stacks naming Inter and IBM Plex Mono, white active pills and send button. **No mock code** and no CDN |
 | B14 | **No backend change:** no `.py` file in the diff. Chat uses only the endpoints listed in N1 handoff §2 |
 | B15 | **No approval or security behaviour changed** (A4–A7), demonstrated by the unchanged suites and the walkthrough |
 

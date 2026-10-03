@@ -1,7 +1,8 @@
 # Persistent agents: N0 architecture proposal
 
-**Status:** **Proposed** (N0, 2026-10-03, Opus). **Not binding.** Nothing in `docs/REDESIGN_ARCHITECTURE.md` is amended until
-the owner approves the decisions in `docs/handoffs/N0_DECISIONS.md`. A recommendation in this document is not an approval.
+**Status:** **Proposed** (N0, 2026-10-03, Opus). On 2026-10-03 the owner approved **P-1, P-11 (a), P-12, P-13, P-14 and the
+milestone sequence**, recorded as D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. **Everything else here is not binding.**
+P-2 to P-10 and P-15 are pending, and a recommendation in this document is not an approval.
 
 **Inputs**
 
@@ -231,8 +232,8 @@ scope. They belong to N-ORCH (§16).
 
 ## 12. Visual system (P-11, P-14)
 
-- **The handoff's near-black palette** (`#070708`, `#101012`, `#161618`) becomes the token set; dark-only if P-11 (a) is
-  approved. White active pills and send button with black text.
+- **The handoff's near-black palette** (`#070708`, `#101012`, `#161618`) becomes the token set, **dark-only** (P-11 (a),
+  approved as D9). White active pills and send button with black text.
 - **Fonts:** system stacks that *name* Inter and IBM Plex Mono first (`Inter, ui-sans-serif, system-ui, …`;
   `"IBM Plex Mono", ui-monospace, …`). Nothing is downloaded: no CDN, no web fonts (invariant 8). The asset allow-list would not
   serve font files without a Python change anyway.
@@ -259,8 +260,8 @@ scope. They belong to N-ORCH (§16).
 | Inv. 8: no new runtime dependencies | Kept. System font stacks; no CDN | P-11 |
 | Inv. 9: classic keeps working | Kept for the whole N series. Classic stays unchanged at `/classic`, and its 82 tests stay green | — |
 | D2: channels added server-side | Kept. The team thread is the `main` channel; Primary and Direct are separate thread APIs, not project channels | — |
-| D4: one design language following system light/dark | **Amend** to dark-only if P-11 (a) is approved | P-11 |
-| §11 vocabulary | **Amend:** "agent" is adopted; "Workspace" is the project directory; per-agent inspection becomes "Turn details" | P-13 |
+| D4: one design language following system light/dark | **Amended:** dark-only (approved as D9; effective when N1 ships) | P-11 |
+| §11 vocabulary | **Amended** (approved as D11): "agent" is adopted; "Workspace" is the project directory; per-agent inspection becomes "Turn details" | P-13 |
 | §12.1 R1 | Realised by the N series. R1's anonymous mapping of historical per-run agents is dropped; its runtime-agnostic adapter moves to N-ORCH | P-6 |
 
 ## 14. Compatibility and data migration
@@ -319,7 +320,7 @@ working.
 | Classic drift | Classic is unchanged; its 82 tests are required at every milestone |
 | Growth of the `messages` table | Paging; a retention policy in a later milestone |
 | Copying mock code (script injection, CDN fonts) | P-14; escaping tests with hostile names in N1 |
-| Users who need a light appearance | P-11 alternative (b); forced colours kept |
+| Users who need a light appearance | Accepted by the owner with P-11 (a); forced colours kept |
 
 ## 18. Open questions for the owner
 

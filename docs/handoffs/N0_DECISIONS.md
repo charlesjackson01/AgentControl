@@ -1,7 +1,8 @@
 # N0 decisions: persistent agents (pending owner approval)
 
-**Status:** every decision below is **Pending**. The recommendations are Opus's (2026-10-03). **None is approved until the owner
-records approval here,** decision by decision.
+**Status (2026-10-03):** **P-1, P-11 (a), P-12, P-13, P-14 and the milestone sequence are approved by the owner** (recorded as
+D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`). **P-2 to P-10 and P-15 remain Pending**: their recommendations are
+Opus's and are not approved until the owner records approval here, decision by decision.
 Architecture: `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`. Inputs: `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and
 `docs/inputs/agentcontrol-ui.html` (visual reference).
 
@@ -13,7 +14,7 @@ approved items. If you approve only the five decisions that gate N1, N1 can star
 
 | # | Decision | Kind of authorisation | Gates | Status |
 |---|---|---|---|---|
-| P-1 | Scope: several milestones; no sample records | Product scope | N1 | **Pending** |
+| P-1 | Scope: several milestones; no sample records | Product scope | N1 | ✅ **Approved 2026-10-03** (D8) |
 | P-2 | New journal tables by append-only migrations | **Database migration** | N2, N3, N4 | **Pending** |
 | P-3 | Text-only reply path for Primary and Direct | **New execution path, security** | N3 | **Pending** |
 | P-4 | Primary is a new agent record; Hermes stays the orchestrator | Product and architecture | N2, N3 | **Pending** |
@@ -23,13 +24,14 @@ approved items. If you approve only the five decisions that gate N1, N1 can star
 | P-8 | Tool policy per agent and permission type: ask or deny; no allow | **Permission semantics, security** | N2, N5 | **Pending** |
 | P-9 | Project folders inside the projects root (nested), git kept | **Security (filesystem)** | N2 | **Pending** |
 | P-10 | Memory: three scopes, written by you only, bounded | **Privacy, security** | N4, N5 | **Pending** |
-| P-11 | Dark-only near-black tokens; system font stacks | Design and invariant amendment | N1 | **Pending** |
-| P-12 | Authorised re-baselining of N1 layout assertions | Test policy | N1 | **Pending** |
-| P-13 | Vocabulary and routes | Contract amendment | N1 | **Pending** |
-| P-14 | The handoff text wins over the mock; mock code not reused | Product | N1 | **Pending** |
+| P-11 | Dark-only near-black tokens; system font stacks | Design and invariant amendment | N1 | ✅ **Approved 2026-10-03, option (a)** (D9) |
+| P-12 | Authorised re-baselining of N1 layout assertions | Test policy | N1 | ✅ **Approved 2026-10-03** (D10) |
+| P-13 | Vocabulary and routes | Contract amendment | N1 | ✅ **Approved 2026-10-03** (D11) |
+| P-14 | The handoff text wins over the mock; mock code not reused | Product | N1 | ✅ **Approved 2026-10-03** (D12) |
 | P-15 | The journal is the source of truth; nothing written into project folders | **Security, persistence** | N2 | **Pending** |
 
-Also for approval: **the milestone sequence** N1 → N2 → N3 → N4 → N5 → N6 (→ N7 optional; N-ORCH separate) in architecture §15.
+**The milestone sequence** N1 → N2 → N3 → N4 → N5 → N6 (→ N7 optional; N-ORCH separate), from architecture §15: ✅ **approved
+2026-10-03** (`REDESIGN_ARCHITECTURE.md` §12.2). Approving the sequence authorises no milestone beyond N1's start conditions.
 
 ---
 
@@ -52,7 +54,7 @@ delivered?
 - The handoff's acceptance items are met progressively (architecture §15).
 - After N1, the Primary, Agents, Workspace and Memory areas are visible but not yet functional.
 
-**Gates:** N1. **Status:** Pending.
+**Gates:** N1. **Status:** ✅ **Approved by the owner, 2026-10-03** (D8).
 
 ## P-2. New persistent records (database migrations)
 
@@ -278,7 +280,7 @@ tools.
 - Users who prefer light get dark (option (a)).
 - Where Inter or Plex isn't installed, the system font shows.
 
-**Gates:** N1. **Status:** Pending (choose (a) or (b)).
+**Gates:** N1. **Status:** ✅ **Approved by the owner, 2026-10-03: option (a), dark-only** (D9).
 
 ## P-12. Re-baselining tests in N1
 
@@ -301,7 +303,7 @@ tools.
 - N1 test churn is bounded and reviewable.
 - The M8 and M9 behaviour suite carries over.
 
-**Gates:** N1. **Status:** Pending.
+**Gates:** N1. **Status:** ✅ **Approved by the owner, 2026-10-03** (D10).
 
 ## P-13. Vocabulary and routes (amends §11)
 
@@ -320,7 +322,7 @@ tools.
 - Bookmarks keep working.
 - Copy changes across the chat.
 
-**Gates:** N1. **Status:** Pending.
+**Gates:** N1. **Status:** ✅ **Approved by the owner, 2026-10-03** (D11).
 
 ## P-14. Precedence of handoff and mock
 
@@ -338,7 +340,7 @@ tools.
   - the Skills Assign picker and policy control (from N2)
   - where approval cards appear (N1: unchanged room cards)
 
-**Gates:** N1. **Status:** Pending.
+**Gates:** N1. **Status:** ✅ **Approved by the owner, 2026-10-03** (D12).
 
 ## P-15. Where membership, assignments, policies and memory are stored
 
@@ -367,4 +369,10 @@ membership or permissions, and the files would appear in every diff and Apply.
 
 | Date | Decision | Outcome | Notes |
 |---|---|---|---|
-| — | — | — | No approvals recorded yet |
+| 2026-10-03 | P-1 | Approved | Recorded as D8 |
+| 2026-10-03 | P-11 | Approved, option (a) | Dark-only; system font stacks. Recorded as D9; amends D4's appearance when N1 ships |
+| 2026-10-03 | P-12 | Approved | Recorded as D10 (N1 only) |
+| 2026-10-03 | P-13 | Approved | Recorded as D11 |
+| 2026-10-03 | P-14 | Approved | Recorded as D12 |
+| 2026-10-03 | Milestone sequence | Approved | `REDESIGN_ARCHITECTURE.md` §12.2; authorises nothing beyond N1's start conditions |
+| — | P-2 to P-10, P-15; Q1–Q3 | Pending | Needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards |

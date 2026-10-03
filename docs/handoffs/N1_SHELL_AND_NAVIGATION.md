@@ -1,14 +1,8 @@
 # N1: Shell and navigation (presentation pass)
 
-**Status: DRAFT — NOT AUTHORISED.** Do not start until the owner has approved, in `docs/handoffs/N0_DECISIONS.md`:
-- **P-1** (scope; no sample records)
-- **P-11** (visual system: option (a) or (b))
-- **P-12** (test re-baselining)
-- **P-13** (vocabulary and routes)
-- **P-14** (the handoff wins over the mock)
-- the **milestone sequence**
-
-If any is refused or changed, Opus revises this handoff first.
+**Status: READY FOR CODEX.** Its start conditions were met on 2026-10-03, when the owner approved **P-1, P-11 (a), P-12,
+P-13, P-14 and the milestone sequence** (recorded as D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`). P-11 is
+**option (a): dark-only**. No other N decision is approved; nothing in N1 may depend on P-2 to P-10 or P-15.
 
 Codex implements, then Opus reviews. Work on `feature/chat-first-redesign`. Do not merge into `main`.
 
@@ -183,7 +177,7 @@ the selected item:
 - **Memory:** **three separate rows** (Primary memory, Specialist memory, Project context). Each has its one-line scope
   description from the handoff and "Not available yet". Never one combined panel.
 - **Usage and activity:** links to classic, as today's More links do.
-- **Appearance:** states the appearance, per P-11.
+- **Appearance:** "AgentControl uses one dark appearance." Information only, with no control (D9).
 - **Sign-in:** "This browser is signed in with the dashboard key." A button, **Forget key and sign out**, opens a confirmation,
   then clears the stored key from local and session storage, closes the event stream and shows sign-in. No POST.
 - **Classic dashboard:** a link to `/classic`.
@@ -234,8 +228,8 @@ the selected item:
 **Type:** `Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`, and `"IBM Plex Mono", ui-monospace,
 SFMono-Regular, Menlo, monospace` for model and file labels. Nothing is downloaded.
 
-**Appearance:** dark-only (`color-scheme: dark`) if P-11 (a) is approved; under (b), a light token set as well. Forced colours
-and reduced motion keep working.
+**Appearance (D9, approved):** dark-only. Set `color-scheme: dark`, remove the light token set and the `prefers-color-scheme`
+branch, and do not add a switcher. Forced colours and reduced motion keep working.
 
 **Sizes:** inputs at 16px or larger. No text smaller than today's smallest type token. Rail and bottom-bar labels use that token,
 not the mock's 9px.
@@ -272,6 +266,10 @@ not the mock's 9px.
 - List each one by test name, with exact before and after, in the completion report.
 - A test whose *behaviour* is still valid moves with its feature and keeps every behavioural assertion. For example, the M6 and
   M8 rail paging and count tests now target the Projects panel.
+- **Under D11 (vocabulary) only:** assertions on the visible label "Workspace" for the per-agent view may change to "Turn
+  details". Change the strings only, and list each one. Keep the existing Turn details element ids and classes (`#workspace`,
+  `workspace-*`), the `#/w/…` route and the `/classic?popout=` link, so that behaviour tests carry over unchanged. The new
+  Workspace section uses new ids (for example `project-files-*`).
 
 ### Browser matrix (`tests/chat_screenshots.cjs`)
 - Add viewports **1280×800** (the handoff), **720×900** and **719×900** (boundary).
@@ -281,7 +279,8 @@ not the mock's 9px.
   - no page overflow
   - targets at least 40×40px (tablet and phone)
   - inputs at least 16px
-  - contrast pairs rebaselined to the new tokens (text at least 4.5:1, essential boundaries and focus at least 3:1)
+  - contrast pairs rebaselined to the new dark tokens (text at least 4.5:1, essential boundaries and focus at least 3:1). The
+    matrix's light-appearance rows are replaced by dark-only rows (D9); report the new combination count
   - keyboard order and focus traps
   - reduced motion and forced colours
   - the bottom bar hidden while the keyboard is open
@@ -313,7 +312,8 @@ not the mock's 9px.
   - `agent-autonomy/tests/test_chat_ui.cjs`, `tests/chat_screenshots.cjs`, `tests/fixtures.cjs`
   - `README.md` and `agent-autonomy/README.md` (the chat description)
   - `CURRENT_STATE.md` and this handoff's completion report
-  - `docs/REDESIGN_ARCHITECTURE.md`, only to apply the approved P-11 and P-13 amendments if Opus has not already done so
+  - `docs/REDESIGN_ARCHITECTURE.md`: rewrite §10 Layout for the shipped shell, and remove the "effective when N1 ships"
+    notes in §9 and §11 once they are true. D8–D12 are already recorded; change nothing else
 - **Must not change:** any `.py` file (including `device_fixture.py`), any Python test, classic files, the journal or state.
 
 ## 10. Acceptance

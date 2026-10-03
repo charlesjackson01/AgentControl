@@ -384,6 +384,10 @@ file browsing and Memory have honest unavailable states. All existing request an
   focus traps/inert backgrounds, Cancel/Close initial focus and focus restoration remain. Essential focus rings
   are inset and meet 3:1. Text zoom to 200%, reduced motion and forced colours remain supported. There is no
   page overflow; touch targets on tablet/phone are at least 40 × 40 px and text inputs at least 16 px.
+- **One place per control** (unchanged since M5, restored in the N1 review): an approval appears **once**, as a card in the
+  Projects team thread, plus one pinned "waiting" pointer above the composer and the Projects waiting badge that
+  locates it. Pause, Resume and Stop live in the active session's menu in the Projects top bar, and are also available as
+  slash commands. Turn details has no decisions or input.
 - **Composer:** one unchanged decision/session interaction surface with a static Team chip before its current
   target. Phone portrait conversation occupies at least 55% with the bar shown; landscape at least 45%.
   Idle footers are at most 72 px and footers with waiting at most 112 px. Existing six-line draft growth remains.

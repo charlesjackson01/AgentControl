@@ -525,3 +525,121 @@ keyboard or assistive-technology testing is claimed. Historical owner G3 evidenc
 Native device behavior should be rechecked on the new shell before treating it as newly verified.
 No scope or authorization deviation; no backend, classic or protected test was weakened. Stop for independent
 Opus review; do not start N2 or merge into main.
+
+---
+
+## Review of N1 — 2026-10-03 (Opus)
+
+**Verdict: not yet accepted.** One Blocking finding (a fatal accessibility check fails reproducibly), plus three Should-fix
+findings. The bounded **N1.1** corrections below fix them. Everything else in N1 is sound, and most of it is verified
+independently. No physical-device testing is claimed by this review either.
+
+Reviewed `8be5d62` against `49a3fa9`: 17 files changed. **No `.py` file, Python test, classic file or state file changed.**
+
+### What was verified
+
+| Check | Result (this review) |
+|---|---|
+| Python (`unittest discover`) | **424, OK (skipped=6)**, first attempt. The 6 skips are gates, not passes: container, desktop preview, KVM, and the three real-OpenCode tests (this container has no OpenCode binary; Codex's environment ran them) |
+| Classic DOM | **82/82** |
+| Chat DOM | **273/273** |
+| Chat routes | **4/4** (run with `PYTHONPATH=agent-autonomy:agent-autonomy/tests`) |
+| Full browser matrix, as committed | **Fails** at `teamProposed zoom clipped control waiting-pointer`, after 452 screenshots (B1) |
+| Full matrix, with only that clip check downgraded to logging in a scratch copy | **540 combinations + 46 regressions, 814 screenshots**, matching the report. The only clipping recorded is B1's five cases |
+| Control: desktop matrix on pre-N1 `49a3fa9`, same container | **Passes**: 96 combinations + 66 regressions, every zoom check included. B1 is an N1 regression, not an environment artefact |
+
+**Fewer regression rows (66 → 46) is legitimate.** Every removed row comes from a `colorScheme` loop narrowed from
+`['light','dark']` to `['dark']` (D9). No case type was dropped, and the counters now report real totals.
+
+**Product code**
+- `sections.js` escapes every server and user string (folder names and paths, skill names and descriptions, errors), uses
+  only the authorised endpoints (`GET /api/projects/browse`, `GET /api/skills`, `POST /api/projects/select` and `create`),
+  takes the shared write lock, sends one POST per activation, and shows refusals verbatim.
+- No sample names anywhere in `chat/`. No CDN, `@import`, `@font-face` or external URL.
+- `tokens.css` is dark-only: `color-scheme: dark`, no `prefers-color-scheme` branch, system stacks naming Inter and IBM
+  Plex Mono.
+- Turn details keeps `#workspace`, `workspace-*`, `#/w/…` and `/classic?popout=`.
+- `signOut` reuses the existing `rejectKey` path.
+
+**Approval and security behaviour** is unchanged, shown by the unchanged suites and the walkthrough counts in the report
+(67 GET / 8 POST).
+
+### Findings
+
+**B1 (Blocking): 200% text zoom clips the waiting pointer when Session details is open.**
+- The fatal M8 zoom check (`zoomCheck`: root font 32px, 1280×800) fails for `singleMembers`, `teamProposed`, `teamReview`,
+  `teamRunning` and `teamUnusable`.
+- With the rail (76px), panel (300px) and Session details (360px) open, the room is 544px wide. "! 1 waiting for you" needs
+  220px and gets 211px (`scrollWidth` 220, `clientWidth` 211), so the strip's text runs into "Open classic dashboard".
+- This container's sans-serif fallback is DejaVu Sans, a wide font and the default on many Linux desktops. M9 passed the
+  same check here with the same fallback. Codex's environment presumably resolves a narrower font, so the layout has no
+  slack for common fallback fonts.
+- This breaks acceptance A9 and B12 (text zoom to 200% without clipped controls) on the control that leads to approvals.
+
+**S1 (Should fix): invalid skills are labelled "Low" risk.**
+- `capabilities.skill_library()` returns entries that fail validation as `{folder, name, error}`, with no `risk`.
+- The card's label `skill.risk==='sensitive'?'Sensitive':'Low'` (`sections.js`) shows **Low** for them: a wrong safety label
+  on exactly the skills that failed inspection.
+
+**S2 (Should fix; documentation, fixed in this review).** The §10 rewrite dropped the binding "One place per control" rule:
+an approval appears once as a card plus one waiting pointer, and Pause, Resume and Stop are in the session menu and slash
+commands. The behaviour and its tests are unchanged. The rule is restored in `docs/REDESIGN_ARCHITECTURE.md` §10 by this
+review commit.
+
+**S3 (Should fix): navigation labels don't fit with a wider fallback font.**
+- On the live fixture, the bottom-bar label "Workspace" needs 66px and gets 53px at 320×640, so it is ellipsised.
+- At 390×844 it fits by under a pixel on the fixture, but the harness render with the Projects badge shows "Workspa…"
+  (`n1-projects-phone.png`).
+- The clip check covers only `button, summary, select, input`, so truncated navigation links are never tested. Same root
+  cause as B1.
+
+**Optional** (fix in N1.1 if cheap, otherwise leave):
+- **O1.** Settings › Sign-in renders a second "Sign-in and key" button (`#phone-key-avatar`) at every width. It links to the
+  page it sits on.
+- **O2.** At 200% text zoom the rail labels truncate ("Pri…", "Ag…"). The icons and full accessible names remain.
+- **O3.** Pressing Escape during an in-flight create or select closes the dialog. A later refusal is written into the closed
+  dialog and never seen.
+- **O4.** `projectPanel` rebuilds the Projects panel by scraping the shell's old rail HTML by position
+  (`template … querySelectorAll('section')[0..2]`, replacing the `<h2>Members</h2>` string). Brittle coupling: prefer the
+  shell exporting those pieces.
+- **O5.** "1 sessions" in the Projects top bar and summary card. M8 D fixed exactly this singular wording for the rail.
+- **O6.** The Projects panel still shows a "Channels · # project" block under the current-project header that repeats it.
+
+## N1.1 corrections (bounded; frontend and frontend tests only)
+
+**Scope:** `agent-autonomy/chat/*`, `tests/test_chat_ui.cjs`, `tests/chat_screenshots.cjs`, `tests/fixtures.cjs`,
+`CURRENT_STATE.md` and a completion report appended here. **No `.py`, Python test, classic, state or endpoint change.**
+Every rule of this handoff and of `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and §B still applies.
+
+1. **C1 (B1).** The waiting strip must never clip.
+   - At 200% text zoom with Session details open at 1280×800, every zoom-check state passes with no clipped control.
+   - Let the strip wrap: the pointer and the classic link may go on separate lines, or the pointer text may wrap.
+   - **At normal zoom, keep D10's footer limits** (portrait conversation at least 55%; landscape at least 45%, idle footer at
+     most 72px, waiting at most 112px).
+   - The pointer stays one control, keeps its exact accessible text, and keeps locating the first actionable card.
+2. **C2 (S3).** Every rail and bottom-bar label is fully visible, with no ellipsis, **at normal text size at every matrix
+   width, including 320×640**, with the handoff's exact names.
+   - Options: a two-line label within the 64px bar, tighter horizontal padding, or tighter letter-spacing within the
+     existing smallest type token.
+   - Targets stay at least 40×40px, and the bar stays at most 64px.
+3. **C3 (font-independent checks).** The matrix must catch B1 and S3 whatever fonts are installed.
+   - Add a "wide font" pass: inject a stylesheet that inflates text width (for example `* { letter-spacing: 0.06em }`, or a
+     measured equivalent that reproduces DejaVu Sans widths) and re-run:
+     - the 200% zoom check for every state
+     - the navigation-label fit check at every width
+   - Extend clipped-control detection to `#section-nav a`, `#bottom-nav a` and the composer chips.
+   - Both passes are fatal. Document the inflation factor and why it covers common fallback fonts.
+4. **C4 (S1).** Show Low or Sensitive only when the entry has a `risk`.
+   - An entry with `error` shows "Problem: <error>" and "Risk: not assessed", never Low or Sensitive.
+   - Add a DOM test with an invalid library entry.
+5. **C5 (O5).** Use the singular "1 session" in the Projects top bar and summary card. Add a DOM test.
+6. **Optional:** O1, O3, O4 and O6 at Codex's discretion. List what was done and what was left.
+
+**Verification for N1.1:**
+- The full browser matrix passes as committed, **both normally and in the wide-font pass**. Report the combination,
+  regression and screenshot counts.
+- Chat DOM, classic **82/82**, routes **4/4**, cutover smoke **5/5**, and the isolated fixture cases.
+- One full Python run (unchanged files; gates labelled).
+- Inspect renders of the five B1 states at 200% zoom, and of the bottom bar at 390 and 320, in both passes.
+- List every changed or added assertion.
+- Then stop for Opus re-review. N2 is not started, and nothing is merged into `main`.

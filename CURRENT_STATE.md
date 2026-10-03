@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Codex (N1 implemented and verified; independent Opus review pending).
+**Last updated:** 2026-10-03, by Opus (N1 reviewed at `8be5d62`: not yet accepted; N1.1 corrections specified).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -42,7 +42,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; keyboard viewport handling with pinch-zoom freeze; visible waiting/Workspace links; isolated fixture; reliable focus return. **Owner-reported iPhone 17 Pro / Safari checklist passed; Android Chrome not performed (owner-accepted gap)** |
 | R1 Persistent bots | roadmap; **N series proposed** | owner | architecture §12.1. Realised by the proposed N series (N1–N7, N-ORCH separate) |
 | **N0 Persistent agents: architecture and requirements** | ✅ **N1-gating decisions approved 2026-10-03**; P-2 to P-10, P-15 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. Approved: P-1 (D8 scope), P-11 (a) (D9 dark-only), P-12 (D10 N1 test policy), P-13 (D11 vocabulary and routes), P-14 (D12 handoff over mock), and the N sequence (§12.2). No code, schema or database changes |
-| **N1 Shell and navigation** | **implemented and verified; Opus review pending** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section shell from existing data and endpoints only; dark-only tokens; no Python change. Acceptance: `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and §B |
+| **N1 Shell and navigation** | ⚠️ **implemented `8be5d62`; review 2026-10-03: not yet accepted** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md` review: **B1** 200% text zoom clips the waiting pointer with Session details open (fatal check; pre-N1 passes in the same environment); **S1** invalid skills labelled Low risk; **S3** nav labels truncate with wide fallback fonts; S2 (§10 rule) fixed in the review. **N1.1 corrections specified**: frontend and tests only |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `sections.js`, `shell.js`.
 `/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
@@ -256,8 +256,10 @@ was changed.
    `f45c112`. The merge-status record was then merged as well (`main` = `d1f4733`).
 4. **N0: the owner approved P-1, P-11 (a), P-12, P-13, P-14 and the N sequence (2026-10-03).** They are recorded as
    D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. N1 applies the §9 and §11 amendments and rewrites §10.
-5. **Next: Opus independently reviews N1** (`docs/handoffs/N1_SHELL_AND_NAVIGATION.md`) after verification and push. No backend
-   change, and no merge into `main`.
+5. **N1 reviewed (Opus, 2026-10-03): not yet accepted.** Codex implements the bounded **N1.1 corrections** at the end of
+   `docs/handoffs/N1_SHELL_AND_NAVIGATION.md` (C1 waiting strip at 200% zoom; C2 nav labels fit; C3 font-independent wide-font
+   matrix pass; C4 risk label for invalid skills; C5 singular "1 session"), then stops for Opus re-review. Frontend and
+   frontend tests only; no backend change, no N2, and no merge into `main`.
 6. **Still the owner's:**
    - P-2 to P-10 and P-15, needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards
    - Q1–Q3 (model registry, Primary's endpoint, projects root), needed before N3

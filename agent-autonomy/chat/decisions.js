@@ -181,7 +181,7 @@
         if(catalogue.length) {
           if(message.kind==='request' && d.kind==='question' && supportedQuestions(d.questions))controls.innerHTML=questionMarkup(message);
           if(message.kind==='request' && d.kind==='permission' && d.risk?.remember_allowed)controls.innerHTML+='<label class="decision-remember"><input type="checkbox" data-remember> Also allow identical requests in this session</label>';
-          controls.innerHTML+='<div class="decision-buttons">'+catalogue.map(c=>'<button type="button" data-decision="'+c.choice+'" class="'+(c.primary?'decision-primary':'')+'" aria-label="'+escape(c.label.replace(/…$/,'')+': '+message.text)+'">'+escape(c.label)+'</button>').join('')+'</div>';
+          controls.innerHTML+='<div class="decision-buttons">'+catalogue.map(c=>'<button type="button" data-decision="'+c.choice+'" class="'+(c.primary?'decision-primary solid':'ghost')+'" aria-label="'+escape(c.label.replace(/…$/,'')+': '+message.text)+'">'+escape(c.label)+'</button>').join('')+'</div>';
           if(catalogue.some(c=>c.disabled))controls.innerHTML+='<p class="muted review-unavailable">'+(d.review_truncated?'Too large to review here':'Cannot review this approval here')+' · <a href="/classic">Open in classic</a></p>';
         }
         // D13: a waiting item this room cannot act on keeps its own classic fallback on the card.

@@ -161,3 +161,214 @@ Append a completion report covering:
 
 Update `CURRENT_STATE.md`. Push only to `feature/chat-first-redesign`, then stop for Opus review: no N2, no merge, no pull
 request.
+
+
+## N1.3 completion report — 2026-10-03
+
+**Implemented and verified; independent Opus review pending.** One implementation/report commit, titled
+`N1.3: match the mock with bundled fonts`, from `a9a4441`; its hash is in the delivery note and branch history.
+Push destination: only `feature/chat-first-redesign`. No N2, main merge or pull request.
+
+### Sync and scope
+
+The requested pull fetched `a9a4441`, but could not fast-forward the original checkout because ten surviving,
+uncommitted N1.2 files overlapped. They were not reset, restored, stashed or discarded. Implementation and all
+verification used a clean isolated worktree, `/tmp/AgentControl-n13`, at `a9a4441` (detached so the original
+checked-out branch and edits remain intact). The implementation commit is pushed as a fast-forward to the requested
+remote branch. The original checkout intentionally retains its earlier dirty work.
+
+Changed files (24):
+
+- `agent-autonomy/chat/`: `chat.css`, `tokens.css`, `index.html`, `thread.js`, `decisions.js`, `sections.js`,
+  `FONTS.md` and the six WOFF2 files listed below.
+- `agent-autonomy/third_party/fonts/`: unmodified `OFL-Inter.txt` and `OFL-IBM-Plex.txt`.
+- `agent-autonomy/app.py`: only D20's flat asset allow-list extension and `font/woff2` MIME mapping. CSS/JS MIME,
+  flat-directory checks, `reply()` headers, authentication and 404 behavior are preserved.
+- `agent-autonomy/tests/`: `test_chat_routes.py` (two additions only), `test_chat_ui.cjs`, `fixtures.cjs`,
+  `chat_screenshots.cjs`.
+- `CURRENT_STATE.md`, README chat description, architecture **§9 only**, this appended report.
+
+No classic file, other Python file/test, engine, journal, schema, endpoint, approval body or decision semantics changed.
+Presentation uses escaped existing fields; avatars are decorative initials of recorded identities. Request catalogues,
+confirmation rules, privacy boundaries, server-authoritative delivery and D7 remain unchanged. The in-flight skill-fetch
+race remains excluded. D13's one approval card plus Projects count, details on demand, session history, one/two-row
+composer and footer constraints remain in force; O8's session marker is unchanged.
+
+### Fonts and provenance
+
+Unmodified Fontsource packages **5.3.0**, metadata font version **v20**, SIL OFL 1.1:
+
+- Inter: https://registry.npmjs.org/@fontsource-variable/inter/-/inter-5.3.0.tgz ; upstream `rsms/inter`.
+- Plex: https://registry.npmjs.org/@fontsource/ibm-plex-mono/-/ibm-plex-mono-5.3.0.tgz ; upstream `IBM/plex`.
+
+Inter variable 400–700 and Plex 400/500; Latin and Latin Extended only. Six flat same-origin files, **189,700 bytes**
+(total), below 400 KB. `font-display: swap`; system fallback stacks retained. Full source filenames and provenance
+are also in `chat/FONTS.md`. Both licence texts are unchanged package copies and are not served.
+
+| File | Bytes | SHA-256 | Package file |
+|---|---:|---|---|
+| `inter-latin-var.woff2` | 48,256 | `3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62` | `inter-latin-wght-normal.woff2` |
+| `inter-latin-ext-var.woff2` | 85,068 | `34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956` | `inter-latin-ext-wght-normal.woff2` |
+| `ibm-plex-mono-latin-400.woff2` | 14,708 | `08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7` | `ibm-plex-mono-latin-400-normal.woff2` |
+| `ibm-plex-mono-latin-500.woff2` | 14,888 | `01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22` | `ibm-plex-mono-latin-500-normal.woff2` |
+| `ibm-plex-mono-latin-ext-400.woff2` | 13,348 | `6bc0f226a5b7884a8170e3f62c63d7675609d4631bdc5931b5cdab81821f00eb` | `ibm-plex-mono-latin-ext-400-normal.woff2` |
+| `ibm-plex-mono-latin-ext-500.woff2` | 13,432 | `6bb06407c97584b0867a959e05e8874693bfeb8c317de190811c51598f2d99ea` | `ibm-plex-mono-latin-ext-500-normal.woff2` |
+
+Every route test checks exact bytes, `font/woff2`, `no-store`, `nosniff`, and `DENY`. Unknown fonts, other extensions,
+FONTS.md, licence files and nested/traversal paths are rejected. Outside-chat licence checks use the existing Bearer
+contract; no unauthenticated non-chat route was broadened.
+
+### Assertions changed (only these two)
+
+| Test | Before | After | Reason |
+|---|---|---|---|
+| `M3.1 exact receipt decisions, delivery labels, actors and redirect` | actor text `● coder-2` | actor text `coder-2` | N1.3 removes the decorative log glyph; all receipt, actor identity, decision and redirect assertions stay |
+| `M8 D all token text, boundary and focus colour contrasts meet their measured thresholds` | `ratios.length === 26` | `ratios.length === 67` | All original 26 pairs remain; 40 new neutral-surface pairs and the solid foreground/background pair are added; thresholds unchanged |
+
+No test is retired. No behavior, accessibility, privacy, count, request or permission assertion is removed or weakened.
+The browser target selector additionally covers composer chips; all existing matrix rows, zoom, clipping, safe-area,
+focus, keyboard, footer and network assertions remain fatal.
+
+### New checks
+
+Two route tests: `test_bundled_fonts_and_security_headers` and `test_font_allow_list_does_not_expose_other_files`.
+Four chat DOM tests:
+
+1. `N1.3 thread bubbles and avatar tiles preserve escaped recorded identities and content`.
+2. `N1.3 each supported decision card has one solid primary and ghost secondary controls`.
+3. `N1.3 Send retains its exact action with an accessible arrow and project avatars are decorative`.
+4. `N1.3 fonts are local OFL subsets with provenance hashes and no remote CSS sources`.
+
+Fatal browser checks load/check both font families (including Latin Extended), validate all six face URLs and swap,
+record **every** HTTP request's origin, measure right alignment/bounded user bubbles, require agent avatar tiles with
+no log prefixes, and require exactly one solid primary on every supported actionable card. Comparison cases also
+measure the circular Send and its accessible name. Every visible tablet/phone interactive target and composer chip
+must be at least 40×40 px. The reference's 26 px pills, 30 px ghost outlines and 32 px Send stay inside those touch
+areas. Font reports record **1,394 checks and zero app origin failures per pass**.
+
+The contrast test covers 67 pairs; lowest text contrast **4.5698:1**, lowest boundary/focus contrast **3.3412:1**.
+Native question radios retain their semantics and keyboard behavior, with styled rows and a selected white ring.
+
+### Final verification
+
+| Suite | Result | Log / artifacts |
+|---|---|---|
+| Chat DOM | **282/282** | `/tmp/ac-n13-chat-accepted.log` |
+| Classic DOM (unchanged) | **82/82** | `/tmp/ac-n13-classic-accepted.log` |
+| Chat routes | **6/6** (original four unchanged, two additions) | `/tmp/ac-n13-routes.log`; also in full Python |
+| Full Python, first full attempt | **426 tests; OK, skipped=3** (**423 passed**) in **263.809 s** | `/tmp/ac-n13-python-full.log` |
+| Browser, normal | **540 combinations + 179 regression cases; 848 screenshots** | `/tmp/ac-n13-browser-accepted.log`; `/tmp/chat-shots-n13-accepted/` |
+| Browser, required 0.06em wide text | **540 + 179; 848 screenshots** | same log; `/tmp/chat-shots-n13-accepted-wide/` |
+| Cutover smoke | **5/5 in each pass** | each directory's `cutover-smoke.json` |
+| Isolated real-server fixture | **9/9 in each pass**, cleanup passed | each directory's `n1-fixture-results.json` |
+| Eight-step real-server walkthrough | **8/8**, invariants and same-key classic smoke passed; no page errors; disposable project removed | `/tmp/ac-n13-real-verified.log`, `/tmp/ac-n13-real-results.json` |
+
+Python's three skips are environment gates, not passes: container E2E needs an enabled runtime/image, desktop preview
+needs missing desktop tools, and VM E2E needs an enabled KVM host. All three installed real-OpenCode tests ran and
+passed. No Python timing failure or retry occurred in this full run. Heavy browser work finished before it started.
+
+Both complete browser passes were run by the committed harness with no nonfatal substitutions: **1,696 screenshots**
+total. All pre-N1.3 regression kinds remain (157 earlier regression cases plus 22 N1.3 comparison/component cases).
+The read-only fixture creates/switches projects only under its disposable root. Recorded project POSTs are exactly
+Stop, `/api/projects/create {name}`, `/api/projects/select {path}`; no real project data is used.
+
+Unchanged DOM request/body checks include `M5 body helpers exclude unapproved fields and enforce text/confirm rules`,
+`M5 real-server confirm word required, remember follows recorded risk`, all permission/question/team/research/skill/
+outcome delivery tests, M4 submission/command/single-flight cases, and N1/N1.2 creation/switch confirmation tests.
+
+The eight-step walkthrough reused the existing scratch real-server fakes, adapted only to current D13 navigation.
+It creates three sessions through the UI, confirms the critical request with the server's word, answers the question,
+approves a proposed team without pretending agents already joined, watches recorded Turn details grow, verifies,
+applies, then replies in session. At every fully paged checkpoint, waiting equals actionable non-outcome messages
+and cards equal actionable messages plus actionable outcomes. Turn details adds no read when it uses cached live data.
+
+| Step | GET | POST |
+|---|---:|---:|
+| Start | 8 | 1 |
+| Critical approval | 3 | 1 |
+| Question | 6 | 1 |
+| Team proposal | 21 | 2 |
+| Live Turn details | 8 | 0 |
+| Verify | 10 | 1 |
+| Apply | 3 | 1 |
+| Follow-up | 8 | 1 |
+
+These per-step counts exactly match `/tmp/ac-n1-real-results.json`. Boot is **27 GET / 0 POST**, versus 21/0: the
+only additions are the **six same-origin font GETs**, eagerly loaded for this probe. API boot/steady behavior is
+unchanged. Auto explanation also passed (2 GET / 1 POST, the existing preflight). All eight steps use chat only;
+the separate classic smoke afterwards loads `/classic` once with the shared key, 9 GET / 0 POST.
+
+### Comparison renders inspected
+
+The mock's original Google Fonts stylesheet request is intercepted and fulfilled with local `@font-face` rules;
+font URLs resolve to the mock page's own origin. No online font fetch occurs. Mock code is used only by tests;
+product code never imports it. The Projects comparison adds matching recorded-shaped test content to the reference
+thread, styled with the mock's own CSS: user, Hermes, one turn and one permission card. Product rendering remains
+entirely server/read-model driven.
+
+**Every pair inspected in both final pass directories** (mock left, app right), each at 1280×800 and 390×844:
+
+| Section/state | File stems (both widths) |
+|---|---|
+| Primary | `n13-compare-primary-1280.png`, `n13-compare-primary-390.png` |
+| Agents | `n13-compare-agents-1280.png`, `n13-compare-agents-390.png` |
+| Projects | `n13-compare-projects-1280.png`, `n13-compare-projects-390.png` |
+| Workspace | `n13-compare-workspace-1280.png`, `n13-compare-workspace-390.png` |
+| Skills | `n13-compare-skills-1280.png`, `n13-compare-skills-390.png` |
+| Settings (Memory) | `n13-compare-settings-1280.png`, `n13-compare-settings-390.png` |
+| Composer | `n13-compare-composer-1280.png`, `n13-compare-composer-390.png` |
+| Create project | `n13-compare-create-project-1280.png`, `n13-compare-create-project-390.png` |
+| Supplement: decision scrolled fully into view | `n13-compare-projects-decision-1280.png`, `n13-compare-projects-decision-390.png` |
+
+**36 pairs** inspected: the required 16 per pass plus two supplemental decision views per pass. The supplemental
+views show the entire card when the real session header/history pushes part below the phone fold. Also inspected
+the wide-text 200% Skills render showing the zoom-scaled single-column grid. Images stay in `/tmp`, not the repository;
+the committed harness reproduces them, and `n13-comparisons.json` lists the cases.
+
+Intentional differences from the mock:
+
+- Accessibility floors: 12 px rail/bar/kicker text instead of 9/11 px, inputs at least 16 px; contrast-safe muted
+  copy and essential borders; slightly darker avatar fill (`#242429`); 40 px touch areas around smaller visuals.
+- The rail stays 5.25 rem, with whole words; phones retain the approved bottom bar/drawer rather than the mock's
+  top scrolling rail. Widened text may show only the active bottom label, with all names retained accessibly.
+- D13 keeps the one-row composer at a room ≥600 px and two rows below, a single Team pill plus recorded target,
+  the pinned compact footer, Projects count and details on demand. No mock member pills or persistent right panel.
+  Idle/waiting footer is **110 px portrait / 66 px landscape**, equal in both passes; established limits and
+  conversation fractions pass unchanged. The 240 px skill-card minimum is 15 rem, scaling at text zoom.
+- The app retains recorded session dividers, dates/times, disclosure links, risk/review evidence, remember controls
+  and actual decision choices. These account for taller thread/cards than the illustrative mock. Render comparison
+  names and messages are test fixtures; runtime names, counts, paths and skill state come only from existing data.
+- Primary, persistent Agents, Direct, project-file browsing, assignment and Memory remain honest unavailable
+  states. Settings has the existing separate memory scopes; approval gates stay in their own Settings section.
+  Create project retains the actual name-only creation contract and explanatory copy, with no future member picker.
+- The mock's project/sample/member/skill copy is not shipped. The offline comparison shows Reconnecting because
+  its SSE is intentionally unavailable; real-server live behavior is separately verified.
+
+### Development failures, corrections and limits
+
+These are development attempts, not substituted passing matrices:
+
+- Before D20, the new font tests rejected all six WOFF2 files. The new outside-chat licence probe was corrected
+  to authenticate, retaining the existing non-chat authentication contract. Existing route assertions never changed.
+- Early DOM checks caught the authorised actor-glyph assertion and a muted/avatar contrast ratio below 4.5;
+  the glyph assertion was updated as listed, and the avatar token darkened. Final 282/282 and all 67 ratios pass.
+- Comparison-only harness faults (relative mock font URLs and a fixture lacking goal/agent messages) were fixed;
+  no product content or runtime requests were invented.
+- `/tmp/ac-n13-browser-first-full.log`: forced-colors active weight was 600; restored 700 with its focus outline.
+- `/tmp/ac-n13-browser-final.log`: safe-area padding 8 px versus expected 20 px; restored `env()` maxima.
+- `/tmp/ac-n13-browser-verified.log`: compact Send was vertically offset beside Turn details in a two-row composer;
+  aligned its grid cell to the input. Both focused normal/wide checks then passed (11 screenshots / 1 combination /
+  5 regression cases each, `/tmp/ac-n13-workspace-focused*.log`).
+- `/tmp/ac-n13-browser-complete.log`: normal passed, required wide failed the 200% skill-summary clipping check
+  (151 px client height / 241 px scroll height). The 240 px minimum now scales as 15 rem; the unchanged section
+  checks passed (60 combinations / 18 screenshots, `/tmp/ac-n13-sections-wide.log`), followed by both complete
+  passing matrices in `/tmp/ac-n13-browser-accepted.log`.
+- Scratch walkthrough attempts required D13 adaptations: close restored Session details before the next decision,
+  assert the exact Settings destination instead of obsolete direct classic links, and enter Settings through the
+  rail while active-session composer Settings is hidden. Each remained fatal; final eight steps, fallback navigation,
+  classic smoke and cleanup pass in `/tmp/ac-n13-real-verified.log`. No committed behavior test was weakened.
+
+No functional deviation from N1.3. Additional decision comparison views and the scratch eight-step walkthrough
+provide evidence beyond the required matrix/fixture checks. No physical-device or native assistive-technology
+verification is claimed; Android keyboard/device checks remain deferred. Only the authorized font asset handler
+changes Python. N2, persistent-bot roadmap work and main are untouched. Stop for independent Opus review.

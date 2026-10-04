@@ -295,7 +295,7 @@ test('M3.1 exact receipt decisions, delivery labels, actors and redirect',async(
   for(const [i,label] of labels.entries()){
     const node=h.timeline.querySelector(`[data-message="receipt:${i}"]`);
     actual.push(node.querySelectorAll('.message > p')[2].textContent);
-    assert.equal(node.querySelector('.actor').textContent.trim(),'● coder-2');
+    assert.equal(node.querySelector('.actor').textContent.trim(),'coder-2');
   }
   assert.deepEqual(actual,labels);
   const denied=h.timeline.querySelector('[data-message="receipt:1"]');
@@ -1286,7 +1286,7 @@ test('M8 D decorative state symbols are hidden while recorded labels and list se
   const h=await membersHarness('teamRunning');await openMembers(h);assert.equal(h.document.querySelector('#project-list').getAttribute('role'),'list');assert.equal(h.document.querySelector('#thread-items').getAttribute('role'),'list');assert(h.document.querySelector('#section-nav .projects-badge[aria-hidden="true"]'));assert(h.document.querySelector('#live-members [aria-hidden="true"]'));assert(h.document.querySelector('.task-graph [aria-hidden="true"]'));assert.equal(h.document.querySelector('#context h2').textContent,'Members');assert(h.timeline.querySelector('[data-message] h2'));assert.equal(posts(h).length,0);
 });
 test('M8 D all token text, boundary and focus colour contrasts meet their measured thresholds',()=>{
-  const ratios=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));assert.equal(ratios.length,26);const failures=ratios.filter(v=>v.ratio<v.minimum);assert.deepEqual(failures,[]);
+  const ratios=fx.contrastReport(fs.readFileSync(path.join(root,'tokens.css'),'utf8'));assert.equal(ratios.length,67);const failures=ratios.filter(v=>v.ratio<v.minimum);assert.deepEqual(failures,[]);
 });
 test('M8 D sign-in protects the shared key from automatic completion, capitals and spelling',async()=>{
   const h=await harness(fixture(),{key:false}),field=h.document.querySelector('#dashboard-key');assert.equal(field.getAttribute('autocomplete'),'off');assert.equal(field.getAttribute('autocapitalize'),'off');assert.equal(field.getAttribute('spellcheck'),'false');assert.equal(field.type,'password');assert.equal(h.local.size,0);
@@ -1542,5 +1542,20 @@ test('N1.2 + offers Create project and Open folder…, which browses inside the 
  dialog.querySelector('[data-browse-path="/tmp/plain"]').click();await tick();await tick();assert.equal(reads(),before+1);assert.equal(dialog.querySelector('#folder-path').textContent,'/tmp/plain');assert(dialog.querySelector('[data-browse-path="/tmp"]'));assert.equal(dialog.querySelectorAll('b').length,0);
  dialog.querySelector('[data-folder-select="0"]').click();assert.match(dialog.textContent,/Switch to inner <b>\?/);assert.equal(posts(h).length,0);
  dialog.querySelector('#confirm-project').click();dialog.querySelector('#confirm-project')?.click();await tick();assert.deepEqual(posts(h),[{url:'/api/projects/select',body:{path:'/tmp/plain/inner'}}]);
+});
+test('N1.3 thread bubbles and avatar tiles preserve escaped recorded identities and content',async()=>{
+ const h=await harness(fixture());
+ for(const node of h.timeline.querySelectorAll('.agent-message')){assert(node.querySelector('.avatar-tile[aria-hidden="true"]'));assert(!/^[●◇]/.test(node.querySelector('.actor').textContent.trim()));}
+ const user=h.timeline.querySelector('.msg.user.you-bubble');assert(user);assert(!user.querySelector('.avatar-tile'));assert(user.textContent.includes(h.core.getState().thread.messages[user.closest('[data-message]').dataset.message].text));
+ const page=clone(h.publicThread);page.messages.push(fx.threadMessage('n13:hostile','decision','<img src=x onerror=alert(1)>',{}, {actor:'<b>agent</b>'}));h.options.respond=url=>url.startsWith('/api/thread')?page:undefined;await h.core.refresh();const card=h.timeline.querySelector('[data-message="n13:hostile"]');assert(card.textContent.includes('<b>agent</b>'));assert(card.textContent.includes('<img src=x onerror=alert(1)>'));assert.equal(card.querySelectorAll('img,b').length,0);assert.equal(posts(h).length,0);
+});
+test('N1.3 each supported decision card has one solid primary and ghost secondary controls',async()=>{
+ const h=await decisionHarness('all');for(const host of h.timeline.querySelectorAll('.decision-host[data-actionable]')){const buttons=[...host.querySelectorAll('[data-decision]')];if(!buttons.length)continue;assert.equal(host.querySelectorAll('.solid').length,1);for(const b of buttons)assert(b.classList.contains('solid') || b.classList.contains('ghost'));assert(host.closest('.msg').querySelector('.kicker'));}assert.equal(posts(h).length,0);
+});
+test('N1.3 Send retains its exact action with an accessible arrow and project avatars are decorative',async()=>{
+ const h=await harness(),send=h.document.querySelector('#send-message');assert.equal(send.getAttribute('aria-label'),'Send');assert.equal(send.querySelector('[aria-hidden="true"]').textContent,'↑');assert(h.document.querySelector('#current-project .avatar-tile[aria-hidden="true"]'));assert.equal(h.document.querySelector('#current-project strong').textContent,h.window.AC.model.projectName(h.core.getState().state));assert.equal(posts(h).length,0);
+});
+test('N1.3 fonts are local OFL subsets with provenance hashes and no remote CSS sources',()=>{
+ const crypto=require('node:crypto'),css=fs.readFileSync(path.join(root,'tokens.css'),'utf8'),report=fs.readFileSync(path.join(root,'FONTS.md'),'utf8');const files=fs.readdirSync(root).filter(f=>f.endsWith('.woff2'));assert.equal(files.length,6);assert(files.reduce((total,f)=>total+fs.statSync(path.join(root,f)).size,0)<=400000);for(const f of files){assert(css.includes("url('/chat/"+f+"') format('woff2')"));assert(report.includes(crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')));}assert.equal((css.match(/font-display: swap/g)||[]).length,6);assert(!/url\(['"]?https?:/.test(css));for(const name of ['OFL-Inter.txt','OFL-IBM-Plex.txt'])assert(fs.readFileSync(path.resolve(root,'../third_party/fonts',name),'utf8').includes('SIL OPEN FONT LICENSE'));
 });
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

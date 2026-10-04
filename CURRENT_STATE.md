@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-03, by Opus (D20 bundled fonts approved; N1.3 Match the mock ready; N2 decisions D14–D19 approved).
+**Last updated:** 2026-10-03, by Codex (N1.3 implemented and verified; D20 fonts shipped; Opus review pending; N2 unstarted).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_2_PROJECTS_SCREEN.md`, **implemented and verified (`f135bb3`); Opus review pending**. N1/N1.1 technically accepted. `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
+| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_3_MATCH_THE_MOCK.md`, **implemented and verified; Opus review pending**. N1/N1.1 technically accepted. `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
 | Persistent agents (proposal; approved parts recorded as D8–D12 and §12.2 in the architecture) | `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`; inputs `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and `docs/inputs/agentcontrol-ui.html` (visual reference only; not served, not reused) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
@@ -44,7 +44,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **N0 Persistent agents: architecture and requirements** | ✅ **N1-gating decisions approved 2026-10-03**; P-2 to P-10, P-15 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. Approved: P-1 (D8 scope), P-11 (a) (D9 dark-only), P-12 (D10 N1 test policy), P-13 (D11 vocabulary and routes), P-14 (D12 handoff over mock), and the N sequence (§12.2). No code, schema or database changes |
 | **N1 Shell and navigation** | ✅ **accepted (N1 `8be5d62`, N1.1 `99b4c7d`; design corrected and accepted in N1.2)** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section dark shell from existing data and endpoints; Turn details unchanged; native project switch and create; honest unavailable states. Both required matrix passes (normal and 0.06em wide-font) green: 540 + 61 each, 1,642 screenshots. Optional O1, O3, O4, O6, O7 carried. No physical-device testing of the new shell yet |
 | **N1.2 Projects screen** | ✅ **accepted (`f135bb3` and `450165e`; review 2026-10-03)** | separate Claude Code session (Codex out of usage), then Opus | `docs/handoffs/N1_2_PROJECTS_SCREEN.md` (D13): rail, project list, team thread, composer; approval once on its card plus a Projects count; details on demand; classic links only where required. Both matrix passes 540 + 157, 830 screenshots each; chat 278/278; Python 424 OK. Optional O8–O10 for the owner. No physical-device check yet |
-| **N1.3 Match the mock** | 📋 **ready for Codex** (owner request, 2026-10-03; D20) | Codex, then Opus | `docs/handoffs/N1_3_MATCH_THE_MOCK.md`: bundled Inter and IBM Plex Mono (same-origin; one-line `app.py` allow-list change); every component restyled to the mock's CSS within the accessibility floors; judged on side-by-side mock and app renders at 1280 and 390. Before N2 |
+| **N1.3 Match the mock** | ✅ **implemented and verified; Opus review pending** (2026-10-03; D20) | Codex, then Opus | `docs/handoffs/N1_3_MATCH_THE_MOCK.md`: bundled Inter/Plex (189,700 bytes, same-origin); reference components within accessibility floors; 36 comparison pairs inspected. Both matrix passes 540 + 179 / 848 screenshots each; chat 282/282, classic 82/82, routes 6/6, Python 426 OK (3 environment gates); real-server walkthrough 8/8. Before N2 |
 | **N2 Library, projects, membership** | 📝 **draft** (start after N1.3 is accepted and the owner confirms migration `_v8`) | implementer, then Opus | `docs/handoffs/N2_LIBRARY_PROJECTS_MEMBERSHIP.md` (D14–D19): `library_agents`, `projects`, `memberships`, `skill_assignments`, `tool_policies`; library, Primary setup, project creation with directory and members, skill assignment, ask/deny policy; membership advisory; no engine change; commits the real-server walkthrough |
 | **N1.1 Bounded corrections** | ✅ **accepted (Opus re-review, `99b4c7d`)** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
 
@@ -260,9 +260,9 @@ was changed.
    `f45c112`. The merge-status record was then merged as well (`main` = `d1f4733`).
 4. **N0: the owner approved P-1, P-11 (a), P-12, P-13, P-14 and the N sequence (2026-10-03).** They are recorded as
    D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. N1 applies the §9 and §11 amendments and rewrites §10.
-5. **N1.2 is accepted (Opus, 2026-10-03).** The owner approved N2's decisions (D14–D19) and bundled fonts (D20). **Next:
-   N1.3 Match the mock** (`docs/handoffs/N1_3_MATCH_THE_MOCK.md`), then Opus reviews it against side-by-side renders. The N2
-   handoff follows, so it is ready when N1.3 is accepted.
+5. **N1.2 is accepted (Opus, 2026-10-03).** The owner approved N2's decisions (D14–D19) and bundled fonts (D20). **N1.3 is now implemented and verified**
+   (`docs/handoffs/N1_3_MATCH_THE_MOCK.md`), awaiting Opus review against side-by-side renders. N2 remains unstarted;
+   its draft is ready only after N1.3 acceptance and the owner's migration confirmation.
 6. **Still the owner's:**
    - P-2 to P-10 and P-15, needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards
    - Q1–Q3 (model registry, Primary's endpoint, projects root), needed before N3
@@ -451,3 +451,30 @@ N2 and all unapproved persistent-agent backend work remain out of scope. Stop fo
   landscape 59 px; equal with and without waiting cards. Named `n12-*` renders inspected in both passes.
 - Deviations for review are listed in the report (unsupported-action cards keep their classic fallback; Details
   describes the active session; route changes close Session details; portrait footer budget). No N2, no merge.
+
+
+## N1.3 Match the mock verification (2026-10-03)
+
+- From `a9a4441`, isolated worktree `/tmp/AgentControl-n13`; the original checkout's surviving dirty N1.2 edits
+  remain untouched. One implementation/completion commit, pushed only to `feature/chat-first-redesign`.
+- D20: six unmodified OFL Fontsource Inter/Plex WOFF2 subsets (189,700 bytes), same-origin swap with provenance,
+  hashes and unserved licences. Python diff is only the font asset allow-list/MIME and two route-test additions.
+  No classic, engine, schema, journal, request body or approval semantics changed; D7/in-flight race boundaries stay.
+- Reference rail, avatars/bubbles, compact mono turns, request cards/radios, composer, sections and dialogs shipped
+  within contrast/input/target floors. D13 layout and all M3–M9 behavior preserved. Two authorized assertion updates:
+  actor glyph `● coder-2` → `coder-2`; contrast coverage 26 → 67 pairs (original pairs and thresholds retained).
+- Chat **282/282**, classic **82/82**, routes **6/6**; full Python **426, OK (skipped=3)**, **263.809 s**, first full
+  attempt (423 passed; container, desktop-tools and KVM gates). All three real-OpenCode tests ran and passed.
+- Both full browser passes **540 + 179**, **848 screenshots each**; cutover **5/5** and isolated fixture **9/9** per
+  pass. Fonts **1,394 checks/pass**, **zero app off-origin requests**. Contrast **67 pairs** (text minimum 4.5698:1;
+  boundary/focus minimum 3.3412:1). Idle/waiting footer equal: portrait **110 px**, landscape **66 px**; original
+  limits, conversation fractions, 200% zoom, safe areas, touch targets and focus assertions pass unchanged.
+- Every required mock-left/app-right pair inspected at 1280 and 390 in both passes: **36 pairs**, including four
+  supplemental decision views. Artifacts `/tmp/chat-shots-n13-accepted/` and `-wide/`; main log
+  `/tmp/ac-n13-browser-accepted.log`. The committed harness reproduces them without online font fetches.
+- Real-server eight-step walkthrough **8/8**, exact earlier per-step GET/POST counts, fully paged waiting/card
+  invariant, typed critical approval, recorded team membership/live output, Verify/Apply/follow-up, same-key classic
+  smoke and disposable cleanup. Boot's six added GETs are only local fonts; API read/write behavior unchanged.
+- Appended handoff report lists all changed/new assertions, font hashes, development failures/retries and intentional
+  visual differences. No Python timing failure, backend fix or test weakening. No physical-device claim or N2.
+  **Stop for independent Opus review.**

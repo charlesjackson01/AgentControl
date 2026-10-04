@@ -49,7 +49,8 @@
     host.addEventListener('scroll',()=>{follow = host.scrollHeight-host.scrollTop-host.clientHeight <= 32;if(follow){unseen=0;pill.hidden=true;}});
     const status = value=>{const info=m.sessionsFromState({runs:[{status:value}]})[0];return m.symbolHTML(info.symbol)+' '+e(info.statusLabel);};
     const time = at=>`<time title="${e(m.timeLabel(at))}">${e(m.relTime(at))}</time>`;
-    const actor = name=>`<span class="actor"><span aria-hidden="true">${name === 'you' ? '◌' : name === 'hermes' ? '◇' : name?.startsWith('reviewer') ? '✓' : name?.startsWith('researcher') ? '⌕' : name?.startsWith('tester') ? '▧' : '●'}</span> ${e(name === 'agentcontrol' ? 'AgentControl' : name)}</span>`;
+    const actor = name=>`<span class="actor">${e(name === 'agentcontrol' ? 'AgentControl' : name)}</span>`;
+    const avatar=name=>`<span class="avatar-tile" aria-hidden="true">${e((name === 'hermes' ? 'H' : name === 'agentcontrol' ? 'A' : name || '?').slice(0,1).toUpperCase())}</span>`;
     const text = (value,cls='',decorative=false)=>`<p class="plain ${cls}">${decorative?m.statusMarkup(value):e(value)}</p>`;
     const fields = (obj,keys)=>`<dl>${keys.filter(k=>obj?.[k] !== undefined && obj[k] !== null).map(k=>`<dt>${e(k.replace(/_/g,' '))}</dt><dd class="plain">${e(Array.isArray(obj[k]) ? obj[k].join(', ') : typeof obj[k] === 'object' ? '' : obj[k])}</dd>`).join('')}</dl>`;
     const risk = value=>value ? fields(value,['level','label','class','reasons']) : '';
@@ -76,9 +77,10 @@
           type='bubble';summary=text(message.text)+(d.title ? text('Next: '+d.title) : '')+(d.repaired ? '<small>repaired reply</small>' : '')+(d.planning ? text('Team plan · '+d.proposal_counts?.agents+' agents · '+d.proposal_counts?.tasks+' tasks','muted') : '');
           detail= d.plan?.length ? '<ol>'+d.plan.map(p=>`<li class="plain">${e(p)}</li>`).join('')+'</ol>' : '';break;
         case 'turn': {
+          type='turn-row';
           const files=d.files || [], add=files.reduce((n,f)=>n+(Number(f.added)||0),0), remove=files.reduce((n,f)=>n+(Number(f.removed)||0),0);
           const v=d.verification?.status, verification=v==='passed' ? '✓ passed' : v==='failed' ? '✕ failed' : '– not configured';
-          summary=text('turn '+d.number+' · '+message.text)+text(statusText(d.status)+' · '+verification+' · '+(files.length+(d.files_omitted || 0))+' files +'+add+'/−'+remove,'',true)+(d.uncertain ? text('! submission uncertain','warning',true) : '');
+          summary=text('turn '+d.number+' · '+message.text)+text(statusText(d.status)+' · '+verification+' · '+(files.length+(d.files_omitted || 0))+' files +'+add+'/−'+remove,'turn-result',true)+(d.uncertain ? text('! submission uncertain','warning',true) : '');
           summary+=`<a class="turn-workspace-link" data-workspace-link href="#/w/${e(encodeURIComponent(message.session))}/${e(encodeURIComponent(message.refs?.agent || message.actor))}">Open turn details</a>`;
           // This is the bounded public task from /api/thread, never the Hermes request prompt.
           detail=(d.prompt ? '<h3>Task</h3><details class="task-more"><summary>Show more</summary>'+text(d.prompt)+'</details>'+text(d.prompt,'task-preview') : '')+'<ul class="files">'+files.map(f=>`<li class="plain">${e(f.path)} · ${e(f.change)} +${e(f.added)}/−${e(f.removed)}</li>`).join('')+'</ul>'+(d.files_omitted ? text(d.files_omitted+' more files') : '')+(d.result_tail ? `<pre>${e(d.result_tail)}</pre>` : '')+(d.ended ? text('Ended '+m.timeLabel(d.ended)) : '');break;
@@ -96,7 +98,7 @@
         default:type='quiet';summary=text(message.text);
       }
       if(action && (message.kind==='proposal' || message.kind==='request' || message.kind==='research'))detail='';
-      return `<h2 class="sr-only">${e(message.kind)} · ${e(m.boundText(message.text))}</h2><div class="message ${type}"><div class="message-meta">${actor(message.actor)} ${time(message.at)}</div>${summary}${detail ? `<details class="message-detail"><summary>${['goal','note','outcome'].includes(message.kind) ? 'Show more' : 'Details'}</summary><div>${detail}</div></details>` : ''}${decisionLink}${message.kind==='outcome' && ['completed','blocked','failed','stopped','limit_reached'].includes(d.status) ? `<a class="reply-session" href="#/" data-reply="${e(message.session)}">Reply in session</a>` : ''}</div>`;
+      return `<h2 class="sr-only">${e(message.kind)} · ${e(m.boundText(message.text))}</h2><div class="message msg ${type} ${message.actor==='you'?'user':'agent-message'}">${message.actor==='you'?'':avatar(message.actor)}${action?`<p class="kicker">${e(message.kind==='request'?d.kind || 'Request':message.kind)}</p>`:''}<div class="message-meta">${actor(message.actor)} ${time(message.at)}</div>${summary}${detail ? `<details class="message-detail"><summary>${['goal','note','outcome'].includes(message.kind) ? 'Show more' : 'Details'}</summary><div>${detail}</div></details>` : ''}${decisionLink}${message.kind==='outcome' && ['completed','blocked','failed','stopped','limit_reached'].includes(d.status) ? `<a class="reply-session" href="#/" data-reply="${e(message.session)}">Reply in session</a>` : ''}</div>`;
     }
     function statusText(value) {if(value==='finished')return '✓ Finished';return m.sessionsFromState({runs:[{status:value}]})[0].symbol+' '+m.sessionsFromState({runs:[{status:value}]})[0].statusLabel;}
     function anchor() {

@@ -27,7 +27,8 @@ browser. To reach the dashboard from your phone, bind `--host` to your Tailscale
 address and keep it on the tailnet. Do not expose the port publicly without
 HTTPS and authentication.
 
-Chat has six dark sections: **Primary, Agents, Projects, Workspace, Skills and Settings**. Projects holds the
+Chat bundles Inter and IBM Plex Mono locally and uses the mock's dark component styling, with accessible contrast,
+touch targets and text sizing. It has six sections: **Primary, Agents, Projects, Workspace, Skills and Settings**. Projects holds the
 existing team thread, approvals, sessions and native project creation/switching. Primary, persistent Agents,
 Direct conversations, file browsing and Memory are marked unavailable. Skills shows the real shared catalog.
 The classic dashboard remains at **`/classic`**, using the same key. Settings and Skills link to its full
@@ -87,7 +88,7 @@ Hermes CLI and the OpenCode API without starting a model.
   before sending work, records token usage per agent, and can run a local
   gateway that queues model calls. Chat shows Connections; detailed queue and usage controls stay in classic.
   See `agent-autonomy/README.md`.
-- **Appearance.** Chat follows system Light/Dark. Classic retains Mac, Terminal and XP themes.
+- **Appearance.** Chat has one dark appearance with same-origin bundled fonts. Classic retains Mac, Terminal and XP themes.
 
 ## Tests
 

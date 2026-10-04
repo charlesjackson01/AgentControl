@@ -336,39 +336,42 @@ the same card can offer another decision, as specified in the M5 handoff.
 
 ## 9. Design language (single, token-based)
 
-> **Amended by D9 (approved 2026-10-03), shipped in N1.** *Appearance* becomes one dark appearance (the
-> near-black token set; no light set); *Type* becomes system stacks naming Inter and IBM Plex Mono first
-> (`Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`; `"IBM Plex Mono", ui-monospace, SFMono-Regular,
-> Menlo, monospace`), with nothing downloaded; active pills and the send button are white with black text. Every
-> accessibility rule below still applies, computed for the dark appearance.
+**D9 shipped the dark shell; N1.3 implements D20 and the reference component styling.** The visual source is
+`docs/inputs/agentcontrol-ui.html` CSS, within the accessibility floors. The six sections and D13 layout remain unchanged.
 
-The direction: the simplicity of modern AI chat apps, with restrained macOS polish. It is calm, dense enough for
-real work, and the content comes first.
-
-- **Tokens** (`chat/tokens.css`) are the only place a colour, font, size, radius, shadow or duration is defined.
-  `chat.css` uses `var(--…)` only, and a test enforces that it contains no hex, `rgb(`, `hsl(` or named-colour literals.
-- **Appearance** follows the system through `prefers-color-scheme`, with light and dark token sets.
-  There is **no theme switcher** and no per-theme component CSS.
-- **Type** uses the system stack: `-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif`.
-  Monospace uses `ui-monospace, "SF Mono", Menlo, Consolas, monospace`. The scale is 12 / 13 / 15 / 17 / 22.
-- **Space** follows a 4 px base: 4, 8, 12, 16, 24, 32. Radii are 8, 12 and 16. Borders are hairlines.
-  Shadows are only for floating layers. There are no cards inside cards.
-- **Colour:** neutral surfaces, **one** accent for primary actions and focus, and semantic colours for success,
-  warning and danger (always with a symbol).
-- **Motion** is 120–200 ms ease-out for opening and closing only. `prefers-reduced-motion` turns it off.
-- **Progressive disclosure:** collapsed by default and one line per item, with detail on demand in place or in the
-  context panel. A secondary control lives in a menu, not on the surface.
-- **Accessibility:**
-  - landmarks (`nav`, `main`, `aside`)
-  - visible inset focus rings in both appearances, and a keyboard path to every action
-  - a first-focusable skip link to the conversation; roving arrow-key context tabs and Workspace turn toolbar
-  - modal dialogs/drawers/sheets trap focus, make the background inert, start on Cancel/Close and restore the opener
-  - the read-only terminal supports arrow/Page/Home/End scrolling and reachable Jump to latest
-  - WCAG AA contrast in both appearances, computed from all text/status tokens against every neutral surface
-  - control boundaries and focus colour meet 3:1; text and special warning/accent pairs meet 4.5:1
-  - polite stable connection/waiting announcements, labelled landmarks/lists and sequential headings
-  - reduced motion disables animations, transitions and smooth scrolling; forced colours retain focus/selection
-  - touch targets of at least 40 px on phones
+- **Tokens:** `chat/tokens.css` defines the colours, fonts, sizes, spacing, radii and durations. `chat.css` uses
+  `var(--…)` for them; the colour-literal test stays enforced.
+- **Appearance:** one dark set, `color-scheme: dark`, no light set or theme switcher. Background `#070708`, project
+  panel `#101012`, rail `#0b0b0d`, cards `#161618`, user bubbles `#1f1f23`, modal `#141416`, inputs `#0e0e10`.
+  Neutral surfaces, white primary actions and focus, semantic success/warning/danger with symbols. No purple or gradients.
+- **Type (D20):** bundled OFL Inter (variable 400–700) and IBM Plex Mono (400/500), Latin and Latin Extended only,
+  served from flat same-origin `/chat/*.woff2` with `font-display: swap`. Six files, **189,700 bytes**, under 400 KB;
+  provenance and SHA-256 in `chat/FONTS.md`, unmodified licences in `third_party/fonts/` (not served). Existing
+  system stacks remain fallbacks. No CDN or external request, runtime download, framework or build step.
+  Base scale 12 / 13 / 15 / 17 / 22, with reference message 14.5, project name 13.5 and card copy 12.5 px.
+  Inputs remain at least 16 px, all other text at least 12 px; the mock's faint text token is not used.
+- **Components:** white 38 px AC tile; icon over whole-word 12 px rail/bar labels; light active fill; 34 px initial
+  avatar tiles beside recorded names, with a smaller tile in compact turns. User messages are bounded, right-aligned
+  bubbles with 16/16/6/16 corners. Turn results use Plex Mono; decision cards have an uppercase request kicker,
+  one white primary and quiet secondary controls. Native radios remain labelled inputs in selectable rows.
+  Quiet session dividers and centred 780 px thread/composer columns; top bar 62 px. Cards/dialogs radius 16,
+  Settings rows radius 14, inputs radius 10, composer radius 18. Composer pills and the arrow Send use the reference
+  visual sizes; D13's one/two-row layout and footer budgets remain binding.
+- **Boundaries:** decorative separators use the reference 7% white. Inputs, composer edges and focus use tested
+  tokens (3:1 minimum); text has 4.5:1 minimum on every neutral surface. Avatar surface is slightly darker than
+  the reference fill to keep muted text above the floor. White primary actions use black text.
+- **Targets:** at least 40×40 px on tablet/phone. Touch pills, ghost outlines and Send retain the reference's smaller
+  visual size inside the larger hit area. At widths of 1200 px and above, compact 26 px pills, 30 px ghosts and
+  32 px Send are allowed. The rail stays in rem, labels remain whole words, and user zoom remains enabled.
+- **Motion:** 160 ms opening/closing only; reduced motion disables animations, transitions and smooth scrolling.
+  Forced colours preserve native radio selection, visible focus and active navigation emphasis.
+- **Disclosure and accessibility:** details stay collapsed by default and open in place or in Session details.
+  Secondary controls stay in menus; shadows are for floating layers only, with no nested card surfaces.
+  Labelled landmarks/lists, sequential headings, first-focusable skip link,
+  arrow-key context/turn navigation, focus trapping and restoration with Cancel/Close first. Terminal scroll keys
+  and Jump to latest remain reachable. Live regions retain server-authoritative waiting/connection announcements.
+  Phone safe-area padding, viewport/keyboard behavior, text zoom to 200%, contrast and complete normal/widened-text
+  browser passes remain mandatory. Step material stays in Turn details; approval/card behavior is unchanged.
 
 ## 10. Layout
 

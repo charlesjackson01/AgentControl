@@ -67,6 +67,34 @@ class ChatRoutesTests(unittest.TestCase):
                 self.get('/chat/' + path)
             self.assertEqual(error.exception.code, 404)
 
+    def test_bundled_fonts_and_security_headers(self):
+        fonts = sorted((ROOT / 'chat').glob('*.woff2'))
+        self.assertEqual(len(fonts), 6)
+        self.assertLessEqual(sum(font.stat().st_size for font in fonts), 400000)
+        for font in fonts:
+            with self.subTest(font=font.name), self.get('/chat/' + font.name) as response:
+                self.assertEqual(response.read(), font.read_bytes())
+                self.assertEqual(response.headers['Content-Type'], 'font/woff2')
+                self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+                self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
+
+    def test_font_allow_list_does_not_expose_other_files(self):
+        for path in ('/chat/unknown.woff2', '/chat/inter-latin-var.ttf',
+                     '/chat/inter-latin-var.woff', '/chat/x.txt', '/chat/x.md',
+                     '/chat/sub/inter-latin-var.woff2', '/chat/../inter-latin-var.woff2',
+                     '/chat/FONTS.md', '/chat/fonts.md', '/chat/OFL-Inter.txt',
+                     '/chat/../third_party/fonts/OFL-Inter.txt'):
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as error:
+                self.get(path)
+            self.assertEqual(error.exception.code, 404)
+
+        for path in ('/third_party/fonts/OFL-Inter.txt', '/third_party/fonts/OFL-IBM-Plex.txt'):
+            request = urllib.request.Request(self.url + path, headers={'Authorization': 'Bearer test-key'})
+            with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as error:
+                self.opener.open(request)
+            self.assertEqual(error.exception.code, 404)
+
     def test_api_still_requires_key(self):
         with self.assertRaises(urllib.error.HTTPError) as error:
             self.get('/api/state')

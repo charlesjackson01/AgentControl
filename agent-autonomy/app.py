@@ -81,10 +81,10 @@ def handler(controller, key):
                 name = path.path[len('/chat/'):]
                 chat_root = (ROOT / 'chat').resolve()
                 asset = (chat_root / name).resolve()
-                if (re.fullmatch(r'[a-z0-9][a-z0-9-]*\.(css|js)', name)
+                if (re.fullmatch(r'[a-z0-9][a-z0-9-]*\.(css|js|woff2)', name)
                         and asset.parent == chat_root and asset.is_file()):
-                    kind = 'text/css' if name.endswith('.css') else 'text/javascript'
-                    return self.reply(200, asset.read_bytes(), kind + '; charset=utf-8')
+                    kind = 'font/woff2' if name.endswith('.woff2') else 'text/css; charset=utf-8' if name.endswith('.css') else 'text/javascript; charset=utf-8'
+                    return self.reply(200, asset.read_bytes(), kind)
                 return self.reply(404, {'error': 'Not found'})
             assets = {'/themes.css': 'text/css; charset=utf-8', '/app.css': 'text/css; charset=utf-8', '/app.js': 'text/javascript; charset=utf-8',
                       '/workspace.css': 'text/css; charset=utf-8', '/workspace.js': 'text/javascript; charset=utf-8'}

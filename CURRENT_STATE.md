@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-04, by Opus (owner confirmed N2 migration `_v8` and asked for a premium feel; N2, with Part 0 polish, ready for Codex).
+**Last updated:** 2026-10-04, by Opus (owner approved classic cleanup: D21 triage and CR series after N2; N2 ready for Codex).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -46,6 +46,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **N1.2 Projects screen** | ✅ **accepted (`f135bb3` and `450165e`; review 2026-10-03)** | separate Claude Code session (Codex out of usage), then Opus | `docs/handoffs/N1_2_PROJECTS_SCREEN.md` (D13): rail, project list, team thread, composer; approval once on its card plus a Projects count; details on demand; classic links only where required. Both matrix passes 540 + 157, 830 screenshots each; chat 278/278; Python 424 OK. Optional O8–O10 for the owner. No physical-device check yet |
 | **N1.3 Match the mock** | ✅ **accepted (`2811a04`; review 2026-10-04)** | Codex, then Opus | `docs/handoffs/N1_3_MATCH_THE_MOCK.md`: bundled Inter and IBM Plex Mono (byte-identical to Fontsource 5.3.0, 189,700 bytes, same-origin); components restyled to the mock; both passes 540 + 179, 848 screenshots each; Python 426 OK. S1 (desktop radio ovals) is N2 Part 0 |
 | **N2 Library, projects, membership** | 📋 **ready for Codex** (migration `_v8` confirmed by the owner, 2026-10-04) | Codex, then Opus | `docs/handoffs/N2_LIBRARY_PROJECTS_MEMBERSHIP.md`. **Part 0:** desktop radio fix, risk label, short fixture key and `--key`, premium empty states and polish (renders at 1280, 1080 and 390). **Then N2:** `library_agents`, `projects`, `memberships`, `skill_assignments`, `tool_policies`; library, Primary setup, projects with directory and members, skill assignment, ask/deny policy; membership advisory; no engine change; commits the real-server walkthrough |
+| **Classic retirement (CR1–CR5)** | 📋 **triage approved 2026-10-04 (D21)**; starts after N2 | Opus handoffs, then implementer | `docs/CLASSIC_RETIREMENT.md`: 3 already native, 14 dropped, 5 N series, 32 ported (CR1 approvals and audit, CR2 run options, CR3 visibility, CR4 native surfaces). CR5 removal needs its own owner approval |
 | **N1.1 Bounded corrections** | ✅ **accepted (Opus re-review, `99b4c7d`)** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
 
 The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `sections.js`, `shell.js`.
@@ -262,7 +263,7 @@ was changed.
    D8–D12 and §12.2 in `docs/REDESIGN_ARCHITECTURE.md`. N1 applies the §9 and §11 amendments and rewrites §10.
 5. **N1.3 is accepted (Opus, 2026-10-04).** The owner confirmed migration `_v8` and asked for a premium feel. **Next: Codex
    implements N2**: Part 0 (radio fix, risk label, short fixture key, premium empty states and polish) as its own commit, then
-   N2. Then Opus reviews both. Classic-retirement triage still awaits the owner's confirmation of the sort and the order.
+   N2. Then Opus reviews both. Classic retirement is approved (D21, `docs/CLASSIC_RETIREMENT.md`) and starts after N2, with CR1.
 6. **Still the owner's:**
    - P-2 to P-10 and P-15, needed before N2 (P-2, P-4, P-6, P-8, P-9, P-15) and N3 onwards
    - Q1–Q3 (model registry, Primary's endpoint, projects root), needed before N3

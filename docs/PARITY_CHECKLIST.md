@@ -51,6 +51,11 @@ Product paths in tables are relative to `agent-autonomy/` unless another root is
 expanded below into exact passing test names and actual screenshot/real-server paths. No product/test file
 changes are made in Part A.
 
+> **Retirement triage (2026-10-04, D21).** C14 (Forget key), C15 (project browsing and creation) and V11 (switch project)
+> have been native since N1 and N1.2, so the current split is **20 Native / 51 Linked / 1 not ported / 0 Missing**. Every
+> Linked row now has an approved outcome (drop, N series, or port in CR1–CR4) in `docs/CLASSIC_RETIREMENT.md`. The rows
+> below keep their original audit evidence.
+
 ## README “What you see” — all 15 bullets
 
 | ID / feature | Classic location | Chat location | Status | Evidence | Notes |

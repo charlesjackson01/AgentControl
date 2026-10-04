@@ -55,6 +55,7 @@ The priorities, in order:
 | D18 | **Approved by the owner, 2026-10-03 (N0 P-9).** A new project directory is a relative path of 1–4 segments inside the projects root, each matching `projects.NAME`; missing intermediate folders inside the root are created; the target must not exist; symlink escapes are refused; git init and a first commit are kept. Existing folders inside the root can be registered as projects. |
 | D19 | **Approved by the owner, 2026-10-03 (N0 P-15).** The journal is the source of truth for membership, assignments, tool policies and memory. Nothing (`team.json`, `room.md`) is written into project folders; any later read-only export must add its paths to the protected patterns in the same change. |
 | D20 | **Approved by the owner, 2026-10-03 (N1.3, option (a)).** **Amends invariant 8:** the chat may bundle the OFL fonts Inter and IBM Plex Mono as same-origin WOFF2 files in `agent-autonomy/chat/` (Latin and Latin Extended subsets, at most 400 KB, provenance and SHA-256 in `chat/FONTS.md`, licences in `third_party/fonts/`). Still no CDN, no remote or downloaded fonts, no external request; it works offline. **Authorises exactly one server change:** the chat asset pattern in `app.py` `do_GET` gains `woff2` (served as `font/woff2`) with the same flat-directory check, `reply()` headers and 404s, plus route tests for it. Implemented by `docs/handoffs/N1_3_MATCH_THE_MOCK.md`. |
+| D21 | **Approved by the owner, 2026-10-04 ("approve classic cleanup").** Classic is retired by the CR series in `docs/CLASSIC_RETIREMENT.md`, starting **after N2**. Of the 54 classic-only features: 3 are already native, 14 are dropped on purpose, 5 are covered by the N series, and 32 are ported natively (CR1 approvals and audit, CR2 run options and controls, CR3 visibility, CR4 native surfaces with their own security review). **Amends invariant 9:** classic keeps working, with its tests green at every commit, **until CR5**. **CR5 (removing the classic files, `/classic`, the C1 compatibility, the classic tests and the chat's classic links) needs its own explicit owner approval when reached.** |
 
 ## 3. Invariants (never weakened)
 
@@ -89,7 +90,7 @@ The priorities, in order:
 8. **No new runtime dependencies.** The server stays standard-library Python. The client is vanilla JS and CSS with
    **no build step, no framework, no CDN and no web fonts**. It must work offline on a tailnet.
    Test-only npm packages (`linkedom`, `cssom`, `playwright-core`) stay test-only.
-9. **The classic UI keeps working** until parity sign-off (M9). The classic test suites stay green at every commit.
+9. **The classic UI keeps working** until CR5 (D21; previously until M9 parity sign-off). The classic test suites stay green at every commit until then.
 
 ## 4. System layers
 
@@ -755,3 +756,4 @@ unchanged.
 - 2026-10-03 (N2 handoff drafted): **naming correction**. The library table is `library_agents`, because `agents` already holds the per-run rows (`_v2`). The owner confirms the exact `_v8` migration before N2 starts (D14).
 - 2026-10-04 (N1.3 review): **N1.3 accepted; D20 implemented.** §9 describes the shipped visual system (bundled Inter and IBM Plex Mono, components per the mock). The desktop radio-indicator fix is carried into N2 Part 0.
 - 2026-10-04 (owner): **migration `_v8` confirmed** for N2, as D14 requires (tables `library_agents`, `projects`, `memberships`, `skill_assignments`, `tool_policies`, plus three indexes). A premium polish pass is added to N2 Part 0.
+- 2026-10-04 (owner): **D21 approved:** the classic retirement triage and the CR series after N2. Invariant 9 now runs until CR5, which needs its own approval.

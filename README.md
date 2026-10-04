@@ -108,3 +108,7 @@ The original prompt journal `dashboard.py` was removed in version 5. Every one o
 its features exists in `agent-autonomy/`. If you still have its local
 `activity.sqlite3` journal, it is untouched. It is plain SQLite, so you can open
 it with `sqlite3 activity.sqlite3 'select * from tasks'`.
+
+The isolated device-checklist fixture accepts an optional readable throwaway key:
+`python3 agent-autonomy/tests/device_fixture.py --port 8767 [--key <value>]`.
+Omit `--key` to generate an eight-character disposable key.

@@ -1558,4 +1558,15 @@ test('N1.3 Send retains its exact action with an accessible arrow and project av
 test('N1.3 fonts are local OFL subsets with provenance hashes and no remote CSS sources',()=>{
  const crypto=require('node:crypto'),css=fs.readFileSync(path.join(root,'tokens.css'),'utf8'),report=fs.readFileSync(path.join(root,'FONTS.md'),'utf8');const files=fs.readdirSync(root).filter(f=>f.endsWith('.woff2'));assert.equal(files.length,6);assert(files.reduce((total,f)=>total+fs.statSync(path.join(root,f)).size,0)<=400000);for(const f of files){assert(css.includes("url('/chat/"+f+"') format('woff2')"));assert(report.includes(crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')));}assert.equal((css.match(/font-display: swap/g)||[]).length,6);assert(!/url\(['"]?https?:/.test(css));for(const name of ['OFL-Inter.txt','OFL-IBM-Plex.txt'])assert(fs.readFileSync(path.resolve(root,'../third_party/fonts',name),'utf8').includes('SIL OPEN FONT LICENSE'));
 });
+test('N2 Part 0 request risk is printed once',async()=>{
+ const h=await decisionHarness('low');assert.equal(h.timeline.querySelector('.risk').textContent,'R1 · Low');
+});
+test('N2 Part 0 composed empty states are honest and Primary has an entirely disabled pill composer',async()=>{
+ const h=await harness();for(const name of ['primary','agents','workspace','skills']){section(h,name);await tick();await tick();assert(h.document.querySelector('#section-stage .empty-state'),name);assert.equal(h.document.querySelectorAll('#section-stage .msg,#section-stage [data-message]').length,0);assert(!/Atlas|Lyra|N[0-9]/.test(h.document.querySelector('#section-stage').textContent));}
+ section(h,'settings');h.document.querySelector('[data-setting="Memory"]').click();assert.equal(h.document.querySelectorAll('.memory-scope').length,3);assert(h.document.querySelector('.empty-state'));
+ section(h,'primary');for(const node of h.document.querySelectorAll('.primary-composer textarea,.primary-composer button')){assert(node.disabled);assert.equal(node.getAttribute('aria-describedby'),'primary-reason');}assert(h.document.querySelector('.primary-composer').textContent.includes('primary memory'));
+});
+test('N2 Part 0 loading and polish remain static with reduced motion and token based',()=>{
+ const css=fs.readFileSync(path.join(root,'chat.css'),'utf8'),html=fs.readFileSync(path.join(root,'index.html'),'utf8');assert(html.includes('skeleton-thread'));assert(!html.includes('Connecting…</p>'));assert(css.includes('prefers-reduced-motion: reduce'));assert(css.includes('animation: none !important'));assert(css.includes('transition: none !important'));assert(css.includes('scrollbar-color: var('));assert(css.includes('font-variant-numeric: tabular-nums'));assert(!/shimmer|linear-gradient/.test(css));
+});
 (async()=>{let failed=0;for(const [name,fn] of tests){try{await fn();console.log('PASS',name);}catch(error){failed++;console.error('FAIL',name,error);}}console.log(`${tests.length-failed}/${tests.length} chat tests passed`);process.exitCode=failed?1:0;})();

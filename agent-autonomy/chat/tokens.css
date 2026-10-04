@@ -22,5 +22,6 @@
   --mock-space-6: 6px; --mock-space-7: 7px; --mock-space-9: 9px; --mock-space-10: 10px; --mock-space-14: 14px; --mock-space-18: 18px; --mock-space-20: 20px; --mock-space-22: 22px; --mock-space-26: 26px; --mock-space-36: 36px;
   --mock-radius-6: 6px; --mock-radius-9: 9px; --mock-radius-10: 10px; --mock-radius-11: 11px; --mock-radius-14: 14px; --mock-radius-18: 18px; --pill-radius: 999px;
   --mark-size: 2.375rem; --avatar-size: 2.125rem; --topbar-size: 3.875rem; --ghost-size: 1.875rem; --pill-size: 1.625rem; --send-size: 2rem;
+  --hover-fill: #ffffff0f; --pressed-fill: #ffffff1a; --empty-tile: 64px; --rise: 8px; --pressed-scale: 0.98;
   --motion: 160ms; --no-motion: 0ms; --line-height: 1.5; --scrim: #00000038;
 }

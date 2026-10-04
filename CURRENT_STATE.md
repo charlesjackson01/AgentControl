@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-04, by Opus (owner approved classic cleanup: D21 triage and CR series after N2; N2 ready for Codex).
+**Last updated:** 2026-10-04, by Codex (N2 Part 0 verified separately; N2 records implementation follows; review pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -45,7 +45,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **N1 Shell and navigation** | ✅ **accepted (N1 `8be5d62`, N1.1 `99b4c7d`; design corrected and accepted in N1.2)** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section dark shell from existing data and endpoints; Turn details unchanged; native project switch and create; honest unavailable states. Both required matrix passes (normal and 0.06em wide-font) green: 540 + 61 each, 1,642 screenshots. Optional O1, O3, O4, O6, O7 carried. No physical-device testing of the new shell yet |
 | **N1.2 Projects screen** | ✅ **accepted (`f135bb3` and `450165e`; review 2026-10-03)** | separate Claude Code session (Codex out of usage), then Opus | `docs/handoffs/N1_2_PROJECTS_SCREEN.md` (D13): rail, project list, team thread, composer; approval once on its card plus a Projects count; details on demand; classic links only where required. Both matrix passes 540 + 157, 830 screenshots each; chat 278/278; Python 424 OK. Optional O8–O10 for the owner. No physical-device check yet |
 | **N1.3 Match the mock** | ✅ **accepted (`2811a04`; review 2026-10-04)** | Codex, then Opus | `docs/handoffs/N1_3_MATCH_THE_MOCK.md`: bundled Inter and IBM Plex Mono (byte-identical to Fontsource 5.3.0, 189,700 bytes, same-origin); components restyled to the mock; both passes 540 + 179, 848 screenshots each; Python 426 OK. S1 (desktop radio ovals) is N2 Part 0 |
-| **N2 Library, projects, membership** | 📋 **ready for Codex** (migration `_v8` confirmed by the owner, 2026-10-04) | Codex, then Opus | `docs/handoffs/N2_LIBRARY_PROJECTS_MEMBERSHIP.md`. **Part 0:** desktop radio fix, risk label, short fixture key and `--key`, premium empty states and polish (renders at 1280, 1080 and 390). **Then N2:** `library_agents`, `projects`, `memberships`, `skill_assignments`, `tool_policies`; library, Primary setup, projects with directory and members, skill assignment, ask/deny policy; membership advisory; no engine change; commits the real-server walkthrough |
+| **N2 Library, projects, membership** | 📋 **ready for Codex** (migration `_v8` confirmed by the owner, 2026-10-04) | Codex, then Opus | `docs/handoffs/N2_LIBRARY_PROJECTS_MEMBERSHIP.md`. **Part 0 implemented:** desktop radio fix, risk label, short fixture key and `--key`, premium empty states and polish (renders at 1280, 1080 and 390). **Then N2:** `library_agents`, `projects`, `memberships`, `skill_assignments`, `tool_policies`; library, Primary setup, projects with directory and members, skill assignment, ask/deny policy; membership advisory; no engine change; commits the real-server walkthrough |
 | **Classic retirement (CR1–CR5)** | 📋 **triage approved 2026-10-04 (D21)**; starts after N2 | Opus handoffs, then implementer | `docs/CLASSIC_RETIREMENT.md`: 3 already native, 14 dropped, 5 N series, 32 ported (CR1 approvals and audit, CR2 run options, CR3 visibility, CR4 native surfaces). CR5 removal needs its own owner approval |
 | **N1.1 Bounded corrections** | ✅ **accepted (Opus re-review, `99b4c7d`)** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
 
@@ -479,3 +479,17 @@ N2 and all unapproved persistent-agent backend work remain out of scope. Stop fo
 - Appended handoff report lists all changed/new assertions, font hashes, development failures/retries and intentional
   visual differences. No Python timing failure, backend fix or test weakening. No physical-device claim or N2.
   **Stop for independent Opus review.**
+
+
+## N2 Part 0 verification (2026-10-04)
+
+Separate prerequisite commit, before `_v8`: square desktop indicators, concise risk, readable disposable fixture
+keys/optional `--key`, composed empty states, disabled Primary composer and token-based polish. Existing
+behavior, accessibility assertions, project data, classic and engine are unchanged; earlier assertions untouched.
+Chat **285/285**, classic **82/82**, Python **430 OK (3 environment gates), 263.964s**, no full-suite retry.
+Real walkthrough **8/8**, exact earlier per-step GET/POST bodies/counts and paged waiting/card invariants,
+same-key classic and disposable cleanup. Both browser passes **540 + 218**, **881 counted images/pass plus 30
+before/after images**, square indicators at every width, cutover **5/5**, fixture **9/9**, zero off-origin requests.
+Mock/app comparisons and before/after empty surfaces inspected at 1280/1080/390; reduced motion verified.
+Exact results and fatal development retries are in the appended N2 report.
+Original checkout's dirty N1.2 files preserved; implementation uses `/tmp/AgentControl-n2`. No N3/CR/main work.

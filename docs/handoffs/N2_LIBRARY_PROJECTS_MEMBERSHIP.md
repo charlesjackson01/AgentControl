@@ -321,3 +321,66 @@ Append a completion report covering:
 
 Update `CURRENT_STATE.md`. Push only to `feature/chat-first-redesign`, then stop for Opus review: no N3, no merge, no pull
 request.
+
+
+## Part 0 completion report (Codex, 2026-10-04)
+
+Implemented before the N2 migration in a standalone commit (hash recorded in the final N2 report).
+Started from `0be0edb`, which includes the requested handoff `f56d03c`. Pull fetched the latest branch but could
+not overwrite the original checkout's ten surviving N1.2 edits. A clean detached worktree at
+`/tmp/AgentControl-n2` preserves those edits; only the implementation commits are pushed to the feature branch.
+
+### Changes and regression evidence
+
+- Desktop radio/checkbox indicators set their minimum width to their square indicator size. New fatal browser
+  audit checks **every visible radio and checkbox**, at every matrix width and in both font passes. The accepted
+  N1.3 CSS fails the new assertion: **40 × 16px** at 1280 (`/tmp/ac-n2-radio-before.log`).
+- Request risk prints level and label once, without repeating the class. The new DOM regression fails before
+  and passes after. A historical fixture's "Low risk" is normalized to "Low" for the same presentation.
+- Device fixture only: eight `secrets.choice` characters from `abcdefghijkmnpqrstuvwxyz23456789`; optional
+  `--key` preserves an explicit 4–64 printable, non-whitespace-character key. Invalid CLI values have an explicit
+  argparse error. Four added tests cover the alphabet, exact supplied key, invalid values and CLI rejection;
+  the existing real HTTP isolation/cleanup test is unchanged. README documents the optional argument.
+- Composed empty Primary, Agents, Workspace, Memory and empty Skills states use a 64px line-icon tile, 17px
+  heading and honest copy. Memory still presents three separate scopes. Primary's pill composer, memory chip
+  and round Send remain disabled and described by the visible reason. No message elements or sample records.
+- Token-based hover/press fills, 160ms fades, heading rhythm, tabular numbers, selection and thin scrollbars.
+  Loading thread/project/skill shapes are static skeletons. Opening fades use opacity so the existing tablet
+  centering transform is preserved. Closing controls hide immediately and restore focus; an inert, aria-hidden
+  visual copy fades out, with form controls converted to static decoration, ids/action attributes removed, and
+  **no Turn details step material copied outside Turn details**. Reduced motion disables all motion.
+- Three added DOM regressions (risk, empty states/disabled Primary, loading/polish). **No earlier assertion
+  changed or removed**; no protected backend, classic, approval, schema or session semantics changed.
+
+### Verification
+
+- Chat DOM **285/285** (`/tmp/ac-n2-part0-dom-complete.log`); classic **82/82**
+  (`/tmp/ac-n2-part0-classic.log`).
+- Full Python **430 tests, OK (skipped=3), 263.964s**, first full run, no timing failure or retry
+  (`/tmp/ac-n2-part0-full-python.log`). The three gates are container runtime/image, missing desktop tools,
+  and enabled KVM host. All three real OpenCode tests passed. Existing route tests **6/6** are included.
+- Device fixture focused **5/5**, including unchanged server-side confinement and fake-coder write isolation
+  (`/tmp/ac-n2-part0-fixture-final.log`). Default-key and explicit-key regressions fail on the old fixture;
+  the first un-escalated probe also hit the environment's socket restriction, which is not a product failure.
+- Accepted eight-step real-server walkthrough **8/8**, unchanged request bodies and per-step counts:
+  GET/POST **8/1, 3/1, 6/1, 21/2, 8/0, 10/1, 3/1, 8/1**. At every fully paged checkpoint waiting equals
+  actionable non-outcomes, and decision cards equal actions plus outcomes. Separate Auto **2 GET/1 POST**;
+  classic same-key smoke **9 GET/0 POST**. No page errors, real projects/state or extra classic loads in the
+  eight steps; disposable cleanup passes (`/tmp/ac-n2-part0-real.log`, results JSON).
+- Both fatal browser passes: **540 combinations + 218 regressions**, **881 counted screenshots/pass**, plus
+  **30 separate before/after empty-state images/pass** (911 generated PNGs/pass before contact sheets).
+  **33 new mock-left/app-right comparisons/pass** at 1280, 1080 and 390 (every section, composer, creation,
+  Memory and empty Skills, plus decision detail). All comparisons and every before/after surface inspected,
+  individually and in contact sheets; reduced-motion render inspected and its zero-duration assertions passed.
+  Cutover **5/5**, disposable fixture **9/9**, 1,454 font checks and **zero off-origin app requests/pass**.
+  Earlier clipping, zoom, targets, contrast, focus, privacy and footer assertions remain fatal and unchanged.
+  Artifacts `/tmp/chat-shots-n2-part0-full/` and `-wide/`; log `/tmp/ac-n2-part0-browser-full.log`.
+  Reproduce with `NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/chat_screenshots.cjs /tmp/chat-shots-n2-part0`;
+  `N2_BEFORE_CHAT=/path/to/accepted-N1.3/chat` additionally produces the before images without modifying that tree.
+
+Development retries were fatal, never logged-only: centering transform overwritten by the first rise animation;
+positive outline offset conflicting with the accepted inset-ring rule; deferred display hiding conflicting with
+immediate Escape/menu hiding; cloned closing input controls not inheriting their original id-based 16px rule.
+The product fixes preserve each existing assertion. The restored-composer focused matrix then passed all ten
+widths (26 renders, five regression cases). One intermediate run was deliberately terminated after a product
+change so final evidence uses one static tree. Native physical-device behavior is not claimed.

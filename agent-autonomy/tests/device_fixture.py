@@ -24,10 +24,19 @@ from test_workflow import coding, complete
 from test_workspaces import make_repo
 
 
+KEY_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
+
+
+def fixture_key(value):
+    if not isinstance(value, str) or not 4 <= len(value) <= 64 or any(not c.isprintable() or c.isspace() for c in value):
+        raise ValueError('Key must be 4–64 printable characters with no spaces')
+    return value
+
+
 class DeviceFixture:
-    def __init__(self, host='127.0.0.1', port=0):
+    def __init__(self, host='127.0.0.1', port=0, key=None):
         self.host, self.port = host, port
-        self.key = secrets.token_urlsafe(32)
+        self.key = fixture_key(key) if key is not None else ''.join(secrets.choice(KEY_ALPHABET) for _ in range(8))
         self.root = self.project = None
         self.controller = self.server = self.temp = None
         self.server_thread = self.growth_thread = None
@@ -161,8 +170,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host', default='127.0.0.1', help='Explicit LAN/tailnet IPv4 address to allow phone access; default loopback only')
     parser.add_argument('--port', type=int, default=8767)
+    def key_argument(value):
+        try:
+            return fixture_key(value)
+        except ValueError as error:
+            raise argparse.ArgumentTypeError(str(error)) from error
+    parser.add_argument('--key', type=key_argument, help='Optional throwaway key: 4–64 printable characters, no spaces')
     args = parser.parse_args()
-    with DeviceFixture(args.host, args.port) as fixture:
+    with DeviceFixture(args.host, args.port, key=args.key) as fixture:
         print('Device-test URL: ' + fixture.url + '/chat', flush=True)
         print('Throwaway test key: ' + fixture.key, flush=True)
         print('Disposable data only. Ctrl+C stops the fixture and removes its project/state.', flush=True)

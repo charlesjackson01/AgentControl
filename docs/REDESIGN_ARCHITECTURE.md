@@ -753,3 +753,4 @@ unchanged.
 - 2026-10-03 (owner decisions): **P-2, P-4, P-6, P-8, P-9 and P-15 approved**, recorded as D14–D19. Invariant 1 is amended only as D14 states. Invariant 2 is unchanged until an N5 handoff restates its engine change.
 - 2026-10-03 (owner decision): **D20 approved:** bundled fonts and the one-line font allow-list change. Invariant 8 is amended only as D20 states. N1.3 (match the mock) comes before N2.
 - 2026-10-03 (N2 handoff drafted): **naming correction**. The library table is `library_agents`, because `agents` already holds the per-run rows (`_v2`). The owner confirms the exact `_v8` migration before N2 starts (D14).
+- 2026-10-04 (N1.3 review): **N1.3 accepted; D20 implemented.** §9 describes the shipped visual system (bundled Inter and IBM Plex Mono, components per the mock). The desktop radio-indicator fix is carried into N2 Part 0.

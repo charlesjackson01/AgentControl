@@ -15,6 +15,16 @@ Not approved, so N2 must not depend on them: P-3 (reply path), P-5 (concurrency)
 - the mock, for visuals
 - `docs/PERSISTENT_AGENTS_ACCEPTANCE.md` §A and §C (N2)
 
+## 0. Part 0: carried from the N1.3 review (first commit of N2)
+
+- **S1:** desktop radio indicators render as 40×16 ovals, because a general `min-width: 40px` overrides `width: var(--s4)`.
+  - At 1200px and above, give `.decision-question input[type="radio"]` (and any visible checkbox indicator) a `min-width`
+    equal to its width.
+  - Add a fatal test: every visible radio and checkbox indicator is square (`|width − height| ≤ 1px`) at every matrix width,
+    in both passes.
+- **Optional O11:** print a request's risk level and label once ("R1 · Low"), not the class again.
+- Commit Part 0 separately, before the N2 migration.
+
 ## 1. Outcome
 
 The handoff's records exist and can be managed in the chat. Nothing executes differently yet.

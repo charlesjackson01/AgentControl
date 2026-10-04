@@ -372,3 +372,56 @@ No functional deviation from N1.3. Additional decision comparison views and the 
 provide evidence beyond the required matrix/fixture checks. No physical-device or native assistive-technology
 verification is claimed; Android keyboard/device checks remain deferred. Only the authorized font asset handler
 changes Python. N2, persistent-bot roadmap work and main are untouched. Stop for independent Opus review.
+
+---
+
+## Review of N1.3 — 2026-10-04 (Opus)
+
+**Verdict: N1.3 is accepted.** The chat now reads as the mock. One Should-fix (S1, desktop radio indicators drawn as ovals) is
+carried into **N2 Part 0**. Reviewed `2811a04` against `a9a4441`.
+
+| Check | Result (this review) |
+|---|---|
+| Scope | The only Python change is D20's: the `app.py` chat asset pattern gains `woff2`, plus its MIME mapping (`font/woff2`). Same `reply()` headers. Classic untouched |
+| Fonts | Six WOFF2 files, **189,700 bytes**. Genuine `wOF2` headers, and SHA-256 equal to `chat/FONTS.md`. **Byte-identical** to `@fontsource-variable/inter` 5.3.0 and `@fontsource/ibm-plex-mono` 5.3.0, downloaded independently from the npm registry. Unmodified OFL 1.1 licences in `third_party/fonts/` |
+| Routes | **6/6**: the original 4, plus bundled fonts with headers, plus every non-font, nested, traversal, licence and `FONTS.md` path giving 404 |
+| Chat DOM / classic | **282/282** / **82/82**. Changed assertions: the agent-name bullet removed (with a new no-bullet check), and token contrast pairs expanded from **26 to 67** (stricter) |
+| Browser matrix | **Normal: 540 + 179, 848 screenshots. Wide (0.06em): 540 + 179, 848 screenshots** |
+| Python | **426, OK (skipped=6)**, first attempt (424 plus 2 font route tests; the 6 are gates) |
+
+**Live probe** (isolated fixture, 1280 and 390):
+- `document.fonts.check` is true for Inter and IBM Plex Mono.
+- Only the needed same-origin subsets are fetched (`/chat/inter-latin-var.woff2`, `/chat/ibm-plex-mono-latin-400.woff2`).
+- **Zero external requests**, zero POSTs.
+
+**Comparison renders inspected** (`n13-compare-*`, mock on the left and app on the right): Projects, Projects with a decision,
+Skills and Settings at 1280 and 390, plus the remaining pairs from the matrix output. They match the mock:
+- the white AC tile
+- 34px avatar tiles in panel rows and messages
+- the right-aligned user bubble
+- rounded surface cards with a kicker
+- solid primary and ghost secondary buttons
+- the pill composer with a round white Send
+- Inter and Plex type
+
+**Intentional differences:**
+- real data instead of mock samples
+- the handoff's phone bottom bar instead of the mock's 900px top row
+- the accessibility floors (12px labels, tested borders, 40px touch targets)
+- assignment and memory placeholders until N2 and N4
+- classic links routed to Settings per D13
+
+**S1 (Should fix, carried into N2 Part 0): desktop radio indicators render as 40×16 ovals.**
+- On the live fixture at 1280px, `.decision-question input[type="radio"]` computes `width 40px, height 16px, min-width 40px`.
+- A general `min-width: 40px` (touch target) overrides the radio's `width: var(--s4)`, and with `border-radius: 999px` each
+  choice shows a pill instead of a circle. Phones are correct (40×40).
+- **Fix:** at 1200px and above, give the radio `min-width: var(--s4)` (or `min-width: 0`). The whole choice row is already the
+  click target.
+- **Test:** every visible radio and checkbox indicator is square (`|width − height| ≤ 1px`) at every width, in both passes.
+
+**Optional:**
+- **O11.** Some request cards show a repeated risk label, for example "R1 · Low · low" on a question card in the fixture
+  (level, label and class all printed). This predates N1.3; print the level and label only.
+- O8–O10 as before (O10's padding is fixed by N1.3).
+
+**No physical-device testing is claimed.** A phone recheck of the new look is advisable.

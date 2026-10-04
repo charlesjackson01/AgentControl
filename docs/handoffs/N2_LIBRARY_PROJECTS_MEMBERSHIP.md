@@ -1,8 +1,11 @@
 # N2: Agent library, projects and membership records
 
-**Status: DRAFT — two start conditions.**
-1. **N1.3 (Match the mock) is accepted**, so N2's screens are built in the final visual language.
-2. **The owner confirms the exact migration in §2.** D14 requires each milestone to restate its migration for confirmation.
+**Status: READY FOR CODEX.** Both start conditions are met:
+1. **N1.3 was accepted** on 2026-10-04.
+2. **The owner confirmed the exact `_v8` migration in §2** on 2026-10-04 ("yes to all").
+
+The owner also asked for a **premium feel**: Part 0 below adds empty-state and polish work. Commit **Part 0 first and
+separately**, then N2. Report both, then stop for Opus review.
 
 Approved decisions this implements: **D14–D19** (`docs/REDESIGN_ARCHITECTURE.md`), from N0's P-2, P-4, P-6, P-8, P-9 and P-15.
 Not approved, so N2 must not depend on them: P-3 (reply path), P-5 (concurrency), P-7 (membership binding) and P-10
@@ -22,7 +25,7 @@ Not approved, so N2 must not depend on them: P-3 (reply path), P-5 (concurrency)
     equal to its width.
   - Add a fatal test: every visible radio and checkbox indicator is square (`|width − height| ≤ 1px`) at every matrix width,
     in both passes.
-- **Optional O11:** print a request's risk level and label once ("R1 · Low"), not the class again.
+- **O11 (now required):** print a request's risk level and label once ("R1 · Low"), not the class again.
 - **Simpler throwaway key for the device fixture (owner request, 2026-10-04).** `agent-autonomy/tests/device_fixture.py`
   only; nothing in `app.py` or the real dashboard key changes.
   - **Default:** a short, readable random key instead of `secrets.token_urlsafe(32)`. Use 8 characters from an unambiguous
@@ -37,6 +40,39 @@ Not approved, so N2 must not depend on them: P-3 (reply path), P-5 (concurrency)
     - invalid keys are refused
     - the existing isolation assertions still pass
   - README: the device-checklist command shows `--key` as optional.
+- **Premium empty states (owner request, 2026-10-04).** Every surface whose feature does not exist yet becomes a composed
+  empty state instead of a lone notice card. This covers Primary, Workspace, Settings › Memory, the Skills empty catalogue,
+  and the Agents screen until N2's own screens replace it.
+  - **Layout:** vertically centred in the stage; a 64px rounded tile holding the section's line icon (1.5px stroke); a 17px
+    semibold heading; two or three lines of muted text on what will live here; optionally a short list of what you will be
+    able to do.
+  - **Copy:** honest and in plain words, with no milestone codes, **no invented messages and no sample agents or projects**
+    (D8).
+  - **Primary:** draw the composer exactly as the mock's pill (pills row with a quiet "primary memory" chip, the placeholder
+    "Message the primary agent", a round white Send), **disabled**, with the visible reason "Not available yet" linked by
+    `aria-describedby`.
+- **Premium polish across the chat** (all through tokens, all off under `prefers-reduced-motion`; forced colours still work):
+  - **States:** hover and pressed fills on rail items, panel rows, buttons and pills (about 6% and 10% white). Pressed
+    buttons may scale to 0.98. Consistent `:focus-visible` rings (2px, offset, at least 3:1).
+  - **Motion:** 160ms ease-out for hover and press. Overlays, sheets, the "+" menu and dialogs fade, with at most an 8px rise,
+    on open and close. New thread items fade in. Nothing loops or flashes.
+  - **Loading:** replace bare "Connecting…" and "Loading…" text with quiet skeleton rows (static blocks, no shimmer) of the
+    shape that will appear: thread messages, project rows, skill cards.
+  - **Typography:** headings at -0.01em letter-spacing. Consistent line heights. `font-variant-numeric: tabular-nums` for
+    counts, times and diff numbers. Mono only for paths, models, files and commands.
+  - **Rhythm:** one 4px-based spacing scale. The thread text column at most 780px. Equal inner padding for cards and session
+    blocks. Icons on one 1.5px stroke weight, optically aligned with their labels.
+  - **Details:** thin dark scrollbars where the browser supports styling them. The selection colour from the tokens. No
+    layout shift when the Projects count or the connection status appears.
+  - **Constraints:** no new colours outside the near-black palette, no gradients, no purple, and no new fonts.
+- **Acceptance for the premium pass:**
+  - side-by-side renders of mock and app at **1280, 1080 (the owner's tablet-width window) and 390**, for every section and
+    every empty state
+  - before and after renders of each empty state
+  - a reduced-motion render showing no transitions
+  - a DOM check that empty states contain no message elements or sample names
+  - every A9 floor still met
+  - Opus reviews the renders before accepting
 - Commit Part 0 separately, before the N2 migration.
 
 ## 1. Outcome

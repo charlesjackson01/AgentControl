@@ -28,6 +28,12 @@ class DeviceFixtureTests(unittest.TestCase):
     def test_explicit_key_is_preserved(self):
         self.assertEqual(DeviceFixture(key='Device-123!').key, 'Device-123!')
 
+    def test_non_ascii_keys_are_refused_before_fixture_setup(self):
+        from device_fixture import fixture_key
+        for value in ['cléé', 'abcd😀', 'abcd\u200b', '漢字漢字']:
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError,'ASCII'):
+                fixture_key(value)
+
     def test_invalid_keys_are_refused(self):
         for key in ['', 'abc', 'a' * 65, 'has space', 'abcd\n', 'abcd\t', 'abcd\x00']:
             with self.subTest(key=repr(key)), self.assertRaises(ValueError):
@@ -38,7 +44,7 @@ class DeviceFixtureTests(unittest.TestCase):
         for key in ['abc', 'has space', 'a' * 65]:
             result = subprocess.run([sys.executable, str(Path(__file__).with_name('device_fixture.py')), '--key', key], capture_output=True, text=True)
             self.assertEqual(result.returncode, 2)
-            self.assertIn('4–64 printable characters with no spaces', result.stderr)
+            self.assertIn('4–64 printable ASCII characters with no spaces', result.stderr)
 
     def test_real_chat_and_two_actionable_requests_are_isolated_and_cleaned(self):
         # A disposable stand-in for the owner's home makes the old default-root escape

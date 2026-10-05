@@ -56,7 +56,7 @@ class BrowseAndCreateTests(unittest.TestCase):
         self.assertEqual(git('status', '--porcelain'), '')
         with self.assertRaisesRegex(ValueError, 'already exists'):
             projects.create(self.root, 'my-app')
-        for bad in ('', '../up', 'a/b', '.hidden', '..', 'x' * 65, 'with space'):
+        for bad in ('', '../up', '.hidden', '..', 'x' * 65, 'with space'):
             with self.assertRaises(ValueError, msg=bad):
                 projects.create(self.root, bad)
         self.assertFalse((self.root / 'up').exists())

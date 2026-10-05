@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import agents as agent_registry
 from engine import Controller, ReviewConflict, Settings, TERMINAL
 import gateway
+import library
 from adapters import jev as jev_api
 import workspaces
 
@@ -38,6 +39,7 @@ def parse_known(text):
 
 
 def handler(controller, key):
+    records = library.Library(controller)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
             # Never log credentials or goal text.
@@ -118,7 +120,10 @@ def handler(controller, key):
                         run = controller.store.get('runs', ident)
                     except KeyError:
                         return self.reply(404, {'error': 'Unknown run'})
-                return self.reply(200, controller.skills_status(run))
+                status = controller.skills_status(run)
+                declared = {s['name']: s['tools'] for s in controller.skill_library() if 'tools' in s and not s.get('error')}
+                status['library'] = [{**s, **({'tools': declared[s['name']]} if s['name'] in declared else {})} for s in status['library']]
+                return self.reply(200, status)
             if path.path == '/api/models':
                 ident = urllib.parse.parse_qs(path.query).get('run', [''])[0] or None
                 if urllib.parse.parse_qs(path.query).get('check'):
@@ -151,6 +156,10 @@ def handler(controller, key):
                 query = urllib.parse.parse_qs(path.query)
                 return self.reply(200, controller.state(query.get('run', [''])[0], (query.get('scope') or ['current'])[0],
                                                         known=parse_known((query.get('known') or [''])[0])))
+            if path.path == '/api/library':
+                return self.reply(200, records.read())
+            if path.path == '/api/projects':
+                return self.reply(200, records.projects())
             if path.path == '/api/projects/browse':
                 try:
                     return self.reply(200, controller.browse_projects((urllib.parse.parse_qs(path.query).get('path') or [''])[0]))
@@ -281,10 +290,32 @@ def handler(controller, key):
                 if self.path == '/api/research/decide':
                     return self.reply(200, controller.decide_research(body['run'], body['step'], body.get('action'),
                                                                       body.get('fingerprint', ''), body.get('confirm', '')))
+                if self.path == '/api/library/agents/create':
+                    return self.reply(201, records.create_agent(body))
+                if self.path == '/api/library/agents/update':
+                    return self.reply(200, records.update_agent(body))
+                if self.path == '/api/library/agents/archive':
+                    return self.reply(200, records.archive_agent(body.get('id')))
+                if self.path == '/api/library/skills/assign':
+                    return self.reply(200, records.assign(body))
+                if self.path == '/api/library/policy':
+                    return self.reply(200, records.policy(body))
+                if self.path == '/api/projects/register':
+                    return self.reply(201, records.register(body.get('path')))
+                if self.path == '/api/projects/members':
+                    return self.reply(200, records.members(body.get('project'), body.get('add', []), body.get('remove', [])))
                 if self.path == '/api/projects/select':
                     return self.reply(200, controller.select_project(str(body.get('path', ''))))
                 if self.path == '/api/projects/create':
-                    return self.reply(201, controller.create_project(str(body.get('name', ''))))
+                    with controller.lock:
+                        if 'path' in body or 'members' in body:
+                            controller._no_active_run('creating a project')
+                            record = records.create_project(body.get('name'), body.get('path'), body.get('members'))
+                            result = controller.select_project(record['path'])
+                        else:
+                            result = controller.create_project(str(body.get('name', '')))
+                            records.register(result['project'], str(body.get('name', '')))
+                    return self.reply(201, result)
                 if self.path == '/api/control':
                     return self.reply(200, controller.control(body['run'], body['action'], body.get('text', ''), body.get('agent')))
                 if self.path == '/api/review':

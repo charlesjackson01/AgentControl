@@ -384,3 +384,327 @@ immediate Escape/menu hiding; cloned closing input controls not inheriting their
 The product fixes preserve each existing assertion. The restored-composer focused matrix then passed all ten
 widths (26 renders, five regression cases). One intermediate run was deliberately terminated after a product
 change so final evidence uses one static tree. Native physical-device behavior is not claimed.
+
+## N2 completion report (Codex, 2026-10-04)
+
+**Implemented; awaiting independent Opus review.** Part 0 was verified and committed first as **`4c99bb6`**.
+The following implementation commit contains this report (its hash is reported after commit). It descends from
+`0be0edb`, including requested `f56d03c`. Work remains in `/tmp/AgentControl-n2` because the original checkout
+has ten surviving N1.2 edits; those files, its HEAD and its branch have not been modified. Push targets only
+`feature/chat-first-redesign`. No N3, CR implementation, main merge or pull request.
+
+### Implementation and scope
+
+Changed files are limited to 26 authorized paths: `CURRENT_STATE.md`, `README.md`; backend `app.py`,
+`capabilities.py`, `journal.py`, `projects.py`, new `library.py`; chat `chat.css`, `core.js`, `index.html`,
+`sections.js`, `shell.js`, new `library.js`; tests `chat_screenshots.cjs`, `test_chat_ui.cjs`, `device_fixture.py`,
+`test_device_fixture.py`, `test_journal.py`, `test_projects.py`, new `test_library_n2.py`, `test_library_api.py`,
+`n2_walkthrough.cjs`, `n2_walkthrough_server.py`; and `PERSISTENT_AGENTS_ARCHITECTURE.md`,
+`REDESIGN_ARCHITECTURE.md`, this handoff. No classic, engine, planner, adapter, gateway, permissions,
+lifecycle, conversation projection, real project or real state file changed. Historical journal methods and
+migrations compare unchanged by AST; `_v8` compares byte-for-byte with §2.
+
+- `journal.py`: append-only exact `_v8` and whitelisted JSON-record list/get/put/update methods for all five
+  tables, using the existing write lock. Changes publish `library`/`projects` with `run=None`; no conversation
+  events or backfill. Existing migrations and historical Store methods are unchanged.
+- New `library.py`: explicit specialist/Primary creation, configuration and archive; serialized uniqueness and
+  single-Primary validation; registry models and typed paid confirmation; advisory project records/membership;
+  independent skill assignment and Ask/Deny policies; read-only host configuration warnings. Audit entries
+  contain `actor: you`, action names, ids and field names only, never names, paths, roles or prompt text.
+- `projects.py`: 1–4 relative segments, preflight confinement and symlink checks, existing-target refusal,
+  missing-parent creation and cleanup limited to this call's own directories; explicit confined registration.
+  Legacy one-name creation, git initialization and first commit still work.
+- `capabilities.py`: optional inline or block `tools:` lists; invalid/unknown tools make the entry invalid;
+  declarations grant nothing. `/api/skills` adds declared tools to valid catalogue entries because the existing
+  engine projection omits them. This is a read-only enrichment needed for §4; engine and classic are unchanged.
+- `app.py`: authenticated §3.5 endpoints and expanded project creation. New creation keeps the existing
+  active-run refusal before filesystem effects; membership changes remain allowed during a run. Legacy
+  `{name}` creation returns its same response and also registers an empty-membership record.
+- New `chat/library.js` uses recorded GET responses after writes and metadata notices; no optimistic records
+  or seeded agents. It shares the established disconnected refresh cadence rather than adding a timer.
+  Agents search/create/configure/archive, Primary setup/edit, five Configure sections, typed paid confirmation,
+  escaped instructions, separate skill assignment/policy, advisory members and navigation-only member pills.
+  Projects keep the existing browse/switch interaction and gain registered nested projects, editable directories,
+  member selection and Manage members. Open folder registers before selecting. Primary/Direct conversations,
+  Memory and project-file browsing stay unavailable. Existing room decisions and composer requests are unchanged.
+- New long record dialogs keep their heading and confirmation buttons available while their fields scroll;
+  Cancel focus, Escape, focus trap/return, zoom, forced colors and reduced motion use the established contract.
+- README documents stop-first journal/WAL backup, records-only behavior and optional fixture key. Architecture
+  changes are limited to §4/§10 and the persistent architecture §4 table-name correction.
+- Committed `tests/n2_walkthrough_server.py` and `tests/n2_walkthrough.cjs`: real handler/Controller, established
+  workflow/team fakes, temporary git project/state/catalogue and throwaway key, with complete cleanup.
+
+The applied migration is exactly §2:
+
+```sql
+CREATE TABLE IF NOT EXISTS library_agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memberships (id TEXT PRIMARY KEY, project TEXT NOT NULL, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS memberships_project ON memberships(project);
+CREATE TABLE IF NOT EXISTS skill_assignments (id TEXT PRIMARY KEY, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS skill_assignments_agent ON skill_assignments(agent);
+CREATE TABLE IF NOT EXISTS tool_policies (id TEXT PRIMARY KEY, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tool_policies_agent ON tool_policies(agent);
+```
+
+The migration regression seeds **every historical table**, compares every old row and schema object before/after,
+and verifies the five new tables/three explicit indexes. Opening v8 with `MIGRATIONS[:7]` succeeds, keeps version
+8 and leaves all rows and the audit chain unchanged. `/tmp/ac-n2-migration-allrows.log`.
+
+### New regressions and authorized earlier assertions
+
+`test_library_n2.py` adds these **19** tests (names omit the common `test_` prefix):
+
+1. `v7_upgrade_preserves_every_row_and_old_build_opens_v8`
+2. `empty_library_has_no_seeded_primary_or_agents`
+3. `agent_create_update_does_not_create_project_and_store_crud`
+4. `uniqueness_lengths_and_engine_type_refusals_before_effects`
+5. `paid_confirmation_and_primary_rules`
+6. `parallel_name_and_primary_creation_serializes_before_writes`
+7. `explicit_null_text_and_unknown_model_refuse_without_audit`
+8. `each_store_record_supports_list_get_put_and_update`
+9. `membership_validation_and_archive_deactivation`
+10. `new_project_needs_specialist_primary_optional_and_validation_before_directory`
+11. `skill_assignment_policy_are_independent_and_allow_never_accepted`
+12. `audit_has_only_identifiers_field_names_and_not_free_text_or_events`
+13. `change_notices_are_library_or_projects_with_no_run`
+14. `host_warning_is_read_only_for_each_exact_permission`
+15. `nested_paths_and_every_refusal`
+16. `failed_git_creation_cleans_only_created_folders`
+17. `registration_is_explicit_confined_and_unique`
+18. `tools_inline_and_block_lists_are_read_only`
+19. `unknown_or_malformed_tools_make_the_catalogue_entry_invalid`
+
+`test_library_api.py` adds **seven** real-HTTP tests: every endpoint's Bearer/object enforcement; all new operations
+and skill projection; active-run creation refusal/advisory membership; paid confirmation before metadata effects;
+legacy name-only creation/classic compatibility; validation before files/records/audit; unchanged per-run agents.
+
+Chat adds **23** cases: empty records; exact Create agent body/explanations/paid confirmation; verbatim paid refusal
+and draft; escaped five-section Configure; draft preservation/exact update; explicit Primary/disabled conversation;
+archive confirmation/focus; recorded policy reconciliation; assignment independent of policy/invalid skills;
+assigned names/declared and undeclared tools; recorded project counts/member pills; Manage members last-specialist
+refusal; editable directory/default preview/member/body; five invalid-path cases; metadata invalidation without
+messages; archived-agent marking/exclusion; Create-from-Configure panel/focus return; assigned Primary displayed
+on skill cards while the Assign picker remains specialists-only; optional Primary member routing preserves its
+configuration without specialist engine/archive controls. The browser adds **69 fatal cases**, six surfaces at eleven sizes plus three docked Turn details layouts,
+with eighteen comparisons at 1280/1080/390. They cover every corresponding form plus targets, clipping, escaped
+text, indicator geometry, contrast, keyboard focus and pinned long-dialog title/confirmation controls.
+
+Before evidence: accepted Part 0 product with the new DOM cases fails all **20 new N2 cases** (282/305 total;
+three other failures are the explicitly superseded assertions below), then current product passes **308/308**
+after adding the final focus-return and Primary-assignment/member-routing regressions.
+`/tmp/ac-n2-before-records-dom.log`, `/tmp/ac-n2-dom-complete.log`. Before-library Python fails because the
+accepted Part 0 has no `Library`, followed by passing new unit/API suites. Part 0's 40×16 before failure remains
+in its preceding report. No non-fatal substitute browser run is used.
+
+Owner-authorized exceptions to §7, and **only** these superseded assertions:
+
+- `N1 unavailable sections make no requests and create no sample data or agent messages`: Primary/Agents removed
+  from the unavailable-screen loop; Workspace/Memory retain it. Agents now has search/Create and still no Direct
+  conversations. No invented messages/sample names, no POST, disabled Primary and original no-read checks retained.
+- `N1 Create required name, read-only derived directory and exactly one request under lock`: directory now editable
+  and relative with root preview; selected specialist; exact `{name,path,members}`. Duplicate-click locking,
+  required-name refusal and verbatim server refusal retained. Backend legacy `{name}` assertions unchanged.
+- `N1.2 + offers Create project and Open folder…, which browses inside root and confirms one exact switch`:
+  Use as project now expects register then the same exact select body. Browse, path escaping, refusal and focus
+  assertions retained.
+- `N2 Part 0 composed empty states are honest and Primary has an entirely disabled pill composer`: Primary's
+  unavailable-stage loop now covers only the remaining unavailable surfaces; its disabled pill assertions stay.
+- Browser `n1Fixture`: creates one real fixture-library specialist, selects it and expects the new creation body;
+  old auth, stop, project switch, isolation/cleanup and focus checks stay fatal.
+- `test_projects.py::test_create_makes_a_git_project_with_a_first_commit`: remove **only `a/b`** from the refused
+  tuple; new nested-creation/refusal/cleanup tests above. Every other old assertion unchanged.
+- `test_journal.py::test_v6_migrates_to_v7_with_only_the_approved_index_and_unchanged_rows`: scope the fixture to
+  `MIGRATIONS[:7]`; its version/index/row assertions are untouched. Separate v8/downgrade regression above.
+- `M7 B unknown session and agent have exact errors and Back without extra endpoints`: add **only GET
+  `/api/library` and `/api/projects`** as exact URL/method matches, leaving its original prefix list untouched.
+  Error, Back and other endpoint assertions unchanged; the additions cannot authorize POSTs or subroutes.
+
+The owner separately approved printable **ASCII** fixture keys: non-ASCII printable strings cannot authenticate
+with the unchanged Bearer comparator. The disposable fixture now accepts exact 4–64 ASCII `!` through `~` keys;
+default alphabet remains unchanged. Added `test_non_ascii_keys_are_refused_before_fixture_setup` covers accented,
+emoji, zero-width and CJK keys. Only the Part 0 CLI error-text assertion gained "ASCII"; existing real-server
+isolation assertions and real authentication are untouched. This small authorized Part 0 follow-up is in N2.
+The same ASCII regression fails against Part 0's validator and passes against N2
+(`/tmp/ac-n2-ascii-before.log`, `/tmp/ac-n2-ascii-after.log`); accented, emoji and CJK printable keys were accepted
+before, while the zero-width key was already refused with the old general message.
+
+### Verification and timing failures
+
+- Chat **308/308**; classic **82/82**. Logs `/tmp/ac-n2-dom-final-complete.log`, `/tmp/ac-n2-classic-final-complete.log`. Routes **6/6**, **5.808s**, `/tmp/ac-n2-routes-final-complete.log`.
+- New API plus fixture focused **13/13**, **7.870s**, `/tmp/ac-n2-api-fixture-final.log`; earlier library/projects/journal
+  focused **31/31** (`/tmp/ac-n2-focused-complete.log`), strengthened migration separately **1/1**.
+- Both complete fatal browser passes: **540 combinations + 287 regression cases**, **968 counted screenshots/pass**,
+  cutover **5/5**, isolated fixture **9/9**, **1,586 font checks/pass**, **zero off-origin app requests**.
+  `/tmp/ac-n2-browser-final-complete.log`; `/tmp/chat-shots-n2-final-complete/` and `-wide/`. Product files stayed fixed during both
+  complete passes, including the final focus and Primary corrections. The screenshot-capture improvement resets dialog scroll after keyboard audits and adds a
+  first-label-below-heading assertion; its fresh focused run also passed **66/66**, **84 screenshots**
+  (`/tmp/ac-n2-capture.log`). All original zoom, footer, waiting/card, decision, privacy, contrast and focus
+  regressions remain fatal. No fonts downloaded at runtime.
+- Full Python first attempt: **454 tests, 391.804s, failures=2, skipped=3** (`/tmp/ac-n2-full-python.log`),
+  run while the large browser workload was also active. Two unchanged lifecycle tests timed out:
+  `test_agents.ControllerLifecycleTests.test_a_restart_records_needs_attention_once_and_old_runs_stay_untouched`
+  at `test_agents.py:229`, waiting for `('coder-1','idle','working')`, and
+  `test_agents.ControllerLifecycleTests.test_a_run_records_hermes_and_coder_1` at line 102, waiting for a running
+  last step. Both reach line 91's `AssertionError: timed out`. Their teardown then removes the temporary journal
+  while a late worker writes, producing disk-I/O/unable-to-open errors in Thread-15.
+- Comparison: earlier M7/M8/M9 reports establish the lifecycle **0.5-second sampling race**, reproduced on
+  pre-redesign `af4da89`, and separate fixed-duration workflow/VM timing failures. These two exact test names
+  were not previously claimed to fail. Both pass together on current N2 **2/2 in 0.462s**, and on accepted Part 0
+  **2/2 in 0.447s** (`/tmp/ac-n2-timing-isolated.log`, `/tmp/ac-n2-timing-baseline.log`). Engine/lifecycle code,
+  waits, protected assertions, configuration and gates remain unchanged. A fresh full retry without browser
+  workloads is recorded below; the first failure is not counted as a pass.
+- Second full attempt, without browser workloads: **457 tests, 409.996s, failures=2, skipped=3**
+  (`/tmp/ac-n2-full-python-retry.log`). Both earlier lifecycle cases pass. Unchanged
+  `test_team.TeamRunTests.test_approvals_from_any_agent_reach_you_and_go_back_to_that_agent` (line 389) and
+  `test_conflicting_tasks_are_retried_with_a_resolution_prompt` (line 337) reach `done()` line 227 and the
+  existing **eight-second** `wait()` line 221 timeout. Both pass together on N2 **2/2 in 4.048s** and accepted
+  Part 0 **2/2 in 3.805s** (`/tmp/ac-n2-team-isolated.log`, `/tmp/ac-n2-team-baseline.log`). This matches the
+  previously documented category of fixed-duration backend workflow timeouts, not a claim that these exact
+  names failed in earlier reviews. Two nonfatal unclosed-socket ResourceWarnings also appear in this full log.
+  No assertion, wait, backend worker or skip was changed; the final full retry follows the isolated comparisons
+  and completion of every browser/server harness.
+- Third full attempt: **457 tests, 441.780s, errors=1, skipped=3** (`/tmp/ac-n2-full-python-final.log`). The single
+  error is `test_team.TeamRunTests.test_approvals_from_any_agent_reach_you_and_go_back_to_that_agent`, line 380:
+  `c.state()` → `sandbox_status()` → `sandbox.detect()` → the unchanged `run_cli()` **60-second** timeout for
+  `podman image inspect agentcontrol-agent:1`, raising `sandbox.SandboxError: podman image timed out`. This is
+  the exact external command/timeout category documented in the M7 review (§ verification/retries). The same
+  imported team case's later execution passes, as do both previous lifecycle failures and the conflict case.
+  No sandbox/runtime selection or protected code changed. Two nonfatal socket ResourceWarnings remain.
+
+- Fourth full attempt, after the preceding browser/server harnesses finished: **457 tests, 440.394s,
+  failures=4, skipped=3** (`/tmp/ac-n2-full-python-accepted.log`). Unchanged `test_permissions.GateTests`
+  cases `test_automatic_decisions_need_a_matching_rule` (line 244), `test_critical_approval_needs_the_typed_word`
+  (line 190), `test_critical_approvals_can_never_be_remembered` (line 206) and
+  `test_critical_denial_needs_no_confirmation` (line 202) time out waiting for projected inbox items in
+  `start()` line 173 → the existing **five-second** `wait()` line 167. Late workers encounter the removed
+  temporary SQLite directory during teardown. All four pass in isolation on N2 **4/4, 10.342s** and the
+  accepted Part 0 baseline **4/4, 10.214s** (`/tmp/ac-n2-permissions-isolated.log`,
+  `/tmp/ac-n2-permissions-baseline.log`). These are another fixed-duration backend wait failure category;
+  this report does not claim those exact names appeared in previous reviews. Permission classification,
+  assertions, waits and gates are unchanged. A last full retry is recorded below after the final browser passes.
+
+- Fifth/final full attempt, run alone after both final browser passes: **457 tests, 1,631.794s,
+  failures=6, errors=6, skipped=3** (`/tmp/ac-n2-full-python-final-complete.log`). All **27 added Python tests**
+  pass. All three real OpenCode integrations run and pass. Full Python remains **non-green**, not replaced by
+  focused runs. Six failures and six errors affect ten distinct unchanged cases:
+
+  | Case | Exact failure/error |
+  |---|---|
+  | `test_models.ControllerModelTests.test_offline_model_pauses_before_anything_is_sent_and_resume_continues` | line 374 waits for resumed completion; five-second `wait()` line 345 times out |
+  | `test_permissions.GateTests.test_state_exposes_policy_audit_and_chain` | line 252 → `start()` → `state()` → `sandbox.detect()`; `podman image inspect agentcontrol-agent:1` exceeds the unchanged 60-second timeout |
+  | `test_team.TeamRunTests.test_restart_mid_run_resumes_without_resending` | line 407 → `done()` → eight-second wait line 221; teardown line 206 also finds temporary `state` nonempty |
+  | `test_surfaces.ControllerSurfaceTests.test_state_lists_surfaces_and_describing_starts_nothing` | line 110 → `state()`; the same Podman 60-second image-inspection timeout |
+  | `test_thread_api.ThreadAPITests.test_read_only_state_bytes_counts_audit_and_rows` | line 333, GET `/api/state`; handler's Podman inspection times out and closes the connection, causing `RemoteDisconnected` |
+  | `test_vm.VMRunTests.test_console_input_is_checked_and_audited` | line 242 → ten-second `done()` line 156; teardown line 138 also finds temporary `.git` nonempty |
+  | `test_workflow.WorkflowTests.test_deny_redirect_is_saved_once_before_dispatch` | assertions complete; teardown line 134 finds temporary `state` nonempty |
+  | `test_team.TeamRunTests.test_approvals_from_any_agent_reach_you_and_go_back_to_that_agent` | line 380 waits for inbox; eight-second wait line 221 times out |
+  | `test_vm.VMRunTests.test_internet_while_working_keeps_the_nat_and_needs_confirmation` | line 200 → ten-second `done()` line 156 times out |
+  | `test_vm.VMRunTests.test_starting_opencode_in_the_vm_does_not_hold_the_ssh_session` | line 207 → ten-second `done()` line 156 times out |
+
+  Late workers report removed/missing SQLite files/tables after timeout cleanup; socket ResourceWarnings are
+  nonfatal. Previous reports establish fixed-duration backend waits, asynchronous VM cleanup races and the exact
+  Podman inspection timeout category. This is comparison of failure mechanisms, not a claim that every exact
+  name previously failed, nor proof that host load is the sole cause. No test, wait, runtime configuration or
+  gate was weakened. All four fourth-attempt permission failures pass in this last full attempt.
+  Three unchanged skips are opt-in container runtime/image, unavailable desktop tools and opt-in KVM;
+  **none** is counted as passing. Final isolated comparisons: the same ten cases pass on N2 **10/10, 22.496s**, and accepted Part 0 **10/10, 17.583s** (`/tmp/ac-n2-final-cases-isolated.log`, `/tmp/ac-n2-final-cases-baseline.log`). Their source bytes match Part 0 exactly. These focused passes do not turn any failed full attempt into a pass. No sixth full retry was used to chase a green result.
+
+### Walkthrough and rendered review
+
+Run the committed walkthrough with:
+
+```sh
+NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/n2_walkthrough.cjs /tmp/ac-n2-walkthrough
+```
+
+The eight accepted steps retain exact bodies and GET/POST counts:
+**8/1, 3/1, 6/1, 21/2, 8/0, 10/1, 3/1, 8/1** = **67 GET / 8 POST**. Every before/after checkpoint fully pages
+the thread: waiting equals actionable non-outcomes; rendered decision cards equal those plus actionable outcomes.
+Critical typed approval, question response, proposed-versus-recorded team, live Turn details privacy, recorded
+verification, Apply and inherited follow-up all pass. Separate Auto **2/1**. Boot **30 GET/0 POST**: relative
+to Part 0, only the new library asset and two record reads are added. Same-key classic smoke **9/0**, after the
+chat-only eight steps; no page errors; all temporary projects/state removed. Seven N2 steps separately record
+agent creation, explicit Primary, nested project with members, folder registration, skill assignment, Deny and
+unchanged single-session execution (`hermes` and `coder-1`, no library-agent substitution). The follow-up is
+approved and finished in a separately measured setup phase before N2 project creation; it is outside the old
+eight-step counts.
+
+Final committed-harness run: **8/8 old + 7/7 N2**, `/tmp/ac-n2-tour-accepted.log` and
+`/tmp/ac-n2-tour-accepted/real-results.json`. N2 GET/POST **3/1, 3/1, 9/1, 7/2, 4/1, 2/1, 18/2** = **46/9**.
+Setup **6/1**, the single POST being the existing follow-up `approve_team` control. Counts are measured, not
+estimated; project registration's second POST is its existing select. Boot, Auto and classic are separate.
+
+Inspected all **18 new mock-left/app-right pairs per pass** at 1280/1080/390, individually and in contact sheets:
+Agents, Create agent, Configure, Primary setup, Create project with members, Skills Assign. Also inspected the
+long phone sheets with title/controls pinned and initial field labels visible; Part 0's every-section/empty-state,
+before/after and reduced-motion comparisons remain recorded above. Where the mock has no N2 editor, the
+reference is its corresponding section, stated in `n2-record-results.json`; no mock editor was invented.
+Actual configuration detail and real-server screenshots are included in the artifact review below.
+
+Supplemental actual Configure renders at all three widths inspect class groups, Ask/Deny values, the host-allow
+warning, Memory and Direct unavailability: `/tmp/chat-shots-n2-inspection/` and `-wide/`. These use the same
+fatal N2 assertions selected to the three review widths (**18 cases each**); they supplement, never replace,
+the complete matrix. Six-surface comparison filenames are `n2-compare-<surface>-<width>.png` in the full
+matrix directories. Contact sheets are `n2-final-contact-<width>.png`.
+
+Development-only fatal retries found duplicate field ids behind dialogs, lost draft fields, a local refusal's
+duplicated global banner obstructing navigation, a native policy select retaining a stale value after a recorded
+GET, long-dialog title scrolling, and a tablet checkbox inheriting the general 40px minimum width. Each was
+fixed in the scoped frontend without weakening the checks. Harness-only retries corrected a missing test-server
+method, exhausted fake response queues and completing a follow-up before its proposal approval; no production
+engine change. The initial classic command missed `NODE_PATH` (dependency resolution error); corrected command
+passed. Earlier full browser runs are retained as development evidence; the final complete invocation above
+verifies fixed product files after the last corrections.
+
+The final new focus check additionally fails before its correction at the phone/tablet Configure → open Agents
+panel → Create → Escape flow (`/tmp/ac-n2-create-focus-before.log`). The background route change hid the open
+panel and left its Create opener unavailable. The scoped fix preserves that panel's open state across the
+route change; it restores the actual Create control, without focusing a hidden element. DOM regression and
+focused browser **66/66** pass afterward (`/tmp/ac-n2-create-focus-after.log`); the complete passes above are
+rerun after this correction. Earlier 965-image passes are development evidence, not substituted final results.
+
+A second display regression proves an assigned Primary was omitted from Skills cards despite its valid recorded
+assignment: **306/307** before (`/tmp/ac-n2-primary-card-before.log`), **307/307** after. The display now includes
+all active assigned agents; the Assign picker still contains only specialists. The final browser cases also
+assign a skill through Primary Configure, show its recorded assignment on the card, and retain the existing
+two-specialist/no-Primary picker assertion. One in-progress matrix was deliberately interrupted (exit 130)
+before this last product correction; it is not counted as completed verification.
+
+The optional Primary member route also failed before correction (**307/308**,
+`/tmp/ac-n2-primary-route-before.log`): the Agents route treated the Primary record as a specialist, despite
+its server-recorded kind. Rendering now uses the record's kind on either route, so no specialist engine or
+Archive is offered and the Primary composer remains disabled. The final browser workflows add Primary through
+Manage members (exact add/remove body), open its actual member pill with no team POST, and verify those controls
+are absent at all eleven widths. Focused Primary correction N2 **66/66**, **84 images** (`/tmp/ac-n2-records-accepted.log`), followed by the complete **69-case** final matrices.
+Two in-progress matrices were deliberately interrupted before the last product corrections; neither counts
+as completed verification. One new DOM failure diagnostic was interrupted because formatting a whole DOM-node
+comparison was excessively slow; replacing it with the equivalent fatal boolean absence assertion produces
+the before failure above without changing its meaning. No earlier assertion was altered for these corrections.
+
+The docked Turn details regression checks the newly scrollable member strip alongside the established composer.
+Against the pre-correction N2 CSS it exposes only **29px** of a member pill at a 420px room, below the 40px usable
+area (`/tmp/ac-n2-workspace-members-before-usable.log`). The member layout now uses the composer's established
+room-width container query, rather than the outer viewport's phone breakpoint. The regression adds members
+into overlap/containment checks, requires a usable scroll area and compares the footer with members hidden:
+no added height. Existing controls retain their clipping checks; the new member strip alone is allowed to
+scroll horizontally, as specified. Original phone footer assertions are untouched. Focused corrected N2
+**69/69, 87 images** (`/tmp/ac-n2-workspace-members-after3.log`); both final matrices include the usable-area check.
+The initial new desktop check incorrectly applied a phone 112px budget to a pre-existing blocked desktop
+composer; it was replaced by the accurate no-added-height comparison. The initial overlap check alone missed
+the collapsed strip, so the required visible-width check was added. Neither diagnostic is counted as a valid
+before-failure proof; the final 29px failure above is. The matrix interrupted to include this final regression
+(exit 130, `/tmp/ac-n2-browser-final.log`) is not counted as completed verification.
+
+### Limitations and stop
+
+**Full Python remains non-green after five attempts**, with the final results and all baseline comparisons above.
+N2's 27 new regressions and all frontend/route/browser/walkthrough checks pass; independent review must assess
+the remaining unchanged backend/runtime flakiness. No failed full attempt is omitted or represented as passing.
+
+Library prompts/models, project membership, assignments and policies are **records only**. Hermes still chooses
+per-run agents; enforcement awaits its authorized later milestone. Primary and Direct conversations, Memory and
+project-file browsing are unavailable. Classic remains compatible and required for its existing functions.
+No physical-device testing is claimed; browser emulation does not verify native iOS/Android keyboards.
+The previously excluded in-flight skill-fetch race remains out of scope; D7 and approval behavior are unchanged.
+Stop for Opus review; no next milestone, route change, classic retirement or main merge.

@@ -71,17 +71,58 @@ def _git(folder, *args):
     return done.stdout.strip()
 
 
-def create(root, name):
-    """A new folder <root>/<name> with a git repository and an empty first commit."""
-    name = (name or '').strip()
-    if not NAME.match(name) or set(name) <= {'.'}:
-        raise ValueError('Use 1–64 letters, digits, dots, dashes or underscores, starting with a letter or digit.')
+def destination(root, name):
+    """Validate a new path before filesystem effects."""
+    if not isinstance(name, str):
+        raise ValueError('Directory must be a relative path')
+    parts = name.strip().split('/')
+    if not 1 <= len(parts) <= 4 or any(not NAME.fullmatch(part) for part in parts):
+        raise ValueError('Use a relative directory of 1–4 segments: letters, digits, dots, dashes or underscores, starting with a letter or digit.')
     root = Path(root).resolve()
-    folder = root / name
-    if folder.exists():
+    if not root.is_dir():
+        raise ValueError('The projects root is not a folder')
+    folder = root
+    for part in parts:
+        folder = folder / part
+        if not _inside(root, folder):
+            raise ValueError(f'Only folders inside {root} can be used.')
+        if (folder.exists() or folder.is_symlink()) and not folder.resolve().is_dir():
+            raise ValueError('An intermediate directory is not a folder')
+    if folder.exists() or folder.is_symlink():
         raise ValueError(f'{folder} already exists. Pick it with Browse instead.')
-    folder.mkdir(mode=0o755)
+    return folder.resolve()
+
+
+def create(root, name):
+    """A new git folder at a relative 1–4 segment path (D18)."""
+    if not isinstance(name, str):
+        raise ValueError('Directory must be a relative path')
+    name = name.strip()
+    parts = name.split('/')
+    if not 1 <= len(parts) <= 4 or any(not NAME.fullmatch(part) for part in parts):
+        raise ValueError('Use a relative directory of 1–4 segments: letters, digits, dots, dashes or underscores, starting with a letter or digit.')
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise ValueError('The projects root is not a folder')
+    destination(root, name)
+    folder, made, target = root, [], None
     try:
+        for index, part in enumerate(parts):
+            candidate = folder / part
+            resolved = candidate.resolve()
+            if not _inside(root, resolved):
+                raise ValueError(f'Only folders inside {root} can be used.')
+            exists = candidate.exists() or candidate.is_symlink()
+            if index == len(parts) - 1 and exists:
+                raise ValueError(f'{candidate} already exists. Pick it with Browse instead.')
+            if exists and not resolved.is_dir():
+                raise ValueError('An intermediate directory is not a folder')
+            if not exists:
+                resolved.mkdir(mode=0o755)
+                made.append(resolved)
+                if index == len(parts) - 1:
+                    target = resolved
+            folder = resolved
         _git(folder, 'init', '-q')
         _git(folder, 'symbolic-ref', 'HEAD', 'refs/heads/main')
         identity = []
@@ -89,9 +130,22 @@ def create(root, name):
             identity = ['-c', 'user.name=AgentControl', '-c', 'user.email=agentcontrol@localhost']
         _git(folder, *identity, '-c', 'core.hooksPath=/dev/null', 'commit', '-q', '--allow-empty', '-m', f'Start {name}')
     except Exception:
-        shutil.rmtree(folder, ignore_errors=True)   # nothing half-made is left behind
+        if target is not None:
+            shutil.rmtree(target, ignore_errors=True)
+        for created in reversed(made):
+            try:
+                created.rmdir()
+            except OSError:
+                pass  # never remove another call's files or a pre-existing directory
         raise
     return folder
+
+
+def register(root, path):
+    """Validate an existing confined folder; the journal service creates its record."""
+    if not isinstance(path, str) or not path:
+        raise ValueError('An existing folder path is required')
+    return resolve(root, path)
 
 
 def load_choice(data):

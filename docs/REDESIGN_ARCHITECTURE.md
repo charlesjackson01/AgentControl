@@ -113,7 +113,10 @@ The priorities, in order:
 ```
 
 The chat UI **reads** through `/api/state` (M1) and then `/api/channels` and `/api/thread` (M2+).
-It **writes** only through the existing POST endpoints.
+Session and decision writes use the existing POST endpoints. N2 adds authenticated `/api/library` and `/api/projects`
+record reads and the approved configuration POSTs. The append-only `_v8` tables are `library_agents`, `projects`,
+`memberships`, `skill_assignments` and `tool_policies`; the existing per-run `agents` table stays separate. Record
+changes publish `library` or `projects` notices with no run; clients re-read. They add no conversation events.
 
 ## 5. Routing and files
 
@@ -377,8 +380,9 @@ the same card can offer another decision, as specified in the M5 handoff.
 ## 10. Layout
 
 N1 has six sections, in order: **Primary, Agents, Projects, Workspace, Skills, Settings**. Projects contains the
-existing team thread; `#/` remains its default route. Primary, persistent Agents, Direct conversations, project
-file browsing and Memory have honest unavailable states. All existing request and session controls stay in Projects.
+existing team thread; `#/` remains its default route. N2 adds the agent library, explicit Primary setup and editable
+configuration, advisory project membership, skill assignment and separate Ask/Deny policy. Primary and Direct
+conversations, project file browsing and Memory have honest unavailable states. All existing request and session controls stay in Projects.
 **N1.2 (D13) shipped the Projects screen as rail, project list, team thread and composer. Details open on demand and
 never sit open beside a copy of themselves.**
 
@@ -395,11 +399,14 @@ never sit open beside a copy of themselves.**
   active item's label (measured, so it follows text zoom and the font). Every item keeps its full accessible name,
   a target of at least 40 × 40 px and `aria-current`.
 - **Project list (the Projects panel):** title, search and "+". The current project first (name, directory,
-  marked current), then the git projects in the projects root from `GET /api/projects/browse`; activating a row
-  opens the existing switch confirmation. "+" offers **Create project** (the existing dialog) and **Open folder…**,
+  marked current, with its recorded member count), then registered records from `GET /api/projects` and unregistered
+  git projects in the projects root from `GET /api/projects/browse`; activating a row
+  opens the existing switch confirmation. "+" offers **Create project** (name, a relative 1–4 segment directory and
+  at least one active specialist; Primary optional) and **Open folder…**,
   a dialog that browses inside the root with Root, Parent folder and Refresh; non-git folders appear only there,
-  labelled "Team sessions need git". The panel has no channels, sessions, members or waiting link; the run's roster
-  is in Session details until library agents arrive (N2).
+  labelled "Team sessions need git". **Use as project** registers the folder before switching. The current project
+  lists its advisory library members and Manage members; links open `#/agents/<id>`. The panel has no channels,
+  sessions or waiting link; the actually running roster stays in Session details.
 - **Stage top bar:** the project name; the project directory, plus a quiet "Reconnecting…" only while the
   connection is not live; **Details** (enabled when a session is selected or active) and the session menu ⋯
   (Pause, Resume, Stop… and Turn details links for active members; no classic link).
@@ -422,7 +429,8 @@ never sit open beside a copy of themselves.**
   Projects and focuses the first actionable card (`locateWaiting`, ten-page budget). Pause, Resume and Stop live in
   the session menu and as slash commands. Turn details has no decisions or input.
 - **Composer:** one unchanged decision/session interaction surface. With a room at least 600 px wide it is one row:
-  Team chip, target chip, input, ⚙ Settings, Send. Below 600 px (phones, or beside Turn details) it is two rows:
+  Team chip, member pills (when recorded), target chip, input, ⚙ Settings, Send. Member pills navigate to library
+  records and never post to the team. Below 600 px (phones, or beside Turn details) it is two rows:
   Team chip, target chip, Cancel follow-up and Resume when present, then ⚙ Settings; then the full-width input and
   Send (a CSS container query on the room). No control overlaps or clips another. Phone portrait conversation
   occupies at least 55% with the bar shown and the footer at most 112 px; landscape at least 45% with the footer at

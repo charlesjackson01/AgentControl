@@ -62,7 +62,7 @@ These follow the existing journal pattern:
 
 | Milestone | Migration | Table | Value (JSON) |
 |---|---|---|---|
-| N2 | `_v8` | `agents` | `id` (`ag_<12 hex>`), `kind` (`primary` or `specialist`), `name`, `display_role`, `engine_type` (specialists: `coder`, `tester`, `reviewer` or `researcher`), `model` (registry endpoint id or `null`), `instructions` (at most 8,000 characters), `created`, `updated`, `archived` |
+| N2 | `_v8` | `library_agents` | `id` (`ag_<12 hex>`), `kind` (`primary` or `specialist`), `name`, `display_role`, `engine_type` (specialists: `coder`, `tester`, `reviewer` or `researcher`), `model` (registry endpoint id or `null`), `instructions` (at most 8,000 characters), `created`, `updated`, `archived` |
 | N2 | `_v8` | `projects` (plus a unique `path` column) | `id` (`pr_<12 hex>`), `path` (resolved, inside the projects root), `name`, `created`, `updated`, `archived` |
 | N2 | `_v8` | `memberships` | `id` (`<project>:<agent>`), `project`, `agent`, `active`, `added`, `removed` |
 | N2 | `_v8` | `skill_assignments` | `id` (`<agent>:<skill>`), `agent`, `skill` (catalogue name), `active`, `updated` |

@@ -27,10 +27,16 @@ browser. To reach the dashboard from your phone, bind `--host` to your Tailscale
 address and keep it on the tailnet. Do not expose the port publicly without
 HTTPS and authentication.
 
+Before upgrading, **stop the server and back up `state/autonomy.sqlite3`**. The journal uses WAL; stop it before
+copying the database. N2 appends migration `_v8` without changing historical rows. Older builds ignore its new tables.
+
 Chat bundles Inter and IBM Plex Mono locally and uses the mock's dark component styling, with accessible contrast,
 touch targets and text sizing. It has six sections: **Primary, Agents, Projects, Workspace, Skills and Settings**. Projects holds the
-existing team thread, approvals, sessions and native project creation/switching. Primary, persistent Agents,
-Direct conversations, file browsing and Memory are marked unavailable. Skills shows the real shared catalog.
+existing team thread, approvals and sessions. Agents manages your specialist library; Primary has an explicit setup
+and editable configuration. Projects supports nested directories and advisory membership, while Skills stores
+assignments and separate Ask/Deny tool policies. Sessions still choose agents automatically; these records do not
+change execution or grant permissions. Primary and Direct conversations, file browsing and Memory remain unavailable.
+Skills shows the real shared catalog.
 The classic dashboard remains at **`/classic`**, using the same key. Settings and Skills link to its full
 management, Usage, Activity and runtime controls. **Turn details** links to a standalone classic pop-out for
 interactive surfaces. `/chat` remains an alias
@@ -111,4 +117,5 @@ it with `sqlite3 activity.sqlite3 'select * from tasks'`.
 
 The isolated device-checklist fixture accepts an optional readable throwaway key:
 `python3 agent-autonomy/tests/device_fixture.py --port 8767 [--key <value>]`.
-Omit `--key` to generate an eight-character disposable key.
+Omit `--key` to generate an eight-character disposable key. Explicit keys accept 4–64 printable ASCII
+characters without spaces and are used exactly.

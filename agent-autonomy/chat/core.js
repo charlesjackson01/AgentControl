@@ -141,7 +141,7 @@
   }
   function scheduleRefresh() { if (!scheduled && key) scheduled = setTimeout(()=>{scheduled = null; refresh();},0); }
   // Copied and adapted from classic connectEvents(): authenticated fetch streaming, no key in URLs.
-  function handleEventBlock(block) { const name = (block.match(/^event:\s*(.*)$/m)||[])[1]; if (name === 'hello' || name === 'change') scheduleRefresh(); }
+  function handleEventBlock(block) { const name = (block.match(/^event:\s*(.*)$/m)||[])[1]; if(name==='change'){try{root.AC.library?.invalidate(JSON.parse((block.match(/^data:\s*(.*)$/m)||[])[1]).kind);}catch{}} if (name === 'hello' || name === 'change') scheduleRefresh(); }
   async function connectEvents() {
     if (!key) return;
     const generation = epoch, controller = new AbortController(); abort = controller;

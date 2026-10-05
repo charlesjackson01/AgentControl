@@ -68,11 +68,11 @@
     $('sign-in').hidden = snapshot.authenticated; $('app').hidden = !snapshot.authenticated;
     $('sign-in-error').textContent = snapshot.authError;
     $('banner').hidden = !snapshot.error; $('banner-text').textContent = snapshot.error;
-    if (!snapshot.authenticated) {workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open');composer.render(snapshot);if($('stop-dialog').hasAttribute('open'))closeStop();syncModal();return;}
+    if (!snapshot.authenticated) {workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open');composer.render(snapshot);root.AC.library.render(snapshot);if($('stop-dialog').hasAttribute('open'))closeStop();syncModal();return;}
     if (!snapshot.focused && focused && root.location.hash === '#/') focused = '';
     const state = snapshot.state;
     if (!state) { $('room-header').textContent = 'Connecting…'; return; }
-    composer.render(snapshot);const controlState=composer.getView();
+    composer.render(snapshot);root.AC.library.render(snapshot);const controlState=composer.getView();
     const railData=m.railSessions(state,snapshot.thread,snapshot.channels?.channels?.[0]?.sessions),sessions=railData.sessions,roster=m.membersFromState({...state,agents:state.agents || []});
     const channel = snapshot.channels?.channels?.[0], roomSession = snapshot.thread?.sessions[channel?.active_session];
     // Details describes the selected session, or the active one when nothing is selected.
@@ -113,8 +113,8 @@
     root.AC.sections.render(snapshot);controlBusy(composer.getBusy());panels();syncModal();
   }
   function route() {
-    const hash=root.location.hash || '#/';const sectionMatch=hash.match(/^#\/(primary|agents|projects|workspace|skills|settings)$/);
-    if(sectionMatch){root.AC.sections.go(sectionMatch[1]);{if(hash!==routedHash)contextOpen=false;workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open','rail-open');render(core.getState());routedHash=hash;return;}}else root.AC.sections.go('projects');
+    const hash=root.location.hash || '#/';const sectionMatch=hash.match(/^#\/(primary|agents|projects|workspace|skills|settings)(?:\/([^/]+))?$/);
+    if(sectionMatch && (!sectionMatch[2] || sectionMatch[1]==='agents')){try{root.AC.library.select(decodeURIComponent(sectionMatch[2] || ''));}catch{root.AC.library.select('');}root.AC.sections.go(sectionMatch[1]);{if(hash!==routedHash)contextOpen=false;workspaceRoute=null;workspace.clear();$('app').classList.remove('workspace-open','rail-open');render(core.getState());routedHash=hash;return;}}else root.AC.sections.go('projects');
     const next=root.AC.workspace.parseRoute(hash),returning=!!workspaceRoute && !next;let id='';
     if(next){if(!workspaceRoute){workspaceContextOpen=contextOpen;roomRoute=/^#\/s\/[^/]+$/.test(lastRoomRoute)?lastRoomRoute:'#/';workspaceOpener=document.activeElement?.matches('a,button,input,textarea,summary,[tabindex]')?document.activeElement:null;}workspaceRoute=next;id=next.run;}
     else{workspaceRoute=null;if(returning)contextOpen=workspaceContextOpen;else if(hash!==routedHash)contextOpen=false;try{const match=hash.match(/^#\/s\/([^/]+)$/);if(match)id=decodeURIComponent(match[1]);else if(!['#/','#/projects'].includes(hash))root.location.hash='#/';}catch{root.location.hash='#/';}lastRoomRoute=root.location.hash || '#/';}

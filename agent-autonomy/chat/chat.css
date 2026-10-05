@@ -684,3 +684,41 @@ dialog[open],#project-add-menu:not([hidden]),#context:not([hidden]),#workspace:n
 @media (forced-colors: active) { .empty-icon { border: var(--line) solid CanvasText; } .skeleton span { border: var(--line) solid GrayText; } }
 
 .primary-memory-chip { border-radius: var(--pill-radius); background: var(--surface); padding: var(--s1) var(--s3); font-size: calc(var(--type-xs) / var(--s4) * 1rem); }
+
+/* N2 records share the room's spacing, type and focus tokens. */
+.library-list .project-row { text-decoration: none; }
+.library-list .project-meta { min-width: 0; }
+.configure, .configure-section, .direct-unavailable { max-width: 780px; margin: 0 auto var(--s4); padding: var(--s4); background: var(--surface); border: var(--line) solid var(--separator); border-radius: var(--r3); }
+.configure h2, .configure-section h2 { margin-top: 0; }
+.configure label, .configure input, .configure select, .configure textarea { display: block; width: 100%; margin-bottom: var(--s2); }
+.configure textarea, #project-dialog textarea, #project-dialog select { width: 100%; min-width: 0; }
+.configure label { color: var(--muted); }
+.configure input, .configure select, .configure textarea, #project-dialog textarea, #project-dialog select { font-size: 1rem; }
+.configure section + section { margin-top: var(--s4); }
+.configure fieldset, .configure-section fieldset, #project-dialog fieldset { border: var(--line) solid var(--border); border-radius: var(--r2); padding: var(--s3); margin: var(--s3) 0; min-width: 0; }
+.member-choice { display: flex !important; align-items: center; gap: var(--s2); padding: var(--s2); min-height: var(--target); overflow-wrap: anywhere; }
+#project-dialog .member-choice input { width: var(--s4); height: var(--s4); min-width: var(--s4); min-height: var(--s4); margin: 0; flex-shrink: 0; }
+.policy-row { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: var(--s2); margin: var(--s2) 0; }
+.policy-row select { min-width: var(--target); max-width: 100%; }
+.policy-row p { grid-column: 1 / -1; color: var(--muted); }
+.project-library-members { margin-top: var(--s4); padding-top: var(--s3); border-top: var(--line) solid var(--separator); }
+.project-library-members p { font-size: calc(var(--type-sm) / var(--s4) * 1rem); }
+#composer-members { display: flex; gap: var(--s1); overflow-x: auto; flex-shrink: 1; min-width: 0; max-width: 20%; scrollbar-width: none; }
+#composer-members[hidden] { display: none; }
+.member-pill { display: inline-flex; align-items: center; min-height: var(--target); padding: var(--s1) var(--s2); border: var(--line) solid var(--border); border-radius: var(--pill-radius); color: var(--muted); white-space: nowrap; text-decoration: none; flex-shrink: 0; }
+@container (max-width:599.98px){
+ .composer-row.has-library-members { grid-template-columns: auto minmax(0,1fr) minmax(0,max-content) auto auto auto; grid-template-areas: "team members target cancel resume settings" "input input input input input send"; }
+ #composer-members { grid-area: members; max-width: none; }
+}
+@media(max-width:600px){
+ .configure, .configure-section, .direct-unavailable { padding: var(--s3); }
+ #project-dialog .member-choice input { width: var(--target); height: var(--target); min-width: var(--target); }
+}
+@media(forced-colors:active){.member-pill { border-color: ButtonText; }}
+
+@media(max-width:1199px){#project-dialog .member-choice input { width: var(--target); height: var(--target); min-width: var(--target); min-height: var(--target); }}
+
+/* Long N2 forms keep their title and Cancel/Save controls available while scrolling. */
+#project-dialog.record-dialog { scroll-padding-block: var(--s8) var(--s8); }
+#project-dialog.record-dialog > h2 { position: sticky; top: calc(-1 * var(--s4)); z-index: 1; background: var(--modal-surface); margin: calc(-1 * var(--s4)) calc(-1 * var(--s4)) var(--s3); padding: var(--s3) var(--s4); }
+#project-dialog.record-dialog > .decision-dialog-buttons { position: sticky; bottom: calc(-1 * var(--s4)); z-index: 1; background: var(--modal-surface); margin: var(--s3) calc(-1 * var(--s4)) calc(-1 * var(--s4)); padding: var(--s3) var(--s4); }

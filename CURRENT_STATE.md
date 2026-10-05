@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-04, by Codex (N2 Part 0 verified separately; N2 records implementation follows; review pending).
+**Last updated:** 2026-10-04, by Codex (N2 Part 0 committed separately; N2 implemented; Opus review pending).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 
@@ -13,7 +13,7 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | Backend source | merged from `claude/gifted-fermi-rcas2a` @ `967aa85` in merge commit `af4da89` (61 commits: engine M0–M13, Workspaces W0–W6, Jev stuck watch) |
 | Architecture (binding) | `docs/REDESIGN_ARCHITECTURE.md` |
 | Detailed plan and rationale | `docs/CHAT-FIRST-PLAN.md` |
-| Handoffs | `docs/handoffs/`. **Latest accepted:** `M9_PARITY_AND_CUTOVER.md` (2026-10-03). **Current:** `N1_3_MATCH_THE_MOCK.md`, **implemented and verified; Opus review pending**. N1/N1.1 technically accepted. `N0_DECISIONS.md`: 5 of 15 decisions and the sequence approved; P-2 to P-10 and P-15 pending |
+| Handoffs | `docs/handoffs/`. **Latest accepted:** `N1_3_MATCH_THE_MOCK.md` (2026-10-04). **Current:** `N2_LIBRARY_PROJECTS_MEMBERSHIP.md`, implemented; Opus review pending. D14–D19 and exact `_v8` approved; P-3, P-5, P-7 and P-10 remain pending |
 | Persistent agents (proposal; approved parts recorded as D8–D12 and §12.2 in the architecture) | `docs/PERSISTENT_AGENTS_ARCHITECTURE.md`, `docs/PERSISTENT_AGENTS_ACCEPTANCE.md`; inputs `docs/inputs/agentcontrol-ui-handoff1.md` (behaviour) and `docs/inputs/agentcontrol-ui.html` (visual reference only; not served, not reused) |
 | Earlier design docs | `docs/MULTI-AGENT-PLAN.md`, `docs/UI-UX-AUDIT.md`, `docs/W7LiveEvents.md`, `docs/M0-SPIKE-REPORT.md` |
 
@@ -41,15 +41,15 @@ History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 | **M9 Parity and cutover** | ✅ **accepted (Part 0 `568534e`, A `1025518`, B `6068f2d`; review 2026-10-03)** | Codex, then the owner | All owner gates cleared at `ae4bcb8`; G2 (a) retains classic surfaces, G3 accepts Android Chrome as not performed. Plain `/` is chat; `/chat` aliases it; `/classic` and `/classic/` retain classic; root pop-out URLs remain compatible. 72 parity rows retain their statuses (17 Native, 54 Linked, 1 not ported, 0 Missing). No merge into main |
 | **M9.1 Device corrections** | ✅ **implementation accepted (re-review 2026-10-02, `fd3c4d3`)** | Codex | `docs/handoffs/M9_1_DEVICE_CORRECTIONS.md`: 16 px inputs; keyboard viewport handling with pinch-zoom freeze; visible waiting/Workspace links; isolated fixture; reliable focus return. **Owner-reported iPhone 17 Pro / Safari checklist passed; Android Chrome not performed (owner-accepted gap)** |
 | R1 Persistent bots | roadmap; **N series proposed** | owner | architecture §12.1. Realised by the proposed N series (N1–N7, N-ORCH separate) |
-| **N0 Persistent agents: architecture and requirements** | ✅ **N1-gating decisions approved 2026-10-03**; P-2 to P-10, P-15 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. Approved: P-1 (D8 scope), P-11 (a) (D9 dark-only), P-12 (D10 N1 test policy), P-13 (D11 vocabulary and routes), P-14 (D12 handoff over mock), and the N sequence (§12.2). No code, schema or database changes |
+| **N0 Persistent agents: architecture and requirements** | ✅ **N1 and N2 gating decisions approved**; P-3, P-5, P-7, P-10 pending | Opus, then the owner | `docs/handoffs/N0_DECISIONS.md`. D8–D12 approve N1 and the sequence; D14–D19 approve library records, advisory membership and separate skill/policy configuration. Execution binding and conversations need later handoffs |
 | **N1 Shell and navigation** | ✅ **accepted (N1 `8be5d62`, N1.1 `99b4c7d`; design corrected and accepted in N1.2)** | Codex, then Opus | `docs/handoffs/N1_SHELL_AND_NAVIGATION.md`: six-section dark shell from existing data and endpoints; Turn details unchanged; native project switch and create; honest unavailable states. Both required matrix passes (normal and 0.06em wide-font) green: 540 + 61 each, 1,642 screenshots. Optional O1, O3, O4, O6, O7 carried. No physical-device testing of the new shell yet |
 | **N1.2 Projects screen** | ✅ **accepted (`f135bb3` and `450165e`; review 2026-10-03)** | separate Claude Code session (Codex out of usage), then Opus | `docs/handoffs/N1_2_PROJECTS_SCREEN.md` (D13): rail, project list, team thread, composer; approval once on its card plus a Projects count; details on demand; classic links only where required. Both matrix passes 540 + 157, 830 screenshots each; chat 278/278; Python 424 OK. Optional O8–O10 for the owner. No physical-device check yet |
 | **N1.3 Match the mock** | ✅ **accepted (`2811a04`; review 2026-10-04)** | Codex, then Opus | `docs/handoffs/N1_3_MATCH_THE_MOCK.md`: bundled Inter and IBM Plex Mono (byte-identical to Fontsource 5.3.0, 189,700 bytes, same-origin); components restyled to the mock; both passes 540 + 179, 848 screenshots each; Python 426 OK. S1 (desktop radio ovals) is N2 Part 0 |
-| **N2 Library, projects, membership** | 📋 **ready for Codex** (migration `_v8` confirmed by the owner, 2026-10-04) | Codex, then Opus | `docs/handoffs/N2_LIBRARY_PROJECTS_MEMBERSHIP.md`. **Part 0 implemented:** desktop radio fix, risk label, short fixture key and `--key`, premium empty states and polish (renders at 1280, 1080 and 390). **Then N2:** `library_agents`, `projects`, `memberships`, `skill_assignments`, `tool_policies`; library, Primary setup, projects with directory and members, skill assignment, ask/deny policy; membership advisory; no engine change; commits the real-server walkthrough |
+| **N2 Library, projects, membership** | ✅ **implemented; Opus review pending** | Codex, then Opus | `docs/handoffs/N2_LIBRARY_PROJECTS_MEMBERSHIP.md`. **Part 0 `4c99bb6` committed first:** square indicators, risk label, fixture keys, empty states and polish. **N2:** exact `_v8`, authenticated records, explicit Primary setup, specialist configuration/archive, nested projects/registration/advisory members, independent skills and Ask/Deny. Committed disposable real-server walkthrough. Both browser passes and 1280/1080/390 comparisons; no execution binding or N3/CR work |
 | **Classic retirement (CR1–CR5)** | 📋 **triage approved 2026-10-04 (D21)**; starts after N2 | Opus handoffs, then implementer | `docs/CLASSIC_RETIREMENT.md`: 3 already native, 14 dropped, 5 N series, 32 ported (CR1 approvals and audit, CR2 run options, CR3 visibility, CR4 native surfaces). CR5 removal needs its own owner approval |
 | **N1.1 Bounded corrections** | ✅ **accepted (Opus re-review, `99b4c7d`)** | Codex | C1–C5: wrapping waiting pointer and full navigation/chip labels, required fatal wide-font matrix, unassessed skill risk and singular session wording. Frontend/tests/docs only; all earlier behavior assertions retained. Evidence and exact retries in the appended N1.1 report |
 
-The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `sections.js`, `shell.js`.
+The isolated frontend is in `agent-autonomy/chat/`: `index.html`, `tokens.css`, `chat.css`, `core.js`, `model.js`, `thread.js`, `decisions.js`, `composer.js`, `members.js`, `workspace.js`, `library.js`, `sections.js`, `shell.js`.
 `/` and its `/chat` alias show real project sessions, members and Connections, with authenticated SSE and polling fallback.
 The room composer starts sessions and follow-ups, sends notes and offers the M4 controls through existing endpoints.
 Actionable cards now expose the M5 permission, question, team, research, skill and outcome decisions in the room.
@@ -493,3 +493,28 @@ before/after images**, square indicators at every width, cutover **5/5**, fixtur
 Mock/app comparisons and before/after empty surfaces inspected at 1280/1080/390; reduced motion verified.
 Exact results and fatal development retries are in the appended N2 report.
 Original checkout's dirty N1.2 files preserved; implementation uses `/tmp/AgentControl-n2`. No N3/CR/main work.
+
+
+## N2 verification (2026-10-04)
+
+- Part 0 was verified/committed first as `4c99bb6`. N2 adds only the exact `_v8` record tables, authenticated
+  library/project configuration, explicit Primary setup, nested creation/registration, advisory members and
+  independent skill assignment/Ask–Deny policy. Historical journal methods and protected orchestration/classic
+  files are unchanged. Records do not bind execution; Primary/Direct conversations and Memory remain unavailable.
+- Chat **308/308**, classic **82/82**, routes **6/6**. Both complete fatal browser passes **540 + 287**, **968
+  counted images each**, cutover **5/5**, fixture **9/9**, **1,586 font checks/pass**, zero off-origin app requests.
+  All mock/app pairs at 1280/1080/390 and docked Turn details member strips inspected in both passes.
+- Real-server committed walkthrough **8/8 original + 7/7 N2**, disposable cleanup, same-key classic. Original
+  **67 GET/8 POST** and exact decision bodies preserved; complete-page waiting/card invariants hold. N2 steps
+  **46 GET/9 POST**; separate follow-up setup **6/1**, Auto **2/1**, boot **30/0**, classic **9/0**.
+- **Full Python remains non-green after five attempts**. Last: **457 tests, 1,631.794s, failures=6, errors=6,
+  skipped=3**. All **27 new Python cases** and all three real OpenCode integrations pass. Ten distinct unchanged
+  final affected cases pass in isolation on N2 **10/10, 22.496s** and Part 0 **10/10, 17.583s**. Earlier failures
+  and baseline comparisons are retained in the handoff report; no backend fixes, relaxed waits or skipped failures.
+  Three gates: opt-in container/image, absent desktop tools, opt-in KVM. Gates are not counted as passes.
+- Report lists every authorized superseded assertion, exact migration/downgrade evidence and fatal development
+  retries. Includes the separately authorized printable-ASCII fixture-key correction without changing real auth.
+  Logs `/tmp/ac-n2-browser-final-complete.log`, `/tmp/ac-n2-full-python-final-complete.log`,
+  `/tmp/ac-n2-tour-accepted.log`; renders `/tmp/chat-shots-n2-final-complete/` and `-wide/`.
+- Original dirty checkout and its HEAD remain untouched; implementation is in `/tmp/AgentControl-n2`.
+  No physical-device claim, N3, CR implementation, route cutover or main merge. **Stop for Opus review.**

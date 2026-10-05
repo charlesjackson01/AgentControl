@@ -28,8 +28,8 @@ KEY_ALPHABET = 'abcdefghijkmnpqrstuvwxyz23456789'
 
 
 def fixture_key(value):
-    if not isinstance(value, str) or not 4 <= len(value) <= 64 or any(not c.isprintable() or c.isspace() for c in value):
-        raise ValueError('Key must be 4–64 printable characters with no spaces')
+    if not isinstance(value, str) or not 4 <= len(value) <= 64 or any(not '!' <= c <= '~' for c in value):
+        raise ValueError('Key must be 4–64 printable ASCII characters with no spaces')
     return value
 
 

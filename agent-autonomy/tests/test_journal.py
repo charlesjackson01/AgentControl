@@ -4,6 +4,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from journal import MIGRATIONS, Store
@@ -54,6 +55,7 @@ class JournalTests(unittest.TestCase):
         with sqlite3.connect(self.path) as c:
             self.assertEqual(c.execute('PRAGMA user_version').fetchone()[0], len(MIGRATIONS))
 
+    @patch('journal.MIGRATIONS', MIGRATIONS[:7])
     def test_v6_migrates_to_v7_with_only_the_approved_index_and_unchanged_rows(self):
         with sqlite3.connect(self.path) as c:
             for migration in MIGRATIONS[:6]:migration(c)

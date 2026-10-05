@@ -60,8 +60,20 @@ def _v7(c):
     c.execute('CREATE INDEX IF NOT EXISTS events_run_id ON events(run, id)')
 
 
+def _v8(c):
+    """N2 library, project and advisory configuration records (D14–D19)."""
+    c.executescript('''CREATE TABLE IF NOT EXISTS library_agents (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS memberships (id TEXT PRIMARY KEY, project TEXT NOT NULL, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS memberships_project ON memberships(project);
+CREATE TABLE IF NOT EXISTS skill_assignments (id TEXT PRIMARY KEY, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS skill_assignments_agent ON skill_assignments(agent);
+CREATE TABLE IF NOT EXISTS tool_policies (id TEXT PRIMARY KEY, agent TEXT NOT NULL, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tool_policies_agent ON tool_policies(agent);''')
+
+
 # Append new migrations here; never edit an applied one. Index + 1 = schema version.
-MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7]
+MIGRATIONS = [_v1, _v2, _v3, _v4, _v5, _v6, _v7, _v8]
 USAGE_FIELDS = ('run', 'agent', 'source', 'endpoint', 'model', 'tokens_in', 'tokens_out', 'duration_ms', 'queued_ms', 'status', 'cost', 'ref')
 GENESIS = '0' * 64
 
@@ -107,6 +119,43 @@ class Store:
                 self.listener(kind, run)
             except Exception:
                 pass  # live updates are best effort; never fail a journal write because of them
+
+    RECORD_COLUMNS = {'library_agents': (), 'projects': ('path',), 'memberships': ('project', 'agent'),
+                      'skill_assignments': ('agent',), 'tool_policies': ('agent',)}
+
+    def record_list(self, table, owner=None):
+        """N2 JSON records only; historical run tables use their unchanged methods."""
+        assert table in self.RECORD_COLUMNS
+        column = 'project' if table == 'memberships' else 'agent'
+        assert owner is None or column in self.RECORD_COLUMNS[table]
+        with self.connection() as c:
+            rows = c.execute(f'SELECT value FROM {table}' + (f' WHERE {column}=?' if owner is not None else '') + ' ORDER BY rowid',
+                             (owner,) if owner is not None else ()).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def record_get(self, table, ident):
+        assert table in self.RECORD_COLUMNS
+        with self.connection() as c:
+            row = c.execute(f'SELECT value FROM {table} WHERE id=?', (ident,)).fetchone()
+        if row is None:
+            raise KeyError(ident)
+        return json.loads(row[0])
+
+    def record_put(self, table, value):
+        assert table in self.RECORD_COLUMNS
+        columns = ('id', *self.RECORD_COLUMNS[table], 'value')
+        values = [value[column] for column in columns[:-1]] + [json.dumps(value)]
+        with self.connection() as c:
+            c.execute(f'INSERT INTO {table} ({",".join(columns)}) VALUES ({",".join("?" for _ in columns)}) '
+                      'ON CONFLICT(id) DO UPDATE SET ' + ','.join(f'{column}=excluded.{column}' for column in columns[1:]), values)
+        self._changed('projects' if table in ('projects', 'memberships') else 'library', None)
+        return value
+
+    def record_update(self, table, ident, **changes):
+        with self.lock:
+            item = self.record_get(table, ident)
+            item.update(changes)
+            return self.record_put(table, item)
 
     def put(self, table, value):
         assert table in ('runs', 'steps')

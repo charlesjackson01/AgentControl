@@ -1,0 +1,448 @@
+{
+  "agents": [
+    {
+      "id": "agt_research",
+      "name": "Research Runner",
+      "description": "Multi-step web research with a citation pass before it answers.",
+      "instructions": "Break the request into sub-questions, research each one, then reconcile the findings into a single cited answer. Flag disagreements between sources instead of silently picking one.",
+      "modelId": "claude-opus-4-6",
+      "endpointId": null,
+      "skillIds": [
+        "web-research",
+        "summarize"
+      ],
+      "status": "running",
+      "createdAt": "2026-07-14T03:42:45.939Z",
+      "lastRunAt": "2026-10-06T03:42:45.939Z",
+      "runCount": 1284,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-06T03:42:45.939Z",
+          "status": "running",
+          "durationMs": 0,
+          "steps": 4,
+          "agentId": "agt_research",
+          "input": "",
+          "output": "",
+          "error": null
+        },
+        {
+          "id": "r2",
+          "startedAt": "2026-10-05T03:42:45.939Z",
+          "status": "succeeded",
+          "durationMs": 184000,
+          "steps": 11,
+          "agentId": "agt_research",
+          "input": "",
+          "output": "",
+          "error": null
+        },
+        {
+          "id": "r3",
+          "startedAt": "2026-10-04T03:42:45.940Z",
+          "status": "succeeded",
+          "durationMs": 162000,
+          "steps": 9,
+          "agentId": "agt_research",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "agt_inbox",
+      "name": "Inbox Triage",
+      "description": "Classifies, tags, and drafts replies for inbound support mail.",
+      "instructions": "Sort into billing, bug, or how-to. Draft a reply for anything not billing. Never send without review.",
+      "modelId": "claude-sonnet-4-6",
+      "endpointId": null,
+      "skillIds": [
+        "summarize",
+        "email-draft",
+        "crm-lookup"
+      ],
+      "status": "running",
+      "createdAt": "2026-08-06T03:42:45.940Z",
+      "lastRunAt": "2026-10-06T03:42:45.940Z",
+      "runCount": 4112,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-06T03:42:45.940Z",
+          "status": "succeeded",
+          "durationMs": 42000,
+          "steps": 5,
+          "agentId": "agt_inbox",
+          "input": "",
+          "output": "",
+          "error": null
+        },
+        {
+          "id": "r2",
+          "startedAt": "2026-10-06T03:42:45.940Z",
+          "status": "running",
+          "durationMs": 0,
+          "steps": 2,
+          "agentId": "agt_inbox",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "agt_review",
+      "name": "Code Reviewer",
+      "description": "Reviews open diffs against the conventions in CONTRIBUTING.md.",
+      "instructions": "Comment only on correctness, security, and convention breaks. Skip formatting nits.",
+      "modelId": "gpt-5.2",
+      "endpointId": null,
+      "skillIds": [
+        "code-interpreter"
+      ],
+      "status": "idle",
+      "createdAt": "2026-08-22T03:42:45.940Z",
+      "lastRunAt": "2026-10-03T03:42:45.940Z",
+      "runCount": 968,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-03T03:42:45.940Z",
+          "status": "succeeded",
+          "durationMs": 96000,
+          "steps": 7,
+          "agentId": "agt_review",
+          "input": "",
+          "output": "",
+          "error": null
+        },
+        {
+          "id": "r2",
+          "startedAt": "2026-10-02T03:42:45.940Z",
+          "status": "failed",
+          "durationMs": 22000,
+          "steps": 2,
+          "agentId": "agt_review",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "agt_release",
+      "name": "Release Notes",
+      "description": "Turns merged pull requests into a customer-facing changelog entry.",
+      "instructions": "Group by Added, Changed, Fixed. Skip internal refactors. Write for someone who has not used the product this week.",
+      "modelId": "claude-haiku-4-5",
+      "endpointId": null,
+      "skillIds": [
+        "summarize"
+      ],
+      "status": "idle",
+      "createdAt": "2026-09-06T03:42:45.940Z",
+      "lastRunAt": "2026-10-05T03:42:45.940Z",
+      "runCount": 74,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-05T03:42:45.940Z",
+          "status": "succeeded",
+          "durationMs": 31000,
+          "steps": 3,
+          "agentId": "agt_release",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "agt_migrate",
+      "name": "Data Migrator",
+      "description": "Plans and applies schema migrations against a staging copy first.",
+      "instructions": "Always plan before applying. Stop and ask if the plan would drop a column that has data.",
+      "modelId": "o5-pro",
+      "endpointId": null,
+      "skillIds": [
+        "sql-query",
+        "code-interpreter"
+      ],
+      "status": "queued",
+      "createdAt": "2026-09-15T03:42:45.940Z",
+      "lastRunAt": "2026-10-04T03:42:45.940Z",
+      "runCount": 46,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-04T03:42:45.940Z",
+          "status": "succeeded",
+          "durationMs": 610000,
+          "steps": 18,
+          "agentId": "agt_migrate",
+          "input": "",
+          "output": "",
+          "error": null
+        },
+        {
+          "id": "r2",
+          "startedAt": "2026-10-01T03:42:45.940Z",
+          "status": "failed",
+          "durationMs": 120000,
+          "steps": 6,
+          "agentId": "agt_migrate",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "agt_support",
+      "name": "Support Bot",
+      "description": "First-line answers drawn from the help center, escalating when unsure.",
+      "instructions": "Only answer from the help center. If there is no matching article, escalate to a human with a summary.",
+      "modelId": "llama-4-405b",
+      "endpointId": null,
+      "skillIds": [
+        "web-research"
+      ],
+      "status": "error",
+      "createdAt": "2026-09-24T03:42:45.940Z",
+      "lastRunAt": "2026-10-05T03:42:45.940Z",
+      "runCount": 231,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-05T03:42:45.940Z",
+          "status": "failed",
+          "durationMs": 12000,
+          "steps": 1,
+          "agentId": "agt_support",
+          "input": "",
+          "output": "",
+          "error": null
+        },
+        {
+          "id": "r2",
+          "startedAt": "2026-10-04T03:42:45.940Z",
+          "status": "failed",
+          "durationMs": 12000,
+          "steps": 1,
+          "agentId": "agt_support",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "agt_standup",
+      "name": "Standup Digest",
+      "description": "Summarizes merged PRs and closed tickets into a daily post.",
+      "instructions": "One paragraph. Lead with anything that blocked someone.",
+      "modelId": "llama-3-70b-local",
+      "endpointId": null,
+      "skillIds": [
+        "summarize",
+        "webhook"
+      ],
+      "status": "idle",
+      "createdAt": "2026-10-01T03:42:45.940Z",
+      "lastRunAt": "2026-10-06T03:42:45.940Z",
+      "runCount": 5,
+      "recentRuns": [
+        {
+          "id": "r1",
+          "startedAt": "2026-10-06T03:42:45.940Z",
+          "status": "succeeded",
+          "durationMs": 8000,
+          "steps": 2,
+          "agentId": "agt_standup",
+          "input": "",
+          "output": "",
+          "error": null
+        }
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj-support-automation",
+      "name": "Support Automation",
+      "desc": "Triage and reply pipeline for inbound tickets.",
+      "updatedAt": "2026-10-06T03:42:45.939Z"
+    },
+    {
+      "id": "proj-docs-refresh",
+      "name": "Docs Refresh",
+      "desc": "Rewrites stale guides from the product changelog.",
+      "updatedAt": "2026-10-05T03:42:45.939Z"
+    },
+    {
+      "id": "proj-data-platform",
+      "name": "Data Platform",
+      "desc": "Nightly ETL plus schema drift monitoring.",
+      "updatedAt": "2026-10-03T03:42:45.939Z"
+    }
+  ],
+  "skills": [
+    {
+      "id": "web-research",
+      "name": "Web Research",
+      "description": "Search, fetch, and cite with source ranking.",
+      "tag": "Core"
+    },
+    {
+      "id": "summarize",
+      "name": "Summarize",
+      "description": "Condenses long documents to key points.",
+      "tag": "Core"
+    },
+    {
+      "id": "code-interpreter",
+      "name": "Code Interpreter",
+      "description": "Runs sandboxed snippets and plots results.",
+      "tag": "Sandbox"
+    },
+    {
+      "id": "sql-query",
+      "name": "SQL Query",
+      "description": "Read-only warehouse access with a query guard.",
+      "tag": "Integration"
+    },
+    {
+      "id": "crm-lookup",
+      "name": "CRM Lookup",
+      "description": "Reads contact and deal history.",
+      "tag": "Integration"
+    },
+    {
+      "id": "email-draft",
+      "name": "Email Draft",
+      "description": "Writes replies in the account owner’s voice.",
+      "tag": "Core"
+    },
+    {
+      "id": "calendar",
+      "name": "Calendar",
+      "description": "Reads availability and books time.",
+      "tag": "Integration"
+    },
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "description": "POSTs structured payloads to a signed endpoint.",
+      "tag": "Integration"
+    }
+  ],
+  "models": [
+    {
+      "id": "claude-opus-4-6",
+      "name": "Claude Opus 4.6",
+      "provider": "Anthropic",
+      "tier": "deep",
+      "contextWindow": 200000
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6",
+      "provider": "Anthropic",
+      "tier": "balanced",
+      "contextWindow": 200000
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "name": "Claude Haiku 4.5",
+      "provider": "Anthropic",
+      "tier": "fast",
+      "contextWindow": 200000
+    },
+    {
+      "id": "gpt-5.2",
+      "name": "GPT-5.2",
+      "provider": "OpenAI",
+      "tier": "balanced",
+      "contextWindow": 400000
+    },
+    {
+      "id": "gpt-5.2-mini",
+      "name": "GPT-5.2 mini",
+      "provider": "OpenAI",
+      "tier": "fast",
+      "contextWindow": 400000
+    },
+    {
+      "id": "o5-pro",
+      "name": "o5-pro",
+      "provider": "OpenAI",
+      "tier": "deep",
+      "contextWindow": 200000
+    },
+    {
+      "id": "llama-4-405b",
+      "name": "Llama 4 405B",
+      "provider": "Meta",
+      "tier": "balanced",
+      "contextWindow": 128000
+    },
+    {
+      "id": "mistral-large-3",
+      "name": "Mistral Large 3",
+      "provider": "Mistral",
+      "tier": "balanced",
+      "contextWindow": 128000
+    },
+    {
+      "id": "llama-3-70b-local",
+      "name": "Llama 3 70B (local)",
+      "provider": "Self-hosted",
+      "tier": "fast",
+      "contextWindow": 8192
+    }
+  ],
+  "endpoints": [
+    {
+      "id": "ep_local_llama",
+      "kind": "openai-compatible",
+      "name": "Local llama.cpp",
+      "baseUrl": "http://127.0.0.1:8080",
+      "defaultModel": "llama-3-8b",
+      "contextWindow": 8192,
+      "apiKeySet": false,
+      "status": "unknown",
+      "lastCheckedAt": null,
+      "createdAt": "2026-09-27T03:42:45.938Z"
+    },
+    {
+      "id": "ep_openrouter",
+      "kind": "openrouter",
+      "name": "OpenRouter",
+      "baseUrl": "https://openrouter.ai/api/v1",
+      "defaultModel": "anthropic/claude-sonnet-4",
+      "contextWindow": 200000,
+      "apiKeySet": false,
+      "status": "unknown",
+      "lastCheckedAt": null,
+      "createdAt": "2026-09-27T03:42:45.939Z"
+    }
+  ],
+  "endpointModels": {
+    "ep_local_llama": [
+      "llama-3-8b",
+      "llama-3-70b"
+    ],
+    "ep_openrouter": [
+      "anthropic/claude-sonnet-4",
+      "openai/gpt-5.2",
+      "meta-llama/llama-3-70b"
+    ]
+  },
+  "settings": {
+    "autoRun": true,
+    "notify": true,
+    "telemetry": false
+  }
+}

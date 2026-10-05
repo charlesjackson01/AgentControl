@@ -1,0 +1,7 @@
+node_modules/
+dist/
+AgentControlBE/data/*
+!AgentControlBE/data/store.example.json
+.env
+.env.*
+*.log

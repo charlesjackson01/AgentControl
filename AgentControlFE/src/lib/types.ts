@@ -1,0 +1,145 @@
+export type AgentStatus = 'running' | 'idle' | 'queued' | 'error'
+
+export type RunStatus = 'succeeded' | 'failed' | 'running'
+
+export type ModelTier = 'fast' | 'balanced' | 'deep'
+
+export type Model = {
+  id: string
+  name: string
+  provider: string
+  tier: ModelTier
+  contextWindow: number
+}
+
+export type EndpointStatus = 'unknown' | 'reachable' | 'unreachable'
+
+export type EndpointKind = 'openai-compatible' | 'openrouter'
+
+/* ==========================================================================
+   FROZEN API CONTRACT (FE is source of truth — BE implements this).
+   --------------------------------------------------------------------------
+   Endpoints (self-hosted llama.cpp --server / vLLM, or OpenRouter):
+   - `GET    /api/models`                 -> Model[] (static curated list,
+     served by BE from its seed; NOT an OpenRouter passthrough. OpenRouter
+     access is an Endpoint with kind 'openrouter'.)
+   - `GET    /api/endpoints`              -> Endpoint[]
+   - `POST   /api/endpoints`              (EndpointInput) -> Endpoint (201)
+   - `PATCH  /api/endpoints/:id`          (Partial<EndpointInput>) -> Endpoint
+   - `DELETE /api/endpoints/:id`          -> 204
+   - `GET    /api/endpoints/:id/models`   -> { models: EndpointModel[] }
+   - `POST   /api/endpoints/:id/test`     -> { ok, models: string[], latencyMs }
+     Test and inference run server-side only (GET {baseUrl}/v1/models and
+     POST {baseUrl}/v1/chat/completions with `{ model: modelId }`). The
+     browser never calls baseUrl directly (CORS/LAN) and never sees apiKey.
+   - `apiKey` is write-only: accepted on create/update, never returned on
+     read. Reads expose `apiKeySet: boolean` only. On update: field omitted
+     keeps the stored key, non-empty string replaces it, "" clears it.
+     kind 'openrouter' requires an effective key (stored or provided);
+     kind 'openai-compatible' sends it as `Authorization: Bearer` if set.
+   - `Agent.endpointId` + `Agent.modelId`: null = hosted Model id;
+     set = model id chosen from GET /api/endpoints/:id/models.
+   - `POST   /api/agents/:id/runs`      (AgentRunInput { input }) -> AgentRun
+     Synchronous run: 200 with status 'succeeded' | 'failed' ('failed' sets
+     `error`; `output` empty). BE proxies the hosted model or the agent's
+     endpoint (POST {baseUrl}/v1/chat/completions) server-side.
+   - `GET    /api/agents/:id/runs`      -> AgentRun[] (newest first)
+     Authoritative run history; replaces the legacy `Agent.recentRuns`
+     field, which is removed from the Agent shape.
+   --------------------------------------------------------------------------
+   Canonical shapes (BE adopts these; FE does not rename):
+   - Agent: { id, name, description (not `desc`), instructions, modelId,
+     endpointId: string|null, skillIds, status (+ 'error'), createdAt,
+     lastRunAt: string|null, runCount }
+   - Skill: { id, name, description (not `desc`), tag: string } (`tag`
+     accepts BE's 'Core'|'Sandbox'|'Integration' union).
+   --------------------------------------------------------------------------
+   Error codes (frozen):
+   - 400 validation: bad kind/name/baseUrl/defaultModel/contextWindow/apiKey,
+     empty/unknown agent modelId, empty agent name.
+   - 404 unknown id: agent, endpoint (incl. its /models and /test), agent
+     referencing a missing endpointId.
+   - 409 delete-endpoint-in-use: endpoint still attached to an agent.
+   ========================================================================== */
+export type Endpoint = {
+  id: string
+  kind: EndpointKind
+  name: string
+  /** Origin + optional path prefix, no trailing slash. e.g. http://192.168.1.20:8080 */
+  baseUrl: string
+  /** Model id as reported by GET /v1/models, e.g. "llama-3-70b". */
+  defaultModel: string
+  contextWindow: number
+  /** True when the server holds a key for this endpoint. The key itself is never returned. */
+  apiKeySet: boolean
+  status: EndpointStatus
+  lastCheckedAt: string | null
+  createdAt: string
+}
+
+/** One model served by an endpoint (GET /api/endpoints/:id/models). */
+export type EndpointModel = {
+  id: string
+  name: string
+}
+
+export type Skill = {
+  id: string
+  name: string
+  description: string
+  tag: string
+}
+
+export type EndpointInput = {
+  kind: EndpointKind
+  name: string
+  /** Optional for kind 'openrouter' (defaults to https://openrouter.ai/api/v1). */
+  baseUrl: string
+  defaultModel: string
+  contextWindow: number
+  /** Write-only. Omit to keep the stored key on update, "" to clear it. Never returned on read. */
+  apiKey?: string
+}
+
+export type AgentRun = {
+  id: string
+  startedAt: string
+  status: RunStatus
+  durationMs: number
+  steps: number
+  /** Set on 'failed' runs: runner/upstream error message. */
+  error: string | null
+  /** Assistant output; empty string when the run failed. */
+  output: string
+}
+
+/** Body for POST /api/agents/:id/runs. */
+export type AgentRunInput = {
+  input: string
+}
+
+export type Agent = {
+  id: string
+  name: string
+  description: string
+  instructions: string
+  modelId: string
+  /** Null = built-in hosted model; set = self-hosted endpoint (llama.cpp / vLLM).
+   *  When set, modelId is the model name on that endpoint (GET /v1/models id). */
+  endpointId: string | null
+  skillIds: string[]
+  status: AgentStatus
+  createdAt: string
+  lastRunAt: string | null
+  runCount: number
+}
+
+/** Everything the create/edit form owns. */
+export type AgentInput = {
+  name: string
+  description: string
+  instructions: string
+  modelId: string
+  endpointId: string | null
+  skillIds: string[]
+}

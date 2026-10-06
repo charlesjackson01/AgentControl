@@ -44,22 +44,14 @@ service configured on the **backend**:
 | `HOSTED_BASE_URL` | OpenAI-compatible base URL for hosted agents, e.g. `https://api.openai.com/v1` or an internal gateway. Runs fail with a clear error when unset. |
 | `HOSTED_API_KEY` | Bearer key sent to `HOSTED_BASE_URL`. |
 
-Endpoint keys entered in the UI (Settings → Endpoints) are **not** stored in
-`store.json`. They live in an encrypted vault (`data/vault.enc`, AES-256-GCM):
+## Secret handling
 
-- Set `AGENTCONTROL_SECRET` to derive the vault master key from the environment
-  — recommended for deployments.
-- Without it, Windows uses a DPAPI-protected `data/vault.key` (current user
-  only). Non-Windows (or DPAPI failure) falls back to a plain key file with a
-  startup warning.
-
-The browser never sees endpoint keys and never calls endpoint `baseUrl`
-directly — all upstream calls (model discovery, chat completions) are proxied
-server-side.
+| Variable | Purpose |
+| --- | --- |
+| `AGENTCONTROL_SECRET` | Vault master key for endpoint (apiKey) storage on the **backend**. The OpenRouter/llama.cpp `apiKey` entered in Settings is write-only — the FE holds no key, and reads expose only `apiKeySet`. Without it, the BE falls back to DPAPI on Windows. |
 
 ## Workspace data
 
 `AgentControlBE/data/store.example.json` is the seed template: copy it to
 `data/store.json` to start from the example workspace, or delete `data/store.json`
-to reseed on next boot. Everything else under `data/` (`store.json`,
-`vault.enc`, `vault.key`) is gitignored and machine-local.
+to reseed on next boot. Everything else under `data/` is gitignored and machine-local.

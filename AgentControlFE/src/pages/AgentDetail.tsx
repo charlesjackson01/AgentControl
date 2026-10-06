@@ -59,6 +59,7 @@ export default function AgentDetail() {
   const navigate = useNavigate()
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [runInput, setRunInput] = useState('')
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
@@ -80,13 +81,19 @@ export default function AgentDetail() {
 
   const onDelete = async () => {
     setDeleting(true)
+    setDeleteError(null)
     try {
       await api.deleteAgent(id)
       navigate('/agents', { replace: true })
     } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not delete this agent.'
+      // Browser/node network failures surface as bare 'Failed to fetch' — say why instead.
+      setDeleteError(
+        msg === 'Failed to fetch' || msg === 'fetch failed'
+          ? 'Could not reach the API server. Is the backend running?'
+          : msg,
+      )
       setDeleting(false)
-      setConfirmingDelete(false)
-      throw err
     }
   }
 
@@ -162,7 +169,14 @@ export default function AgentDetail() {
                 <Link to={`/agents/${agent.data.id}/edit`} className="btn">
                   Edit
                 </Link>
-                <button type="button" className="btn btn--danger" onClick={() => setConfirmingDelete(true)}>
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  onClick={() => {
+                    setDeleteError(null)
+                    setConfirmingDelete(true)
+                  }}
+                >
                   Delete
                 </button>
               </div>
@@ -323,6 +337,11 @@ export default function AgentDetail() {
               <p className="prose">
                 If other agents depend on this one’s skills, they keep working — skills are shared, not owned.
               </p>
+              {deleteError && (
+                <p className="field__err" role="alert" style={{ marginTop: 10, overflowWrap: 'anywhere' }}>
+                  {deleteError}
+                </p>
+              )}
             </Dialog>
           </>
         ) : null}

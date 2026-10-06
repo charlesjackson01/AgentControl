@@ -12,44 +12,9 @@
         "summarize"
       ],
       "status": "running",
-      "createdAt": "2026-07-14T03:42:45.939Z",
-      "lastRunAt": "2026-10-06T03:42:45.939Z",
-      "runCount": 1284,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-06T03:42:45.939Z",
-          "status": "running",
-          "durationMs": 0,
-          "steps": 4,
-          "agentId": "agt_research",
-          "input": "",
-          "output": "",
-          "error": null
-        },
-        {
-          "id": "r2",
-          "startedAt": "2026-10-05T03:42:45.939Z",
-          "status": "succeeded",
-          "durationMs": 184000,
-          "steps": 11,
-          "agentId": "agt_research",
-          "input": "",
-          "output": "",
-          "error": null
-        },
-        {
-          "id": "r3",
-          "startedAt": "2026-10-04T03:42:45.940Z",
-          "status": "succeeded",
-          "durationMs": 162000,
-          "steps": 9,
-          "agentId": "agt_research",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-07-14T04:07:55.870Z",
+      "lastRunAt": "2026-10-06T04:07:55.870Z",
+      "runCount": 1284
     },
     {
       "id": "agt_inbox",
@@ -64,33 +29,9 @@
         "crm-lookup"
       ],
       "status": "running",
-      "createdAt": "2026-08-06T03:42:45.940Z",
-      "lastRunAt": "2026-10-06T03:42:45.940Z",
-      "runCount": 4112,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-06T03:42:45.940Z",
-          "status": "succeeded",
-          "durationMs": 42000,
-          "steps": 5,
-          "agentId": "agt_inbox",
-          "input": "",
-          "output": "",
-          "error": null
-        },
-        {
-          "id": "r2",
-          "startedAt": "2026-10-06T03:42:45.940Z",
-          "status": "running",
-          "durationMs": 0,
-          "steps": 2,
-          "agentId": "agt_inbox",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-08-06T04:07:55.870Z",
+      "lastRunAt": "2026-10-06T04:07:55.870Z",
+      "runCount": 4112
     },
     {
       "id": "agt_review",
@@ -103,33 +44,9 @@
         "code-interpreter"
       ],
       "status": "idle",
-      "createdAt": "2026-08-22T03:42:45.940Z",
-      "lastRunAt": "2026-10-03T03:42:45.940Z",
-      "runCount": 968,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-03T03:42:45.940Z",
-          "status": "succeeded",
-          "durationMs": 96000,
-          "steps": 7,
-          "agentId": "agt_review",
-          "input": "",
-          "output": "",
-          "error": null
-        },
-        {
-          "id": "r2",
-          "startedAt": "2026-10-02T03:42:45.940Z",
-          "status": "failed",
-          "durationMs": 22000,
-          "steps": 2,
-          "agentId": "agt_review",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-08-22T04:07:55.870Z",
+      "lastRunAt": "2026-10-03T04:07:55.870Z",
+      "runCount": 968
     },
     {
       "id": "agt_release",
@@ -142,22 +59,9 @@
         "summarize"
       ],
       "status": "idle",
-      "createdAt": "2026-09-06T03:42:45.940Z",
-      "lastRunAt": "2026-10-05T03:42:45.940Z",
-      "runCount": 74,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-05T03:42:45.940Z",
-          "status": "succeeded",
-          "durationMs": 31000,
-          "steps": 3,
-          "agentId": "agt_release",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-09-06T04:07:55.870Z",
+      "lastRunAt": "2026-10-05T04:07:55.870Z",
+      "runCount": 74
     },
     {
       "id": "agt_migrate",
@@ -171,33 +75,9 @@
         "code-interpreter"
       ],
       "status": "queued",
-      "createdAt": "2026-09-15T03:42:45.940Z",
-      "lastRunAt": "2026-10-04T03:42:45.940Z",
-      "runCount": 46,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-04T03:42:45.940Z",
-          "status": "succeeded",
-          "durationMs": 610000,
-          "steps": 18,
-          "agentId": "agt_migrate",
-          "input": "",
-          "output": "",
-          "error": null
-        },
-        {
-          "id": "r2",
-          "startedAt": "2026-10-01T03:42:45.940Z",
-          "status": "failed",
-          "durationMs": 120000,
-          "steps": 6,
-          "agentId": "agt_migrate",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-09-15T04:07:55.870Z",
+      "lastRunAt": "2026-10-04T04:07:55.870Z",
+      "runCount": 46
     },
     {
       "id": "agt_support",
@@ -210,33 +90,9 @@
         "web-research"
       ],
       "status": "error",
-      "createdAt": "2026-09-24T03:42:45.940Z",
-      "lastRunAt": "2026-10-05T03:42:45.940Z",
-      "runCount": 231,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-05T03:42:45.940Z",
-          "status": "failed",
-          "durationMs": 12000,
-          "steps": 1,
-          "agentId": "agt_support",
-          "input": "",
-          "output": "",
-          "error": null
-        },
-        {
-          "id": "r2",
-          "startedAt": "2026-10-04T03:42:45.940Z",
-          "status": "failed",
-          "durationMs": 12000,
-          "steps": 1,
-          "agentId": "agt_support",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-09-24T04:07:55.870Z",
+      "lastRunAt": "2026-10-05T04:07:55.870Z",
+      "runCount": 231
     },
     {
       "id": "agt_standup",
@@ -250,22 +106,154 @@
         "webhook"
       ],
       "status": "idle",
-      "createdAt": "2026-10-01T03:42:45.940Z",
-      "lastRunAt": "2026-10-06T03:42:45.940Z",
-      "runCount": 5,
-      "recentRuns": [
-        {
-          "id": "r1",
-          "startedAt": "2026-10-06T03:42:45.940Z",
-          "status": "succeeded",
-          "durationMs": 8000,
-          "steps": 2,
-          "agentId": "agt_standup",
-          "input": "",
-          "output": "",
-          "error": null
-        }
-      ]
+      "createdAt": "2026-10-01T04:07:55.870Z",
+      "lastRunAt": "2026-10-06T04:07:55.870Z",
+      "runCount": 5
+    }
+  ],
+  "runs": [
+    {
+      "id": "r1",
+      "startedAt": "2026-10-06T04:07:55.870Z",
+      "status": "running",
+      "durationMs": 0,
+      "steps": 4,
+      "agentId": "agt_research",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r2",
+      "startedAt": "2026-10-05T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 184000,
+      "steps": 11,
+      "agentId": "agt_research",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r3",
+      "startedAt": "2026-10-04T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 162000,
+      "steps": 9,
+      "agentId": "agt_research",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r1",
+      "startedAt": "2026-10-06T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 42000,
+      "steps": 5,
+      "agentId": "agt_inbox",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r2",
+      "startedAt": "2026-10-06T04:07:55.870Z",
+      "status": "running",
+      "durationMs": 0,
+      "steps": 2,
+      "agentId": "agt_inbox",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r1",
+      "startedAt": "2026-10-03T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 96000,
+      "steps": 7,
+      "agentId": "agt_review",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r2",
+      "startedAt": "2026-10-02T04:07:55.870Z",
+      "status": "failed",
+      "durationMs": 22000,
+      "steps": 2,
+      "agentId": "agt_review",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r1",
+      "startedAt": "2026-10-05T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 31000,
+      "steps": 3,
+      "agentId": "agt_release",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r1",
+      "startedAt": "2026-10-04T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 610000,
+      "steps": 18,
+      "agentId": "agt_migrate",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r2",
+      "startedAt": "2026-10-01T04:07:55.870Z",
+      "status": "failed",
+      "durationMs": 120000,
+      "steps": 6,
+      "agentId": "agt_migrate",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r1",
+      "startedAt": "2026-10-05T04:07:55.870Z",
+      "status": "failed",
+      "durationMs": 12000,
+      "steps": 1,
+      "agentId": "agt_support",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r2",
+      "startedAt": "2026-10-04T04:07:55.870Z",
+      "status": "failed",
+      "durationMs": 12000,
+      "steps": 1,
+      "agentId": "agt_support",
+      "input": "",
+      "output": "",
+      "error": null
+    },
+    {
+      "id": "r1",
+      "startedAt": "2026-10-06T04:07:55.870Z",
+      "status": "succeeded",
+      "durationMs": 8000,
+      "steps": 2,
+      "agentId": "agt_standup",
+      "input": "",
+      "output": "",
+      "error": null
     }
   ],
   "projects": [
@@ -273,19 +261,19 @@
       "id": "proj-support-automation",
       "name": "Support Automation",
       "desc": "Triage and reply pipeline for inbound tickets.",
-      "updatedAt": "2026-10-06T03:42:45.939Z"
+      "updatedAt": "2026-10-06T04:07:55.870Z"
     },
     {
       "id": "proj-docs-refresh",
       "name": "Docs Refresh",
       "desc": "Rewrites stale guides from the product changelog.",
-      "updatedAt": "2026-10-05T03:42:45.939Z"
+      "updatedAt": "2026-10-05T04:07:55.870Z"
     },
     {
       "id": "proj-data-platform",
       "name": "Data Platform",
       "desc": "Nightly ETL plus schema drift monitoring.",
-      "updatedAt": "2026-10-03T03:42:45.939Z"
+      "updatedAt": "2026-10-03T04:07:55.870Z"
     }
   ],
   "skills": [
@@ -414,7 +402,7 @@
       "apiKeySet": false,
       "status": "unknown",
       "lastCheckedAt": null,
-      "createdAt": "2026-09-27T03:42:45.938Z"
+      "createdAt": "2026-09-27T04:07:55.868Z"
     },
     {
       "id": "ep_openrouter",
@@ -426,7 +414,7 @@
       "apiKeySet": false,
       "status": "unknown",
       "lastCheckedAt": null,
-      "createdAt": "2026-09-27T03:42:45.939Z"
+      "createdAt": "2026-09-27T04:07:55.870Z"
     }
   ],
   "endpointModels": {

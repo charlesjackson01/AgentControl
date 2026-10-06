@@ -22,10 +22,13 @@ export class ApiError extends Error {
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 
 /**
- * Follows however the app was opened (localhost, LAN IP, Tailscale IP), so the
- * BE host always matches the FE host. Override with VITE_API_BASE.
+ * Dev: empty base -> relative `/api` requests ride Vite's dev proxy
+ * (see vite.config.ts server.proxy), so no CORS is involved. Prod: follows
+ * however the app was opened (localhost, LAN IP, Tailscale IP) so the BE host
+ * matches the FE host. VITE_API_BASE overrides in either mode.
  */
-const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${window.location.hostname}:3001`
+const API_BASE =
+  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '' : `http://${window.location.hostname}:3001`)
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

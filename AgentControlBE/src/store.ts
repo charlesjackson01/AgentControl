@@ -6,14 +6,17 @@ import {
   seedEndpoints,
   seedModels,
   seedProjects,
+  seedRuns,
   seedSettings,
   seedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
-import type { Agent, Endpoint, Model, Project, Skill, WorkspaceSettings } from './shared/types.js'
+import type { Agent, AgentRun, Endpoint, Model, Project, Skill, WorkspaceSettings } from './shared/types.js'
 
 export interface WorkspaceStore {
   agents: Agent[]
+  /** All agent runs across the workspace; GET /runs filters + sorts. */
+  runs: AgentRun[]
   projects: Project[]
   skills: Skill[]
   models: Model[]
@@ -30,6 +33,7 @@ export interface WorkspaceStore {
 /** Everything written to `store.json`. Key material is deliberately excluded. */
 interface Persisted {
   agents: Agent[]
+  runs: AgentRun[]
   projects: Project[]
   skills: Skill[]
   models: Model[]
@@ -38,14 +42,20 @@ interface Persisted {
   settings: WorkspaceSettings
 }
 
-/** Older workspaces stored `endpointKeys` in plaintext alongside the rest. */
-type StoredShape = Partial<Persisted> & { endpointKeys?: Record<string, string> }
+/** Older workspaces stored `endpointKeys` in plaintext and runs on each agent. */
+type StoredShape = Partial<Persisted> & {
+  endpointKeys?: Record<string, string>
+  agents?: (Agent & { recentRuns?: Partial<AgentRun>[] })[]
+}
 
-const DEFAULT_PATH = resolve(process.cwd(), 'data', 'store.json')
+/** Resolved from AGENTCONTROL_DATA_DIR so tests can point at a temp dir. */
+const DATA_DIR = process.env.AGENTCONTROL_DATA_DIR ?? resolve(process.cwd(), 'data')
+const DEFAULT_PATH = resolve(DATA_DIR, 'store.json')
 
 function seed(): Persisted {
   return {
     agents: structuredClone(seedAgents),
+    runs: structuredClone(seedRuns),
     projects: structuredClone(seedProjects),
     skills: structuredClone(seedSkills),
     models: structuredClone(seedModels),
@@ -55,15 +65,47 @@ function seed(): Persisted {
   }
 }
 
+function normalizeRun(r: Partial<AgentRun>): AgentRun {
+  return {
+    id: r.id ?? `run_${Math.random().toString(36).slice(2, 10)}`,
+    agentId: r.agentId ?? '',
+    startedAt: r.startedAt ?? new Date().toISOString(),
+    status: r.status ?? 'failed',
+    durationMs: r.durationMs ?? 0,
+    steps: r.steps ?? 0,
+    input: r.input ?? '',
+    output: r.output ?? '',
+    error: r.error ?? null,
+  }
+}
+
 /** Backfill fields added after a workspace was first written. */
 function reconcile(raw: StoredShape): Persisted {
   const base = seed()
+
+  // Runs used to live on each agent (agent.recentRuns); hoist them to `runs`.
+  const legacyRuns: AgentRun[] = []
+  const rawAgentsList = (raw.agents ?? base.agents) as (Agent & { recentRuns?: Partial<AgentRun>[] })[]
+  const agents: Agent[] = rawAgentsList.map((agent) => {
+    const { recentRuns, ...rest } = agent
+    if (Array.isArray(recentRuns)) {
+      for (const r of recentRuns) legacyRuns.push(normalizeRun({ ...r, agentId: r.agentId ?? rest.id }))
+    }
+    return rest as Agent
+  })
+
   const endpoints = (raw.endpoints ?? base.endpoints).map((e) => {
     const legacy = e as Partial<Endpoint> & { id: string }
     return { ...e, kind: legacy.kind ?? ('openai-compatible' as const), apiKeySet: false }
   })
+
+  const runs = (raw.runs ?? (legacyRuns.length > 0 ? legacyRuns : base.runs)).map((r) =>
+    normalizeRun(r as Partial<AgentRun>),
+  )
+
   return {
-    agents: raw.agents ?? base.agents,
+    agents,
+    runs,
     projects: raw.projects ?? base.projects,
     skills: raw.skills ?? base.skills,
     models: raw.models ?? base.models,
@@ -106,6 +148,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
         mkdirSync(dir, { recursive: true })
         const snapshot: Persisted = {
           agents: store.agents,
+          runs: store.runs,
           projects: store.projects,
           skills: store.skills,
           models: store.models,

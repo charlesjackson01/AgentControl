@@ -89,7 +89,6 @@ export interface Agent {
   createdAt: string
   lastRunAt: string | null
   runCount: number
-  recentRuns: AgentRun[]
 }
 
 export interface AgentInput {

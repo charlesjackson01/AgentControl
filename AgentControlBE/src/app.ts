@@ -95,7 +95,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
 }
 
 export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance {
-  const app = Fastify({ logger: true })
+  const app = Fastify({ logger: process.env.NODE_ENV !== 'test' })
 
   // Reflect the request origin so the app works from localhost, LAN, and
   // Tailscale alike. Set CORS_ORIGINS (comma-separated) to pin an allowlist.
@@ -210,8 +210,13 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       }
     }
 
-    // Newest first, capped so history cannot grow without bound.
-    agent.recentRuns = [run, ...agent.recentRuns].slice(0, 50)
+    // Prepend, then trim this agent's history to the newest 50.
+    store.runs = [run, ...store.runs]
+    const mine = store.runs.filter((r) => r.agentId === agent.id)
+    if (mine.length > 50) {
+      const drop = new Set(mine.slice(50).map((r) => r.id))
+      store.runs = store.runs.filter((r) => !drop.has(r.id))
+    }
     agent.lastRunAt = run.startedAt
     agent.runCount += 1
     agent.status = run.status === 'succeeded' ? 'idle' : 'error'
@@ -223,7 +228,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
-    return agent.recentRuns
+    return store.runs
+      .filter((r) => r.agentId === id)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .slice(0, 50)
   })
 
   app.post('/api/agents', async (request, reply) => {
@@ -235,7 +243,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       createdAt: new Date().toISOString(),
       lastRunAt: null,
       runCount: 0,
-      recentRuns: [],
     }
     store.agents = [agent, ...store.agents]
     store.save()

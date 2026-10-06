@@ -81,7 +81,7 @@ export const seedProjects: Project[] = [
 ]
 
 type SeedRun = Omit<AgentRun, 'agentId' | 'input' | 'output' | 'error'>
-type SeedAgent = Omit<Agent, 'recentRuns'> & { recentRuns: SeedRun[] }
+type SeedAgent = Agent & { recentRuns: SeedRun[] }
 
 function run(id: string, days: number, status: RunStatus, durationMs: number, steps: number): SeedRun {
   return { id, startedAt: daysAgo(days), status, durationMs, steps }
@@ -189,10 +189,14 @@ const rawAgents: SeedAgent[] = [
   },
 ]
 
-export const seedAgents: Agent[] = rawAgents.map((agent) => ({
-  ...agent,
-  recentRuns: agent.recentRuns.map((r) => ({ ...r, agentId: agent.id, input: '', output: '', error: null })),
-}))
+export const seedAgents: Agent[] = rawAgents.map((agent) => {
+  const { recentRuns: _runs, ...rest } = agent
+  return rest
+})
+
+export const seedRuns: AgentRun[] = rawAgents.flatMap((agent) =>
+  agent.recentRuns.map((r) => ({ ...r, agentId: agent.id, input: '', output: '', error: null })),
+)
 
 export const seedSettings: WorkspaceSettings = {
   autoRun: true,

@@ -37,8 +37,9 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
      keeps the stored key, non-empty string replaces it, "" clears it.
      kind 'openrouter' requires an effective key (stored or provided);
      kind 'openai-compatible' sends it as `Authorization: Bearer` if set.
-   - `Agent.endpointId` + `Agent.modelId`: null = hosted Model id;
-     set = model id chosen from GET /api/endpoints/:id/models.
+   - `Agent.endpointId` + `Agent.modelId` (DD-7): endpointId is REQUIRED —
+      every agent runs on an endpoint; there is no hosted/null path. The
+      Team Lead's (isPrimary agent's) endpoint is the default for new agents.
    - `POST   /api/agents/:id/runs`      (AgentRunInput { input }) -> AgentRun
      Synchronous run: 200 with status 'succeeded' | 'failed' ('failed' sets
      `error`; `output` empty). BE proxies the hosted model or the agent's
@@ -49,8 +50,8 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
    --------------------------------------------------------------------------
    Canonical shapes (BE adopts these; FE does not rename):
    - Agent: { id, name, description (not `desc`), instructions, modelId,
-     endpointId: string|null, skillIds, status (+ 'error'), createdAt,
-     lastRunAt: string|null, runCount }
+      endpointId (required), skillIds, isPrimary (exactly one — the Team
+      Lead), status (+ 'error'), createdAt, lastRunAt: string|null, runCount }
    - Skill: { id, name, description (not `desc`), tag: string } (`tag`
      accepts BE's 'Core'|'Sandbox'|'Integration' union).
    --------------------------------------------------------------------------
@@ -59,7 +60,9 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
      empty/unknown agent modelId, empty agent name.
    - 404 unknown id: agent, endpoint (incl. its /models and /test), agent
      referencing a missing endpointId.
-   - 409 delete-endpoint-in-use: endpoint still attached to an agent.
+   - 409 delete blocked: endpoint still attached (agents move to the Team
+      Lead's endpoint instead — except the Team Lead's own endpoint), or
+      deleting the Team Lead agent itself.
    ========================================================================== */
 export type Endpoint = {
   id: string
@@ -128,14 +131,15 @@ export type Agent = {
   description: string
   instructions: string
   modelId: string
-  /** Null = built-in hosted model; set = self-hosted endpoint (llama.cpp / vLLM).
-   *  When set, modelId is the model name on that endpoint (GET /v1/models id). */
-  endpointId: string | null
+  /** Required: the endpoint this agent runs on. No hosted/null path exists. */
+  endpointId: string
   skillIds: string[]
   status: AgentStatus
   createdAt: string
   lastRunAt: string | null
   runCount: number
+  /** True for exactly one agent — the Team Lead. Its endpoint is the default for new agents. */
+  isPrimary: boolean
   /** Chat transcript for multi-turn context (BE serves it at GET /api/agents/:id/runs; not part of the Agent body). */
   runs?: AgentRun[]
   /** Sampling temperature (0–2). BE accepts it on create/update; older BEs ignore it. */
@@ -148,7 +152,10 @@ export type AgentInput = {
   description: string
   instructions: string
   modelId: string
-  endpointId: string | null
+  /** Required: the endpoint this agent runs on. */
+  endpointId: string
   temperature: number
   skillIds: string[]
+  /** Bootstrap only: set true when creating the first (Team Lead) agent. */
+  isPrimary?: boolean
 }

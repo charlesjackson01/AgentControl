@@ -736,6 +736,26 @@ ul {
   white-space: nowrap;
 }
 
+/* Team Lead badge (agent tile + chat header) */
+.pill--lead {
+  background: var(--c-accent-soft);
+  border-color: transparent;
+  color: var(--c-accent);
+}
+
+.tile__lead {
+  flex-shrink: 0;
+}
+
+/* DD-7 bootstrap: the full-page Team Lead setup form */
+.setup {
+  padding-top: 7vh;
+}
+
+.setup .formpage__head {
+  margin-bottom: 22px;
+}
+
 .segmented {
   display: inline-flex;
   gap: 2px;

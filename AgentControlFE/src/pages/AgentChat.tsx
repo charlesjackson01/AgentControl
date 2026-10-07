@@ -44,7 +44,6 @@ export default function AgentChat() {
 
   const loadAgent = useCallback(() => api.getAgent(id), [id])
   const agent = useAsync(loadAgent, [id])
-  const models = useAsync(api.listModels, [])
   const endpoints = useAsync(api.listEndpoints, [])
   const skills = useAsync(api.listSkills, [])
 
@@ -120,6 +119,11 @@ export default function AgentChat() {
             {agent.data && (
               <span className="chat__header__status">
                 <StatusPill status={agent.data.status} />
+              </span>
+            )}
+            {agent.data?.isPrimary && (
+              <span className="pill pill--lead">
+                Team Lead
               </span>
             )}
           </div>
@@ -264,7 +268,6 @@ export default function AgentChat() {
       <SettingsDrawer
         open={settingsOpen}
         agent={agent.data ?? null}
-        models={models.data ?? []}
         endpoints={endpoints.data ?? []}
         skills={skills.data ?? []}
         onClose={() => setSettingsOpen(false)}

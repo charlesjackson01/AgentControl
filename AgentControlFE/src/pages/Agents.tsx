@@ -6,6 +6,7 @@ import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { AgentsIcon, PlusIcon, SearchIcon } from '../components/icons'
 import { api } from '../lib/api'
 import type { AgentStatus } from '../lib/types'
+import TeamLeadSetup from './TeamLeadSetup'
 import { useAsync } from '../hooks/useAsync'
 
 type Filter = AgentStatus | 'all'
@@ -43,25 +44,16 @@ export default function Agents() {
   const [sort, setSort] = useState<Sort>('recent')
 
   const agents = useAsync(api.listAgents, [])
-  const models = useAsync(api.listModels, [])
   const endpoints = useAsync(api.listEndpoints, [])
-
-  const modelName = useMemo(() => {
-    const map = new Map((models.data ?? []).map((m) => [m.id, m.name]))
-    return (id: string) => map.get(id) ?? 'Unknown model'
-  }, [models.data])
 
   const endpointById = useMemo(() => new Map((endpoints.data ?? []).map((e) => [e.id, e])), [endpoints.data])
 
   const displayModel = useMemo(() => {
-    return (a: { modelId: string; endpointId: string | null }) => {
-      if (a.endpointId) {
-        const ep = endpointById.get(a.endpointId)
-        return ep ? `${a.modelId} · ${ep.name}` : `${a.modelId} · Custom`
-      }
-      return modelName(a.modelId)
+    return (a: { modelId: string; endpointId: string }) => {
+      const ep = endpointById.get(a.endpointId)
+      return `${a.modelId} · ${ep ? ep.name : 'Custom endpoint'}`
     }
-  }, [endpointById, modelName])
+  }, [endpointById])
 
   const counts = useMemo(() => {
     const base: Record<Filter, number> = { all: 0, running: 0, idle: 0, queued: 0, error: 0 }
@@ -92,8 +84,6 @@ export default function Agents() {
       return bt - at
     })
   }, [agents.data, query, filter, sort, displayModel])
-
-  const filtering = query.trim() !== '' || filter !== 'all'
 
   return (
     <PageShell
@@ -157,7 +147,10 @@ export default function Agents() {
         </select>
       </div>
 
-      {agents.loading ? (
+      {agents.data !== undefined && agents.data.length === 0 ? (
+        /* DD-7 bootstrap: an empty workspace has no Team Lead yet. */
+        <TeamLeadSetup />
+      ) : agents.loading ? (
         <div className="grid">
           {[0, 1, 2, 3, 4, 5].map((i) => (
             <div className="skel-card" key={i}>
@@ -170,37 +163,23 @@ export default function Agents() {
       ) : agents.error ? (
         <ErrorState error={agents.error} onRetry={agents.reload} />
       ) : visible.length === 0 ? (
-        filtering ? (
-          <EmptyState
-            icon={<SearchIcon size={20} />}
-            title="No agents match"
-            text="Try a different search, or clear the status filter to see everything."
-            actions={
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setQuery('')
-                  setFilter('all')
-                }}
-              >
-                Clear filters
-              </button>
-            }
-          />
-        ) : (
-          <EmptyState
-            icon={<AgentsIcon size={20} />}
-            title="No agents yet"
-            text="Create your first agent to give it a model, some skills, and a job to do."
-            actions={
-              <Link to="/agents/new" className="btn btn--primary">
-                <PlusIcon size={16} />
-                New Agent
-              </Link>
-            }
-          />
-        )
+        <EmptyState
+          icon={<SearchIcon size={20} />}
+          title="No agents match"
+          text="Try a different search, or clear the status filter to see everything."
+          actions={
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setQuery('')
+                setFilter('all')
+              }}
+            >
+              Clear filters
+            </button>
+          }
+        />
       ) : (
         <div className="grid">
           {visible.map((a) => (
@@ -210,6 +189,11 @@ export default function Agents() {
                   <AgentsIcon size={16} />
                 </span>
                 <span className="tile__name">{a.name}</span>
+                {a.isPrimary && (
+                  <span className="pill pill--lead tile__lead">
+                    Team Lead
+                  </span>
+                )}
                 <span className="tile__status">
                   <StatusPill status={a.status} />
                 </span>

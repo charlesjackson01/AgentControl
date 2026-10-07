@@ -4,12 +4,11 @@ import Dialog from './Dialog'
 import { Confirm } from './Confirm'
 import AgentForm from './AgentForm'
 import { api } from '../lib/api'
-import type { Agent, Endpoint, Model, Skill } from '../lib/types'
+import type { Agent, Endpoint, Skill } from '../lib/types'
 
 type SettingsDrawerProps = {
   open: boolean
   agent: Agent | null
-  models: Model[]
   endpoints: Endpoint[]
   skills: Skill[]
   onClose: () => void
@@ -26,7 +25,7 @@ function friendly(err: unknown, fallback: string): string {
     : msg
 }
 
-export function SettingsDrawer({ open, agent, models, endpoints, skills, onClose, onSaved, onCleared }: SettingsDrawerProps) {
+export function SettingsDrawer({ open, agent, endpoints, skills, onClose, onSaved, onCleared }: SettingsDrawerProps) {
   const navigate = useNavigate()
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -84,7 +83,6 @@ export function SettingsDrawer({ open, agent, models, endpoints, skills, onClose
         initial={agent}
         isEdit
         compact
-        models={models}
         endpoints={endpoints}
         skills={skills}
         onSaved={() => {
@@ -112,23 +110,25 @@ export function SettingsDrawer({ open, agent, models, endpoints, skills, onClose
             Clear…
           </button>
         </div>
-        <div className="drawer__danger__row">
-          <div>
-            <p className="row__label">Delete agent</p>
-            <p className="row__hint">Removes the agent and its run history. Cannot be undone.</p>
+        {!agent.isPrimary && (
+          <div className="drawer__danger__row">
+            <div>
+              <p className="row__label">Delete agent</p>
+              <p className="row__hint">Removes the agent and its run history. Cannot be undone.</p>
+            </div>
+            <button
+              type="button"
+              className="btn btn--danger"
+              onClick={() => {
+                setDeleteError(null)
+                setConfirmingDelete(true)
+              }}
+              disabled={deleting || clearing}
+            >
+              Delete…
+            </button>
           </div>
-          <button
-            type="button"
-            className="btn btn--danger"
-            onClick={() => {
-              setDeleteError(null)
-              setConfirmingDelete(true)
-            }}
-            disabled={deleting || clearing}
-          >
-            Delete…
-          </button>
-        </div>
+        )}
       </div>
 
       <Confirm
@@ -148,24 +148,26 @@ export function SettingsDrawer({ open, agent, models, endpoints, skills, onClose
         )}
       </Confirm>
 
-      <Confirm
-        open={confirmingDelete}
-        title={`Delete ${agent.name}?`}
-        subtitle="This removes the agent and its run history. It cannot be undone."
-        confirmLabel="Delete agent"
-        loading={deleting}
-        onCancel={() => setConfirmingDelete(false)}
-        onConfirm={() => void onDelete()}
-      >
-        <p className="prose">
-          If other agents depend on this one's skills, they keep working — skills are shared, not owned.
-        </p>
-        {deleteError && (
-          <p className="field__err" role="alert" style={{ marginTop: 10, overflowWrap: 'anywhere' }}>
-            {deleteError}
+      {!agent.isPrimary && (
+        <Confirm
+          open={confirmingDelete}
+          title={`Delete ${agent.name}?`}
+          subtitle="This removes the agent and its run history. It cannot be undone."
+          confirmLabel="Delete agent"
+          loading={deleting}
+          onCancel={() => setConfirmingDelete(false)}
+          onConfirm={() => void onDelete()}
+        >
+          <p className="prose">
+            If other agents depend on this one's skills, they keep working — skills are shared, not owned.
           </p>
-        )}
-      </Confirm>
+          {deleteError && (
+            <p className="field__err" role="alert" style={{ marginTop: 10, overflowWrap: 'anywhere' }}>
+              {deleteError}
+            </p>
+          )}
+        </Confirm>
+      )}
     </Dialog>
   )
 }

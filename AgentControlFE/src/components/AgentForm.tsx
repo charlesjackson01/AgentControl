@@ -1,12 +1,12 @@
 import { useCallback, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
-import { api, ENDPOINT_KIND_LABELS, TIER_LABELS } from '../lib/api'
-import type { Agent, AgentInput, Endpoint, Model, Skill } from '../lib/types'
+import { api, ENDPOINT_KIND_LABELS } from '../lib/api'
+import type { Agent, AgentInput, Endpoint, Skill } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
 
-const EMPTY: AgentInput = { name: '', description: '', instructions: '', modelId: '', endpointId: null, temperature: 0, skillIds: [] }
+const EMPTY: AgentInput = { name: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [] }
 
 function toInput(agent: Agent): AgentInput {
   return {
@@ -14,7 +14,7 @@ function toInput(agent: Agent): AgentInput {
     description: agent.description,
     instructions: agent.instructions,
     modelId: agent.modelId,
-    endpointId: agent.endpointId ?? null,
+    endpointId: agent.endpointId,
     temperature: agent.temperature ?? 0,
     skillIds: [...agent.skillIds],
   }
@@ -26,7 +26,7 @@ function isDirty(a: AgentInput, b: AgentInput): boolean {
     a.description.trim() !== b.description.trim() ||
     a.instructions.trim() !== b.instructions.trim() ||
     a.modelId.trim() !== b.modelId.trim() ||
-    (a.endpointId ?? null) !== (b.endpointId ?? null) ||
+    a.endpointId !== b.endpointId ||
     a.skillIds.length !== b.skillIds.length ||
     a.skillIds.some((id) => !b.skillIds.includes(id))
   )
@@ -35,20 +35,36 @@ function isDirty(a: AgentInput, b: AgentInput): boolean {
 type FormProps = {
   initial: Agent | null
   isEdit: boolean
-  models: Model[]
   endpoints: Endpoint[]
   skills: Skill[]
-  /** Drawer mode: the bare form, no page chrome around it. */
+  /** The Team Lead's endpoint — preselected (and labeled) for new agents. */
+  defaultEndpointId?: string | null
+  /** Bootstrap mode: creates the workspace's first agent with isPrimary: true. */
+  isBootstrap?: boolean
+  /** Drawer / bootstrap mode: the bare form, no page chrome around it. */
   compact?: boolean
+  /** Hide the Cancel action (bootstrap has nowhere to cancel to). */
+  noCancel?: boolean
   /** Called with the saved agent; when omitted the form navigates itself. */
   onSaved?: (saved: Agent) => void
   /** Cancel handler; when omitted the form navigates to backTo. */
   onCancel?: () => void
 }
 
-export default function AgentForm({ initial, isEdit, models, endpoints, skills, compact = false, onSaved, onCancel }: FormProps) {
+export default function AgentForm({
+  initial,
+  isEdit,
+  endpoints,
+  skills,
+  defaultEndpointId = null,
+  isBootstrap = false,
+  compact = false,
+  noCancel = false,
+  onSaved,
+  onCancel,
+}: FormProps) {
   const navigate = useNavigate()
-  const baseline = initial ? toInput(initial) : EMPTY
+  const baseline = initial ? toInput(initial) : { ...EMPTY, endpointId: defaultEndpointId ?? '' }
 
   const [draft, setDraft] = useState<AgentInput>(baseline)
   const [errors, setErrors] = useState<Partial<Record<'name' | 'modelId' | 'endpointId' | 'temperature', string>>>({})
@@ -80,10 +96,7 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
     )
   }, [skills, skillQuery])
 
-  const providers = useMemo(() => [...new Set(models.map((m) => m.provider))], [models])
-  const selectedModel = models.find((m) => m.id === draft.modelId)
   const selectedEndpoint = endpoints.find((e) => e.id === draft.endpointId) ?? null
-  const usingCustom = selectedEndpoint !== null
 
   // Models served by the chosen endpoint (GET /api/endpoints/:id/models).
   // Never free-texted: the agent can only reference a served model id.
@@ -91,24 +104,20 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
     () => (draft.endpointId ? api.listEndpointModels(draft.endpointId) : Promise.resolve([])),
     [draft.endpointId],
   )
-  const epModels = useAsync(loadEpModels, [draft.endpointId ?? ''])
+  const epModels = useAsync(loadEpModels, [draft.endpointId])
 
   // Derive the selectable model during render (covers endpoint switches and
   // edits whose model vanished upstream): prefer the draft when served,
   // else the endpoint default, else the first served model.
   const servedIds = useMemo(() => (epModels.data ?? []).map((m) => m.id), [epModels.data])
   const effectiveModelId =
-    usingCustom && selectedEndpoint && servedIds.length > 0 && !servedIds.includes(draft.modelId)
+    selectedEndpoint && servedIds.length > 0 && !servedIds.includes(draft.modelId)
       ? (servedIds.includes(selectedEndpoint.defaultModel) ? selectedEndpoint.defaultModel : servedIds[0])
       : draft.modelId
 
   const pickEndpoint = (endpointId: string) => {
-    if (!endpointId) {
-      setDraft((d) => ({ ...d, endpointId: null, modelId: '' }))
-    } else {
-      const ep = endpoints.find((e) => e.id === endpointId)
-      setDraft((d) => ({ ...d, endpointId, modelId: ep ? ep.defaultModel : d.modelId }))
-    }
+    const ep = endpoints.find((e) => e.id === endpointId)
+    setDraft((d) => ({ ...d, endpointId, modelId: ep ? ep.defaultModel : '' }))
     setErrors((e) => ({ ...e, endpointId: undefined, modelId: undefined }))
   }
 
@@ -117,9 +126,11 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
 
     const next: typeof errors = {}
     if (!draft.name.trim()) next.name = 'Give the agent a name.'
-    if (draft.endpointId !== null && !selectedEndpoint) {
+    if (!draft.endpointId) {
+      next.endpointId = 'Pick an endpoint to run this agent on.'
+    } else if (!selectedEndpoint) {
       next.endpointId = 'This endpoint no longer exists. Pick another one.'
-    } else if (usingCustom && selectedEndpoint) {
+    } else {
       if (epModels.loading) next.modelId = 'Models are still loading — wait a moment.'
       else if (epModels.error) next.modelId = 'Could not load models for this endpoint. Try again.'
       else if (servedIds.length === 0) next.modelId = 'This endpoint serves no models.'
@@ -127,8 +138,6 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
       else if (!servedIds.includes(effectiveModelId)) {
         next.modelId = 'Pick a model from this endpoint.'
       }
-    } else if (!draft.modelId.trim()) {
-      next.modelId = 'Pick a model to run this agent on.'
     }
     const temperature = draft.temperature
     if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
@@ -136,14 +145,18 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
     }
     setErrors(next)
     if (Object.keys(next).length > 0) {
-      document.getElementById(next.name ? 'af-name' : usingCustom ? 'af-model-name' : 'af-model')?.focus()
+      document.getElementById(next.name ? 'af-name' : next.endpointId ? 'af-endpoint' : 'af-model-name')?.focus()
       return
     }
 
     setSaving(true)
     setSubmitError(null)
     try {
-      const payload: AgentInput = { ...draft, modelId: usingCustom ? effectiveModelId : draft.modelId.trim() }
+      const payload: AgentInput = {
+        ...draft,
+        modelId: effectiveModelId.trim(),
+        ...(isBootstrap ? { isPrimary: true } : {}),
+      }
       const saved = initial ? await api.updateAgent(initial.id, payload) : await api.createAgent(payload)
       if (onSaved) onSaved(saved)
       else navigate(isEdit && initial ? `/agents/${initial.id}` : `/agents/${saved.id}`, { replace: true })
@@ -179,7 +192,7 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
                   className={`input${errors.name ? ' input--invalid' : ''}`}
                   value={draft.name}
                   onChange={(e) => set('name', e.target.value)}
-                  placeholder="Support Triage"
+                  placeholder={isBootstrap ? 'Team Lead' : 'Support Triage'}
                   aria-invalid={Boolean(errors.name)}
                   aria-describedby={errors.name ? 'af-name-err' : undefined}
                 />
@@ -208,27 +221,35 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
             </div>
 
             <div className="formsection">
-              <h2 className="formsection__title">Model & endpoint</h2>
-              <p className="formsection__hint">Run on a hosted model, a self-hosted llama.cpp / vLLM server, or OpenRouter.</p>
+              <h2 className="formsection__title">Endpoint & model</h2>
+              <p className="formsection__hint">
+                Every agent runs on an endpoint. New agents start on the Team Lead's endpoint.
+              </p>
 
               <div className="field">
                 <label className="field__label" htmlFor="af-endpoint">
-                  Endpoint
+                  Endpoint <span className="field__req" aria-hidden="true">*</span>
                 </label>
                 <select
                   id="af-endpoint"
                   className={`select${errors.endpointId ? ' input--invalid' : ''}`}
-                  value={draft.endpointId ?? ''}
+                  value={draft.endpointId}
                   onChange={(e) => pickEndpoint(e.target.value)}
                   aria-invalid={Boolean(errors.endpointId)}
                   aria-describedby={errors.endpointId ? 'af-endpoint-err' : 'af-endpoint-hint'}
                 >
-                  <option value="">Hosted models (default)</option>
-                  {endpoints.map((ep) => (
-                    <option key={ep.id} value={ep.id}>
-                      {ep.name} ({ENDPOINT_KIND_LABELS[ep.kind]})
-                    </option>
-                  ))}
+                  {defaultEndpointId ? (
+                    <option value={defaultEndpointId}>Default — Team Lead's endpoint</option>
+                  ) : (
+                    <option value="">Select an endpoint…</option>
+                  )}
+                  {endpoints
+                    .filter((ep) => ep.id !== defaultEndpointId)
+                    .map((ep) => (
+                      <option key={ep.id} value={ep.id}>
+                        {ep.name} ({ENDPOINT_KIND_LABELS[ep.kind]})
+                      </option>
+                    ))}
                 </select>
                 {errors.endpointId ? (
                   <p className="field__err" id="af-endpoint-err">
@@ -238,12 +259,12 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
                   <p className="field__hint" id="af-endpoint-hint">
                     {selectedEndpoint
                       ? `${selectedEndpoint.baseUrl} · ${selectedEndpoint.contextWindow.toLocaleString()} ctx`
-                      : 'Need a custom server? Add it in Settings → Endpoints.'}
+                      : 'Add a server in Settings → Endpoints.'}
                   </p>
                 )}
               </div>
 
-              {usingCustom && selectedEndpoint ? (
+              {draft.endpointId && selectedEndpoint ? (
                 <div className="field">
                   <label className="field__label" htmlFor="af-model-name">
                     Model <span className="field__req" aria-hidden="true">*</span>
@@ -291,41 +312,15 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
                 </div>
               ) : (
                 <div className="field">
-                  <label className="field__label" htmlFor="af-model">
+                  <label className="field__label" htmlFor="af-model-name">
                     Model <span className="field__req" aria-hidden="true">*</span>
                   </label>
-                  <select
-                    id="af-model"
-                    className={`select${errors.modelId ? ' input--invalid' : ''}`}
-                    value={draft.modelId}
-                    onChange={(e) => set('modelId', e.target.value)}
-                    aria-invalid={Boolean(errors.modelId)}
-                    aria-describedby={errors.modelId ? 'af-model-err' : 'af-model-hint'}
-                  >
-                    <option value="">Select a model…</option>
-                    {providers.map((provider) => (
-                      <optgroup key={provider} label={provider}>
-                        {models
-                          .filter((m) => m.provider === provider)
-                          .map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name} — {TIER_LABELS[m.tier]}
-                            </option>
-                          ))}
-                      </optgroup>
-                    ))}
+                  <select id="af-model-name" className="select" value="" disabled aria-describedby="af-model-hint">
+                    <option value="">Pick an endpoint first…</option>
                   </select>
-                  {errors.modelId ? (
-                    <p className="field__err" id="af-model-err">
-                      {errors.modelId}
-                    </p>
-                  ) : (
-                    <p className="field__hint" id="af-model-hint">
-                      {selectedModel
-                        ? `${selectedModel.provider} · ${TIER_LABELS[selectedModel.tier]} · ${selectedModel.contextWindow.toLocaleString()} token context`
-                        : 'Pick the provider that hosts this agent.'}
-                    </p>
-                  )}
+                  <p className="field__hint" id="af-model-hint">
+                    The model list comes from the selected endpoint.
+                  </p>
                 </div>
               )}
             </div>
@@ -431,12 +426,14 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
           </section>
 
           <div className="formactions">
-            <button type="button" className="btn" onClick={leave} disabled={saving}>
-              Cancel
-            </button>
+            {!noCancel && (
+              <button type="button" className="btn" onClick={leave} disabled={saving}>
+                Cancel
+              </button>
+            )}
             <button type="submit" className="btn btn--primary" disabled={saving}>
               {saving && <span className="spinner" aria-hidden="true" />}
-              {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create agent'}
+              {saving ? 'Saving…' : isEdit ? 'Save changes' : isBootstrap ? 'Create Team Lead' : 'Create agent'}
             </button>
           </div>
         </form>
@@ -491,7 +488,7 @@ export default function AgentForm({ initial, isEdit, models, endpoints, skills, 
             <p className="page__sub">
               {isEdit
                 ? 'Changes take effect on the next run. In-flight runs keep the old configuration.'
-                : 'Name it, choose a model, and give it the skills it needs.'}
+                : 'Name it, pick an endpoint and model, and give it the skills it needs.'}
             </p>
           </div>
         </div>

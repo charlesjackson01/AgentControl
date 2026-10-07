@@ -199,13 +199,12 @@ function EndpointsSection() {
     setServerError(null)
     try {
       const result = await api.deleteEndpoint(ep.id)
-      const movedIds = result.reassignedAgents ?? []
-      if (movedIds.length > 0) {
-        const movedNames = movedIds
-          .map((id) => (agents.data ?? []).find((a) => a.id === id)?.name ?? id)
-          .filter((n): n is string => Boolean(n))
-          .join(', ')
-        setNotice({ type: 'success', text: `${movedIds.length} moved to hosted models: ${movedNames}` })
+      const movedCount = result.reassignedAgents?.length ?? 0
+      if (movedCount > 0) {
+        setNotice({
+          type: 'success',
+          text: `${movedCount} agent${movedCount === 1 ? '' : 's'} moved to the Team Lead's endpoint.`,
+        })
         setTimeout(() => setNotice(null), 5000)
       }
       await endpoints.reload()
@@ -289,7 +288,7 @@ function EndpointsSection() {
       <Dialog
         open={dialog !== null}
         title={dialog?.mode === 'edit' ? `Edit ${dialog.endpoint.name}` : dialog?.mode === 'delete' ? `Delete ${dialog.endpoint.name}?` : 'New endpoint'}
-        subtitle={dialog?.mode === 'delete' ? 'Agents that use this endpoint will keep working with their existing hosted models.' : 'OpenAI-compatible chat server (llama.cpp --server, vLLM) or OpenRouter.'}
+        subtitle={dialog?.mode === 'delete' ? 'Agents using this endpoint move to the Team Lead\u2019s endpoint.' : 'OpenAI-compatible chat server (llama.cpp --server, vLLM) or OpenRouter.'}
         onClose={() => { if (!saving) { setDialog(null); setServerError(null) } }}
       >
         {dialog?.mode === 'delete' ? (
@@ -302,7 +301,7 @@ function EndpointsSection() {
                 <ul style={{ margin: 0, paddingLeft: 20 }}>
                   {affected(dialog.endpoint).map((a) => <li key={a.id}>{a.name}</li>)}
                 </ul>
-                <p className="field__hint">Nothing else about those agents changes. Deletion cannot be undone.</p>
+                <p className="field__hint">These agents move to the Team Lead's endpoint and keep working. Deletion cannot be undone.</p>
               </>
             )}
             <div className="dialog__foot">

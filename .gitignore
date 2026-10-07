@@ -2,6 +2,7 @@ node_modules/
 dist/
 AgentControlBE/data/*
 !AgentControlBE/data/store.example.json
+AgentControlBE/start-be.cmd
 .env
 .env.*
 *.log

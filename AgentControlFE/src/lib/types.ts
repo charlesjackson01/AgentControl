@@ -111,13 +111,17 @@ export type AgentRun = {
   error: string | null
   /** Assistant output; empty string when the run failed. */
   output: string
+  /** Prompt the run received. */
+  input: string
 }
 
 /** Body for POST /api/agents/:id/runs. */
 export type AgentRunInput = {
   input: string
+  temperature?: number
 }
 
+/** Agent that runs in the workspace (the chat producer). */
 export type Agent = {
   id: string
   name: string
@@ -132,6 +136,10 @@ export type Agent = {
   createdAt: string
   lastRunAt: string | null
   runCount: number
+  /** Chat transcript for multi-turn context (BE serves it at GET /api/agents/:id/runs; not part of the Agent body). */
+  runs?: AgentRun[]
+  /** Sampling temperature (0–2). BE accepts it on create/update; older BEs ignore it. */
+  temperature?: number
 }
 
 /** Everything the create/edit form owns. */
@@ -141,5 +149,6 @@ export type AgentInput = {
   instructions: string
   modelId: string
   endpointId: string | null
+  temperature: number
   skillIds: string[]
 }

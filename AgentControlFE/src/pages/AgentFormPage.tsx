@@ -7,7 +7,7 @@ import { api, ENDPOINT_KIND_LABELS, TIER_LABELS } from '../lib/api'
 import type { Agent, AgentInput, Endpoint, Model, Skill } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 
-const EMPTY: AgentInput = { name: '', description: '', instructions: '', modelId: '', endpointId: null, skillIds: [] }
+const EMPTY: AgentInput = { name: '', description: '', instructions: '', modelId: '', endpointId: null, temperature: 0, skillIds: [] }
 
 function toInput(agent: Agent): AgentInput {
   return {
@@ -16,6 +16,7 @@ function toInput(agent: Agent): AgentInput {
     instructions: agent.instructions,
     modelId: agent.modelId,
     endpointId: agent.endpointId ?? null,
+    temperature: agent.temperature ?? 0,
     skillIds: [...agent.skillIds],
   }
 }

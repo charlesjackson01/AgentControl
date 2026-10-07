@@ -1,7 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
-import AgentDetail from './pages/AgentDetail'
 import AgentFormPage from './pages/AgentFormPage'
+import AgentChat from './pages/AgentChat'
 import Agents from './pages/Agents'
 import Projects from './pages/Projects'
 import Settings from './pages/Settings'
@@ -14,7 +14,7 @@ export default function App() {
         <Route index element={<Navigate to="/agents" replace />} />
         <Route path="agents" element={<Agents />} />
         <Route path="agents/new" element={<AgentFormPage />} />
-        <Route path="agents/:id" element={<AgentDetail />} />
+        <Route path="agents/:id" element={<AgentChat />} />
         <Route path="agents/:id/edit" element={<AgentFormPage />} />
         <Route path="projects" element={<Projects />} />
         <Route path="skills" element={<SkillLibrary />} />

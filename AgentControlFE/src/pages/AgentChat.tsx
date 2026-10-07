@@ -1,0 +1,276 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import { StatusPill } from '../components/StatusPill'
+import { SettingsDrawer } from '../components/SettingsDrawer'
+import { ErrorState, Skeleton } from '../components/States'
+import { api } from '../lib/api'
+import type { AgentRun } from '../lib/types'
+import { useAsync } from '../hooks/useAsync'
+
+/** A turn awaiting server confirmation: optimistic user bubble + typing/error state. */
+type Pending = {
+  input: string
+  ts: string
+  status: 'typing' | 'done' | 'error'
+  run?: AgentRun
+  error?: string
+}
+
+function turnTime(iso: string): string {
+  const date = new Date(iso)
+  const today = new Date()
+  const sameDay =
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  if (sameDay) return time
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
+}
+
+function friendly(err: unknown, fallback: string): string {
+  const msg = err instanceof Error ? err.message : fallback
+  return msg === 'Failed to fetch' || msg === 'fetch failed'
+    ? 'Could not reach the API server. Is the backend running?'
+    : msg
+}
+
+export default function AgentChat() {
+  const { id = '' } = useParams()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const [pending, setPending] = useState<Pending | null>(null)
+
+  const loadAgent = useCallback(() => api.getAgent(id), [id])
+  const agent = useAsync(loadAgent, [id])
+  const models = useAsync(api.listModels, [])
+  const endpoints = useAsync(api.listEndpoints, [])
+  const skills = useAsync(api.listSkills, [])
+
+  // Transcript fetcher with manual reload — unlike useAsync, refetches keep
+  // the previous data rendered, so the thread never blanks mid-send.
+  const [runsList, setRunsList] = useState<AgentRun[] | undefined>(undefined)
+  const [runsError, setRunsError] = useState<Error | undefined>(undefined)
+  const [runTick, setRunTick] = useState(0)
+  useEffect(() => {
+    let active = true
+    api.listAgentRuns(id).then(
+      (data) => {
+        if (active) {
+          setRunsList(data)
+          setRunsError(undefined)
+        }
+      },
+      (err: unknown) => {
+        if (active) setRunsError(err instanceof Error ? err : new Error(String(err)))
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [id, runTick])
+  const reloadRuns = useCallback(() => setRunTick((n) => n + 1), [])
+
+  // GET /api/agents/:id/runs is newest-first; the chat reads oldest-first.
+  const sortedRuns = [...(runsList ?? [])].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+
+  // The optimistic turn disappears once the refetched transcript contains it;
+  // derived during render so no clearing effect is needed.
+  const pendingActive =
+    pending &&
+    !runsError &&
+    !(
+      pending.status === 'done' &&
+      pending.run &&
+      (runsList ?? []).some((r) => r.id === pending.run?.id)
+    )
+      ? pending
+      : null
+
+  // Stick to the bottom as turns arrive.
+  const endRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: 'end' })
+  }, [sortedRuns.length, pendingActive])
+
+  const send = async (text: string) => {
+    const input = text.trim()
+    if (!input || sending) return
+    setSending(true)
+    setPending({ input, ts: new Date().toISOString(), status: 'typing' })
+    setDraft('')
+    try {
+      const run = await api.runAgent(id, input)
+      setPending({ input, ts: new Date().toISOString(), status: 'done', run })
+      reloadRuns()
+    } catch (err) {
+      setPending({ input, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The run failed.') })
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <main className="page page--chat">
+      <div className="page__inner">
+        <header className="chat__header">
+          <div className="chat__header__left">
+            <h1 className="chat__header__name">{agent.data?.name ?? ''}</h1>
+            {agent.data && (
+              <span className="chat__header__status">
+                <StatusPill status={agent.data.status} />
+              </span>
+            )}
+          </div>
+          <div className="chat__header__right">
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Agent settings"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3.2" />
+                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.08a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.05Z" />
+              </svg>
+              Settings
+            </button>
+          </div>
+        </header>
+
+        <section className="chat__thread" aria-label="Conversation">
+          {runsError ? (
+            <div className="chat__thread__error">
+              <ErrorState title="Could not load the conversation" error={runsError} onRetry={reloadRuns} />
+            </div>
+          ) : !runsList ? (
+            <div className="chat__thread__placeholder">
+              <Skeleton height={12} width="30%" />
+              <Skeleton height={64} width="70%" />
+              <Skeleton height={64} width="55%" />
+            </div>
+          ) : (
+            <>
+              {sortedRuns.map((run, i) => (
+                <div className="chat__turn" key={run.id}>
+                  {i > 0 && (
+                    <div className="chat__ts">
+                      <span>{turnTime(run.startedAt)}</span>
+                    </div>
+                  )}
+                  <div className="chat__bubble chat__bubble--user">
+                    <div className="bubble__header">You</div>
+                    <div className="bubble__body">{run.input}</div>
+                  </div>
+                  {run.error ? (
+                    <div className="chat__bubble chat__bubble--assistant chat__bubble--error">
+                      <div className="bubble__header">Agent</div>
+                      <div className="bubble__body">{run.error}</div>
+                    </div>
+                  ) : (
+                    <div className="chat__bubble chat__bubble--assistant">
+                      <div className="bubble__header">Agent</div>
+                      <div className="bubble__body">{run.output || '(no output)'}</div>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {pendingActive && (
+                <div className="chat__turn">
+                  {sortedRuns.length > 0 && (
+                    <div className="chat__ts">
+                      <span>{turnTime(pendingActive.ts)}</span>
+                    </div>
+                  )}
+                  <div className="chat__bubble chat__bubble--user">
+                    <div className="bubble__header">You</div>
+                    <div className="bubble__body">{pendingActive.input}</div>
+                  </div>
+                  {pendingActive.status === 'typing' && (
+                    <div className="chat__bubble chat__bubble--assistant" aria-label="Agent is typing">
+                      <span className="typing" aria-hidden="true">
+                        <span className="typing__dot" />
+                        <span className="typing__dot" />
+                        <span className="typing__dot" />
+                      </span>
+                    </div>
+                  )}
+                  {pendingActive.status === 'done' && pendingActive.run && (
+                    <>
+                      {pendingActive.run.error ? (
+                        <div className="chat__bubble chat__bubble--assistant chat__bubble--error">
+                          <div className="bubble__header">Agent</div>
+                          <div className="bubble__body">{pendingActive.run.error}</div>
+                        </div>
+                      ) : (
+                        <div className="chat__bubble chat__bubble--assistant">
+                          <div className="bubble__header">Agent</div>
+                          <div className="bubble__body">{pendingActive.run.output || '(no output)'}</div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {pendingActive.status === 'error' && (
+                    <div className="chat__bubble chat__bubble--assistant chat__bubble--error">
+                      <div className="bubble__header">Agent</div>
+                      <div className="bubble__body">{pendingActive.error}</div>
+                      <button type="button" className="chat__retry" onClick={() => void send(pendingActive.input)}>
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+          <div ref={endRef} />
+        </section>
+
+        <div className="chat__composer">
+          <div className="chat__composer__input">
+            <textarea
+              className="textarea"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void send(draft)
+                }
+              }}
+              placeholder="Message this agent…"
+              rows={1}
+              disabled={sending}
+              aria-label="Message"
+            />
+            <div className="chat__composer__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => void send(draft)}
+                disabled={sending || !draft.trim()}
+              >
+                {sending && <span className="spinner" aria-hidden="true" />}
+                {sending ? 'Sending…' : 'Send'}
+              </button>
+            </div>
+          </div>
+          <p className="chat__composer__hint">Enter to send · Shift+Enter for a new line</p>
+        </div>
+      </div>
+
+      <SettingsDrawer
+        open={settingsOpen}
+        agent={agent.data ?? null}
+        models={models.data ?? []}
+        endpoints={endpoints.data ?? []}
+        skills={skills.data ?? []}
+        onClose={() => setSettingsOpen(false)}
+        onSaved={agent.reload}
+        onCleared={reloadRuns}
+      />
+    </main>
+  )
+}

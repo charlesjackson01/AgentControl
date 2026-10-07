@@ -161,6 +161,11 @@ export const api = {
       { method: 'POST' },
     )
   },
+
+  /** Clear an agent's chat transcript (DELETE /api/agents/:id/runs). */
+  async deleteAgentRuns(id: string): Promise<void> {
+    return request<void>(`/api/agents/${encodeURIComponent(id)}/runs`, { method: 'DELETE' })
+  },
 }
 
 export const STATUS_LABELS: Record<AgentStatus, string> = {

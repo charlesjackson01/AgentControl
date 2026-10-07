@@ -58,6 +58,9 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
   if (input.kind === 'openrouter' && !effectiveKey) {
     fail(400, 'OpenRouter endpoints require an API key.')
   }
+  if (input.timeoutMs !== undefined && (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0)) {
+    fail(400, 'Timeout must be a positive number of milliseconds.')
+  }
 }
 
 function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
@@ -132,6 +135,19 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     })
   })
 
+  // Optional gate: when AGENTCONTROL_AUTH_TOKEN is set, every /api/* call must
+  // present `Authorization: Bearer <token>`. Off by default (no token -> open).
+  const authToken = process.env.AGENTCONTROL_AUTH_TOKEN
+  if (authToken) {
+    app.addHook('onRequest', async (request, reply) => {
+      if (!request.url.startsWith('/api/')) return
+      if (request.headers.authorization === `Bearer ${authToken}`) return
+      await reply
+        .code(401)
+        .send({ statusCode: 401, error: 'Unauthorized', message: 'Missing or invalid bearer token.' })
+    })
+  }
+
   app.get('/health', async () => ({ status: 'ok' }))
   app.get('/api/models', async () => store.models)
   app.get('/api/skills', async () => store.skills)
@@ -159,11 +175,13 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // Resolve transport: attached endpoint (key from the vault) or hosted default.
     let baseUrl: string | undefined
     let apiKey: string | undefined
+    let timeoutMs = Number(process.env.HOSTED_TIMEOUT_MS) || 30_000
     if (agent.endpointId !== null) {
       const endpoint = store.endpoints.find((e) => e.id === agent.endpointId)
       if (!endpoint) fail(404, `No endpoint with id "${agent.endpointId}"`)
       baseUrl = endpoint.baseUrl
       apiKey = store.endpointKeys[endpoint.id]
+      timeoutMs = endpoint.timeoutMs ?? 30_000
     } else {
       baseUrl = process.env.HOSTED_BASE_URL
       apiKey = process.env.HOSTED_API_KEY
@@ -196,7 +214,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         error: 'No endpoint configured for this agent. Attach an endpoint or set HOSTED_BASE_URL.',
       }
     } else {
-      const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, 30_000)
+      const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, timeoutMs)
       run = {
         id: uid('run'),
         agentId: agent.id,
@@ -220,7 +238,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     agent.lastRunAt = run.startedAt
     agent.runCount += 1
     agent.status = run.status === 'succeeded' ? 'idle' : 'error'
-    store.save()
+    const persisted = store.save()
+    // Never report a successful run as stored when the write actually failed.
+    if (!persisted && run.status === 'succeeded') {
+      fail(500, 'Run completed but its result could not be persisted.')
+    }
     return run
   })
 
@@ -284,6 +306,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       defaultModel: typeof raw.defaultModel === 'string' ? raw.defaultModel : '',
       contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : Number.NaN,
       ...(raw.apiKey !== undefined ? { apiKey: raw.apiKey } : {}),
+      ...(raw.timeoutMs !== undefined ? { timeoutMs: raw.timeoutMs } : {}),
     }
     assertEndpointInput(input, '')
     const id = uid('ep')
@@ -300,6 +323,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       status: 'unknown',
       lastCheckedAt: null,
       createdAt: new Date().toISOString(),
+      ...(input.timeoutMs !== undefined ? { timeoutMs: Math.floor(input.timeoutMs) } : {}),
     }
     store.endpoints = [endpoint, ...store.endpoints]
     store.endpointModels[id] = [endpoint.defaultModel]
@@ -321,6 +345,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       defaultModel: raw.defaultModel ?? current.defaultModel,
       contextWindow: raw.contextWindow ?? current.contextWindow,
       ...(raw.apiKey !== undefined ? { apiKey: raw.apiKey } : {}),
+      timeoutMs: raw.timeoutMs ?? current.timeoutMs,
     }
     assertEndpointInput(merged, store.endpointKeys[id] ?? '')
     // Write-only key semantics: omitted keeps, non-empty replaces, "" clears.
@@ -338,6 +363,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       apiKeySet: Boolean(store.endpointKeys[id]),
       status: 'unknown',
       lastCheckedAt: null,
+      ...(merged.timeoutMs !== undefined ? { timeoutMs: Math.floor(merged.timeoutMs) } : {}),
     }
     store.endpoints = store.endpoints.map((e, i) => (i === index ? next : e))
     const models = store.endpointModels[id] ?? []
@@ -346,19 +372,25 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return next
   })
 
-  app.delete('/api/endpoints/:id', async (request, reply) => {
+  app.delete('/api/endpoints/:id', async (request) => {
     const { id } = request.params as { id: string }
-    if (store.agents.some((a) => a.endpointId === id)) {
-      fail(409, 'This endpoint is still attached to an agent. Move those agents first.')
+    const endpoint = store.endpoints.find((e) => e.id === id)
+    if (!endpoint) fail(404, `No endpoint with id "${id}"`)
+
+    // Move any attached agents to hosted models rather than blocking the delete.
+    const reassignedAgents: string[] = []
+    for (const agent of store.agents) {
+      if (agent.endpointId === id) {
+        agent.endpointId = null
+        reassignedAgents.push(agent.id)
+      }
     }
-    const next = store.endpoints.filter((e) => e.id !== id)
-    if (next.length === store.endpoints.length) fail(404, `No endpoint with id "${id}"`)
-    store.endpoints = next
+
+    store.endpoints = store.endpoints.filter((e) => e.id !== id)
     delete store.endpointModels[id]
     delete store.endpointKeys[id]
     store.save()
-    void reply.status(204)
-    return null
+    return { ok: true, reassignedAgents }
   })
 
   app.get('/api/endpoints/:id/models', async (request) => {

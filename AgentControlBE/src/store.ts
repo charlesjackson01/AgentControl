@@ -26,8 +26,8 @@ export interface WorkspaceStore {
   /** Secret vault: endpoint id -> bearer key. Never serialized to clients. */
   endpointKeys: Record<string, string>
   settings: WorkspaceSettings
-  /** Persist the current store to disk (secrets go to the encrypted vault). */
-  save(): void
+  /** Persist to disk; returns false (and logs) when the write fails. */
+  save(): boolean
 }
 
 /** Everything written to `store.json`. Key material is deliberately excluded. */
@@ -158,8 +158,12 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
         }
         writeFileSync(path, JSON.stringify(snapshot, null, 2), 'utf8')
         vault.save(store.endpointKeys)
-      } catch {
-        // Persistence failure is non-fatal: the in-memory store keeps working.
+        return true
+      } catch (err) {
+        console.error(
+          `[store] failed to persist ${path}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        return false
       }
     },
   }

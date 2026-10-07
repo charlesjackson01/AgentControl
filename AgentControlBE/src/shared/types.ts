@@ -36,6 +36,8 @@ export interface Endpoint {
   status: EndpointStatus
   lastCheckedAt: string | null
   createdAt: string
+  /** Per-run upstream timeout in ms; falls back to 30000 when unset. */
+  timeoutMs?: number
 }
 
 /** One model served by an endpoint (GET /api/endpoints/:id/models). */
@@ -53,6 +55,8 @@ export interface EndpointInput {
   contextWindow: number
   /** Write-only. Omit to keep the stored key on update, "" to clear it. Never returned on read. */
   apiKey?: string
+  /** Optional per-endpoint upstream timeout in ms (defaults to 30000). */
+  timeoutMs?: number
 }
 
 export type EndpointPatch = Partial<EndpointInput>

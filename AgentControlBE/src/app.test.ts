@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
@@ -201,7 +201,7 @@ describe('GET /api/agents/:id/runs', () => {
 })
 
 describe('JSON parser regression', () => {
-  it('bodyless DELETE with a JSON content-type returns 204', async () => {
+  it('bodyless DELETE with a JSON content-type does not 400', async () => {
     const ep = await inject('POST', '/api/endpoints', {
       kind: 'openai-compatible',
       name: 'Del endpoint',
@@ -215,6 +215,124 @@ describe('JSON parser regression', () => {
       url: `/api/endpoints/${id}`,
       headers: { 'content-type': 'application/json' },
     })
-    expect(res.statusCode).toBe(204)
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ ok: true, reassignedAgents: [] })
+  })
+})
+
+describe('DELETE /api/endpoints/:id reassignment', () => {
+  it('moves attached agents to hosted and lists them', async () => {
+    const { endpoint, agent } = await makeRunner()
+    const res = await inject('DELETE', `/api/endpoints/${endpoint.id}`)
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({ ok: true, reassignedAgents: [agent.id] })
+
+    const got = await inject('GET', `/api/agents/${agent.id}`)
+    expect((got.json() as Agent).endpointId).toBeNull()
+    expect((await inject('GET', `/api/endpoints/${endpoint.id}/models`)).statusCode).toBe(404)
+  })
+
+  it('404s for an unknown endpoint', async () => {
+    expect((await inject('DELETE', '/api/endpoints/nope')).statusCode).toBe(404)
+  })
+})
+
+describe('persistence failure', () => {
+  it('returns 500 when a successful run cannot be persisted', async () => {
+    const blocker = join(dir, 'blocker')
+    writeFileSync(blocker, 'not a directory')
+    const badApp = buildApp(createStore(join(blocker, 'store.json')))
+    try {
+      const ep = await badApp.inject({
+        method: 'POST',
+        url: '/api/endpoints',
+        payload: { kind: 'openai-compatible', name: 'e', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 100 },
+        headers: { 'content-type': 'application/json' },
+      })
+      const epId = (ep.json() as Endpoint).id
+      const ag = await badApp.inject({
+        method: 'POST',
+        url: '/api/agents',
+        payload: { name: 'a', description: '', instructions: '', modelId: 'm', endpointId: epId, skillIds: [] },
+        headers: { 'content-type': 'application/json' },
+      })
+      const agentId = (ag.json() as Agent).id
+
+      mockChat('hello')
+      const res = await badApp.inject({
+        method: 'POST',
+        url: `/api/agents/${agentId}/runs`,
+        payload: { input: 'hi' },
+        headers: { 'content-type': 'application/json' },
+      })
+      expect(res.statusCode).toBe(500)
+      expect((res.json() as { message: string }).message).toContain('could not be persisted')
+    } finally {
+      await badApp.close()
+    }
+  })
+})
+
+describe('per-endpoint timeout', () => {
+  it('honors timeoutMs with a slow (never-resolving) upstream', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init?: { signal?: AbortSignal }) =>
+          new Promise<never>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              const err = new Error('aborted')
+              err.name = 'AbortError'
+              reject(err)
+            })
+          }),
+      ),
+    )
+
+    const ep = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible',
+      name: 'Slow endpoint',
+      baseUrl: 'http://127.0.0.1:9',
+      defaultModel: 'm',
+      contextWindow: 100,
+      timeoutMs: 50,
+    })
+    const endpoint = ep.json() as Endpoint
+    expect(endpoint.timeoutMs).toBe(50)
+
+    const ag = await inject('POST', '/api/agents', {
+      name: 'Slow agent',
+      description: '',
+      instructions: '',
+      modelId: 'm',
+      endpointId: endpoint.id,
+      skillIds: [],
+    })
+    const agentId = (ag.json() as Agent).id
+
+    const started = Date.now()
+    const res = await inject('POST', `/api/agents/${agentId}/runs`, { input: 'hi' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.error).toContain('timed out after 50ms')
+    expect(Date.now() - started).toBeLessThan(2000)
+  })
+})
+
+describe('AGENTCONTROL_AUTH_TOKEN', () => {
+  it('gates /api/* but leaves /health open', async () => {
+    process.env.AGENTCONTROL_AUTH_TOKEN = 'tok-123'
+    const gated = buildApp(createStore(join(dir, 'store.json')))
+    try {
+      expect((await gated.inject({ method: 'GET', url: '/api/agents' })).statusCode).toBe(401)
+      expect(
+        (await gated.inject({ method: 'GET', url: '/api/agents', headers: { authorization: 'Bearer tok-123' } })).statusCode,
+      ).toBe(200)
+      expect((await gated.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200)
+    } finally {
+      await gated.close()
+      delete process.env.AGENTCONTROL_AUTH_TOKEN
+    }
   })
 })

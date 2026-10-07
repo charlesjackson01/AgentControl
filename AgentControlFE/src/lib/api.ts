@@ -30,10 +30,26 @@ export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 const API_BASE =
   import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '' : `http://${window.location.hostname}:3001`)
 
+/**
+ * Optional bearer token for self-hosted BE endpoints.
+ * Set VITE_AUTH_TOKEN in your `.env` / `.env.local`; leave blank for unauthenticated use.
+ * The token is embedded in the bundle at build time (Vite only exposes VITE_* to client code).
+ */
+const AUTH_TOKEN = import.meta.env.VITE_AUTH_TOKEN
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  // Merge existing request headers, auth header, and the JSON content type.
+  const headers: Record<string, string> = {}
+  if (AUTH_TOKEN) {
+    headers.Authorization = `Bearer ${AUTH_TOKEN}`
+  }
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    headers: {
+      ...headers,
+      'Content-Type': 'application/json',
+      ...init?.headers,
+    },
   })
   // Deletes answer 204 with no body.
   if (res.status === 204) return undefined as T
@@ -125,14 +141,11 @@ export const api = {
     })
   },
 
-  async deleteEndpoint(id: string): Promise<{ reassignedAgents?: number }> {
-    const body = await request<{ reassignedAgents?: number } | null>(
+  async deleteEndpoint(id: string): Promise<{ ok: true; reassignedAgents: string[] }> {
+    return request<{ ok: true; reassignedAgents: string[] }>(
       `/api/endpoints/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
     )
-    // 204 responses carry no body; the mock returns void. The BE replaces this
-    // with real data from its store when it lands.
-    return body ?? { reassignedAgents: 0 }
   },
 
   async listEndpointModels(id: string): Promise<EndpointModel[]> {

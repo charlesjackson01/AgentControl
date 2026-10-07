@@ -24,6 +24,15 @@ involved. The API base lives in `src/lib/api.ts`:
 - prod: `http://<window hostname>:3001` — follows however the app was opened
   (localhost, LAN IP, Tailscale IP); override with `VITE_API_BASE`
 
+## Runtime config (`.env` / `.env.local` — never commit these)
+
+| Variable | Purpose | Example |
+| --- | --- | --- |
+| `VITE_API_BASE` | Override the API base (dev: relative `/api` via the proxy; prod: the backend host). | `http://192.168.1.20:3001` |
+| `VITE_AUTH_TOKEN` | Bearer token sent with every request as `Authorization: Bearer <token>`. Leave empty for unauthenticated use. | `sk-xxxx` |
+
+> Copy `.env.example` to `.env.local` and fill in values; the file is gitignored.
+
 ## Scripts
 
 | Script | What it does |

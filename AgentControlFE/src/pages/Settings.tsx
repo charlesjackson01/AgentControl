@@ -199,9 +199,13 @@ function EndpointsSection() {
     setServerError(null)
     try {
       const result = await api.deleteEndpoint(ep.id)
-      const moved = result.reassignedAgents ?? 0
-      if (moved > 0) {
-        setNotice({ type: 'success', text: `${moved} agent${moved === 1 ? '' : 's'} moved to hosted models` })
+      const movedIds = result.reassignedAgents ?? []
+      if (movedIds.length > 0) {
+        const movedNames = movedIds
+          .map((id) => (agents.data ?? []).find((a) => a.id === id)?.name ?? id)
+          .filter((n): n is string => Boolean(n))
+          .join(', ')
+        setNotice({ type: 'success', text: `${movedIds.length} moved to hosted models: ${movedNames}` })
         setTimeout(() => setNotice(null), 5000)
       }
       await endpoints.reload()

@@ -6,7 +6,7 @@ import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { AgentsIcon, PlusIcon, SearchIcon } from '../components/icons'
 import { api } from '../lib/api'
 import type { AgentStatus } from '../lib/types'
-import TeamLeadSetup from './TeamLeadSetup'
+import BootstrapPage from './BootstrapPage'
 import { useAsync } from '../hooks/useAsync'
 
 type Filter = AgentStatus | 'all'
@@ -149,7 +149,7 @@ export default function Agents() {
 
       {agents.data !== undefined && agents.data.length === 0 ? (
         /* DD-7 bootstrap: an empty workspace has no Team Lead yet. */
-        <TeamLeadSetup />
+        <BootstrapPage />
       ) : agents.loading ? (
         <div className="grid">
           {[0, 1, 2, 3, 4, 5].map((i) => (

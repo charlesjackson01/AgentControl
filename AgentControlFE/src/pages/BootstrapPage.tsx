@@ -6,10 +6,11 @@ import { useAsync } from '../hooks/useAsync'
 
 /**
  * DD-7 bootstrap: when the workspace has no agents, this full-page form
- * creates the Team Lead (POST /api/agents with isPrimary: true). Its
- * endpoint becomes the default for every agent created afterwards.
+ * creates the Team Lead (POST /api/agents with isPrimary: true) and routes
+ * into the new agent's chat. Its endpoint becomes the default for every
+ * agent created afterwards.
  */
-export default function TeamLeadSetup() {
+export default function BootstrapPage() {
   const endpoints = useAsync(api.listEndpoints, [])
   const skills = useAsync(api.listSkills, [])
 

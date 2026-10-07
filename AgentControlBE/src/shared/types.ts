@@ -86,8 +86,10 @@ export interface Agent {
   description: string
   instructions: string
   modelId: string
-  /** Null = built-in hosted model; set = model id on a saved endpoint. */
-  endpointId: string | null
+  /** Required: the endpoint this agent runs on. No hosted/null path. */
+  endpointId: string
+  /** The Team Lead. Exactly one agent is primary; its endpoint is the default. */
+  isPrimary: boolean
   skillIds: string[]
   status: AgentStatus
   createdAt: string
@@ -100,7 +102,9 @@ export interface AgentInput {
   description: string
   instructions: string
   modelId: string
-  endpointId: string | null
+  endpointId: string
+  /** Create: honored only when no primary exists. Update: true transfers the role. */
+  isPrimary?: boolean
   skillIds: string[]
 }
 

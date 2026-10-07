@@ -68,19 +68,17 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
   const name = typeof raw.name === 'string' ? raw.name.trim() : ''
   if (!name) fail(400, 'Give the agent a name.')
 
-  const endpointId = typeof raw.endpointId === 'string' && raw.endpointId !== '' ? raw.endpointId : null
+  const endpointId = typeof raw.endpointId === 'string' && raw.endpointId !== '' ? raw.endpointId : ''
+  if (!endpointId) fail(400, 'Every agent needs an endpoint. Pick one before saving.')
+
+  const endpoint = store.endpoints.find((e) => e.id === endpointId)
+  if (!endpoint) fail(400, `No endpoint with id "${endpointId}". Pick an existing endpoint.`)
+
   const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : ''
   if (!modelId) fail(400, 'Pick a model to run this agent on.')
-
-  if (endpointId !== null) {
-    const endpoint = store.endpoints.find((e) => e.id === endpointId)
-    if (!endpoint) fail(404, `No endpoint with id "${endpointId}"`)
-    const served = store.endpointModels[endpoint.id] ?? []
-    if (served.length > 0 && !served.includes(modelId) && modelId !== endpoint.defaultModel) {
-      fail(400, `Model "${modelId}" is not served by this endpoint.`)
-    }
-  } else if (!store.models.some((m) => m.id === modelId)) {
-    fail(400, `Unknown hosted model "${modelId}".`)
+  const served = store.endpointModels[endpoint.id] ?? []
+  if (served.length > 0 && !served.includes(modelId) && modelId !== endpoint.defaultModel) {
+    fail(400, `Model "${modelId}" is not served by this endpoint.`)
   }
 
   const skillIds = Array.isArray(raw.skillIds)
@@ -93,6 +91,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     instructions: typeof raw.instructions === 'string' ? raw.instructions.trim() : '',
     modelId,
     endpointId,
+    isPrimary: raw.isPrimary === true,
     skillIds,
   }
 }
@@ -172,20 +171,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const input = typeof body.input === 'string' ? body.input.trim() : ''
     if (!input) fail(400, 'Provide an "input" string to run the agent.')
 
-    // Resolve transport: attached endpoint (key from the vault) or hosted default.
-    let baseUrl: string | undefined
-    let apiKey: string | undefined
-    let timeoutMs = Number(process.env.HOSTED_TIMEOUT_MS) || 30_000
-    if (agent.endpointId !== null) {
-      const endpoint = store.endpoints.find((e) => e.id === agent.endpointId)
-      if (!endpoint) fail(404, `No endpoint with id "${agent.endpointId}"`)
-      baseUrl = endpoint.baseUrl
-      apiKey = store.endpointKeys[endpoint.id]
-      timeoutMs = endpoint.timeoutMs ?? 30_000
-    } else {
-      baseUrl = process.env.HOSTED_BASE_URL
-      apiKey = process.env.HOSTED_API_KEY
-    }
+    // Every agent has an endpoint; no hosted fallback exists.
+    const endpoint = store.endpoints.find((e) => e.id === agent.endpointId)
+    if (!endpoint) fail(400, `Agent "${agent.name}" has no valid endpoint. Pick one in its settings.`)
+    const baseUrl = endpoint.baseUrl
+    const apiKey = store.endpointKeys[endpoint.id]
+    const timeoutMs = endpoint.timeoutMs ?? 30_000
 
     // System prompt = instructions + the content of attached skills.
     const skillLines = agent.skillIds
@@ -219,32 +210,17 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     messages.push({ role: 'user', content: input })
 
     const startedAt = new Date().toISOString()
-    let run: AgentRun
-    if (!baseUrl) {
-      run = {
-        id: uid('run'),
-        agentId: agent.id,
-        startedAt,
-        status: 'failed',
-        durationMs: 0,
-        steps: 0,
-        input,
-        output: '',
-        error: 'No endpoint configured for this agent. Attach an endpoint or set HOSTED_BASE_URL.',
-      }
-    } else {
-      const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, timeoutMs)
-      run = {
-        id: uid('run'),
-        agentId: agent.id,
-        startedAt,
-        status: result.ok ? 'succeeded' : 'failed',
-        durationMs: result.latencyMs,
-        steps: 1,
-        input,
-        output: result.content,
-        error: result.ok ? null : (result.error ?? 'Request failed'),
-      }
+    const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, timeoutMs)
+    const run: AgentRun = {
+      id: uid('run'),
+      agentId: agent.id,
+      startedAt,
+      status: result.ok ? 'succeeded' : 'failed',
+      durationMs: result.latencyMs,
+      steps: 1,
+      input,
+      output: result.content,
+      error: result.ok ? null : (result.error ?? 'Request failed'),
     }
 
     // Prepend, then trim this agent's history to the newest 50.
@@ -287,9 +263,17 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
   app.post('/api/agents', async (request, reply) => {
     const input = parseAgentInput(store, request.body)
+    const hasPrimary = store.agents.some((a) => a.isPrimary)
+    if (input.isPrimary && hasPrimary) {
+      fail(409, 'A Team Lead already exists. Transfer the role from the other agent instead.')
+    }
+    // Exactly one primary: honor the request, otherwise promote the first agent.
+    const isPrimary = input.isPrimary === true || !hasPrimary
     const agent: Agent = {
       id: uid('agt'),
       ...input,
+      endpointId: input.endpointId,
+      isPrimary,
       status: 'idle',
       createdAt: new Date().toISOString(),
       lastRunAt: null,
@@ -305,18 +289,31 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const index = store.agents.findIndex((a) => a.id === id)
     if (index === -1) fail(404, `No agent with id "${id}"`)
+    const current = store.agents[index] as Agent
     const input = parseAgentInput(store, request.body)
-    const next: Agent = { ...(store.agents[index] as Agent), ...input }
-    store.agents = store.agents.map((a, i) => (i === index ? next : a))
+    const transferPrimary = input.isPrimary === true
+    // The primary flag never flips off here; transfer by promoting another agent.
+    const next: Agent = { ...current, ...input, isPrimary: transferPrimary || current.isPrimary }
+    if (transferPrimary) {
+      store.agents = store.agents.map((a, i) =>
+        i === index ? next : a.isPrimary ? { ...a, isPrimary: false } : a,
+      )
+    } else {
+      store.agents = store.agents.map((a, i) => (i === index ? next : a))
+    }
     store.save()
     return next
   })
 
   app.delete('/api/agents/:id', async (request, reply) => {
     const { id } = request.params as { id: string }
-    const next = store.agents.filter((a) => a.id !== id)
-    if (next.length === store.agents.length) fail(404, `No agent with id "${id}"`)
-    store.agents = next
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    if (agent.isPrimary) {
+      fail(409, 'Move the Team Lead role to another agent before deleting it.')
+    }
+    store.agents = store.agents.filter((a) => a.id !== id)
+    store.runs = store.runs.filter((r) => r.agentId !== id)
     store.save()
     void reply.status(204)
     return null
@@ -406,11 +403,20 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const endpoint = store.endpoints.find((e) => e.id === id)
     if (!endpoint) fail(404, `No endpoint with id "${id}"`)
 
-    // Move any attached agents to hosted models rather than blocking the delete.
+    const primary = store.agents.find((a) => a.isPrimary)
+    if (primary && primary.endpointId === id) {
+      fail(409, 'Move the Team Lead to another endpoint first.')
+    }
+    const fallbackEndpointId = primary?.endpointId
+
+    // Reassign attached agents to the Team Lead's endpoint (the default).
     const reassignedAgents: string[] = []
     for (const agent of store.agents) {
       if (agent.endpointId === id) {
-        agent.endpointId = null
+        if (!fallbackEndpointId) {
+          fail(409, 'No default endpoint available. Move the Team Lead to another endpoint first.')
+        }
+        agent.endpointId = fallbackEndpointId
         reassignedAgents.push(agent.id)
       }
     }

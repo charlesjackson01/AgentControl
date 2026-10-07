@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
@@ -87,18 +87,29 @@ afterEach(async () => {
 
 describe('agents CRUD', () => {
   it('round-trips create/get/list/update/delete', async () => {
+    const ep = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible',
+      name: 'CRUD endpoint',
+      baseUrl: 'http://127.0.0.1:9',
+      defaultModel: 'crud-model',
+      contextWindow: 4096,
+    })
+    const endpoint = ep.json() as Endpoint
+
     const create = await inject('POST', '/api/agents', {
       name: 'Crud Agent',
       description: 'd',
       instructions: 'i',
-      modelId: 'gpt-5.2',
-      endpointId: null,
+      modelId: 'crud-model',
+      endpointId: endpoint.id,
       skillIds: ['summarize'],
     })
     expect(create.statusCode).toBe(201)
     const agent = create.json() as Agent
     expect(agent.id).toBeTruthy()
     expect(agent.status).toBe('idle')
+    expect(agent.endpointId).toBe(endpoint.id)
+    expect(agent.isPrimary).toBe(false)
     expect(agent).not.toHaveProperty('recentRuns')
 
     const got = await inject('GET', `/api/agents/${agent.id}`)
@@ -110,8 +121,8 @@ describe('agents CRUD', () => {
       name: 'Crud Agent v2',
       description: 'd2',
       instructions: 'i2',
-      modelId: 'claude-haiku-4-5',
-      endpointId: null,
+      modelId: 'crud-model',
+      endpointId: endpoint.id,
       skillIds: ['summarize', 'webhook'],
     })
     expect(upd.statusCode).toBe(200)
@@ -123,6 +134,17 @@ describe('agents CRUD', () => {
 
     expect((await inject('DELETE', `/api/agents/${agent.id}`)).statusCode).toBe(204)
     expect((await inject('GET', `/api/agents/${agent.id}`)).statusCode).toBe(404)
+  })
+
+  it('rejects saving an agent with no endpoint (400)', async () => {
+    const res = await inject('POST', '/api/agents', {
+      name: 'No endpoint',
+      description: '',
+      instructions: '',
+      modelId: 'gpt-5.2',
+      skillIds: [],
+    })
+    expect(res.statusCode).toBe(400)
   })
 })
 
@@ -302,19 +324,141 @@ describe('JSON parser regression', () => {
 })
 
 describe('DELETE /api/endpoints/:id reassignment', () => {
-  it('moves attached agents to hosted and lists them', async () => {
+  it("reassigns attached agents to the primary agent's endpoint", async () => {
+    const primary = await inject('GET', '/api/agents/agt_research')
+    expect((primary.json() as Agent).isPrimary).toBe(true)
     const { endpoint, agent } = await makeRunner()
+
     const res = await inject('DELETE', `/api/endpoints/${endpoint.id}`)
     expect(res.statusCode).toBe(200)
     expect(res.json()).toEqual({ ok: true, reassignedAgents: [agent.id] })
 
     const got = await inject('GET', `/api/agents/${agent.id}`)
-    expect((got.json() as Agent).endpointId).toBeNull()
+    expect((got.json() as Agent).endpointId).toBe('ep_local_llama')
     expect((await inject('GET', `/api/endpoints/${endpoint.id}/models`)).statusCode).toBe(404)
+  })
+
+  it("409s when deleting the Team Lead's own endpoint", async () => {
+    const res = await inject('DELETE', '/api/endpoints/ep_local_llama')
+    expect(res.statusCode).toBe(409)
+    expect((res.json() as { message: string }).message).toContain('Move the Team Lead')
+    const listed = await inject('GET', '/api/endpoints')
+    expect((listed.json() as Endpoint[]).some((e) => e.id === 'ep_local_llama')).toBe(true)
   })
 
   it('404s for an unknown endpoint', async () => {
     expect((await inject('DELETE', '/api/endpoints/nope')).statusCode).toBe(404)
+  })
+})
+
+describe('primary (Team Lead) invariant', () => {
+  it('honors isPrimary on create when no primary exists', async () => {
+    store.agents = []
+    const res = await inject('POST', '/api/agents', {
+      name: 'New Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      isPrimary: true,
+      skillIds: [],
+    })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as Agent).isPrimary).toBe(true)
+  })
+
+  it('409s on a second primary', async () => {
+    const res = await inject('POST', '/api/agents', {
+      name: 'Wannabe Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      isPrimary: true,
+      skillIds: [],
+    })
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('409s when deleting the primary agent', async () => {
+    const res = await inject('DELETE', '/api/agents/agt_research')
+    expect(res.statusCode).toBe(409)
+    expect((res.json() as { message: string }).message).toContain('Team Lead')
+    expect((await inject('GET', '/api/agents/agt_research')).statusCode).toBe(200)
+  })
+
+  it('transfers primary on update', async () => {
+    const { agent } = await makeRunner()
+    const res = await inject('PUT', `/api/agents/${agent.id}`, {
+      name: agent.name,
+      description: '',
+      instructions: '',
+      modelId: agent.modelId,
+      endpointId: agent.endpointId,
+      isPrimary: true,
+      skillIds: [],
+    })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as Agent).isPrimary).toBe(true)
+    const oldLead = await inject('GET', '/api/agents/agt_research')
+    expect((oldLead.json() as Agent).isPrimary).toBe(false)
+  })
+})
+
+describe('DD-7 store migration', () => {
+  it('promotes the oldest agent, backfills endpointId, and persists once', () => {
+    const legacyDir = mkdtempSync(join(tmpdir(), 'agentcontrol-legacy-'))
+    const legacyPath = join(legacyDir, 'store.json')
+    const mkAgent = (id: string, createdAt: string): Record<string, unknown> => ({
+      id,
+      name: id,
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: null,
+      skillIds: [],
+      status: 'idle',
+      createdAt,
+      lastRunAt: null,
+      runCount: 0,
+    })
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        agents: [mkAgent('agt_new', '2026-02-01T00:00:00.000Z'), mkAgent('agt_old', '2025-01-01T00:00:00.000Z')],
+        runs: [],
+        endpoints: [
+          {
+            id: 'ep_only',
+            kind: 'openai-compatible',
+            name: 'Only',
+            baseUrl: 'http://127.0.0.1:9',
+            defaultModel: 'llama-3-8b',
+            contextWindow: 4096,
+            apiKeySet: false,
+            status: 'unknown',
+            lastCheckedAt: null,
+            createdAt: '2025-01-01T00:00:00.000Z',
+          },
+        ],
+      }),
+      'utf8',
+    )
+
+    const legacyStore = createStore(legacyPath)
+    const old = legacyStore.agents.find((a) => a.id === 'agt_old') as Agent
+    const fresh = legacyStore.agents.find((a) => a.id === 'agt_new') as Agent
+    expect(old.isPrimary).toBe(true)
+    expect(fresh.isPrimary).toBe(false)
+    expect(old.endpointId).toBe('ep_only')
+    expect(fresh.endpointId).toBe('ep_only')
+
+    // Persisted once, so a reload sees the migrated shape.
+    const reloaded = JSON.parse(readFileSync(legacyPath, 'utf8')) as { agents: Agent[] }
+    expect(reloaded.agents.find((a) => a.id === 'agt_old')?.isPrimary).toBe(true)
+    expect(reloaded.agents.find((a) => a.id === 'agt_new')?.endpointId).toBe('ep_only')
+
+    rmSync(legacyDir, { recursive: true, force: true })
   })
 })
 

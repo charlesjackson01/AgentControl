@@ -24,11 +24,10 @@ npm run typecheck
 | `AGENTCONTROL_AUTH_TOKEN` | *(unset)* | When set, every `/api/*` call requires `Authorization: Bearer <token>` (401 otherwise). `/health` stays open. |
 | `AGENTCONTROL_DATA_DIR` | `<cwd>/data` | Directory holding `store.json` and the vault. |
 | `AGENTCONTROL_SECRET` | *(unset)* | Master key for the vault (`sha256(secret)`). When unset, a random key is kept DPAPI-wrapped in `vault.key`. |
-| `HOSTED_BASE_URL` / `HOSTED_API_KEY` | *(unset)* | Transport for runs on hosted models (`endpointId: null`). Without it, hosted runs record a clear failure. |
-| `HOSTED_TIMEOUT_MS` | `30000` | Default upstream timeout for hosted runs. |
 
 Per-endpoint upstream timeout is configurable on the endpoint itself
 (`timeoutMs`, defaults to `30000`), which matters for slow reasoning models.
+Every agent runs on an endpoint — there is no hosted-model fallback.
 
 ## Remote access (Tailscale / LAN)
 
@@ -45,9 +44,8 @@ npm run dev
 
 Then point the frontend at it, e.g. `VITE_API_BASE=http://100.110.232.85:3001`
 (and restart the Vite dev server). CORS reflects the request origin by default,
-so no extra CORS config is needed for a different host. **Frontend support for
-sending the bearer token is not wired up yet**, so leave the token unset until
-that lands, or the FE will get 401s.
+so no extra CORS config is needed for a different host. The frontend sends the
+token when `VITE_AUTH_TOKEN` is set in its `.env.local`.
 
 ## Data at rest
 
@@ -61,10 +59,14 @@ shape of the store.
 ## API surface
 
 - `GET /api/models`, `GET /api/skills`, `GET /api/projects`, `GET /api/settings`
-- Agents: `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/:id`
+- Agents: `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/:id`. Every agent
+  requires an `endpointId` (400 otherwise); exactly one agent is `isPrimary`
+  (the Team Lead) and its endpoint is the workspace default. Creating a second
+  primary or deleting the primary → 409.
 - Runs: `POST/GET /api/agents/:id/runs` (newest-first, capped at 50), `DELETE /api/agents/:id/runs` (clear chat history).
   `POST` assembles multi-turn context: system prompt + the agent's last 10 successful
   runs as user/assistant pairs + the new input (failed runs excluded).
 - Endpoints: `GET/POST /api/endpoints`, `PATCH/DELETE /api/endpoints/:id`
-  (`DELETE` returns `{ ok, reassignedAgents }`, moving attached agents to hosted),
+  (`DELETE` returns `{ ok, reassignedAgents }`, moving attached agents to the
+  Team Lead's endpoint; deleting the Team Lead's own endpoint → 409),
   `GET /api/endpoints/:id/models`, `POST /api/endpoints/:id/test`

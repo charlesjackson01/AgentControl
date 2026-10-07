@@ -42,10 +42,17 @@ interface Persisted {
   settings: WorkspaceSettings
 }
 
+/** Agents from older installs may lack `isPrimary` or have a null `endpointId`. */
+type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary'> & {
+  endpointId?: string | null
+  isPrimary?: boolean
+  recentRuns?: Partial<AgentRun>[]
+}
+
 /** Older workspaces stored `endpointKeys` in plaintext and runs on each agent. */
 type StoredShape = Partial<Persisted> & {
   endpointKeys?: Record<string, string>
-  agents?: (Agent & { recentRuns?: Partial<AgentRun>[] })[]
+  agents?: LegacyAgent[]
 }
 
 /** Resolved from AGENTCONTROL_DATA_DIR so tests can point at a temp dir. */
@@ -80,18 +87,19 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
 }
 
 /** Backfill fields added after a workspace was first written. */
-function reconcile(raw: StoredShape): Persisted {
+function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
   const base = seed()
+  let changed = false
 
   // Runs used to live on each agent (agent.recentRuns); hoist them to `runs`.
   const legacyRuns: AgentRun[] = []
-  const rawAgentsList = (raw.agents ?? base.agents) as (Agent & { recentRuns?: Partial<AgentRun>[] })[]
-  const agents: Agent[] = rawAgentsList.map((agent) => {
+  const rawAgentsList = (raw.agents ?? base.agents) as LegacyAgent[]
+  const agents: LegacyAgent[] = rawAgentsList.map((agent) => {
     const { recentRuns, ...rest } = agent
     if (Array.isArray(recentRuns)) {
       for (const r of recentRuns) legacyRuns.push(normalizeRun({ ...r, agentId: r.agentId ?? rest.id }))
     }
-    return rest as Agent
+    return rest
   })
 
   const endpoints = (raw.endpoints ?? base.endpoints).map((e) => {
@@ -99,41 +107,69 @@ function reconcile(raw: StoredShape): Persisted {
     return { ...e, kind: legacy.kind ?? ('openai-compatible' as const), apiKeySet: false }
   })
 
+  // DD-7 migration: exactly one primary (the Team Lead) and every agent must
+  // reference an endpoint. Promote the oldest agent and backfill nulls.
+  if (agents.length > 0) {
+    let primary = agents.find((a) => a.isPrimary === true)
+    if (!primary) {
+      primary = [...agents].sort((a, b) => (a.createdAt ?? '').localeCompare(b.createdAt ?? ''))[0]
+      changed = true
+    }
+    if (primary) {
+      const fallbackEndpointId = primary.endpointId ?? endpoints[0]?.id ?? ''
+      for (const agent of agents) {
+        if (!agent.endpointId) {
+          agent.endpointId = fallbackEndpointId
+          changed = true
+        }
+        const shouldBePrimary = agent === primary
+        if (agent.isPrimary !== shouldBePrimary) {
+          agent.isPrimary = shouldBePrimary
+          changed = true
+        }
+      }
+    }
+  }
+
   const runs = (raw.runs ?? (legacyRuns.length > 0 ? legacyRuns : base.runs)).map((r) =>
     normalizeRun(r as Partial<AgentRun>),
   )
 
   return {
-    agents,
-    runs,
-    projects: raw.projects ?? base.projects,
-    skills: raw.skills ?? base.skills,
-    models: raw.models ?? base.models,
-    endpoints,
-    endpointModels: raw.endpointModels ?? base.endpointModels,
-    settings: raw.settings ?? base.settings,
+    data: {
+      agents: agents as Agent[],
+      runs,
+      projects: raw.projects ?? base.projects,
+      skills: raw.skills ?? base.skills,
+      models: raw.models ?? base.models,
+      endpoints,
+      endpointModels: raw.endpointModels ?? base.endpointModels,
+      settings: raw.settings ?? base.settings,
+    },
+    changed,
   }
 }
 
-function read(path: string): { data: Persisted; legacyKeys: Record<string, string> } {
+function read(path: string): { data: Persisted; legacyKeys: Record<string, string>; changed: boolean } {
   if (existsSync(path)) {
     try {
       const raw = JSON.parse(readFileSync(path, 'utf8')) as StoredShape
-      return { data: reconcile(raw), legacyKeys: raw.endpointKeys ?? {} }
+      const { data, changed } = reconcile(raw)
+      return { data, legacyKeys: raw.endpointKeys ?? {}, changed }
     } catch {
       // Corrupt or unreadable file falls back to a fresh seed below.
     }
   }
-  return { data: seed(), legacyKeys: {} }
+  return { data: seed(), legacyKeys: {}, changed: false }
 }
 
 export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
   const dir = dirname(path)
   const vault = createVault(join(dir, 'vault.enc'), join(dir, 'vault.key'))
-  const { data, legacyKeys } = read(path)
+  const { data, legacyKeys, changed } = read(path)
 
   let endpointKeys = vault.load()
-  let migrated = false
+  let migrated = changed
   // One-time migration: move any plaintext keys into the encrypted vault.
   if (Object.keys(endpointKeys).length === 0 && Object.keys(legacyKeys).length > 0) {
     endpointKeys = { ...legacyKeys }

@@ -1,4 +1,4 @@
-import type { Agent, AgentRun, Endpoint, Model, Project, RunStatus, Skill, WorkspaceSettings } from '../shared/types.js'
+import type { Agent, AgentRun, Endpoint, Model, Project, Skill, WorkspaceSettings } from '../shared/types.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
 
 const daysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString()
@@ -80,130 +80,11 @@ export const seedProjects: Project[] = [
   },
 ]
 
-type SeedRun = Omit<AgentRun, 'agentId' | 'input' | 'output' | 'error'>
-type SeedAgent = Agent & { recentRuns: SeedRun[] }
+// Fresh installs start empty: no agents and no runs. The first agent created
+// becomes the Team Lead (primary), and its endpoint is the workspace default.
+export const seedAgents: Agent[] = []
 
-function run(id: string, days: number, status: RunStatus, durationMs: number, steps: number): SeedRun {
-  return { id, startedAt: daysAgo(days), status, durationMs, steps }
-}
-
-const rawAgents: SeedAgent[] = [
-  {
-    id: 'agt_research',
-    name: 'Research Runner',
-    description: 'Multi-step web research with a citation pass before it answers.',
-    instructions:
-      'Break the request into sub-questions, research each one, then reconcile the findings into a single cited answer. Flag disagreements between sources instead of silently picking one.',
-    modelId: 'claude-opus-4-6',
-    endpointId: 'ep_local_llama',
-    isPrimary: true,
-    skillIds: ['web-research', 'summarize'],
-    status: 'running',
-    createdAt: daysAgo(84),
-    lastRunAt: daysAgo(0),
-    runCount: 1_284,
-    recentRuns: [run('r1', 0, 'running', 0, 4), run('r2', 1, 'succeeded', 184_000, 11), run('r3', 2, 'succeeded', 162_000, 9)],
-  },
-  {
-    id: 'agt_inbox',
-    name: 'Inbox Triage',
-    description: 'Classifies, tags, and drafts replies for inbound support mail.',
-    instructions: 'Sort into billing, bug, or how-to. Draft a reply for anything not billing. Never send without review.',
-    modelId: 'claude-sonnet-4-6',
-    endpointId: 'ep_openrouter',
-    isPrimary: false,
-    skillIds: ['summarize', 'email-draft', 'crm-lookup'],
-    status: 'running',
-    createdAt: daysAgo(61),
-    lastRunAt: daysAgo(0),
-    runCount: 4_112,
-    recentRuns: [run('r1', 0, 'succeeded', 42_000, 5), run('r2', 0, 'running', 0, 2)],
-  },
-  {
-    id: 'agt_review',
-    name: 'Code Reviewer',
-    description: 'Reviews open diffs against the conventions in CONTRIBUTING.md.',
-    instructions: 'Comment only on correctness, security, and convention breaks. Skip formatting nits.',
-    modelId: 'gpt-5.2',
-    endpointId: 'ep_local_llama',
-    isPrimary: false,
-    skillIds: ['code-interpreter'],
-    status: 'idle',
-    createdAt: daysAgo(45),
-    lastRunAt: daysAgo(3),
-    runCount: 968,
-    recentRuns: [run('r1', 3, 'succeeded', 96_000, 7), run('r2', 4, 'failed', 22_000, 2)],
-  },
-  {
-    id: 'agt_release',
-    name: 'Release Notes',
-    description: 'Turns merged pull requests into a customer-facing changelog entry.',
-    instructions: 'Group by Added, Changed, Fixed. Skip internal refactors. Write for someone who has not used the product this week.',
-    modelId: 'claude-haiku-4-5',
-    endpointId: 'ep_openrouter',
-    isPrimary: false,
-    skillIds: ['summarize'],
-    status: 'idle',
-    createdAt: daysAgo(30),
-    lastRunAt: daysAgo(1),
-    runCount: 74,
-    recentRuns: [run('r1', 1, 'succeeded', 31_000, 3)],
-  },
-  {
-    id: 'agt_migrate',
-    name: 'Data Migrator',
-    description: 'Plans and applies schema migrations against a staging copy first.',
-    instructions: 'Always plan before applying. Stop and ask if the plan would drop a column that has data.',
-    modelId: 'o5-pro',
-    endpointId: 'ep_local_llama',
-    isPrimary: false,
-    skillIds: ['sql-query', 'code-interpreter'],
-    status: 'queued',
-    createdAt: daysAgo(21),
-    lastRunAt: daysAgo(2),
-    runCount: 46,
-    recentRuns: [run('r1', 2, 'succeeded', 610_000, 18), run('r2', 5, 'failed', 120_000, 6)],
-  },
-  {
-    id: 'agt_support',
-    name: 'Support Bot',
-    description: 'First-line answers drawn from the help center, escalating when unsure.',
-    instructions: 'Only answer from the help center. If there is no matching article, escalate to a human with a summary.',
-    modelId: 'llama-4-405b',
-    endpointId: 'ep_openrouter',
-    isPrimary: false,
-    skillIds: ['web-research'],
-    status: 'error',
-    createdAt: daysAgo(12),
-    lastRunAt: daysAgo(1),
-    runCount: 231,
-    recentRuns: [run('r1', 1, 'failed', 12_000, 1), run('r2', 2, 'failed', 12_000, 1)],
-  },
-  {
-    id: 'agt_standup',
-    name: 'Standup Digest',
-    description: 'Summarizes merged PRs and closed tickets into a daily post.',
-    instructions: 'One paragraph. Lead with anything that blocked someone.',
-    modelId: 'llama-3-70b-local',
-    endpointId: 'ep_local_llama',
-    isPrimary: false,
-    skillIds: ['summarize', 'webhook'],
-    status: 'idle',
-    createdAt: daysAgo(5),
-    lastRunAt: daysAgo(0),
-    runCount: 5,
-    recentRuns: [run('r1', 0, 'succeeded', 8_000, 2)],
-  },
-]
-
-export const seedAgents: Agent[] = rawAgents.map((agent) => {
-  const { recentRuns: _runs, ...rest } = agent
-  return rest
-})
-
-export const seedRuns: AgentRun[] = rawAgents.flatMap((agent) =>
-  agent.recentRuns.map((r) => ({ ...r, agentId: agent.id, input: '', output: '', error: null })),
-)
+export const seedRuns: AgentRun[] = []
 
 export const seedSettings: WorkspaceSettings = {
   autoRun: true,

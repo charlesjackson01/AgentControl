@@ -87,6 +87,19 @@ afterEach(async () => {
 
 describe('agents CRUD', () => {
   it('round-trips create/get/list/update/delete', async () => {
+    // A fresh store has no agents, so create the Team Lead first (the CRUD agent
+    // must not be primary or it could not be deleted).
+    const lead = await inject('POST', '/api/agents', {
+      name: 'Team Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      isPrimary: true,
+      skillIds: [],
+    })
+    expect(lead.statusCode).toBe(201)
+
     const ep = await inject('POST', '/api/endpoints', {
       kind: 'openai-compatible',
       name: 'CRUD endpoint',
@@ -325,8 +338,15 @@ describe('JSON parser regression', () => {
 
 describe('DELETE /api/endpoints/:id reassignment', () => {
   it("reassigns attached agents to the primary agent's endpoint", async () => {
-    const primary = await inject('GET', '/api/agents/agt_research')
-    expect((primary.json() as Agent).isPrimary).toBe(true)
+    const lead = await inject('POST', '/api/agents', {
+      name: 'Team Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
+    expect((lead.json() as Agent).isPrimary).toBe(true)
     const { endpoint, agent } = await makeRunner()
 
     const res = await inject('DELETE', `/api/endpoints/${endpoint.id}`)
@@ -339,6 +359,14 @@ describe('DELETE /api/endpoints/:id reassignment', () => {
   })
 
   it("409s when deleting the Team Lead's own endpoint", async () => {
+    await inject('POST', '/api/agents', {
+      name: 'Team Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
     const res = await inject('DELETE', '/api/endpoints/ep_local_llama')
     expect(res.statusCode).toBe(409)
     expect((res.json() as { message: string }).message).toContain('Move the Team Lead')
@@ -353,7 +381,7 @@ describe('DELETE /api/endpoints/:id reassignment', () => {
 
 describe('primary (Team Lead) invariant', () => {
   it('honors isPrimary on create when no primary exists', async () => {
-    store.agents = []
+    expect((await inject('GET', '/api/agents')).json()).toEqual([])
     const res = await inject('POST', '/api/agents', {
       name: 'New Lead',
       description: '',
@@ -368,6 +396,16 @@ describe('primary (Team Lead) invariant', () => {
   })
 
   it('409s on a second primary', async () => {
+    const first = await inject('POST', '/api/agents', {
+      name: 'New Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      isPrimary: true,
+      skillIds: [],
+    })
+    expect(first.statusCode).toBe(201)
     const res = await inject('POST', '/api/agents', {
       name: 'Wannabe Lead',
       description: '',
@@ -381,13 +419,31 @@ describe('primary (Team Lead) invariant', () => {
   })
 
   it('409s when deleting the primary agent', async () => {
-    const res = await inject('DELETE', '/api/agents/agt_research')
+    const lead = await inject('POST', '/api/agents', {
+      name: 'Team Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
+    const leadId = (lead.json() as Agent).id
+    const res = await inject('DELETE', `/api/agents/${leadId}`)
     expect(res.statusCode).toBe(409)
     expect((res.json() as { message: string }).message).toContain('Team Lead')
-    expect((await inject('GET', '/api/agents/agt_research')).statusCode).toBe(200)
+    expect((await inject('GET', `/api/agents/${leadId}`)).statusCode).toBe(200)
   })
 
   it('transfers primary on update', async () => {
+    const lead = await inject('POST', '/api/agents', {
+      name: 'Team Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
+    const leadId = (lead.json() as Agent).id
     const { agent } = await makeRunner()
     const res = await inject('PUT', `/api/agents/${agent.id}`, {
       name: agent.name,
@@ -400,8 +456,19 @@ describe('primary (Team Lead) invariant', () => {
     })
     expect(res.statusCode).toBe(200)
     expect((res.json() as Agent).isPrimary).toBe(true)
-    const oldLead = await inject('GET', '/api/agents/agt_research')
+    const oldLead = await inject('GET', `/api/agents/${leadId}`)
     expect((oldLead.json() as Agent).isPrimary).toBe(false)
+  })
+})
+
+describe('fresh install', () => {
+  it('seeds zero agents and zero runs but keeps the catalogs', async () => {
+    const agents = await inject('GET', '/api/agents')
+    expect(agents.statusCode).toBe(200)
+    expect(agents.json()).toEqual([])
+    expect((await inject('GET', '/api/endpoints')).json()).toHaveLength(2)
+    expect(((await inject('GET', '/api/skills')).json() as unknown[]).length).toBeGreaterThan(0)
+    expect(((await inject('GET', '/api/models')).json() as unknown[]).length).toBeGreaterThan(0)
   })
 })
 

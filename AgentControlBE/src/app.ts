@@ -195,8 +195,27 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const system = [agent.instructions, skillLines.length > 0 ? `Skills:\n${skillLines.join('\n')}` : '']
       .filter(Boolean)
       .join('\n\n')
+
+    // Prior turns: the most recent successful runs become user/assistant pairs
+    // (oldest first). Placeholder seed runs with empty text are skipped.
+    const history = store.runs
+      .filter(
+        (r) =>
+          r.agentId === agent.id &&
+          r.status === 'succeeded' &&
+          r.input.trim() !== '' &&
+          r.output.trim() !== '',
+      )
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+      .slice(0, 10)
+      .reverse()
+
     const messages: ChatMessage[] = []
     if (system) messages.push({ role: 'system', content: system })
+    for (const turn of history) {
+      messages.push({ role: 'user', content: turn.input })
+      messages.push({ role: 'assistant', content: turn.output })
+    }
     messages.push({ role: 'user', content: input })
 
     const startedAt = new Date().toISOString()
@@ -254,6 +273,16 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       .filter((r) => r.agentId === id)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, 50)
+  })
+
+  app.delete('/api/agents/:id/runs', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    store.runs = store.runs.filter((r) => r.agentId !== id)
+    store.save()
+    void reply.status(204)
+    return null
   })
 
   app.post('/api/agents', async (request, reply) => {

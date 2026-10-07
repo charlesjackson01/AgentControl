@@ -62,7 +62,9 @@ shape of the store.
 
 - `GET /api/models`, `GET /api/skills`, `GET /api/projects`, `GET /api/settings`
 - Agents: `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/:id`
-- Runs: `POST/GET /api/agents/:id/runs` (newest-first, capped at 50)
+- Runs: `POST/GET /api/agents/:id/runs` (newest-first, capped at 50), `DELETE /api/agents/:id/runs` (clear chat history).
+  `POST` assembles multi-turn context: system prompt + the agent's last 10 successful
+  runs as user/assistant pairs + the new input (failed runs excluded).
 - Endpoints: `GET/POST /api/endpoints`, `PATCH/DELETE /api/endpoints/:id`
   (`DELETE` returns `{ ok, reassignedAgents }`, moving attached agents to hosted),
   `GET /api/endpoints/:id/models`, `POST /api/endpoints/:id/test`

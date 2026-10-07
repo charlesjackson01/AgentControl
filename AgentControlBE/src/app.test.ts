@@ -31,13 +31,21 @@ async function inject(
 }
 
 function mockChat(content: string) {
-  const mock = vi.fn(async () => ({
+  const mock = vi.fn(async (_url: string, _init?: { body?: string }) => ({
     ok: true,
     status: 200,
     json: async () => ({ choices: [{ index: 0, message: { role: 'assistant', content } }] }),
   }))
   vi.stubGlobal('fetch', mock)
   return mock
+}
+
+type ChatRequest = { model?: string; messages?: { role: string; content: string }[] }
+
+/** Parse the body of the most recent mocked fetch call. */
+function lastRequest(mock: ReturnType<typeof mockChat>): ChatRequest {
+  const call = mock.mock.calls[mock.mock.calls.length - 1]
+  return JSON.parse(call?.[1]?.body ?? '{}') as ChatRequest
 }
 
 async function makeRunner() {
@@ -197,6 +205,79 @@ describe('GET /api/agents/:id/runs', () => {
 
   it('404s for an unknown agent', async () => {
     expect((await inject('GET', '/api/agents/nope/runs')).statusCode).toBe(404)
+  })
+})
+
+describe('multi-turn context', () => {
+  it('sends prior successful runs as user/assistant pairs', async () => {
+    const mock = mockChat('answer')
+    const { agent } = await makeRunner()
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'first' })
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'second' })
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'third' })
+
+    const { messages } = lastRequest(mock)
+    expect(messages?.[0]?.role).toBe('system')
+    expect(messages?.slice(1)).toEqual([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'second' },
+      { role: 'assistant', content: 'answer' },
+      { role: 'user', content: 'third' },
+    ])
+  })
+
+  it('excludes failed runs from context', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner()
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'good' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('boom')
+      }),
+    )
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'bad' })
+    vi.stubGlobal('fetch', mock)
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'again' })
+
+    const { messages } = lastRequest(mock)
+    expect(messages?.slice(1)).toEqual([
+      { role: 'user', content: 'good' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'again' },
+    ])
+  })
+
+  it('caps prior context at the last 10 successful runs', async () => {
+    const mock = mockChat('r')
+    const { agent } = await makeRunner()
+    for (let i = 0; i < 15; i++) {
+      await inject('POST', `/api/agents/${agent.id}/runs`, { input: `m${i}` })
+    }
+
+    const { messages } = lastRequest(mock)
+    expect(messages).toHaveLength(22) // system + 10 pairs + new input
+    expect(messages?.[1]).toEqual({ role: 'user', content: 'm4' })
+    expect(messages?.[messages.length - 1]).toEqual({ role: 'user', content: 'm14' })
+  })
+})
+
+describe('DELETE /api/agents/:id/runs', () => {
+  it('clears history and returns 204', async () => {
+    mockChat('a')
+    const { agent } = await makeRunner()
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect((await inject('GET', `/api/agents/${agent.id}/runs`)).json()).toHaveLength(1)
+
+    const res = await inject('DELETE', `/api/agents/${agent.id}/runs`)
+    expect(res.statusCode).toBe(204)
+    expect((await inject('GET', `/api/agents/${agent.id}/runs`)).json()).toEqual([])
+    expect(store.runs.some((r) => r.agentId === agent.id)).toBe(false)
+  })
+
+  it('404s for an unknown agent', async () => {
+    expect((await inject('DELETE', '/api/agents/nope/runs')).statusCode).toBe(404)
   })
 })
 

@@ -125,8 +125,14 @@ export const api = {
     })
   },
 
-  async deleteEndpoint(id: string): Promise<void> {
-    await request<void>(`/api/endpoints/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  async deleteEndpoint(id: string): Promise<{ reassignedAgents?: number }> {
+    const body = await request<{ reassignedAgents?: number } | null>(
+      `/api/endpoints/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    )
+    // 204 responses carry no body; the mock returns void. The BE replaces this
+    // with real data from its store when it lands.
+    return body ?? { reassignedAgents: 0 }
   },
 
   async listEndpointModels(id: string): Promise<EndpointModel[]> {

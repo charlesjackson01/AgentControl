@@ -157,12 +157,14 @@ function EndpointForm({
 
 function EndpointsSection() {
   const endpoints = useAsync(api.listEndpoints, [])
-  const [dialog, setDialog] = useState<{ mode: 'add' } | { mode: 'edit'; endpoint: Endpoint } | null>(null)
+  const agents = useAsync(api.listAgents, [])
+  const [dialog, setDialog] = useState<{ mode: 'add' } | { mode: 'edit'; endpoint: Endpoint } | { mode: 'delete'; endpoint: Endpoint } | null>(null)
   const [saving, setSaving] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testNote, setTestNote] = useState<Record<string, string>>({})
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ type: 'success'; text: string } | null>(null)
 
   const save = async (input: EndpointInput) => {
     setSaving(true)
@@ -192,17 +194,27 @@ function EndpointsSection() {
     }
   }
 
-  const remove = async (id: string) => {
-    setDeletingId(id)
+  const remove = async (ep: Endpoint) => {
+    setDeletingId(ep.id)
     setServerError(null)
     try {
-      await api.deleteEndpoint(id)
+      const result = await api.deleteEndpoint(ep.id)
+      const moved = result.reassignedAgents ?? 0
+      if (moved > 0) {
+        setNotice({ type: 'success', text: `${moved} agent${moved === 1 ? '' : 's'} moved to hosted models` })
+        setTimeout(() => setNotice(null), 5000)
+      }
       await endpoints.reload()
+      await agents.reload()
     } catch (err) {
       setServerError(err instanceof Error ? err.message : 'Could not delete the endpoint.')
     } finally {
       setDeletingId(null)
     }
+  }
+
+  const affected = (ep: Endpoint) => {
+    return (agents.data ?? []).filter((a) => a.endpointId === ep.id)
   }
 
   return (
@@ -218,6 +230,12 @@ function EndpointsSection() {
       <p className="field__hint" style={{ marginBottom: 10 }}>
         OpenAI-compatible servers (llama.cpp <code>--server</code>, vLLM) and OpenRouter. Keys stay server-side; the browser never calls these URLs directly.
       </p>
+
+      {notice && (
+        <div className="card" role="status" style={{ marginBottom: 12 }}>
+          <p className="run__meta" style={{ margin: 0, marginBottom: 2 }}>{notice.text}</p>
+        </div>
+      )}
 
       {endpoints.loading ? (
         <div className="rows">
@@ -250,7 +268,7 @@ function EndpointsSection() {
                 <button type="button" className="btn" onClick={() => { setServerError(null); setDialog({ mode: 'edit', endpoint: ep }) }}>
                   Edit
                 </button>
-                <button type="button" className="btn btn--danger" onClick={() => void remove(ep.id)} disabled={deletingId === ep.id}>
+                <button type="button" className="btn btn--danger" onClick={() => void remove(ep)} disabled={deletingId === ep.id}>
                   {deletingId === ep.id ? 'Removing…' : 'Delete'}
                 </button>
               </div>
@@ -266,17 +284,41 @@ function EndpointsSection() {
 
       <Dialog
         open={dialog !== null}
-        title={dialog?.mode === 'edit' ? `Edit ${dialog.endpoint.name}` : 'New endpoint'}
-        subtitle="OpenAI-compatible chat server (llama.cpp --server, vLLM) or OpenRouter."
+        title={dialog?.mode === 'edit' ? `Edit ${dialog.endpoint.name}` : dialog?.mode === 'delete' ? `Delete ${dialog.endpoint.name}?` : 'New endpoint'}
+        subtitle={dialog?.mode === 'delete' ? 'Agents that use this endpoint will keep working with their existing hosted models.' : 'OpenAI-compatible chat server (llama.cpp --server, vLLM) or OpenRouter.'}
         onClose={() => { if (!saving) { setDialog(null); setServerError(null) } }}
       >
-        <EndpointForm initial={dialog?.mode === 'edit' ? dialog.endpoint : null} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
+        {dialog?.mode === 'delete' ? (
+          <>
+            {affected(dialog.endpoint).length === 0 ? (
+              <p className="prose">No agent references this endpoint, so deleting it cannot affect anyone.</p>
+            ) : (
+              <>
+                <p className="field__err" style={{ margin: 0, marginBottom: 10 }}>This endpoint is used by {affected(dialog.endpoint).length} agent{affected(dialog.endpoint).length === 1 ? '' : 's'}:</p>
+                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                  {affected(dialog.endpoint).map((a) => <li key={a.id}>{a.name}</li>)}
+                </ul>
+                <p className="field__hint">Nothing else about those agents changes. Deletion cannot be undone.</p>
+              </>
+            )}
+            <div className="dialog__foot">
+              <button type="button" className="btn" onClick={() => setDialog(null)} disabled={deletingId === dialog.endpoint.id}>
+                Cancel
+              </button>
+              <button type="button" className="btn btn--danger" onClick={() => void remove(dialog.endpoint)} disabled={deletingId === dialog.endpoint.id}>
+                {deletingId === dialog.endpoint.id ? 'Removing…' : 'Delete endpoint'}
+              </button>
+            </div>
+          </>
+        ) : (
+          <EndpointForm initial={dialog?.mode === 'edit' ? dialog.endpoint : null} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
+        )}
       </Dialog>
     </section>
-  )
-}
+   )
+ }
 
-export default function Settings() {
+ export default function Settings() {
   const { theme, setTheme } = useTheme()
   const [autoRun, setAutoRun] = useState(true)
   const [notify, setNotify] = useState(true)

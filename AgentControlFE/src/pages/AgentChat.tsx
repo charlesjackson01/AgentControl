@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useParams } from 'react-router-dom'
 import { StatusPill } from '../components/StatusPill'
 import { SettingsDrawer } from '../components/SettingsDrawer'
@@ -6,6 +6,31 @@ import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import type { AgentRun } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
+
+/**
+ * One chat bubble. The speaker header renders only when a name is provided —
+ * 1:1 agent chats pass nothing; multi-agent project chats will pass agent
+ * names later.
+ */
+function Bubble({
+  kind,
+  speaker,
+  label,
+  children,
+}: {
+  kind: 'user' | 'assistant' | 'error'
+  speaker?: string
+  label?: string
+  children: ReactNode
+}) {
+  const kindClass = kind === 'error' ? 'chat__bubble--assistant chat__bubble--error' : `chat__bubble--${kind}`
+  return (
+    <div className={`chat__bubble ${kindClass}`} aria-label={label}>
+      {speaker && <div className="bubble__header">{speaker}</div>}
+      {children}
+    </div>
+  )
+}
 
 /** A turn awaiting server confirmation: optimistic user bubble + typing/error state. */
 type Pending = {
@@ -166,20 +191,17 @@ export default function AgentChat() {
                       <span>{turnTime(run.startedAt)}</span>
                     </div>
                   )}
-                  <div className="chat__bubble chat__bubble--user">
-                    <div className="bubble__header">You</div>
+                  <Bubble kind="user">
                     <div className="bubble__body">{run.input}</div>
-                  </div>
+                  </Bubble>
                   {run.error ? (
-                    <div className="chat__bubble chat__bubble--assistant chat__bubble--error">
-                      <div className="bubble__header">Agent</div>
+                    <Bubble kind="error">
                       <div className="bubble__body">{run.error}</div>
-                    </div>
+                    </Bubble>
                   ) : (
-                    <div className="chat__bubble chat__bubble--assistant">
-                      <div className="bubble__header">Agent</div>
+                    <Bubble kind="assistant">
                       <div className="bubble__body">{run.output || '(no output)'}</div>
-                    </div>
+                    </Bubble>
                   )}
                 </div>
               ))}
@@ -191,42 +213,38 @@ export default function AgentChat() {
                       <span>{turnTime(pendingActive.ts)}</span>
                     </div>
                   )}
-                  <div className="chat__bubble chat__bubble--user">
-                    <div className="bubble__header">You</div>
+                  <Bubble kind="user">
                     <div className="bubble__body">{pendingActive.input}</div>
-                  </div>
+                  </Bubble>
                   {pendingActive.status === 'typing' && (
-                    <div className="chat__bubble chat__bubble--assistant" aria-label="Agent is typing">
+                    <Bubble kind="assistant" label="Agent is typing">
                       <span className="typing" aria-hidden="true">
                         <span className="typing__dot" />
                         <span className="typing__dot" />
                         <span className="typing__dot" />
                       </span>
-                    </div>
+                    </Bubble>
                   )}
                   {pendingActive.status === 'done' && pendingActive.run && (
                     <>
                       {pendingActive.run.error ? (
-                        <div className="chat__bubble chat__bubble--assistant chat__bubble--error">
-                          <div className="bubble__header">Agent</div>
+                        <Bubble kind="error">
                           <div className="bubble__body">{pendingActive.run.error}</div>
-                        </div>
+                        </Bubble>
                       ) : (
-                        <div className="chat__bubble chat__bubble--assistant">
-                          <div className="bubble__header">Agent</div>
+                        <Bubble kind="assistant">
                           <div className="bubble__body">{pendingActive.run.output || '(no output)'}</div>
-                        </div>
+                        </Bubble>
                       )}
                     </>
                   )}
                   {pendingActive.status === 'error' && (
-                    <div className="chat__bubble chat__bubble--assistant chat__bubble--error">
-                      <div className="bubble__header">Agent</div>
+                    <Bubble kind="error">
                       <div className="bubble__body">{pendingActive.error}</div>
                       <button type="button" className="chat__retry" onClick={() => void send(pendingActive.input)}>
                         Retry
                       </button>
-                    </div>
+                    </Bubble>
                   )}
                 </div>
               )}

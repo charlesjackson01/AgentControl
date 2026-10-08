@@ -42,10 +42,11 @@ interface Persisted {
   settings: WorkspaceSettings
 }
 
-/** Agents from older installs may lack `isPrimary` or have a null `endpointId`. */
-type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary'> & {
+/** Agents from older installs may lack `role`, `isPrimary`, or have a null `endpointId`. */
+type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary' | 'role'> & {
   endpointId?: string | null
   isPrimary?: boolean
+  role?: string
   recentRuns?: Partial<AgentRun>[]
 }
 
@@ -98,6 +99,10 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     const { recentRuns, ...rest } = agent
     if (Array.isArray(recentRuns)) {
       for (const r of recentRuns) legacyRuns.push(normalizeRun({ ...r, agentId: r.agentId ?? rest.id }))
+    }
+    if (rest.role === undefined) {
+      rest.role = ''
+      changed = true
     }
     return rest
   })

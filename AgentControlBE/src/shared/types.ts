@@ -90,6 +90,8 @@ export interface Agent {
   endpointId: string
   /** The Team Lead. Exactly one agent is primary; its endpoint is the default. */
   isPrimary: boolean
+  /** Free-text role label, e.g. "Code Reviewer". Empty when unset. */
+  role: string
   skillIds: string[]
   status: AgentStatus
   createdAt: string
@@ -105,6 +107,7 @@ export interface AgentInput {
   endpointId: string
   /** Create: honored only when no primary exists. Update: true transfers the role. */
   isPrimary?: boolean
+  role: string
   skillIds: string[]
 }
 

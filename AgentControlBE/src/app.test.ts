@@ -472,6 +472,36 @@ describe('fresh install', () => {
   })
 })
 
+describe('agent role', () => {
+  const base = {
+    description: '',
+    instructions: '',
+    modelId: 'llama-3-8b',
+    endpointId: 'ep_local_llama',
+    skillIds: [],
+  }
+
+  it('persists role on create', async () => {
+    const res = await inject('POST', '/api/agents', { ...base, name: 'Reviewer', role: 'Code Reviewer' })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as Agent).role).toBe('Code Reviewer')
+  })
+
+  it('updates role on PUT', async () => {
+    const created = await inject('POST', '/api/agents', { ...base, name: 'Reviewer', role: 'Code Reviewer' })
+    const agent = created.json() as Agent
+    const res = await inject('PUT', `/api/agents/${agent.id}`, { ...base, name: agent.name, role: 'Researcher' })
+    expect(res.statusCode).toBe(200)
+    expect((res.json() as Agent).role).toBe('Researcher')
+  })
+
+  it('defaults role to "" when omitted', async () => {
+    const res = await inject('POST', '/api/agents', { ...base, name: 'No Role' })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as Agent).role).toBe('')
+  })
+})
+
 describe('DD-7 store migration', () => {
   it('promotes the oldest agent, backfills endpointId, and persists once', () => {
     const legacyDir = mkdtempSync(join(tmpdir(), 'agentcontrol-legacy-'))

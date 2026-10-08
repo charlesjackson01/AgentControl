@@ -92,6 +92,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     modelId,
     endpointId,
     isPrimary: raw.isPrimary === true,
+    role: typeof raw.role === 'string' ? raw.role.trim() : '',
     skillIds,
   }
 }

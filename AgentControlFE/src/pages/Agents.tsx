@@ -198,6 +198,7 @@ export default function Agents() {
                   <StatusPill status={a.status} />
                 </span>
               </div>
+              {a.role && <p className="tile__role">{a.role}</p>}
               <p className="tile__desc">{a.description || 'No description yet.'}</p>
               <div className="tile__meta">
                 <span>{displayModel(a)}</span>

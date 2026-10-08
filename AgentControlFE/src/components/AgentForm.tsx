@@ -6,11 +6,17 @@ import type { Agent, AgentInput, Endpoint, Skill } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
 
-const EMPTY: AgentInput = { name: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [] }
+const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [] }
+
+/** DD-7 bootstrap: the lead's identity is set up for the user, not asked. */
+const LEAD_INSTRUCTIONS =
+  'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
+const LEAD_SKILL_IDS = ['web-research', 'summarize', 'code-interpreter']
 
 function toInput(agent: Agent): AgentInput {
   return {
     name: agent.name,
+    role: agent.role ?? '',
     description: agent.description,
     instructions: agent.instructions,
     modelId: agent.modelId,
@@ -23,6 +29,7 @@ function toInput(agent: Agent): AgentInput {
 function isDirty(a: AgentInput, b: AgentInput): boolean {
   return (
     a.name.trim() !== b.name.trim() ||
+    a.role.trim() !== b.role.trim() ||
     a.description.trim() !== b.description.trim() ||
     a.instructions.trim() !== b.instructions.trim() ||
     a.modelId.trim() !== b.modelId.trim() ||
@@ -64,7 +71,18 @@ export default function AgentForm({
   onCancel,
 }: FormProps) {
   const navigate = useNavigate()
-  const baseline = initial ? toInput(initial) : { ...EMPTY, endpointId: defaultEndpointId ?? '' }
+  const baseline = initial
+    ? toInput(initial)
+    : isBootstrap
+      ? {
+          ...EMPTY,
+          role: 'Team Lead',
+          instructions: LEAD_INSTRUCTIONS,
+          temperature: 0.7,
+          // Pre-check the placeholder lead skills that exist in this workspace.
+          skillIds: LEAD_SKILL_IDS.filter((id) => skills.some((s) => s.id === id)),
+        }
+      : { ...EMPTY, endpointId: defaultEndpointId ?? '' }
 
   const [draft, setDraft] = useState<AgentInput>(baseline)
   const [errors, setErrors] = useState<Partial<Record<'name' | 'modelId' | 'endpointId' | 'temperature', string>>>({})
@@ -154,6 +172,7 @@ export default function AgentForm({
     try {
       const payload: AgentInput = {
         ...draft,
+        role: draft.role.trim(),
         modelId: effectiveModelId.trim(),
         ...(isBootstrap ? { isPrimary: true } : {}),
       }
@@ -205,6 +224,26 @@ export default function AgentForm({
                 )}
               </div>
 
+              {!isBootstrap && (
+                <div className="field">
+                  <label className="field__label" htmlFor="af-role">
+                    Role
+                  </label>
+                  <input
+                    id="af-role"
+                    className="input"
+                    value={draft.role}
+                    onChange={(e) => set('role', e.target.value)}
+                    placeholder="e.g. Code Reviewer"
+                    aria-describedby="af-role-hint"
+                  />
+                  <p className="field__hint" id="af-role-hint">
+                    Shown under the agent's name on cards and in chat.
+                  </p>
+                </div>
+              )}
+
+              {!isBootstrap && (
               <div className="field">
                 <label className="field__label" htmlFor="af-desc">
                   Description
@@ -218,6 +257,7 @@ export default function AgentForm({
                 />
                 <p className="field__hint">Shown on the agent card and in search results.</p>
               </div>
+              )}
             </div>
 
             <div className="formsection">
@@ -325,6 +365,8 @@ export default function AgentForm({
               )}
             </div>
 
+            {!isBootstrap && (
+              <>
             <div className="formsection">
               <div className="formsection__bar">
                 <div>
@@ -373,6 +415,10 @@ export default function AgentForm({
                   })}
                 </div>
               )}
+
+              <p className="field__hint skillpick__note">
+                Starter skills are placeholders — import and create your own in the Skill Library (coming soon).
+              </p>
             </div>
 
             <div className="formsection">
@@ -417,6 +463,8 @@ export default function AgentForm({
                 )}
               </div>
             </div>
+              </>
+            )}
 
             {submitError && (
               <p className="field__err formpage__error" role="alert">

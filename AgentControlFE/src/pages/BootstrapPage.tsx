@@ -63,8 +63,8 @@ export default function BootstrapPage() {
             <p className="page__eyebrow">Workspace</p>
             <h1 className="detail__name">Set up your Team Lead</h1>
             <p className="page__sub">
-              Every agent runs on an endpoint — there is no hosted fallback. Name the lead agent, point it at a
-              server, and its endpoint becomes the default for everyone else.
+              Name your Team Lead — its role, system prompt, and starter skills are set up for you. Everything is
+              editable later.
             </p>
           </div>
         </div>

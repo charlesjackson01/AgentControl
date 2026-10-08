@@ -128,6 +128,8 @@ export type AgentRunInput = {
 export type Agent = {
   id: string
   name: string
+  /** Free-text role label, e.g. "Code Reviewer". Empty when unset. */
+  role: string
   description: string
   instructions: string
   modelId: string
@@ -149,6 +151,7 @@ export type Agent = {
 /** Everything the create/edit form owns. */
 export type AgentInput = {
   name: string
+  role: string
   description: string
   instructions: string
   modelId: string

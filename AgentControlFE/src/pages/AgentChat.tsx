@@ -115,7 +115,10 @@ export default function AgentChat() {
       <div className="page__inner">
         <header className="chat__header">
           <div className="chat__header__left">
-            <h1 className="chat__header__name">{agent.data?.name ?? ''}</h1>
+            <div className="chat__header__id">
+              <h1 className="chat__header__name">{agent.data?.name ?? ''}</h1>
+              {agent.data?.role && <p className="chat__header__role">{agent.data.role}</p>}
+            </div>
             {agent.data && (
               <span className="chat__header__status">
                 <StatusPill status={agent.data.status} />

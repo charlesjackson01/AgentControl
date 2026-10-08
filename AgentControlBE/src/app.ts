@@ -107,6 +107,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     origin: corsOrigins
       ? corsOrigins.split(',').map((o) => o.trim()).filter(Boolean)
       : true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   })
 
   // Clients (including our own FE) send `Content-Type: application/json` even on

@@ -502,6 +502,47 @@ describe('agent role', () => {
   })
 })
 
+describe('CORS', () => {
+  const origin = 'http://localhost:5173'
+
+  it('allows PUT in the preflight response', async () => {
+    const res = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/agents/some-id',
+      headers: { origin, 'access-control-request-method': 'PUT' },
+    })
+    expect(res.statusCode).toBeLessThan(300)
+    expect(res.headers['access-control-allow-methods']).toContain('PUT')
+  })
+
+  it('sends allow-origin on a PUT request', async () => {
+    const created = await inject('POST', '/api/agents', {
+      name: 'CORS Agent',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
+    const agent = created.json() as Agent
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/agents/${agent.id}`,
+      headers: { origin, 'content-type': 'application/json' },
+      payload: {
+        name: 'CORS Agent v2',
+        description: '',
+        instructions: '',
+        modelId: 'llama-3-8b',
+        endpointId: 'ep_local_llama',
+        skillIds: [],
+      },
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.headers['access-control-allow-origin']).toBe(origin)
+  })
+})
+
 describe('DD-7 store migration', () => {
   it('promotes the oldest agent, backfills endpointId, and persists once', () => {
     const legacyDir = mkdtempSync(join(tmpdir(), 'agentcontrol-legacy-'))

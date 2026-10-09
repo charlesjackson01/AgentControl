@@ -61,12 +61,37 @@ export interface EndpointInput {
 
 export type EndpointPatch = Partial<EndpointInput>
 
+/** A tool a skill declares it can use. Declared only — never executed yet. */
+export interface SkillTool {
+  name: string
+  description: string
+  /** JSON-schema-ish parameter description; defaults to {} when unset. */
+  parameters: object
+}
+
 export interface Skill {
   id: string
   name: string
   description: string
   tag: string
+  /** Full SKILL.md body (frontmatter stripped). Injected into the run prompt. */
+  content: string
+  /** Tools the skill declares. Never sent to the model. */
+  tools: SkillTool[]
+  /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
+  source?: string
 }
+
+export interface SkillInput {
+  name: string
+  description: string
+  tag: string
+  content: string
+  tools?: SkillTool[]
+  source?: string
+}
+
+export type SkillPatch = Partial<SkillInput>
 
 export interface AgentRun {
   id: string

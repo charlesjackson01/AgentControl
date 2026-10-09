@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc && xcopy /I /Y \"src\\db\\seed-skills\" \"dist\\db\\seed-skills\\\" >nul",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

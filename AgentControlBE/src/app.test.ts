@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
-import type { Agent, AgentRun, Endpoint } from './shared/types.js'
+import type { Agent, AgentRun, Endpoint, Skill } from './shared/types.js'
 
 /**
  * Hermetic HTTP tests via fastify.inject() — no sockets, no real network.
@@ -65,7 +65,7 @@ async function makeRunner() {
     instructions: 'Be brief.',
     modelId: 'test-model',
     endpointId: endpoint.id,
-    skillIds: ['summarize'],
+    skillIds: ['summarization'],
   })
   expect(ag.statusCode).toBe(201)
   return { endpoint, agent: ag.json() as Agent }
@@ -115,7 +115,7 @@ describe('agents CRUD', () => {
       instructions: 'i',
       modelId: 'crud-model',
       endpointId: endpoint.id,
-      skillIds: ['summarize'],
+      skillIds: ['summarization'],
     })
     expect(create.statusCode).toBe(201)
     const agent = create.json() as Agent
@@ -136,7 +136,7 @@ describe('agents CRUD', () => {
       instructions: 'i2',
       modelId: 'crud-model',
       endpointId: endpoint.id,
-      skillIds: ['summarize', 'webhook'],
+      skillIds: ['summarization', 'debugging'],
     })
     expect(upd.statusCode).toBe(200)
     expect((upd.json() as Agent).name).toBe('Crud Agent v2')
@@ -215,6 +215,20 @@ describe('POST /api/agents/:id/runs', () => {
     mockChat('x')
     const { agent } = await makeRunner()
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, {})).statusCode).toBe(400)
+  })
+
+  it('injects skill content into the system prompt and never sends tools', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner() // attached: the real "summarization" seed
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect(res.statusCode).toBe(200)
+
+    const req = lastRequest(mock)
+    const system = req.messages?.[0]?.content ?? ''
+    expect(system).toContain('Be brief.')
+    expect(system).toContain('## summarization')
+    expect(system).toContain('condense long-form text')
+    expect(req).not.toHaveProperty('tools')
   })
 })
 
@@ -469,6 +483,123 @@ describe('fresh install', () => {
     expect((await inject('GET', '/api/endpoints')).json()).toHaveLength(2)
     expect(((await inject('GET', '/api/skills')).json() as unknown[]).length).toBeGreaterThan(0)
     expect(((await inject('GET', '/api/models')).json() as unknown[]).length).toBeGreaterThan(0)
+  })
+})
+
+describe('skill seeds', () => {
+  it('ships the six real SKILL.md skills with content and provenance', async () => {
+    const skills = (await inject('GET', '/api/skills')).json() as Skill[]
+    expect(skills.map((s) => s.id)).toEqual([
+      'code-review',
+      'debugging',
+      'deep-research',
+      'multi-agent-orchestration',
+      'summarization',
+      'technical-writing',
+    ])
+    for (const s of skills) {
+      expect(s.content.length).toBeGreaterThan(100)
+      expect(s.content).not.toMatch(/^---/)
+      expect(s.source).toBe('seb1n/awesome-ai-agent-skills')
+      expect(s.tools).toEqual([])
+    }
+  })
+})
+
+describe('skills CRUD', () => {
+  it('round-trips create/get/list/update/delete', async () => {
+    const create = await inject('POST', '/api/skills', {
+      name: 'Frobnicate',
+      description: 'Frobs widgets.',
+      tag: 'Core',
+      content: 'Frob the widget carefully.',
+      tools: [{ name: 'frob', description: 'Frobs one widget' }],
+    })
+    expect(create.statusCode).toBe(201)
+    const skill = create.json() as Skill
+    expect(skill.id).toBeTruthy()
+    expect(skill.content).toBe('Frob the widget carefully.')
+    expect(skill.tools).toEqual([{ name: 'frob', description: 'Frobs one widget', parameters: {} }])
+
+    const got = await inject('GET', `/api/skills/${skill.id}`)
+    expect(got.statusCode).toBe(200)
+    expect((got.json() as Skill).name).toBe('Frobnicate')
+
+    const list = await inject('GET', '/api/skills')
+    expect((list.json() as Skill[]).some((s) => s.id === skill.id)).toBe(true)
+
+    const patch = await inject('PATCH', `/api/skills/${skill.id}`, { tag: 'Advanced', content: 'v2 content' })
+    expect(patch.statusCode).toBe(200)
+    const patched = patch.json() as Skill
+    expect(patched.tag).toBe('Advanced')
+    expect(patched.content).toBe('v2 content')
+    expect(patched.name).toBe('Frobnicate')
+
+    expect((await inject('DELETE', `/api/skills/${skill.id}`)).statusCode).toBe(204)
+    expect((await inject('GET', `/api/skills/${skill.id}`)).statusCode).toBe(404)
+  })
+
+  it('400s when content is missing', async () => {
+    const res = await inject('POST', '/api/skills', { name: 'No content', description: 'd' })
+    expect(res.statusCode).toBe(400)
+    expect((res.json() as { message: string }).message).toContain('content')
+  })
+
+  it('400s when a tool lacks name or description', async () => {
+    const res = await inject('POST', '/api/skills', {
+      name: 'Bad tools',
+      content: 'c',
+      tools: [{ name: 'only-name' }],
+    })
+    expect(res.statusCode).toBe(400)
+  })
+})
+
+describe('POST /api/skills/import', () => {
+  it('parses frontmatter into name/description and strips it from content', async () => {
+    const res = await inject('POST', '/api/skills/import', {
+      markdown: '---\nname: my-skill\ndescription: Does a thing.\nlicense: MIT\nmetadata:\n  author: someone\n---\n\n# Body\n\nStep one.\n',
+    })
+    expect(res.statusCode).toBe(201)
+    const skill = res.json() as Skill
+    expect(skill.id).toBe('my-skill')
+    expect(skill.name).toBe('my-skill')
+    expect(skill.description).toBe('Does a thing.')
+    expect(skill.content).toBe('# Body\n\nStep one.')
+  })
+
+  it('422s when frontmatter is missing', async () => {
+    const res = await inject('POST', '/api/skills/import', { markdown: '# Just a body\n\nNo header.' })
+    expect(res.statusCode).toBe(422)
+  })
+
+  it('422s when frontmatter lacks a description', async () => {
+    const res = await inject('POST', '/api/skills/import', { markdown: '---\nname: x\n---\n\nBody.' })
+    expect(res.statusCode).toBe(422)
+  })
+})
+
+describe('DELETE /api/skills/:id detaches from agents', () => {
+  it('strips the skill id from every agent skillIds', async () => {
+    const created = await inject('POST', '/api/skills', { name: 'Temp', content: 'temp content' })
+    const skillId = (created.json() as Skill).id
+
+    const lead = await inject('POST', '/api/agents', {
+      name: 'Team Lead',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [skillId, 'debugging'],
+    })
+    const leadId = (lead.json() as Agent).id
+
+    const res = await inject('DELETE', `/api/skills/${skillId}`)
+    expect(res.statusCode).toBe(204)
+
+    const got = await inject('GET', `/api/agents/${leadId}`)
+    expect((got.json() as Agent).skillIds).toEqual(['debugging'])
+    expect(store.agents.find((a) => a.id === leadId)?.skillIds).toEqual(['debugging'])
   })
 })
 

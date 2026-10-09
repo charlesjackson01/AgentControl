@@ -1,6 +1,7 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { createStore, type WorkspaceStore } from './store.js'
+import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { chatCompletion, fetchModels, type ChatMessage } from './upstream.js'
 import {
   OPENROUTER_DEFAULT_BASE_URL,
@@ -11,6 +12,8 @@ import {
   type EndpointInput,
   type EndpointKind,
   type Skill,
+  type SkillInput,
+  type SkillTool,
 } from './shared/types.js'
 
 function fail(status: number, message: string): never {
@@ -97,6 +100,48 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
   }
 }
 
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function parseSkillTools(raw: unknown): SkillTool[] | undefined {
+  if (raw === undefined) return undefined
+  if (!Array.isArray(raw)) fail(400, '"tools" must be an array of tool declarations.')
+  return raw.map((entry, i) => {
+    const tool = (entry ?? {}) as Record<string, unknown>
+    const name = typeof tool.name === 'string' ? tool.name.trim() : ''
+    const description = typeof tool.description === 'string' ? tool.description.trim() : ''
+    if (!name || !description) {
+      fail(400, `Each tool needs a "name" and a "description" (tool #${i + 1}).`)
+    }
+    const parameters =
+      typeof tool.parameters === 'object' && tool.parameters !== null ? tool.parameters : {}
+    return { name, description, parameters }
+  })
+}
+
+/** Create: name and content are required; description/tag default to "". */
+function parseSkillInput(body: unknown): SkillInput {
+  const raw = (body ?? {}) as Record<string, unknown>
+  const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+  if (!name) fail(400, 'Give the skill a name.')
+  const content = typeof raw.content === 'string' ? raw.content.trim() : ''
+  if (!content) fail(400, 'Skills need "content" — the instructions injected into the run prompt.')
+  const tools = parseSkillTools(raw.tools)
+  return {
+    name,
+    description: typeof raw.description === 'string' ? raw.description.trim() : '',
+    tag: typeof raw.tag === 'string' ? raw.tag.trim() : '',
+    content,
+    ...(tools ? { tools } : {}),
+    ...(typeof raw.source === 'string' && raw.source.trim() ? { source: raw.source.trim() } : {}),
+  }
+}
+
 export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' })
 
@@ -180,12 +225,16 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const apiKey = store.endpointKeys[endpoint.id]
     const timeoutMs = endpoint.timeoutMs ?? 30_000
 
-    // System prompt = instructions + the content of attached skills.
-    const skillLines = agent.skillIds
+    // System prompt = instructions + the full CONTENT of attached skills.
+    // Declared tools are never sent to the model (no execution yet).
+    const skillBlocks = agent.skillIds
       .map((sid) => store.skills.find((s) => s.id === sid))
       .filter((s): s is Skill => s !== undefined)
-      .map((s) => `- ${s.name}: ${s.description}`)
-    const system = [agent.instructions, skillLines.length > 0 ? `Skills:\n${skillLines.join('\n')}` : '']
+      .map((s) => `## ${s.name}\n${s.content}`)
+    const system = [
+      agent.instructions,
+      skillBlocks.length > 0 ? `Skills:\n\n${skillBlocks.join('\n\n')}` : '',
+    ]
       .filter(Boolean)
       .join('\n\n')
 
@@ -461,6 +510,105 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (live.ok) store.endpointModels[id] = live.models
     store.save()
     return { ok: live.ok, models: live.ok ? live.models : [], latencyMs: live.latencyMs }
+  })
+
+  app.get('/api/skills/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const skill = store.skills.find((s) => s.id === id)
+    if (!skill) fail(404, `No skill with id "${id}"`)
+    return skill
+  })
+
+  app.post('/api/skills', async (request, reply) => {
+    const input = parseSkillInput(request.body)
+    const skill: Skill = {
+      id: uid('skl'),
+      ...input,
+      tools: input.tools ?? [],
+    }
+    store.skills = [...store.skills, skill]
+    store.save()
+    void reply.status(201)
+    return skill
+  })
+
+  // SKILL.md import: YAML frontmatter -> name + description, body -> content.
+  app.post('/api/skills/import', async (request, reply) => {
+    const raw = (request.body ?? {}) as { markdown?: unknown }
+    const markdown = typeof raw.markdown === 'string' ? raw.markdown : ''
+    if (!markdown.trim()) fail(400, 'Provide the SKILL.md text in "markdown".')
+    let parsed: ReturnType<typeof parseSkillMarkdown>
+    try {
+      parsed = parseSkillMarkdown(markdown)
+    } catch (err) {
+      if (err instanceof SkillMarkdownError) fail(422, err.message)
+      throw err
+    }
+    const id = slugify(parsed.name) || uid('skl')
+    if (store.skills.some((s) => s.id === id)) {
+      fail(409, `A skill with id "${id}" already exists.`)
+    }
+    const skill: Skill = {
+      id,
+      name: parsed.name,
+      description: parsed.description,
+      tag: '',
+      content: parsed.content,
+      tools: [],
+    }
+    store.skills = [...store.skills, skill]
+    store.save()
+    void reply.status(201)
+    return skill
+  })
+
+  app.patch('/api/skills/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const index = store.skills.findIndex((s) => s.id === id)
+    if (index === -1) fail(404, `No skill with id "${id}"`)
+    const current = store.skills[index] as Skill
+    const raw = (request.body ?? {}) as Record<string, unknown>
+    const next: Skill = { ...current }
+    if (raw.name !== undefined) {
+      const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+      if (!name) fail(400, 'Skill name cannot be empty.')
+      next.name = name
+    }
+    if (raw.content !== undefined) {
+      const content = typeof raw.content === 'string' ? raw.content.trim() : ''
+      if (!content) fail(400, 'Skill content cannot be empty.')
+      next.content = content
+    }
+    if (raw.description !== undefined) {
+      next.description = typeof raw.description === 'string' ? raw.description.trim() : ''
+    }
+    if (raw.tag !== undefined) {
+      next.tag = typeof raw.tag === 'string' ? raw.tag.trim() : ''
+    }
+    if (raw.source !== undefined) {
+      const source = typeof raw.source === 'string' ? raw.source.trim() : ''
+      if (source) next.source = source
+      else delete next.source
+    }
+    if (raw.tools !== undefined) {
+      const tools = parseSkillTools(raw.tools)
+      if (tools) next.tools = tools
+    }
+    store.skills = store.skills.map((s, i) => (i === index ? next : s))
+    store.save()
+    return next
+  })
+
+  app.delete('/api/skills/:id', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const skill = store.skills.find((s) => s.id === id)
+    if (!skill) fail(404, `No skill with id "${id}"`)
+    // Same-transaction detach: strip the id from every agent before removal.
+    store.detachSkill(id)
+    store.skills = store.skills.filter((s) => s.id !== id)
+    store.save()
+    void reply.status(204)
+    return null
   })
 
   return app

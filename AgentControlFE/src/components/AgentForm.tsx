@@ -11,7 +11,7 @@ const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '
 /** DD-7 bootstrap: the lead's identity is set up for the user, not asked. */
 const LEAD_INSTRUCTIONS =
   'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
-const LEAD_SKILL_IDS = ['web-research', 'summarize', 'code-interpreter']
+const LEAD_SKILL_IDS = ['deep-research', 'summarization', 'multi-agent-orchestration']
 
 function toInput(agent: Agent): AgentInput {
   return {

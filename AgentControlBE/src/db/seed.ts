@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Agent, AgentRun, Endpoint, Model, Project, Skill, WorkspaceSettings } from '../shared/types.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
+import { parseSkillMarkdown } from './skill-md.js'
 
 const daysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString()
 
@@ -15,16 +19,34 @@ export const seedModels: Model[] = [
   { id: 'llama-3-70b-local', name: 'Llama 3 70B (local)', provider: 'Self-hosted', tier: 'fast', contextWindow: 8_192 },
 ]
 
-export const seedSkills: Skill[] = [
-  { id: 'web-research', name: 'Web Research', description: 'Search, fetch, and cite with source ranking.', tag: 'Core' },
-  { id: 'summarize', name: 'Summarize', description: 'Condenses long documents to key points.', tag: 'Core' },
-  { id: 'code-interpreter', name: 'Code Interpreter', description: 'Runs sandboxed snippets and plots results.', tag: 'Sandbox' },
-  { id: 'sql-query', name: 'SQL Query', description: 'Read-only warehouse access with a query guard.', tag: 'Integration' },
-  { id: 'crm-lookup', name: 'CRM Lookup', description: 'Reads contact and deal history.', tag: 'Integration' },
-  { id: 'email-draft', name: 'Email Draft', description: 'Writes replies in the account owner’s voice.', tag: 'Core' },
-  { id: 'calendar', name: 'Calendar', description: 'Reads availability and books time.', tag: 'Integration' },
-  { id: 'webhook', name: 'Webhook', description: 'POSTs structured payloads to a signed endpoint.', tag: 'Integration' },
+/**
+ * Real SKILL.md files (MIT, seb1n/awesome-ai-agent-skills) shipped under
+ * `src/db/seed-skills/` and loaded through the same parser the import
+ * endpoint uses. The frontmatter `name` becomes the skill id.
+ */
+const SEED_SKILL_FILES = [
+  'code-review',
+  'debugging',
+  'deep-research',
+  'multi-agent-orchestration',
+  'summarization',
+  'technical-writing',
 ]
+
+const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')
+
+export const seedSkills: Skill[] = SEED_SKILL_FILES.map((file) => {
+  const parsed = parseSkillMarkdown(readFileSync(join(SEED_SKILLS_DIR, `${file}.md`), 'utf8'))
+  return {
+    id: parsed.name,
+    name: parsed.name,
+    description: parsed.description,
+    tag: 'Core',
+    content: parsed.content,
+    tools: [],
+    source: 'seb1n/awesome-ai-agent-skills',
+  }
+})
 
 export const seedEndpoints: Endpoint[] = [
   {

@@ -28,6 +28,8 @@ export interface WorkspaceStore {
   settings: WorkspaceSettings
   /** Persist to disk; returns false (and logs) when the write fails. */
   save(): boolean
+  /** Strip a skill id from every agent's skillIds (call before removing the skill, then save once). */
+  detachSkill(skillId: string): void
 }
 
 /** Everything written to `store.json`. Key material is deliberately excluded. */
@@ -205,6 +207,13 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           `[store] failed to persist ${path}: ${err instanceof Error ? err.message : String(err)}`,
         )
         return false
+      }
+    },
+    detachSkill(skillId: string) {
+      for (const agent of store.agents) {
+        if (agent.skillIds.includes(skillId)) {
+          agent.skillIds = agent.skillIds.filter((id) => id !== skillId)
+        }
       }
     },
   }

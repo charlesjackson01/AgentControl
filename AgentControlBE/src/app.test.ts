@@ -731,6 +731,39 @@ describe('DD-7 store migration', () => {
   })
 })
 
+describe('seed skill merge', () => {
+  it('appends seed skills missing from an existing store and keeps saved ones', () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-oldskills-'))
+    const oldPath = join(oldDir, 'store.json')
+    writeFileSync(
+      oldPath,
+      JSON.stringify({
+        agents: [],
+        runs: [],
+        projects: [],
+        models: [],
+        endpoints: [],
+        endpointModels: {},
+        settings: { autoRun: true, notify: true, telemetry: false },
+        skills: [{ id: 'web-research', name: 'Web Research', description: 'old placeholder', tag: 'Core' }],
+      }),
+      'utf8',
+    )
+
+    const merged = createStore(oldPath)
+    expect(merged.skills.some((s) => s.id === 'web-research')).toBe(true)
+    expect(merged.skills.some((s) => s.id === 'summarization')).toBe(true)
+    expect(merged.skills.some((s) => s.id === 'multi-agent-orchestration')).toBe(true)
+
+    // The merge is persisted, so a reload sees the upgraded catalog too.
+    const reloaded = JSON.parse(readFileSync(oldPath, 'utf8')) as { skills: { id: string }[] }
+    expect(reloaded.skills.some((s) => s.id === 'deep-research')).toBe(true)
+    expect(reloaded.skills.some((s) => s.id === 'web-research')).toBe(true)
+
+    rmSync(oldDir, { recursive: true, force: true })
+  })
+})
+
 describe('persistence failure', () => {
   it('returns 500 when a successful run cannot be persisted', async () => {
     const blocker = join(dir, 'blocker')

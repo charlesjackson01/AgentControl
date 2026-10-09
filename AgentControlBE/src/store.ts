@@ -142,12 +142,18 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     normalizeRun(r as Partial<AgentRun>),
   )
 
+  // Seed-skill upgrades: keep saved skills but append seed skills whose ids are
+  // missing (e.g. after the placeholder seeds were replaced by real SKILL.md).
+  const savedSkills = raw.skills ?? base.skills
+  const missingSkills = base.skills.filter((s) => !savedSkills.some((saved) => saved.id === s.id))
+  if (missingSkills.length > 0) changed = true
+
   return {
     data: {
       agents: agents as Agent[],
       runs,
       projects: raw.projects ?? base.projects,
-      skills: raw.skills ?? base.skills,
+      skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
       models: raw.models ?? base.models,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,

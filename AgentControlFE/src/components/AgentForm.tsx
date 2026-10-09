@@ -11,6 +11,7 @@ const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '
 /** DD-7 bootstrap: the lead's identity is set up for the user, not asked. */
 const LEAD_INSTRUCTIONS =
   'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
+// The three starter skills the BE seeds in the Skill Library.
 const LEAD_SKILL_IDS = ['deep-research', 'summarization', 'multi-agent-orchestration']
 
 function toInput(agent: Agent): AgentInput {
@@ -79,7 +80,7 @@ export default function AgentForm({
           role: 'Team Lead',
           instructions: LEAD_INSTRUCTIONS,
           temperature: 0.7,
-          // Pre-check the placeholder lead skills that exist in this workspace.
+          // Pre-check the starter skills that exist in this workspace.
           skillIds: LEAD_SKILL_IDS.filter((id) => skills.some((s) => s.id === id)),
         }
       : { ...EMPTY, endpointId: defaultEndpointId ?? '' }
@@ -416,9 +417,6 @@ export default function AgentForm({
                 </div>
               )}
 
-              <p className="field__hint skillpick__note">
-                Starter skills are placeholders — import and create your own in the Skill Library (coming soon).
-              </p>
             </div>
 
             <div className="formsection">

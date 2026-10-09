@@ -969,8 +969,51 @@ ul {
   color: var(--c-text-3);
 }
 
-.skillpick__note {
-  margin-top: 8px;
+/* --- Skill library cards --- */
+
+/* SKILL.md content preview on the card */
+.tile__preview {
+  margin: 8px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--c-text-3);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Monospace editing for SKILL.md content */
+.textarea--mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* External discovery links */
+.link {
+  color: var(--c-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link:hover {
+  color: var(--c-accent-hover);
+}
+
+/* Import dialog: parsed SKILL.md preview */
+.importpreview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-md);
+  background: var(--c-surface-2);
+}
+
+.importpreview .tile__preview {
+  margin-top: 4px;
 }
 
 .toolbar .toolbar__sort {

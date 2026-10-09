@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Model, Skill } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Model, Skill, SkillInput } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -93,6 +93,27 @@ export const api = {
 
   async listSkills(): Promise<Skill[]> {
     return request<Skill[]>('/api/skills')
+  },
+
+  async createSkill(input: SkillInput): Promise<Skill> {
+    return request<Skill>('/api/skills', { method: 'POST', body: JSON.stringify(input) })
+  },
+
+  async updateSkill(id: string, patch: Partial<SkillInput>): Promise<Skill> {
+    return request<Skill>(`/api/skills/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  /** 204; the BE detaches the skill from every agent in the same transaction. */
+  async deleteSkill(id: string): Promise<void> {
+    await request<void>(`/api/skills/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  /** Paste a SKILL.md file; the BE parses frontmatter -> name/description, body -> content. */
+  async importSkill(markdown: string): Promise<Skill> {
+    return request<Skill>('/api/skills/import', { method: 'POST', body: JSON.stringify({ markdown }) })
   },
 
   async createAgent(input: AgentInput): Promise<Agent> {

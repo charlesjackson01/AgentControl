@@ -44,10 +44,22 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
      Synchronous run: 200 with status 'succeeded' | 'failed' ('failed' sets
      `error`; `output` empty). BE proxies the hosted model or the agent's
      endpoint (POST {baseUrl}/v1/chat/completions) server-side.
-   - `GET    /api/agents/:id/runs`      -> AgentRun[] (newest first)
-     Authoritative run history; replaces the legacy `Agent.recentRuns`
-     field, which is removed from the Agent shape.
-   --------------------------------------------------------------------------
+    - `GET    /api/agents/:id/runs`      -> AgentRun[] (newest first)
+      Authoritative run history; replaces the legacy `Agent.recentRuns`
+      field, which is removed from the Agent shape.
+    --------------------------------------------------------------------------
+    Skills (Skill Library):
+    - `GET    /api/skills`               -> Skill[]
+    - `GET    /api/skills/:id`           -> Skill
+    - `POST   /api/skills`               (SkillInput) -> Skill (201)
+    - `PATCH  /api/skills/:id`           (Partial<SkillInput>) -> Skill
+    - `DELETE /api/skills/:id`           -> 204 (detaches from every agent
+      in the same transaction; agents keep working without the skill)
+    - `POST   /api/skills/import`        ({ markdown }) -> Skill (201)
+      YAML frontmatter -> name + description, body -> content; id is the
+      slugified name. 422 when the frontmatter is missing/incomplete,
+      409 when the id already exists.
+    --------------------------------------------------------------------------
    Canonical shapes (BE adopts these; FE does not rename):
    - Agent: { id, name, description (not `desc`), instructions, modelId,
       endpointId (required), skillIds, isPrimary (exactly one — the Team
@@ -86,11 +98,35 @@ export type EndpointModel = {
   name: string
 }
 
+/** A tool a skill declares it can use. Declared only — never executed yet. */
+export type SkillTool = {
+  name: string
+  description: string
+  /** JSON-schema-ish parameter description; defaults to {} when unset. */
+  parameters: object
+}
+
 export type Skill = {
   id: string
   name: string
   description: string
   tag: string
+  /** Full SKILL.md body (frontmatter stripped). Injected into the run prompt. */
+  content: string
+  /** Tools the skill declares. Never sent to the model. */
+  tools: SkillTool[]
+  /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
+  source?: string
+}
+
+/** Body for POST /api/skills; PATCH /api/skills/:id takes a partial of it. */
+export type SkillInput = {
+  name: string
+  description: string
+  tag: string
+  content: string
+  tools?: SkillTool[]
+  source?: string
 }
 
 export type EndpointInput = {

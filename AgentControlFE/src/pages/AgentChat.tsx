@@ -34,17 +34,37 @@ function Bubble({
 
 /**
  * Collapsed run-audit affordance under a persisted assistant turn. Renders only
- * when the BE recorded a system prompt (pre-audit runs omit the field entirely).
+ * when the BE recorded a system prompt or tool calls (pre-audit runs omit both
+ * fields entirely).
  */
 function TurnAudit({ run }: { run: AgentRun }) {
-  if (run.systemPrompt === undefined) return null
+  if (run.systemPrompt === undefined && run.toolCalls === undefined) return null
   const skills = run.skillSnapshot ?? []
-  const kb = (run.systemPrompt.length / 1024).toFixed(1)
+  const tools = run.toolCalls ?? []
+  const summaryParts: string[] = []
+  if (run.systemPrompt !== undefined) {
+    const kb = (run.systemPrompt.length / 1024).toFixed(1)
+    summaryParts.push(`System prompt (${kb} KB · ${skills.length} ${skills.length === 1 ? 'skill' : 'skills'})`)
+  }
+  if (tools.length > 0) {
+    summaryParts.push(`${tools.length} tool ${tools.length === 1 ? 'call' : 'calls'}`)
+  }
   return (
     <details className="turn-audit">
-      <summary>
-        System prompt ({kb} KB · {skills.length} {skills.length === 1 ? 'skill' : 'skills'})
-      </summary>
+      <summary>{summaryParts.join(' · ')}</summary>
+      {tools.length > 0 && (
+        <ul className="turn-audit__tools">
+          {tools.map((t, i) => (
+            <li key={i} className={t.ok ? undefined : 'turn-audit__tool--fail'}>
+              {t.ok ? '✓' : '✗'} {t.name}{' '}
+              <code>
+                {t.arguments.length > 80 ? `${t.arguments.slice(0, 80)}…` : t.arguments}
+              </code>{' '}
+              → {t.resultChars.toLocaleString('en-US')} chars
+            </li>
+          ))}
+        </ul>
+      )}
       {skills.length > 0 && (
         <ul className="turn-audit__skills">
           {skills.map((s) => (
@@ -54,11 +74,12 @@ function TurnAudit({ run }: { run: AgentRun }) {
           ))}
         </ul>
       )}
-      {run.systemPrompt === '' ? (
-        <p className="turn-audit__empty">No system prompt was sent.</p>
-      ) : (
-        <pre className="turn-audit__prompt">{run.systemPrompt}</pre>
-      )}
+      {run.systemPrompt !== undefined &&
+        (run.systemPrompt === '' ? (
+          <p className="turn-audit__empty">No system prompt was sent.</p>
+        ) : (
+          <pre className="turn-audit__prompt">{run.systemPrompt}</pre>
+        ))}
     </details>
   )
 }

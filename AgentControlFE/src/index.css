@@ -2104,6 +2104,31 @@ ul {
   color: var(--c-text-2);
 }
 
+.turn-audit__tools {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-2);
+}
+
+.turn-audit__tools code {
+  color: var(--c-text-3);
+  word-break: break-all;
+}
+
+.turn-audit__tool--fail {
+  color: var(--c-danger);
+}
+
+.turn-audit__tool--fail code {
+  color: var(--c-danger);
+}
+
 .turn-audit__prompt {
   margin: 8px 0 0;
   padding: 10px 12px;

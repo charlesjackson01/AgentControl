@@ -156,6 +156,8 @@ export type AgentRun = {
   systemPrompt?: string
   /** Skills injected into that prompt (content itself is never sent). */
   skillSnapshot?: { id: string; name: string; contentChars: number }[]
+  /** Tool calls executed during the run; absent on pre-tool-execution runs/BEs. */
+  toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
 }
 
 /** Body for POST /api/agents/:id/runs. */

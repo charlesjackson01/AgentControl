@@ -140,10 +140,10 @@ function SkillForm({
                 </div>
               ))}
             </div>
-            <p className="field__hint">Declared only — tool execution is coming soon.</p>
+            <p className="field__hint">Available to agents that attach this skill.</p>
           </>
         ) : (
-          <p className="field__hint">No tools declared. Tool execution is coming soon.</p>
+          <p className="field__hint">No tools declared.</p>
         )}
       </div>
 
@@ -416,8 +416,8 @@ export default function SkillLibrary() {
                         Used by {users.length} agent{users.length === 1 ? '' : 's'}
                       </span>
                       <span>·</span>
-                      <span className="pill" title="Declared only — tool execution is coming soon.">
-                        {s.tools.length} {s.tools.length === 1 ? 'tool' : 'tools'} · execution coming soon
+                      <span className="pill" title="Executed at run time">
+                        {s.tools.length} {s.tools.length === 1 ? 'tool' : 'tools'}
                       </span>
                       {s.source && (
                         <>

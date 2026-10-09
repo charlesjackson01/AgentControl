@@ -1016,6 +1016,46 @@ ul {
   margin-top: 4px;
 }
 
+/* Tag filter chips above the library grid */
+.tagfilter {
+  margin-bottom: 16px;
+}
+
+/* Read-only skill view dialog */
+.skillview__head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.skillview__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skillview__usedby {
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
+
+.skillview__content {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-sm);
+  background: var(--c-surface-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--c-text-2);
+}
+
 .toolbar .toolbar__sort {
   width: auto;
   min-width: 148px;

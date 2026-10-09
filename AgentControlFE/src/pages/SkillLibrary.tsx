@@ -3,7 +3,7 @@ import PageShell from '../components/PageShell'
 import Dialog from '../components/Dialog'
 import ConfirmDialog from '../components/ConfirmDialog'
 import { EmptyState, ErrorState, Skeleton } from '../components/States'
-import { PlusIcon, SkillLibraryIcon } from '../components/icons'
+import { PlusIcon, SearchIcon, SkillLibraryIcon } from '../components/icons'
 import { api } from '../lib/api'
 import type { Skill, SkillInput } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
@@ -164,6 +164,7 @@ function SkillForm({
 
 type DialogState =
   | { mode: 'create' }
+  | { mode: 'view'; skill: Skill }
   | { mode: 'edit'; skill: Skill }
   | { mode: 'delete'; skill: Skill }
   | { mode: 'import' }
@@ -182,6 +183,9 @@ export default function SkillLibrary() {
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
 
+  const [query, setQuery] = useState('')
+  const [activeTags, setActiveTags] = useState<string[]>([])
+
   const usedBy = useMemo(() => {
     const names = new Map<string, string[]>()
     for (const a of agents.data ?? []) {
@@ -193,6 +197,36 @@ export default function SkillLibrary() {
   }, [agents.data])
 
   const preview = useMemo(() => (importText.trim() ? parsePreview(importText) : null), [importText])
+
+  const tags = useMemo(() => {
+    const set = new Set<string>()
+    for (const s of skills.data ?? []) if (s.tag) set.add(s.tag)
+    return [...set].sort((a, b) => a.localeCompare(b))
+  }, [skills.data])
+
+  // Skill has no createdAt in the contract (types.ts), so the list keeps BE order.
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    return (skills.data ?? []).filter((s) => {
+      if (activeTags.length > 0 && !activeTags.includes(s.tag)) return false
+      if (!q) return true
+      return (
+        s.name.toLowerCase().includes(q) ||
+        s.description.toLowerCase().includes(q) ||
+        s.tag.toLowerCase().includes(q)
+      )
+    })
+  }, [skills.data, query, activeTags])
+
+  const toggleTag = (tag: string) =>
+    setActiveTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
+
+  const clearFilters = () => {
+    setQuery('')
+    setActiveTags([])
+  }
+
+  const viewSkill = dialog?.mode === 'view' ? dialog.skill : null
 
   const closeDialog = () => {
     if (saving || deleting || importing) return
@@ -252,6 +286,25 @@ export default function SkillLibrary() {
       subtitle="Reusable capabilities your agents can call. Their content is injected into every agent that references them."
       actions={
         <>
+          <div className="search">
+            <span className="search__icon">
+              <SearchIcon size={15} />
+            </span>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search skills…"
+              aria-label="Search skills"
+            />
+            {query && (
+              <button type="button" className="search__clear" onClick={() => setQuery('')} aria-label="Clear search">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            )}
+          </div>
           <button
             type="button"
             className="btn"
@@ -305,50 +358,80 @@ export default function SkillLibrary() {
           }
         />
       ) : (
-        <div className="grid">
-          {(skills.data ?? []).map((s) => {
-            const users = usedBy.get(s.id) ?? []
-            return (
-              <button
-                type="button"
-                className="tile"
-                key={s.id}
-                onClick={() => {
-                  setServerError(null)
-                  setDialog({ mode: 'edit', skill: s })
-                }}
-              >
-                <div className="tile__top">
-                  <span className="tile__icon">
-                    <SkillLibraryIcon size={16} />
-                  </span>
-                  <span className="tile__name">{s.name}</span>
-                  {s.tag && <span className="pill">{s.tag}</span>}
-                </div>
-                <p className="tile__desc">{s.description || 'No description yet.'}</p>
-                <pre className="tile__preview">
-                  {s.content.slice(0, 160)}
-                  {s.content.length > 160 ? '…' : ''}
-                </pre>
-                <div className="tile__meta">
-                  <span>
-                    Used by {users.length} agent{users.length === 1 ? '' : 's'}
-                  </span>
-                  <span>·</span>
-                  <span className="pill" title="Declared only — tool execution is coming soon.">
-                    {s.tools.length} {s.tools.length === 1 ? 'tool' : 'tools'} · execution coming soon
-                  </span>
-                  {s.source && (
-                    <>
+        <>
+          {tags.length > 0 && (
+            <div className="chips tagfilter" role="group" aria-label="Filter by tag">
+              {tags.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`chip${activeTags.includes(t) ? ' chip--on' : ''}`}
+                  onClick={() => toggleTag(t)}
+                  aria-pressed={activeTags.includes(t)}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          )}
+          {visible.length === 0 ? (
+            <EmptyState
+              icon={<SearchIcon size={20} />}
+              title="No skills match"
+              text="Try a different search, or clear the tag filters to see everything."
+              actions={
+                <button type="button" className="btn" onClick={clearFilters}>
+                  Clear filters
+                </button>
+              }
+            />
+          ) : (
+            <div className="grid">
+              {visible.map((s) => {
+                const users = usedBy.get(s.id) ?? []
+                return (
+                  <button
+                    type="button"
+                    className="tile"
+                    key={s.id}
+                    onClick={() => {
+                      setServerError(null)
+                      setDialog({ mode: 'view', skill: s })
+                    }}
+                  >
+                    <div className="tile__top">
+                      <span className="tile__icon">
+                        <SkillLibraryIcon size={16} />
+                      </span>
+                      <span className="tile__name">{s.name}</span>
+                      {s.tag && <span className="pill">{s.tag}</span>}
+                    </div>
+                    <p className="tile__desc">{s.description || 'No description yet.'}</p>
+                    <pre className="tile__preview">
+                      {s.content.slice(0, 160)}
+                      {s.content.length > 160 ? '…' : ''}
+                    </pre>
+                    <div className="tile__meta">
+                      <span>
+                        Used by {users.length} agent{users.length === 1 ? '' : 's'}
+                      </span>
                       <span>·</span>
-                      <span>from {s.source}</span>
-                    </>
-                  )}
-                </div>
-              </button>
-            )
-          })}
-        </div>
+                      <span className="pill" title="Declared only — tool execution is coming soon.">
+                        {s.tools.length} {s.tools.length === 1 ? 'tool' : 'tools'} · execution coming soon
+                      </span>
+                      {s.source && (
+                        <>
+                          <span>·</span>
+                          <span>from {s.source}</span>
+                        </>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </>
       )}
 
       <Dialog
@@ -377,6 +460,62 @@ export default function SkillLibrary() {
         {dialog?.mode === 'create' && (
           <SkillForm key="create" initial={null} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
         )}
+      </Dialog>
+
+      <Dialog
+        open={viewSkill !== null}
+        title={viewSkill?.name ?? ''}
+        onClose={closeDialog}
+        footer={
+          viewSkill && (
+            <>
+              <button
+                type="button"
+                className="btn btn--danger"
+                onClick={() => {
+                  setServerError(null)
+                  setDialog({ mode: 'delete', skill: viewSkill })
+                }}
+              >
+                Delete…
+              </button>
+              <button type="button" className="btn" onClick={closeDialog}>
+                Close
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => {
+                  setServerError(null)
+                  setDialog({ mode: 'edit', skill: viewSkill })
+                }}
+              >
+                Edit
+              </button>
+            </>
+          )
+        }
+      >
+        {viewSkill &&
+          (() => {
+            const users = usedBy.get(viewSkill.id) ?? []
+            return (
+              <>
+                <div className="skillview__head">
+                  {viewSkill.tag && (
+                    <div className="skillview__top">
+                      <span className="pill">{viewSkill.tag}</span>
+                    </div>
+                  )}
+                  <p className="tile__desc">{viewSkill.description || 'No description yet.'}</p>
+                  <p className="skillview__usedby">
+                    {users.length > 0 ? `Used by: ${users.join(', ')}` : 'Not attached to any agent'}
+                  </p>
+                </div>
+                <pre className="skillview__content">{viewSkill.content}</pre>
+              </>
+            )
+          })()}
       </Dialog>
 
       <ConfirmDialog

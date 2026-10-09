@@ -7,7 +7,7 @@ export default defineConfig({
   server: {
     proxy: {
       // Dev only: /api rides this proxy to the BE, so no CORS is involved.
-      '/api': 'http://localhost:3001',
+      '/api': 'http://localhost:3101',
     },
   },
 })

@@ -5,8 +5,9 @@ import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint,
 
    Every page goes through `api.*`. Bodies are thin fetch wrappers; the frozen
    contract (routes, shapes, 400/404/409 codes) is documented in ./types.ts.
-   BE base: http://127.0.0.1:3001 (override with VITE_API_BASE). The server
-   store is the source of truth — no local persistence or key vault here.
+   Requests use a relative `/api` base, proxied to the BE by Vite in dev and
+   preview (see vite.config.ts). The server store is the source of truth — no
+   local persistence or key vault here.
    ========================================================================== */
 
 export class ApiError extends Error {
@@ -22,13 +23,11 @@ export class ApiError extends Error {
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 
 /**
- * Dev: empty base -> relative `/api` requests ride Vite's dev proxy
- * (see vite.config.ts server.proxy), so no CORS is involved. Prod: follows
- * however the app was opened (localhost, LAN IP, Tailscale IP) so the BE host
- * matches the FE host. VITE_API_BASE overrides in either mode.
+ * Empty base -> relative `/api` requests ride Vite's proxy in dev and preview
+ * (preview inherits server.proxy), so there is a single origin and no CORS.
+ * VITE_API_BASE overrides when the BE lives elsewhere.
  */
-const API_BASE =
-  import.meta.env.VITE_API_BASE ?? (import.meta.env.DEV ? '' : `http://${window.location.hostname}:3001`)
+const API_BASE = import.meta.env.VITE_API_BASE ?? ''
 
 /**
  * Optional bearer token for self-hosted BE endpoints.

@@ -86,6 +86,9 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
     input: r.input ?? '',
     output: r.output ?? '',
     error: r.error ?? null,
+    // Audit fields are optional: pre-audit runs parse without them.
+    ...(r.systemPrompt !== undefined ? { systemPrompt: r.systemPrompt } : {}),
+    ...(r.skillSnapshot !== undefined ? { skillSnapshot: r.skillSnapshot } : {}),
   }
 }
 

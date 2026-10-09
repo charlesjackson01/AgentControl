@@ -103,6 +103,10 @@ export interface AgentRun {
   input: string
   output: string
   error: string | null
+  /** Exact system message sent ('' when none was). Optional: pre-audit runs parse as-is. */
+  systemPrompt?: string
+  /** Per-injected-skill audit (content itself is never stored). */
+  skillSnapshot?: { id: string; name: string; contentChars: number }[]
 }
 
 export interface Agent {

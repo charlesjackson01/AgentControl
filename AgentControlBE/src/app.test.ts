@@ -232,6 +232,95 @@ describe('POST /api/agents/:id/runs', () => {
   })
 })
 
+describe('run audit fields', () => {
+  it('records systemPrompt and skillSnapshot for an injected skill', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner() // attached: the real "summarization" seed
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect(res.statusCode).toBe(200)
+
+    const run = res.json() as AgentRun
+    const skill = store.skills.find((s) => s.id === 'summarization') as Skill
+    expect(run.systemPrompt).toContain('Be brief.')
+    expect(run.systemPrompt).toContain('## summarization')
+    expect(run.systemPrompt).toContain(skill.content.slice(0, 120))
+    expect(run.skillSnapshot).toEqual([{ id: 'summarization', name: 'summarization', contentChars: skill.content.length }])
+
+    // Byte-identical to what went upstream.
+    expect(lastRequest(mock).messages?.[0]?.content).toBe(run.systemPrompt)
+
+    // GET returns the fields whole (no field-picking strips them).
+    const listed = (await inject('GET', `/api/agents/${agent.id}/runs`)).json() as AgentRun[]
+    expect(listed[0]?.systemPrompt).toBe(run.systemPrompt)
+    expect(listed[0]?.skillSnapshot).toEqual(run.skillSnapshot)
+  })
+
+  it('systemPrompt is just the instructions (or "") with no skills', async () => {
+    mockChat('ok')
+    const ep = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible',
+      name: 'Audit endpoint',
+      baseUrl: 'http://127.0.0.1:9',
+      defaultModel: 'm',
+      contextWindow: 4096,
+    })
+    const endpointId = (ep.json() as Endpoint).id
+    const ag = await inject('POST', '/api/agents', {
+      name: 'No skills',
+      description: '',
+      instructions: 'Only instructions.',
+      modelId: 'm',
+      endpointId,
+      skillIds: [],
+    })
+    const run1 = (await inject('POST', `/api/agents/${(ag.json() as Agent).id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run1.systemPrompt).toBe('Only instructions.')
+    expect(run1.skillSnapshot).toEqual([])
+
+    const ag2 = await inject('POST', '/api/agents', {
+      name: 'No skills no instructions',
+      description: '',
+      instructions: '',
+      modelId: 'm',
+      endpointId,
+      skillIds: [],
+    })
+    const run2 = (await inject('POST', `/api/agents/${(ag2.json() as Agent).id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run2.systemPrompt).toBe('')
+    expect(run2.skillSnapshot).toEqual([])
+  })
+
+  it('excludes dangling skill ids from the snapshot and the prompt', async () => {
+    mockChat('ok')
+    const ag = await inject('POST', '/api/agents', {
+      name: 'Dangling',
+      description: '',
+      instructions: 'Base.',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: ['deleted-skill'],
+    })
+    const run = (await inject('POST', `/api/agents/${(ag.json() as Agent).id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run.skillSnapshot).toEqual([])
+    expect(run.systemPrompt).toBe('Base.')
+    expect(run.systemPrompt).not.toContain('##')
+  })
+
+  it('failed runs record the audit fields too', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down')
+      }),
+    )
+    const { agent } = await makeRunner()
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.systemPrompt).toContain('## summarization')
+    expect(run.skillSnapshot).toHaveLength(1)
+  })
+})
+
 describe('GET /api/agents/:id/runs', () => {
   it('returns newest-first and caps at 50', async () => {
     mockChat('ok')

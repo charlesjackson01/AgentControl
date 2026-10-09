@@ -227,10 +227,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
     // System prompt = instructions + the full CONTENT of attached skills.
     // Declared tools are never sent to the model (no execution yet).
-    const skillBlocks = agent.skillIds
+    const injectedSkills = agent.skillIds
       .map((sid) => store.skills.find((s) => s.id === sid))
       .filter((s): s is Skill => s !== undefined)
-      .map((s) => `## ${s.name}\n${s.content}`)
+    const skillBlocks = injectedSkills.map((s) => `## ${s.name}\n${s.content}`)
     const system = [
       agent.instructions,
       skillBlocks.length > 0 ? `Skills:\n\n${skillBlocks.join('\n\n')}` : '',
@@ -272,6 +272,14 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       input,
       output: result.content,
       error: result.ok ? null : (result.error ?? 'Request failed'),
+      // Audit: exactly what went upstream. Failed runs record it too —
+      // injection happens before the upstream call.
+      systemPrompt: system,
+      skillSnapshot: injectedSkills.map((s) => ({
+        id: s.id,
+        name: s.name,
+        contentChars: s.content.length,
+      })),
     }
 
     // Prepend, then trim this agent's history to the newest 50.

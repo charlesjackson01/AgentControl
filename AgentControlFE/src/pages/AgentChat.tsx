@@ -32,6 +32,37 @@ function Bubble({
   )
 }
 
+/**
+ * Collapsed run-audit affordance under a persisted assistant turn. Renders only
+ * when the BE recorded a system prompt (pre-audit runs omit the field entirely).
+ */
+function TurnAudit({ run }: { run: AgentRun }) {
+  if (run.systemPrompt === undefined) return null
+  const skills = run.skillSnapshot ?? []
+  const kb = (run.systemPrompt.length / 1024).toFixed(1)
+  return (
+    <details className="turn-audit">
+      <summary>
+        System prompt ({kb} KB · {skills.length} {skills.length === 1 ? 'skill' : 'skills'})
+      </summary>
+      {skills.length > 0 && (
+        <ul className="turn-audit__skills">
+          {skills.map((s) => (
+            <li key={s.id}>
+              {s.name} — {s.contentChars.toLocaleString('en-US')} chars
+            </li>
+          ))}
+        </ul>
+      )}
+      {run.systemPrompt === '' ? (
+        <p className="turn-audit__empty">No system prompt was sent.</p>
+      ) : (
+        <pre className="turn-audit__prompt">{run.systemPrompt}</pre>
+      )}
+    </details>
+  )
+}
+
 /** A turn awaiting server confirmation: optimistic user bubble + typing/error state. */
 type Pending = {
   input: string
@@ -203,6 +234,7 @@ export default function AgentChat() {
                       <div className="bubble__body">{run.output || '(no output)'}</div>
                     </Bubble>
                   )}
+                  <TurnAudit run={run} />
                 </div>
               ))}
 

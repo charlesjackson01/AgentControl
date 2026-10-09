@@ -152,6 +152,10 @@ export type AgentRun = {
   output: string
   /** Prompt the run received. */
   input: string
+  /** Exact system message the run sent upstream; absent on pre-audit runs/BEs. */
+  systemPrompt?: string
+  /** Skills injected into that prompt (content itself is never sent). */
+  skillSnapshot?: { id: string; name: string; contentChars: number }[]
 }
 
 /** Body for POST /api/agents/:id/runs. */

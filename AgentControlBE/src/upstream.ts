@@ -64,11 +64,29 @@ export async function fetchModels(baseUrl: string, apiKey?: string): Promise<Mod
 
 const CHAT_TIMEOUT_MS = 30_000
 
-export type ChatRole = 'system' | 'user' | 'assistant'
+export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
+
+/** One model-requested tool call. `arguments` stays a raw JSON string (OpenAI contract). */
+export interface ToolCall {
+  id: string
+  name: string
+  arguments: string
+}
 
 export interface ChatMessage {
   role: ChatRole
   content: string
+  /** role: 'tool' messages: the call this result answers. */
+  toolCallId?: string
+  /** assistant messages: tool calls the model requested. */
+  toolCalls?: ToolCall[]
+}
+
+/** What we advertise upstream; serialized as { type: 'function', function: {...} }. */
+export interface ToolDeclaration {
+  name: string
+  description: string
+  parameters: object
 }
 
 export interface ChatResult {
@@ -76,6 +94,8 @@ export interface ChatResult {
   content: string
   latencyMs: number
   error?: string
+  toolCalls?: ToolCall[]
+  finishReason?: string
 }
 
 function extractContent(body: { choices?: unknown }): string | null {
@@ -95,6 +115,38 @@ function extractContent(body: { choices?: unknown }): string | null {
   return null
 }
 
+function parseToolCalls(raw: unknown): ToolCall[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) return undefined
+  const calls: ToolCall[] = []
+  for (const entry of raw) {
+    const record = (entry ?? {}) as { id?: unknown; function?: { name?: unknown; arguments?: unknown } }
+    if (typeof record.function?.name !== 'string') continue
+    calls.push({
+      id: typeof record.id === 'string' ? record.id : `call_${calls.length}`,
+      name: record.function.name,
+      arguments:
+        typeof record.function.arguments === 'string'
+          ? record.function.arguments
+          : JSON.stringify(record.function.arguments ?? {}),
+    })
+  }
+  return calls.length > 0 ? calls : undefined
+}
+
+/** OpenAI wire shape: tool results carry tool_call_id, tool calls nest under function. */
+function serializeMessage(message: ChatMessage): Record<string, unknown> {
+  const out: Record<string, unknown> = { role: message.role, content: message.content }
+  if (message.role === 'tool' && message.toolCallId !== undefined) out.tool_call_id = message.toolCallId
+  if (message.toolCalls && message.toolCalls.length > 0) {
+    out.tool_calls = message.toolCalls.map((call) => ({
+      id: call.id,
+      type: 'function',
+      function: { name: call.name, arguments: call.arguments },
+    }))
+  }
+  return out
+}
+
 /** POST {baseUrl}/v1/chat/completions (or `{baseUrl}/chat/completions`). */
 export async function chatCompletion(
   baseUrl: string,
@@ -103,6 +155,7 @@ export async function chatCompletion(
   messages: ChatMessage[],
   timeoutMs: number = CHAT_TIMEOUT_MS,
   maxTokens?: number,
+  tools?: ToolDeclaration[],
 ): Promise<ChatResult> {
   const started = Date.now()
   const controller = new AbortController()
@@ -110,8 +163,14 @@ export async function chatCompletion(
   try {
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' }
     if (apiKey) headers.authorization = `Bearer ${apiKey}`
-    const payload: Record<string, unknown> = { model, messages }
+    const payload: Record<string, unknown> = { model, messages: messages.map(serializeMessage) }
     if (typeof maxTokens === 'number') payload.max_tokens = maxTokens
+    if (tools && tools.length > 0) {
+      payload.tools = tools.map((tool) => ({
+        type: 'function',
+        function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+      }))
+    }
     const response = await fetch(chatCompletionsUrl(baseUrl), {
       method: 'POST',
       headers,
@@ -128,11 +187,21 @@ export async function chatCompletion(
         error: `Upstream responded ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
       }
     }
-    const content = extractContent((await response.json()) as { choices?: unknown })
+    const body = (await response.json()) as { choices?: unknown }
+    const first = (Array.isArray(body.choices) ? body.choices[0] : undefined) as
+      | { message?: { content?: unknown; tool_calls?: unknown }; finish_reason?: unknown }
+      | undefined
+    const finishReason = typeof first?.finish_reason === 'string' ? first.finish_reason : undefined
+    const toolCalls = parseToolCalls(first?.message?.tool_calls)
+    const content = extractContent(body)
+    // A tool-call turn may legitimately carry no text content.
+    if (toolCalls && toolCalls.length > 0) {
+      return { ok: true, content: content ?? '', latencyMs, toolCalls, finishReason }
+    }
     if (content === null) {
       return { ok: false, content: '', latencyMs, error: 'Upstream response had no message content.' }
     }
-    return { ok: true, content, latencyMs }
+    return { ok: true, content, latencyMs, finishReason }
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError'
     return {

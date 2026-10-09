@@ -42,14 +42,83 @@ function mockChat(content: string) {
 
 type ChatRequest = {
   model?: string
-  messages?: { role: string; content: string }[]
+  messages?: {
+    role: string
+    content: string
+    tool_call_id?: string
+    tool_calls?: { id: string; type?: string; function?: { name?: string; arguments?: string } }[]
+  }[]
   max_tokens?: number
+  tools?: unknown
 }
 
 /** Parse the body of the most recent mocked fetch call. */
 function lastRequest(mock: ReturnType<typeof mockChat>): ChatRequest {
   const call = mock.mock.calls[mock.mock.calls.length - 1]
   return JSON.parse(call?.[1]?.body ?? '{}') as ChatRequest
+}
+
+/** Upstream that answers each call from a scripted sequence. */
+function mockChatSequence(responses: unknown[]) {
+  const mock = vi.fn(async (_url: string, _init?: { body?: string }) => ({
+    ok: true,
+    status: 200,
+    json: async () =>
+      responses.shift() ?? { choices: [{ index: 0, message: { role: 'assistant', content: 'done' } }] },
+  }))
+  vi.stubGlobal('fetch', mock)
+  return mock
+}
+
+function toolCallResponse(name: string, args = '{}', id = 'call_1') {
+  return {
+    choices: [
+      {
+        index: 0,
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id, type: 'function', function: { name, arguments: args } }],
+        },
+      },
+    ],
+  }
+}
+
+function contentResponse(content: string) {
+  return { choices: [{ index: 0, message: { role: 'assistant', content } }] }
+}
+
+/** Agent attached to a skill that declares the given built-in tool names. */
+async function makeToolRunner(toolNames: string[]) {
+  const sk = await inject('POST', '/api/skills', {
+    name: 'Workspace tools',
+    description: 'Workspace introspection.',
+    content: 'Use the workspace tools when helpful.',
+    tools: toolNames.map((name) => ({ name, description: `Built-in ${name}` })),
+  })
+  expect(sk.statusCode).toBe(201)
+  const skillId = (sk.json() as Skill).id
+
+  const ep = await inject('POST', '/api/endpoints', {
+    kind: 'openai-compatible',
+    name: 'Tool endpoint',
+    baseUrl: 'http://127.0.0.1:9',
+    defaultModel: 'test-model',
+    contextWindow: 8192,
+  })
+  const endpointId = (ep.json() as Endpoint).id
+  const ag = await inject('POST', '/api/agents', {
+    name: 'Tool Runner',
+    description: '',
+    instructions: 'Be brief.',
+    modelId: 'test-model',
+    endpointId,
+    skillIds: [skillId],
+  })
+  expect(ag.statusCode).toBe(201)
+  return { agent: ag.json() as Agent, endpointId }
 }
 
 async function makeRunner() {
@@ -471,6 +540,112 @@ describe('context budget before upstream', () => {
     expect(typeof req.max_tokens).toBe('number')
     expect(req.max_tokens).toBe(Math.min(4096, 8192 - estimated))
     expect(req.max_tokens! + estimated).toBeLessThanOrEqual(8192)
+  })
+})
+
+describe('tool execution loop', () => {
+  it('runs the tool loop and feeds the tool result back upstream', async () => {
+    const mock = mockChatSequence([toolCallResponse('list_skills'), contentResponse('all good')])
+    const { agent } = await makeToolRunner(['list_skills'])
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'what skills exist?' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.status).toBe('succeeded')
+    expect(run.output).toBe('all good')
+    expect(mock).toHaveBeenCalledTimes(2)
+
+    // Call 1 advertised the declared tool in OpenAI function format.
+    const first = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}') as ChatRequest
+    expect(first.tools).toEqual([
+      {
+        type: 'function',
+        function: { name: 'list_skills', description: 'Built-in list_skills', parameters: {} },
+      },
+    ])
+
+    // Call 2 carries the assistant tool_calls turn and the matching tool result.
+    const req = lastRequest(mock)
+    const assistantTurn = req.messages?.find((m) => m.role === 'assistant' && m.tool_calls)
+    expect(assistantTurn?.tool_calls?.[0]?.function?.name).toBe('list_skills')
+    const toolMsg = req.messages?.find((m) => m.role === 'tool')
+    expect(toolMsg?.tool_call_id).toBe('call_1')
+    const listed = JSON.parse(toolMsg?.content ?? '[]') as { id: string }[]
+    expect(listed.some((s) => s.id === 'summarization')).toBe(true)
+
+    expect(run.toolCalls).toEqual([
+      { name: 'list_skills', arguments: '{}', resultChars: expect.any(Number), ok: true },
+    ])
+  })
+
+  it('caps the loop at 4 tool iterations and fails with a clear error', async () => {
+    const mock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => toolCallResponse('list_agents'),
+    }))
+    vi.stubGlobal('fetch', mock)
+    const { agent } = await makeToolRunner(['list_agents'])
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.error).toContain('exhausted after 4 iterations')
+    // 4 tool-enabled calls + 1 final tools-off call.
+    expect(mock).toHaveBeenCalledTimes(5)
+    const finalReq = lastRequest(mock)
+    expect(finalReq).not.toHaveProperty('tools')
+    expect(finalReq.messages?.[0]?.content).toContain('Answer the user directly')
+    expect(run.toolCalls).toHaveLength(4)
+  })
+
+  it('feeds an unknown-tool error back so the model recovers', async () => {
+    const mock = mockChatSequence([toolCallResponse('frobnicate'), contentResponse('recovered')])
+    const { agent } = await makeToolRunner(['list_skills'])
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'frobnicate it' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.status).toBe('succeeded')
+    expect(run.output).toBe('recovered')
+
+    const toolMsg = lastRequest(mock).messages?.find((m) => m.role === 'tool')
+    expect(toolMsg?.content).toContain('Unknown tool "frobnicate"')
+    expect(toolMsg?.content).toContain('list_agents, list_skills, read_run_log')
+    expect(run.toolCalls).toEqual([
+      { name: 'frobnicate', arguments: '{}', resultChars: expect.any(Number), ok: false },
+    ])
+  })
+
+  it('omits the tools key when no attached skill declares tools', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner() // summarization seed declares no tools
+    expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
+    expect(lastRequest(mock)).not.toHaveProperty('tools')
+  })
+
+  it('truncates tool results at 4,000 chars with a marker', async () => {
+    const { agent, endpointId } = await makeToolRunner(['list_agents'])
+    for (let i = 0; i < 15; i++) {
+      const created = await inject('POST', '/api/agents', {
+        name: `Bulk ${i} ${'x'.repeat(300)}`,
+        description: '',
+        instructions: '',
+        modelId: 'test-model',
+        endpointId,
+        skillIds: [],
+      })
+      expect(created.statusCode).toBe(201)
+    }
+
+    const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'list them' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.status).toBe('succeeded')
+
+    const toolMsg = lastRequest(mock).messages?.find((m) => m.role === 'tool')
+    expect(toolMsg?.content.endsWith('…[truncated]')).toBe(true)
+    expect(toolMsg?.content).toHaveLength(4012)
+    expect(run.toolCalls?.[0]?.resultChars).toBe(4012)
   })
 })
 

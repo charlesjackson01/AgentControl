@@ -2,7 +2,14 @@ import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { createStore, type WorkspaceStore } from './store.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
-import { chatCompletion, fetchModels, type ChatMessage } from './upstream.js'
+import {
+  chatCompletion,
+  fetchModels,
+  type ChatMessage,
+  type ChatResult,
+  type ToolDeclaration,
+} from './upstream.js'
+import { executeToolCall } from './tools.js'
 import {
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
@@ -226,7 +233,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const timeoutMs = endpoint.timeoutMs ?? 30_000
 
     // System prompt = instructions + the full CONTENT of attached skills.
-    // Declared tools are never sent to the model (no execution yet).
     const injectedSkills = agent.skillIds
       .map((sid) => store.skills.find((s) => s.id === sid))
       .filter((s): s is Skill => s !== undefined)
@@ -237,6 +243,22 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     ]
       .filter(Boolean)
       .join('\n\n')
+
+    // Tool list: union of tools declared by attached skills, deduped by name.
+    // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
+    const toolDeclarations: ToolDeclaration[] = []
+    {
+      const seen = new Set<string>()
+      for (const s of injectedSkills) {
+        for (const t of s.tools ?? []) {
+          if (!seen.has(t.name)) {
+            seen.add(t.name)
+            toolDeclarations.push({ name: t.name, description: t.description, parameters: t.parameters })
+          }
+        }
+      }
+    }
+    const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
 
     // Prior turns: the most recent successful runs become user/assistant pairs
     // (oldest first). Placeholder seed runs with empty text are skipped.
@@ -255,51 +277,117 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // Context budget: a crude chars/4 estimate (no tokenizer dep) checked against
     // the endpoint's context window. Reserve room for the response, then drop the
     // oldest history turns until the prompt fits. The system prompt + this input
-    // can't be trimmed, so if they alone overflow, reject with 413.
+    // can't be trimmed, so if they alone overflow, reject with 413. Tool results
+    // count toward the estimate and the whole check re-runs each loop iteration.
     const RESPONSE_RESERVE = 4096
     const contextWindow = endpoint.contextWindow
+    let toolChars = 0
     const estimate = (turns: AgentRun[]): number => {
-      let chars = system.length + input.length
+      let chars = system.length + input.length + toolChars
       for (const t of turns) chars += t.input.length + t.output.length
       return Math.ceil(chars / 4)
     }
 
-    let turns = history
-    let estimated = estimate(turns)
-    while (estimated + RESPONSE_RESERVE > contextWindow && turns.length > 0) {
-      turns = turns.slice(1)
-      estimated = estimate(turns)
-    }
+    // Tool loop: bounded by MAX_TOOL_ITERATIONS tool-enabled calls, then one
+    // final tools-off call. Unknown tools / bad JSON come back as tool messages
+    // so the model can recover; they never 500 the run.
+    const MAX_TOOL_ITERATIONS = 4
+    const TOOL_RESULT_MAX_CHARS = 4_000
+    const DIRECT_ANSWER_INSTRUCTION =
+      'Tool use is no longer available. Answer the user directly in plain text now.'
 
-    const baseEstimated = estimate([])
-    if (baseEstimated + RESPONSE_RESERVE > contextWindow) {
-      fail(
-        413,
-        `Prompt too large for this endpoint's context window (estimated ${baseEstimated} of ${contextWindow} tokens).`,
-      )
-    }
-    const maxTokens = Math.min(RESPONSE_RESERVE, contextWindow - estimated)
-
-    const messages: ChatMessage[] = []
-    if (system) messages.push({ role: 'system', content: system })
-    for (const turn of turns) {
-      messages.push({ role: 'user', content: turn.input })
-      messages.push({ role: 'assistant', content: turn.output })
-    }
-    messages.push({ role: 'user', content: input })
+    const loopMessages: ChatMessage[] = []
+    const toolAudit: NonNullable<AgentRun['toolCalls']> = []
+    let totalLatency = 0
+    let steps = 0
+    let exhausted = false
+    let result: ChatResult | undefined
 
     const startedAt = new Date().toISOString()
-    const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, timeoutMs, maxTokens)
+    for (let iteration = 0; ; iteration++) {
+      const finalCall = iteration >= MAX_TOOL_ITERATIONS
+      const systemText =
+        finalCall && system ? `${system}\n\n${DIRECT_ANSWER_INSTRUCTION}` : system
+
+      let turns = history
+      let estimated = estimate(turns)
+      while (estimated + RESPONSE_RESERVE > contextWindow && turns.length > 0) {
+        turns = turns.slice(1)
+        estimated = estimate(turns)
+      }
+      const baseEstimated = estimate([])
+      if (baseEstimated + RESPONSE_RESERVE > contextWindow) {
+        fail(
+          413,
+          `Prompt too large for this endpoint's context window (estimated ${baseEstimated} of ${contextWindow} tokens).`,
+        )
+      }
+      const maxTokens = Math.min(RESPONSE_RESERVE, contextWindow - estimated)
+
+      const messages: ChatMessage[] = []
+      if (systemText) messages.push({ role: 'system', content: systemText })
+      for (const turn of turns) {
+        messages.push({ role: 'user', content: turn.input })
+        messages.push({ role: 'assistant', content: turn.output })
+      }
+      messages.push({ role: 'user', content: input })
+      messages.push(...loopMessages)
+
+      result = await chatCompletion(
+        baseUrl,
+        apiKey,
+        agent.modelId,
+        messages,
+        timeoutMs,
+        maxTokens,
+        finalCall ? undefined : sendTools,
+      )
+      steps += 1
+      totalLatency += result.latencyMs
+
+      if (!result.ok) break
+      if (result.toolCalls && result.toolCalls.length > 0) {
+        if (finalCall) {
+          exhausted = true
+          break
+        }
+        loopMessages.push({ role: 'assistant', content: result.content, toolCalls: result.toolCalls })
+        for (const call of result.toolCalls) {
+          const outcome = await executeToolCall(call, { store, agentId: agent.id })
+          const content =
+            outcome.content.length > TOOL_RESULT_MAX_CHARS
+              ? `${outcome.content.slice(0, TOOL_RESULT_MAX_CHARS)}…[truncated]`
+              : outcome.content
+          toolChars += content.length
+          loopMessages.push({ role: 'tool', content, toolCallId: call.id })
+          toolAudit.push({
+            name: call.name,
+            arguments: call.arguments,
+            resultChars: content.length,
+            ok: outcome.ok,
+          })
+        }
+        continue
+      }
+      break
+    }
+
+    const upstream = result as ChatResult
+    const failed = exhausted || !upstream.ok
     const run: AgentRun = {
       id: uid('run'),
       agentId: agent.id,
       startedAt,
-      status: result.ok ? 'succeeded' : 'failed',
-      durationMs: result.latencyMs,
-      steps: 1,
+      status: failed ? 'failed' : 'succeeded',
+      durationMs: totalLatency,
+      steps,
       input,
-      output: result.content,
-      error: result.ok ? null : (result.error ?? 'Request failed'),
+      output: failed ? '' : upstream.content,
+      error: failed
+        ? exhausted
+          ? `Tool-call loop exhausted after ${MAX_TOOL_ITERATIONS} iterations; the model kept requesting tools.`
+          : (upstream.error ?? 'Request failed')
+        : null,
       // Audit: exactly what went upstream. Failed runs record it too —
       // injection happens before the upstream call.
       systemPrompt: system,
@@ -308,6 +396,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         name: s.name,
         contentChars: s.content.length,
       })),
+      ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
     }
 
     // Prepend, then trim this agent's history to the newest 50.

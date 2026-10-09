@@ -61,7 +61,7 @@ export interface EndpointInput {
 
 export type EndpointPatch = Partial<EndpointInput>
 
-/** A tool a skill declares it can use. Declared only — never executed yet. */
+/** A tool a skill declares. Sent upstream and executed against the built-in registry. */
 export interface SkillTool {
   name: string
   description: string
@@ -76,7 +76,7 @@ export interface Skill {
   tag: string
   /** Full SKILL.md body (frontmatter stripped). Injected into the run prompt. */
   content: string
-  /** Tools the skill declares. Never sent to the model. */
+  /** Tools the skill declares. Unioned into the run's tool list when attached. */
   tools: SkillTool[]
   /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
   source?: string
@@ -107,6 +107,8 @@ export interface AgentRun {
   systemPrompt?: string
   /** Per-injected-skill audit (content itself is never stored). */
   skillSnapshot?: { id: string; name: string; contentChars: number }[]
+  /** Per-tool-call audit for runs that used the tool loop. */
+  toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
 }
 
 export interface Agent {

@@ -252,16 +252,44 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       .slice(0, 10)
       .reverse()
 
+    // Context budget: a crude chars/4 estimate (no tokenizer dep) checked against
+    // the endpoint's context window. Reserve room for the response, then drop the
+    // oldest history turns until the prompt fits. The system prompt + this input
+    // can't be trimmed, so if they alone overflow, reject with 413.
+    const RESPONSE_RESERVE = 4096
+    const contextWindow = endpoint.contextWindow
+    const estimate = (turns: AgentRun[]): number => {
+      let chars = system.length + input.length
+      for (const t of turns) chars += t.input.length + t.output.length
+      return Math.ceil(chars / 4)
+    }
+
+    let turns = history
+    let estimated = estimate(turns)
+    while (estimated + RESPONSE_RESERVE > contextWindow && turns.length > 0) {
+      turns = turns.slice(1)
+      estimated = estimate(turns)
+    }
+
+    const baseEstimated = estimate([])
+    if (baseEstimated + RESPONSE_RESERVE > contextWindow) {
+      fail(
+        413,
+        `Prompt too large for this endpoint's context window (estimated ${baseEstimated} of ${contextWindow} tokens).`,
+      )
+    }
+    const maxTokens = Math.min(RESPONSE_RESERVE, contextWindow - estimated)
+
     const messages: ChatMessage[] = []
     if (system) messages.push({ role: 'system', content: system })
-    for (const turn of history) {
+    for (const turn of turns) {
       messages.push({ role: 'user', content: turn.input })
       messages.push({ role: 'assistant', content: turn.output })
     }
     messages.push({ role: 'user', content: input })
 
     const startedAt = new Date().toISOString()
-    const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, timeoutMs)
+    const result = await chatCompletion(baseUrl, apiKey, agent.modelId, messages, timeoutMs, maxTokens)
     const run: AgentRun = {
       id: uid('run'),
       agentId: agent.id,

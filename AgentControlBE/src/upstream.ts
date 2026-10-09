@@ -102,6 +102,7 @@ export async function chatCompletion(
   model: string,
   messages: ChatMessage[],
   timeoutMs: number = CHAT_TIMEOUT_MS,
+  maxTokens?: number,
 ): Promise<ChatResult> {
   const started = Date.now()
   const controller = new AbortController()
@@ -109,10 +110,12 @@ export async function chatCompletion(
   try {
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' }
     if (apiKey) headers.authorization = `Bearer ${apiKey}`
+    const payload: Record<string, unknown> = { model, messages }
+    if (typeof maxTokens === 'number') payload.max_tokens = maxTokens
     const response = await fetch(chatCompletionsUrl(baseUrl), {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model, messages }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     })
     const latencyMs = Date.now() - started

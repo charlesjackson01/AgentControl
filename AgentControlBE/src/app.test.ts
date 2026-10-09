@@ -40,7 +40,11 @@ function mockChat(content: string) {
   return mock
 }
 
-type ChatRequest = { model?: string; messages?: { role: string; content: string }[] }
+type ChatRequest = {
+  model?: string
+  messages?: { role: string; content: string }[]
+  max_tokens?: number
+}
 
 /** Parse the body of the most recent mocked fetch call. */
 function lastRequest(mock: ReturnType<typeof mockChat>): ChatRequest {
@@ -54,7 +58,7 @@ async function makeRunner() {
     name: 'Test endpoint',
     baseUrl: 'http://127.0.0.1:9',
     defaultModel: 'test-model',
-    contextWindow: 4096,
+    contextWindow: 8192,
   })
   expect(ep.statusCode).toBe(201)
   const endpoint = ep.json() as Endpoint
@@ -262,7 +266,7 @@ describe('run audit fields', () => {
       name: 'Audit endpoint',
       baseUrl: 'http://127.0.0.1:9',
       defaultModel: 'm',
-      contextWindow: 4096,
+      contextWindow: 8192,
     })
     const endpointId = (ep.json() as Endpoint).id
     const ag = await inject('POST', '/api/agents', {
@@ -398,6 +402,75 @@ describe('multi-turn context', () => {
     expect(messages).toHaveLength(22) // system + 10 pairs + new input
     expect(messages?.[1]).toEqual({ role: 'user', content: 'm4' })
     expect(messages?.[messages.length - 1]).toEqual({ role: 'user', content: 'm14' })
+  })
+})
+
+describe('context budget before upstream', () => {
+  async function makeBudgetRunner(contextWindow: number) {
+    const ep = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible',
+      name: 'Budget endpoint',
+      baseUrl: 'http://127.0.0.1:9',
+      defaultModel: 'm',
+      contextWindow,
+    })
+    const endpointId = (ep.json() as Endpoint).id
+    const ag = await inject('POST', '/api/agents', {
+      name: 'Budget agent',
+      description: '',
+      instructions: '',
+      modelId: 'm',
+      endpointId,
+      skillIds: [],
+    })
+    return (ag.json() as Agent).id
+  }
+
+  it('drops oldest history turns and keeps the newest', async () => {
+    // 400-char turns => 200 tokens each. Window fits system+input+reserve plus
+    // exactly two turns, so a five-turn history trims down to the two newest.
+    const mock = mockChat('A'.repeat(400))
+    const agentId = await makeBudgetRunner(4600)
+
+    const mk = (i: number): string => `u${i}`.padEnd(400, 'x')
+    const hist: string[] = []
+    for (let i = 1; i <= 5; i++) {
+      const text = mk(i)
+      hist.push(text)
+      expect((await inject('POST', `/api/agents/${agentId}/runs`, { input: text })).statusCode).toBe(200)
+    }
+
+    const res = await inject('POST', `/api/agents/${agentId}/runs`, { input: 'q' })
+    expect(res.statusCode).toBe(200)
+
+    const { messages } = lastRequest(mock)
+    // No system prompt (empty instructions, no skills): 2 kept pairs + new input.
+    expect(messages).toHaveLength(5)
+    expect(messages?.map((m) => m.content)).toEqual([hist[3], 'A'.repeat(400), hist[4], 'A'.repeat(400), 'q'])
+    for (const dropped of hist.slice(0, 3)) {
+      expect(messages?.some((m) => m.content === dropped)).toBe(false)
+    }
+  })
+
+  it('413s when system + input alone overflow the window', async () => {
+    mockChat('ok')
+    const agentId = await makeBudgetRunner(100)
+    const res = await inject('POST', `/api/agents/${agentId}/runs`, { input: 'x'.repeat(1000) })
+    expect(res.statusCode).toBe(413)
+    // ceil(1000 / 4) = 250 estimated of a 100-token window.
+    expect((res.json() as { message: string }).message).toContain('estimated 250 of 100 tokens')
+  })
+
+  it('sends an explicit max_tokens in the upstream payload', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner() // 8192-token window
+    expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
+
+    const req = lastRequest(mock)
+    const estimated = Math.ceil((req.messages ?? []).reduce((n, m) => n + m.content.length, 0) / 4)
+    expect(typeof req.max_tokens).toBe('number')
+    expect(req.max_tokens).toBe(Math.min(4096, 8192 - estimated))
+    expect(req.max_tokens! + estimated).toBeLessThanOrEqual(8192)
   })
 })
 
@@ -862,7 +935,7 @@ describe('persistence failure', () => {
       const ep = await badApp.inject({
         method: 'POST',
         url: '/api/endpoints',
-        payload: { kind: 'openai-compatible', name: 'e', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 100 },
+        payload: { kind: 'openai-compatible', name: 'e', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 8192 },
         headers: { 'content-type': 'application/json' },
       })
       const epId = (ep.json() as Endpoint).id
@@ -910,7 +983,7 @@ describe('per-endpoint timeout', () => {
       name: 'Slow endpoint',
       baseUrl: 'http://127.0.0.1:9',
       defaultModel: 'm',
-      contextWindow: 100,
+      contextWindow: 8192,
       timeoutMs: 50,
     })
     const endpoint = ep.json() as Endpoint

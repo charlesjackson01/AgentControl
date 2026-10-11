@@ -16,7 +16,8 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
    - `GET    /api/endpoints`              -> Endpoint[]
    - `POST   /api/endpoints`              (EndpointInput) -> Endpoint (201)
    - `PATCH  /api/endpoints/:id`          (Partial<EndpointInput>) -> Endpoint
-   - `DELETE /api/endpoints/:id`          -> 204
+   - `DELETE /api/endpoints/:id`          -> { ok, reassignedAgents } (its
+     agents move to the Team Lead's endpoint, the workspace default)
    - `GET    /api/endpoints/:id/models`   -> { models: EndpointModel[] }
    - `POST   /api/endpoints/:id/test`     -> { ok, models: string[], latencyMs }
      Test and inference run server-side only (GET {baseUrl}/v1/models and
@@ -32,8 +33,8 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
       Team Lead's (isPrimary agent's) endpoint is the default for new agents.
    - `POST   /api/agents/:id/runs`      (AgentRunInput { input }) -> AgentRun
      Synchronous run: 200 with status 'succeeded' | 'failed' ('failed' sets
-     `error`; `output` empty). BE proxies the hosted model or the agent's
-     endpoint (POST {baseUrl}/v1/chat/completions) server-side.
+     `error`; `output` empty). BE proxies the agent's endpoint
+     (POST {baseUrl}/v1/chat/completions) server-side.
     - `GET    /api/agents/:id/runs`      -> AgentRun[] (newest first)
       Authoritative run history; replaces the legacy `Agent.recentRuns`
       field, which is removed from the Agent shape.
@@ -59,12 +60,12 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
    --------------------------------------------------------------------------
    Error codes (frozen):
    - 400 validation: bad kind/name/baseUrl/defaultModel/contextWindow/apiKey,
-     empty/unknown agent modelId, empty agent name.
-   - 404 unknown id: agent, endpoint (incl. its /models and /test), agent
-     referencing a missing endpointId.
-   - 409 delete blocked: endpoint still attached (agents move to the Team
-      Lead's endpoint instead — except the Team Lead's own endpoint), or
-      deleting the Team Lead agent itself.
+     empty/unknown agent modelId, empty agent name, missing or unknown agent
+     endpointId.
+   - 404 unknown id: agent, endpoint (incl. its /models and /test).
+   - 409: deleting the Team Lead's own endpoint, deleting the Team Lead agent
+      itself, or creating a second Team Lead (isPrimary). Deleting any other
+      endpoint succeeds and moves its agents to the Team Lead's endpoint.
    ========================================================================== */
 export type Endpoint = {
   id: string
@@ -88,7 +89,7 @@ export type EndpointModel = {
   name: string
 }
 
-/** A tool a skill declares it can use. Declared only — never executed yet. */
+/** A tool a skill declares. Sent upstream and executed against the BE's built-in registry. */
 export type SkillTool = {
   name: string
   description: string
@@ -103,7 +104,7 @@ export type Skill = {
   tag: string
   /** Full SKILL.md body (frontmatter stripped). Injected into the run prompt. */
   content: string
-  /** Tools the skill declares. Never sent to the model. */
+  /** Tools the skill declares. Unioned into the run's tool list when attached. */
   tools: SkillTool[]
   /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
   source?: string

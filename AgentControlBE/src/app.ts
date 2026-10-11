@@ -96,6 +96,15 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     ? raw.skillIds.filter((s): s is string => typeof s === 'string')
     : []
 
+  let temperature: number | undefined
+  if (raw.temperature !== undefined && raw.temperature !== null) {
+    const t = raw.temperature
+    if (typeof t !== 'number' || !Number.isFinite(t) || t < 0 || t > 2) {
+      fail(400, 'Temperature must be a number between 0 and 2.')
+    }
+    temperature = t
+  }
+
   return {
     name,
     description: typeof raw.description === 'string' ? raw.description.trim() : '',
@@ -104,6 +113,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     endpointId,
     isPrimary: raw.isPrimary === true,
     role: typeof raw.role === 'string' ? raw.role.trim() : '',
+    ...(temperature !== undefined ? { temperature } : {}),
     skillIds,
   }
 }
@@ -341,6 +351,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         timeoutMs,
         maxTokens,
         finalCall ? undefined : sendTools,
+        agent.temperature,
       )
       steps += 1
       totalLatency += result.latencyMs

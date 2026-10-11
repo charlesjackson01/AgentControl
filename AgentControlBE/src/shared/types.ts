@@ -112,6 +112,8 @@ export interface Agent {
   isPrimary: boolean
   /** Free-text role label, e.g. "Code Reviewer". Empty when unset. */
   role: string
+  /** Sampling temperature (0–2) sent upstream. Unset → the server's default. */
+  temperature?: number
   skillIds: string[]
   status: AgentStatus
   createdAt: string
@@ -128,6 +130,8 @@ export interface AgentInput {
   /** Create: honored only when no primary exists. Update: true transfers the role. */
   isPrimary?: boolean
   role: string
+  /** 0–2. Omitted keeps the stored value (unset on create). */
+  temperature?: number
   skillIds: string[]
 }
 

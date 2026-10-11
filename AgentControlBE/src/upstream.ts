@@ -156,6 +156,7 @@ export async function chatCompletion(
   timeoutMs: number = CHAT_TIMEOUT_MS,
   maxTokens?: number,
   tools?: ToolDeclaration[],
+  temperature?: number,
 ): Promise<ChatResult> {
   const started = Date.now()
   const controller = new AbortController()
@@ -165,6 +166,7 @@ export async function chatCompletion(
     if (apiKey) headers.authorization = `Bearer ${apiKey}`
     const payload: Record<string, unknown> = { model, messages: messages.map(serializeMessage) }
     if (typeof maxTokens === 'number') payload.max_tokens = maxTokens
+    if (typeof temperature === 'number') payload.temperature = temperature
     if (tools && tools.length > 0) {
       payload.tools = tools.map((tool) => ({
         type: 'function',

@@ -1,10 +1,10 @@
 # AgentControl — Handoff for Claude (Opus)
 
 > **Read this first.** This is a working, tested app. The bar is: keep the
-> existing tests green (`npm test` in `AgentControlBE`, 56 passing), keep
+> existing tests green (`npm test` in `AgentControlBE`, 60 passing), keep
 > typecheck green in both packages, and make additive changes. Prefer small,
 > verified, committed steps over big rewrites. Every claim below is grounded in
-> the current tree at commit `43faced`.
+> the tree as of PR #2 (the table below cites commits and PRs).
 
 ## What this is
 
@@ -27,9 +27,9 @@ AgentControlBE/            # Fastify API
   src/app.ts               # route definitions + all business logic (read this)
   src/upstream.ts          # endpoint chat calls, model discovery, per-endpoint timeout
   src/tools.ts             # built-in workspace tools (server-side execution)
-  src/store.ts             # JSON store load/save
+  src/store.ts             # JSON store load/save + reconcile/migrations
   src/vault.ts             # endpoint apiKey encryption (AES-256-GCM)
-  src/db/seed.ts           # seed skills + reconcile-missing logic
+  src/db/seed.ts           # seed data: skills, endpoints (incl. the placeholder), endpointModels
   src/shared/types.ts      # shared types
   src/app.test.ts          # vitest suite (hermetic, no network)
   data/store.example.json  # committed seed shape of the store
@@ -70,16 +70,20 @@ npm run dev        # Vite, http://localhost:5173
   or delete `store.json` to reseed on next boot.
 - **Default endpoint (testing placeholder):** `http://100.79.242.24:8791`, defined
   once per package as `DEFAULT_ENDPOINT_BASE_URL` (`AgentControlBE/src/shared/types.ts`,
-  `AgentControlFE/src/lib/api.ts`). Fresh installs seed it as the first endpoint
+  `AgentControlFE/src/lib/api.ts`) plus the literal in `data/store.example.json`
+  (a test fails if the example drifts from the seed). Fresh installs seed it as the first endpoint
   ("Test endpoint (placeholder)"), onboarding preselects it for the Team Lead, and
   Settings prefills it for new OpenAI-compatible endpoints. All of it stays
   editable (OpenAI-compatible or OpenRouter); replace it for the final build. An
-  existing `store.json` keeps its own endpoints, so edit those in Settings.
+  existing `store.json` still holding the untouched old seed endpoint
+  (`Local llama.cpp` at `http://127.0.0.1:8080`) is repointed to the placeholder on
+  boot; any endpoint you edited is left alone (change it in Settings).
+  Until a Team Lead exists, `/agents/new` sends you to onboarding.
 
 ### Verify it works (run these before claiming a change is done)
 
 ```bash
-cd AgentControlBE && npm run typecheck && npm test          # expect 56 passing
+cd AgentControlBE && npm run typecheck && npm test          # expect 60 passing
 cd AgentControlFE && npm run typecheck && npm run build     # expect clean
 ```
 
@@ -126,7 +130,7 @@ GET /api/endpoints/:id/models                 POST /api/endpoints/:id/test
 GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 ```
 
-## State as of `43faced` (what's done, with SHAs)
+## State (what's done, with commits / PRs)
 
 | Area | Commit(s) |
 | --- | --- |
@@ -145,6 +149,9 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 | Production preview serving + relative API base | FE `c17e541`, `d7c5849`, `3ae54cf` |
 | **Tool execution loop (BE) + tool-call audit in chat (FE)** | BE `19dc871`, FE `43faced` |
 | **Skill Library search / tag filter / detail view** | FE `0d751a3` |
+| CI workflow + FE dev proxy port fix | PR #1 |
+| FE README cleanup, seeded model catalog removed, role verified | PR #2 |
+| Default endpoint placeholder (`100.79.242.24:8791`) | PR #2 |
 
 ## Former open items (all closed)
 
@@ -184,8 +191,14 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 
 The original open items are closed. Small follow-ups noticed along the way:
 
-- `store.example.json` ships 8 skills while the seed has 14; the seed-skill merge
-  backfills them on first boot, but the example could be regenerated.
+- `store.example.json` ships 8 legacy placeholder skills with no `content`/`tools`
+  (the seed has 6 SKILL.md skills). Copying it yields 14 skills, and the 8 legacy
+  ones crash the Skill Library (`s.content.slice` on undefined). Regenerate the
+  example from the seed and/or backfill those fields in `reconcile`.
+- The BE ignores agent `temperature` (not parsed, stored, or sent upstream),
+  though the FE form sets it (the Team Lead defaults to 0.7).
+- Settings' endpoint Delete button deletes immediately; its confirmation dialog
+  (with the "agents move to the Team Lead's endpoint" notice) is never opened.
 - The BE `build` script uses Windows-only `xcopy`; CI skips it, but it breaks on
   Linux/macOS.
 - FE `npm run serve` binds a machine-specific address (`100.110.232.85`).

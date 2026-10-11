@@ -1,23 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Agent, AgentRun, Endpoint, Model, Project, Skill, WorkspaceSettings } from '../shared/types.js'
+import type { Agent, AgentRun, Endpoint, Project, Skill, WorkspaceSettings } from '../shared/types.js'
 import { OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
 import { parseSkillMarkdown } from './skill-md.js'
 
 const daysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString()
-
-export const seedModels: Model[] = [
-  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'Anthropic', tier: 'deep', contextWindow: 200_000 },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', tier: 'balanced', contextWindow: 200_000 },
-  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', provider: 'Anthropic', tier: 'fast', contextWindow: 200_000 },
-  { id: 'gpt-5.2', name: 'GPT-5.2', provider: 'OpenAI', tier: 'balanced', contextWindow: 400_000 },
-  { id: 'gpt-5.2-mini', name: 'GPT-5.2 mini', provider: 'OpenAI', tier: 'fast', contextWindow: 400_000 },
-  { id: 'o5-pro', name: 'o5-pro', provider: 'OpenAI', tier: 'deep', contextWindow: 200_000 },
-  { id: 'llama-4-405b', name: 'Llama 4 405B', provider: 'Meta', tier: 'balanced', contextWindow: 128_000 },
-  { id: 'mistral-large-3', name: 'Mistral Large 3', provider: 'Mistral', tier: 'balanced', contextWindow: 128_000 },
-  { id: 'llama-3-70b-local', name: 'Llama 3 70B (local)', provider: 'Self-hosted', tier: 'fast', contextWindow: 8_192 },
-]
 
 /**
  * Real SKILL.md files (MIT, seb1n/awesome-ai-agent-skills) shipped under

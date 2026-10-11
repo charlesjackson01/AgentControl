@@ -1,7 +1,7 @@
 # AgentControl — Handoff for Claude (Opus)
 
 > **Read this first.** This is a working, tested app. The bar is: keep the
-> existing tests green (`npm test` in `AgentControlBE`, 54 passing), keep
+> existing tests green (`npm test` in `AgentControlBE`, 56 passing), keep
 > typecheck green in both packages, and make additive changes. Prefer small,
 > verified, committed steps over big rewrites. Every claim below is grounded in
 > the current tree at commit `43faced`.
@@ -72,7 +72,7 @@ npm run dev        # Vite, http://localhost:5173
 ### Verify it works (run these before claiming a change is done)
 
 ```bash
-cd AgentControlBE && npm run typecheck && npm test          # expect 54 passing
+cd AgentControlBE && npm run typecheck && npm test          # expect 56 passing
 cd AgentControlFE && npm run typecheck && npm run build     # expect clean
 ```
 
@@ -110,7 +110,7 @@ Projects, Settings (endpoints + keys), Bootstrap (empty-store onboarding).
 
 ```
 GET /health                                   # open, no auth
-GET /api/models  GET /api/skills  GET /api/projects  GET /api/settings
+GET /api/skills  GET /api/projects  GET /api/settings   # no /api/models: models are per endpoint
 GET/POST /api/agents                          GET/PUT/DELETE /api/agents/:id
 POST/GET /api/agents/:id/runs                 DELETE /api/agents/:id/runs   # clear history
 GET/POST /api/endpoints                       PATCH/DELETE /api/endpoints/:id
@@ -144,12 +144,11 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
    documents "hosted agents" (`HOSTED_BASE_URL` / `HOSTED_API_KEY`), which the BE
    **no longer has** — every agent needs an endpoint now. Fix the README to match
    the code, not the other way around.
-2. **Seeded model catalog.** `store.example.json` still seeds a `models` array
-   (Claude/GPT/Llama/etc.) even though per-endpoint live discovery exists
-   (`endpointModels`). Decide: keep it as a display-only fallback, or remove it
-   so model choices come from `GET /api/endpoints/:id/models`. This was an
-   original goal ("replace seeded catalog with live discovery") and is only
-   *partially* done.
+2. ~~**Seeded model catalog.**~~ Done: removed. Nothing read it (the FE never
+   called `GET /api/models`), its ids matched no endpoint's models, and agent
+   `modelId` was already validated against `endpointModels`. Model choice is
+   `GET /api/endpoints/:id/models` only (live, falling back to the per-endpoint
+   cache). Old stores with `models` load fine and are rewritten without it.
 3. ~~**No CI.**~~ Done: `.github/workflows/ci.yml` runs BE `typecheck`+`test`
    and FE `lint`+`typecheck`+`build` on pushes to `master` and on PRs.
 4. **`role` field surfacing.** BE has it (`317039b`); confirm the FE AgentForm

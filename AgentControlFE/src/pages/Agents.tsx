@@ -91,10 +91,13 @@ export default function Agents() {
       title="Agents"
       subtitle="Every autonomous worker in this workspace, with live status and recent activity."
       actions={
-        <Link to="/agents/new" className="btn btn--primary">
-          <PlusIcon size={16} />
-          New Agent
-        </Link>
+        // Hidden until onboarding has created the Team Lead.
+        agents.data !== undefined && agents.data.length === 0 ? undefined : (
+          <Link to="/agents/new" className="btn btn--primary">
+            <PlusIcon size={16} />
+            New Agent
+          </Link>
+        )
       }
     >
       <div className="toolbar">

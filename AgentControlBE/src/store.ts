@@ -59,6 +59,13 @@ type StoredShape = Partial<Persisted> & {
   agents?: LegacyAgent[]
 }
 
+/**
+ * The seeded default endpoint as older installs wrote it. Its successor (same
+ * id) is the testing placeholder; a store still holding this untouched value
+ * is repointed on load, while an endpoint the user edited is left alone.
+ */
+const LEGACY_SEED_ENDPOINT = { id: 'ep_local_llama', name: 'Local llama.cpp', baseUrl: 'http://127.0.0.1:8080' }
+
 /** Resolved from AGENTCONTROL_DATA_DIR so tests can point at a temp dir. */
 const DATA_DIR = process.env.AGENTCONTROL_DATA_DIR ?? resolve(process.cwd(), 'data')
 const DEFAULT_PATH = resolve(DATA_DIR, 'store.json')
@@ -113,9 +120,19 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     return rest
   })
 
+  const seedDefault = base.endpoints.find((e) => e.id === LEGACY_SEED_ENDPOINT.id)
   const endpoints = (raw.endpoints ?? base.endpoints).map((e) => {
     const legacy = e as Partial<Endpoint> & { id: string }
-    return { ...e, kind: legacy.kind ?? ('openai-compatible' as const), apiKeySet: false }
+    const endpoint = { ...e, kind: legacy.kind ?? ('openai-compatible' as const), apiKeySet: false }
+    const untouchedOldSeed =
+      legacy.id === LEGACY_SEED_ENDPOINT.id &&
+      legacy.name === LEGACY_SEED_ENDPOINT.name &&
+      legacy.baseUrl === LEGACY_SEED_ENDPOINT.baseUrl
+    if (untouchedOldSeed && seedDefault) {
+      changed = true
+      return { ...endpoint, name: seedDefault.name, baseUrl: seedDefault.baseUrl }
+    }
+    return endpoint
   })
 
   // DD-7 migration: exactly one primary (the Team Lead) and every agent must

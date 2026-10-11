@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from '../components/icons'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
@@ -57,6 +57,10 @@ export default function AgentFormPage() {
       </main>
     )
   }
+
+  // No Team Lead yet (empty workspace): the first agent must go through
+  // onboarding, which creates the Team Lead on the default endpoint.
+  if (!isEdit && !primary) return <Navigate to="/agents" replace />
 
   if (isEdit && !agent.data) {
     return (

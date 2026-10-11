@@ -165,7 +165,14 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
 
   // Seed-skill upgrades: keep saved skills but append seed skills whose ids are
   // missing (e.g. after the placeholder seeds were replaced by real SKILL.md).
-  const savedSkills = raw.skills ?? base.skills
+  // Pre-SKILL.md placeholder skills have no `content`/`tools`; the FE assumes
+  // both, so backfill them instead of crashing the Skill Library.
+  const savedSkills = (raw.skills ?? base.skills).map((s) => {
+    const legacy = s as Partial<Skill> & { id: string }
+    if (typeof legacy.content === 'string' && Array.isArray(legacy.tools)) return s
+    changed = true
+    return { ...s, content: legacy.content ?? '', tools: legacy.tools ?? [] }
+  })
   const missingSkills = base.skills.filter((s) => !savedSkills.some((saved) => saved.id === s.id))
   if (missingSkills.length > 0) changed = true
 

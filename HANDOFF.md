@@ -138,12 +138,11 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 | **Tool execution loop (BE) + tool-call audit in chat (FE)** | BE `19dc871`, FE `43faced` |
 | **Skill Library search / tag filter / detail view** | FE `0d751a3` |
 
-## What's genuinely open (verify before touching)
+## Former open items (all closed)
 
-1. **FE README is stale.** `AgentControlFE/README.md` still
-   documents "hosted agents" (`HOSTED_BASE_URL` / `HOSTED_API_KEY`), which the BE
-   **no longer has** — every agent needs an endpoint now. Fix the README to match
-   the code, not the other way around.
+1. ~~**FE README is stale.**~~ Done: hosted-agents section removed, API base /
+   preview / vault notes match the code, and `AgentControlFE/.env.example` is now
+   committed (the root `.gitignore`'s `.env.*` had been hiding it).
 2. ~~**Seeded model catalog.**~~ Done: removed. Nothing read it (the FE never
    called `GET /api/models`), its ids matched no endpoint's models, and agent
    `modelId` was already validated against `endpointModels`. Model choice is
@@ -151,8 +150,10 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
    cache). Old stores with `models` load fine and are rewritten without it.
 3. ~~**No CI.**~~ Done: `.github/workflows/ci.yml` runs BE `typecheck`+`test`
    and FE `lint`+`typecheck`+`build` on pushes to `master` and on PRs.
-4. **`role` field surfacing.** BE has it (`317039b`); confirm the FE AgentForm
-   actually lets you set/read it end-to-end before calling it done.
+4. ~~**`role` field surfacing.**~~ Verified, no code change needed: a Playwright
+   run against a real BE + Vite covered bootstrap (Team Lead gets "Team Lead"),
+   create, card + chat header display, edit (loads saved value, trims), reload,
+   `store.json` on disk, BE restart, and clearing the role.
 
 ## Gotchas / conventions (operational, learned the hard way)
 
@@ -173,7 +174,13 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 
 ## Suggested next task (if you want one)
 
-Close open item #2 (live model discovery as the single source of truth for model
-choice) **or** add the CI workflow (#3). Both are additive, verifiable, and low
-risk. Pick one, run the full verify block above, and commit with a message that
-matches the existing `type(scope): summary` convention.
+The original open items are closed. Small follow-ups noticed along the way:
+
+- `store.example.json` ships 8 skills while the seed has 14; the seed-skill merge
+  backfills them on first boot, but the example could be regenerated.
+- The BE `build` script uses Windows-only `xcopy`; CI skips it, but it breaks on
+  Linux/macOS.
+- FE `npm run serve` binds a machine-specific address (`100.110.232.85`).
+
+Whatever you pick: run the verify block above (CI runs it too), and commit with
+a message that matches the existing `type(scope): summary` convention.

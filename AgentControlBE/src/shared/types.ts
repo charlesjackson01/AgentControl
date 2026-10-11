@@ -145,3 +145,10 @@ export interface WorkspaceSettings {
 }
 
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
+
+/**
+ * Testing placeholder for the default OpenAI-compatible endpoint: the seeded
+ * endpoint points here (and the FE prefills it). Every endpoint stays editable
+ * (OpenAI-compatible or OpenRouter); replace this for the final build.
+ */
+export const DEFAULT_ENDPOINT_BASE_URL = 'http://100.79.242.24:8791'

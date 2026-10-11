@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Agent, AgentRun, Endpoint, Project, Skill, WorkspaceSettings } from '../shared/types.js'
-import { OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
+import { DEFAULT_ENDPOINT_BASE_URL, OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
 import { parseSkillMarkdown } from './skill-md.js'
 
 const daysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString()
@@ -40,8 +40,8 @@ export const seedEndpoints: Endpoint[] = [
   {
     id: 'ep_local_llama',
     kind: 'openai-compatible',
-    name: 'Local llama.cpp',
-    baseUrl: 'http://127.0.0.1:8080',
+    name: 'Test endpoint (placeholder)',
+    baseUrl: DEFAULT_ENDPOINT_BASE_URL,
     defaultModel: 'llama-3-8b',
     contextWindow: 8192,
     apiKeySet: false,

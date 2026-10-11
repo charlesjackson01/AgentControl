@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import type { Agent, AgentRun, Endpoint, Skill } from './shared/types.js'
+import { DEFAULT_ENDPOINT_BASE_URL } from './shared/types.js'
 
 /**
  * Hermetic HTTP tests via fastify.inject() — no sockets, no real network.
@@ -819,6 +820,12 @@ describe('fresh install', () => {
     expect(agents.json()).toEqual([])
     expect((await inject('GET', '/api/endpoints')).json()).toHaveLength(2)
     expect(((await inject('GET', '/api/skills')).json() as unknown[]).length).toBeGreaterThan(0)
+  })
+
+  it('seeds the placeholder default endpoint first (OpenAI-compatible)', async () => {
+    const first = ((await inject('GET', '/api/endpoints')).json() as Endpoint[])[0] as Endpoint
+    expect(first).toMatchObject({ kind: 'openai-compatible', baseUrl: DEFAULT_ENDPOINT_BASE_URL })
+    expect(store.endpointModels[first.id]).toContain(first.defaultModel)
   })
 
   it('has no seeded model catalog; model choice is per endpoint', async () => {

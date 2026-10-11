@@ -23,6 +23,13 @@ export class ApiError extends Error {
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 
 /**
+ * Testing placeholder for the default OpenAI-compatible endpoint (mirrors the
+ * BE seed): prefilled in Settings and preselected for the Team Lead. Every
+ * endpoint stays editable; replace this for the final build.
+ */
+export const DEFAULT_ENDPOINT_BASE_URL = 'http://100.79.242.24:8791'
+
+/**
  * Empty base -> relative `/api` requests ride Vite's proxy in dev and preview
  * (preview inherits server.proxy), so there is a single origin and no CORS.
  * VITE_API_BASE overrides when the BE lives elsewhere.

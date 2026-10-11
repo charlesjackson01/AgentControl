@@ -68,6 +68,13 @@ npm run dev        # Vite, http://localhost:5173
   unauthenticated use.
 - **Fresh start:** copy `AgentControlBE/data/store.example.json` → `store.json`,
   or delete `store.json` to reseed on next boot.
+- **Default endpoint (testing placeholder):** `http://100.79.242.24:8791`, defined
+  once per package as `DEFAULT_ENDPOINT_BASE_URL` (`AgentControlBE/src/shared/types.ts`,
+  `AgentControlFE/src/lib/api.ts`). Fresh installs seed it as the first endpoint
+  ("Test endpoint (placeholder)"), onboarding preselects it for the Team Lead, and
+  Settings prefills it for new OpenAI-compatible endpoints. All of it stays
+  editable (OpenAI-compatible or OpenRouter); replace it for the final build. An
+  existing `store.json` keeps its own endpoints, so edit those in Settings.
 
 ### Verify it works (run these before claiming a change is done)
 
@@ -84,7 +91,8 @@ Key invariants that tests enforce:
 - Every agent **requires** an `endpointId` (400 otherwise).
 - **Exactly one** agent is `isPrimary` (the Team Lead). Creating a second primary
   or deleting the primary → **409**. The primary's endpoint is the workspace
-  default endpoint.
+  default endpoint: preselected (never forced) for every new agent, and where
+  agents move when their endpoint is deleted.
 - **Runs** (`POST /api/agents/:id/runs`) assemble multi-turn context: system
   prompt + the agent's last **10 successful** runs as user/assistant pairs + the
   new input. **Failed runs are excluded.** A context-budget check runs **before**

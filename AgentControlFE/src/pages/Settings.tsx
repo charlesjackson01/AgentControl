@@ -4,7 +4,7 @@ import Dialog from '../components/Dialog'
 import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { useTheme, type Theme } from '../hooks/useTheme'
 import { useAsync } from '../hooks/useAsync'
-import { api, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_LABELS, OPENROUTER_DEFAULT_BASE_URL } from '../lib/api'
+import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_LABELS, OPENROUTER_DEFAULT_BASE_URL } from '../lib/api'
 import type { Endpoint, EndpointInput, EndpointKind } from '../lib/types'
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
@@ -45,7 +45,7 @@ function EndpointForm({
 }) {
   const [name, setName] = useState(initial?.name ?? '')
   const [kind, setKind] = useState<EndpointKind>(initial?.kind ?? 'openai-compatible')
-  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? 'http://127.0.0.1:8080')
+  const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? DEFAULT_ENDPOINT_BASE_URL)
   const [defaultModel, setDefaultModel] = useState(initial?.defaultModel ?? '')
   const [contextWindow, setContextWindow] = useState(String(initial?.contextWindow ?? 8192))
   const [apiKey, setApiKey] = useState('')
@@ -53,10 +53,13 @@ function EndpointForm({
 
   const pickKind = (next: EndpointKind) => {
     setKind(next)
-    // Prefill the OpenRouter default when the URL field still holds the
-    // llama.cpp placeholder (or nothing); never clobber a typed URL.
-    if (next === 'openrouter' && (baseUrl.trim() === '' || baseUrl.trim() === 'http://127.0.0.1:8080')) {
+    // Swap between the two prefills when the URL field still holds the other
+    // kind's default (or nothing); never clobber a typed URL.
+    const url = baseUrl.trim()
+    if (next === 'openrouter' && (url === '' || url === DEFAULT_ENDPOINT_BASE_URL)) {
       setBaseUrl(OPENROUTER_DEFAULT_BASE_URL)
+    } else if (next === 'openai-compatible' && (url === '' || url === OPENROUTER_DEFAULT_BASE_URL)) {
+      setBaseUrl(DEFAULT_ENDPOINT_BASE_URL)
     }
   }
 
@@ -116,7 +119,7 @@ function EndpointForm({
         <label className="field__label" htmlFor="ep-url">
           Base URL
         </label>
-        <input id="ep-url" className={`input${errors.baseUrl ? ' input--invalid' : ''}`} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : 'http://127.0.0.1:8080'} inputMode="url" />
+        <input id="ep-url" className={`input${errors.baseUrl ? ' input--invalid' : ''}`} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : DEFAULT_ENDPOINT_BASE_URL} inputMode="url" />
         {errors.baseUrl ? <p className="field__err">{errors.baseUrl}</p> : <p className="field__hint">Origin only — the backend calls {(baseUrl.trim() || (kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : '…')).replace(/\/+$/, '')}/v1/models server-side.</p>}
       </div>
       <div className="field">

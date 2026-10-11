@@ -1170,6 +1170,41 @@ describe('seed skill merge', () => {
   })
 })
 
+describe('legacy skills', () => {
+  it('backfills content and tools on skills that predate them, and persists it', async () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-legacyskills-'))
+    const oldPath = join(oldDir, 'store.json')
+    writeFileSync(
+      oldPath,
+      JSON.stringify({
+        agents: [],
+        runs: [],
+        projects: [],
+        endpoints: [],
+        endpointModels: {},
+        settings: { autoRun: true, notify: true, telemetry: false },
+        skills: [{ id: 'web-research', name: 'Web Research', description: 'old placeholder', tag: 'Core' }],
+      }),
+      'utf8',
+    )
+
+    const loaded = createStore(oldPath)
+    expect(loaded.skills.find((s) => s.id === 'web-research')).toMatchObject({ content: '', tools: [] })
+    const rewritten = JSON.parse(readFileSync(oldPath, 'utf8')) as { skills: Skill[] }
+    expect(rewritten.skills.find((s) => s.id === 'web-research')).toMatchObject({ content: '', tools: [] })
+
+    // And the API serves it in the shape the FE expects.
+    const legacyApp = buildApp(loaded)
+    const res = await legacyApp.inject({ method: 'GET', url: '/api/skills' })
+    for (const skill of res.json() as Skill[]) {
+      expect(typeof skill.content).toBe('string')
+      expect(Array.isArray(skill.tools)).toBe(true)
+    }
+    await legacyApp.close()
+    rmSync(oldDir, { recursive: true, force: true })
+  })
+})
+
 describe('default endpoint placeholder', () => {
   const oldSeedEndpoint = {
     id: 'ep_local_llama',

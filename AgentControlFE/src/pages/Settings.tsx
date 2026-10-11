@@ -201,6 +201,7 @@ function EndpointsSection() {
     setServerError(null)
     try {
       const result = await api.deleteEndpoint(ep.id)
+      setDialog(null)
       const movedCount = result.reassignedAgents?.length ?? 0
       if (movedCount > 0) {
         setNotice({
@@ -221,6 +222,9 @@ function EndpointsSection() {
   const affected = (ep: Endpoint) => {
     return (agents.data ?? []).filter((a) => a.endpointId === ep.id)
   }
+  // The BE refuses (409) to delete the Team Lead's own endpoint; say so up front.
+  const isTeamLeadEndpoint = (ep: Endpoint) =>
+    (agents.data ?? []).some((a) => a.isPrimary && a.endpointId === ep.id)
 
   return (
     <section className="section">
@@ -273,7 +277,7 @@ function EndpointsSection() {
                 <button type="button" className="btn" onClick={() => { setServerError(null); setDialog({ mode: 'edit', endpoint: ep }) }}>
                   Edit
                 </button>
-                <button type="button" className="btn btn--danger" onClick={() => void remove(ep)} disabled={deletingId === ep.id}>
+                <button type="button" className="btn btn--danger" onClick={() => { setServerError(null); setDialog({ mode: 'delete', endpoint: ep }) }} disabled={deletingId === ep.id}>
                   {deletingId === ep.id ? 'Removing…' : 'Delete'}
                 </button>
               </div>
@@ -290,12 +294,16 @@ function EndpointsSection() {
       <Dialog
         open={dialog !== null}
         title={dialog?.mode === 'edit' ? `Edit ${dialog.endpoint.name}` : dialog?.mode === 'delete' ? `Delete ${dialog.endpoint.name}?` : 'New endpoint'}
-        subtitle={dialog?.mode === 'delete' ? 'Agents using this endpoint move to the Team Lead\u2019s endpoint.' : 'OpenAI-compatible chat server (llama.cpp --server, vLLM) or OpenRouter.'}
-        onClose={() => { if (!saving) { setDialog(null); setServerError(null) } }}
+        subtitle={dialog?.mode === 'delete' ? (isTeamLeadEndpoint(dialog.endpoint) ? 'The Team Lead\u2019s endpoint can\u2019t be deleted.' : 'Agents using this endpoint move to the Team Lead\u2019s endpoint.') : 'OpenAI-compatible chat server (llama.cpp --server, vLLM) or OpenRouter.'}
+        onClose={() => { if (!saving && !deletingId) { setDialog(null); setServerError(null) } }}
       >
         {dialog?.mode === 'delete' ? (
           <>
-            {affected(dialog.endpoint).length === 0 ? (
+            {isTeamLeadEndpoint(dialog.endpoint) ? (
+              <p className="field__err" style={{ margin: 0 }}>
+                This is the Team Lead's endpoint, the default for every agent. Move the Team Lead to another endpoint before deleting it.
+              </p>
+            ) : affected(dialog.endpoint).length === 0 ? (
               <p className="prose">No agent references this endpoint, so deleting it cannot affect anyone.</p>
             ) : (
               <>
@@ -306,11 +314,16 @@ function EndpointsSection() {
                 <p className="field__hint">These agents move to the Team Lead's endpoint and keep working. Deletion cannot be undone.</p>
               </>
             )}
+            {serverError && (
+              <p className="field__err" role="alert" style={{ marginTop: 10 }}>
+                {serverError}
+              </p>
+            )}
             <div className="dialog__foot">
               <button type="button" className="btn" onClick={() => setDialog(null)} disabled={deletingId === dialog.endpoint.id}>
                 Cancel
               </button>
-              <button type="button" className="btn btn--danger" onClick={() => void remove(dialog.endpoint)} disabled={deletingId === dialog.endpoint.id}>
+              <button type="button" className="btn btn--danger" onClick={() => void remove(dialog.endpoint)} disabled={deletingId === dialog.endpoint.id || isTeamLeadEndpoint(dialog.endpoint)}>
                 {deletingId === dialog.endpoint.id ? 'Removing…' : 'Delete endpoint'}
               </button>
             </div>

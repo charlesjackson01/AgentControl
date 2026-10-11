@@ -6,6 +6,8 @@ import type { Agent, AgentInput, Endpoint, Skill } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
 
+const MODELS_LOADING = 'Models are still loading — wait a moment.'
+
 const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [] }
 
 /** DD-7 bootstrap: the lead's identity is set up for the user, not asked. */
@@ -131,6 +133,9 @@ export default function AgentForm({
   // Derive the selectable model during render (covers endpoint switches and
   // edits whose model vanished upstream): prefer the draft when served,
   // else the endpoint default, else the first served model.
+  // "Still loading" describes a moment, not the form: drop it once models arrive.
+  const modelError = errors.modelId === MODELS_LOADING && !epModels.loading ? undefined : errors.modelId
+
   const servedIds = useMemo(() => (epModels.data ?? []).map((m) => m.id), [epModels.data])
   const effectiveModelId =
     selectedEndpoint && servedIds.length > 0 && !servedIds.includes(draft.modelId)
@@ -153,7 +158,7 @@ export default function AgentForm({
     } else if (!selectedEndpoint) {
       next.endpointId = 'This endpoint no longer exists. Pick another one.'
     } else {
-      if (epModels.loading) next.modelId = 'Models are still loading — wait a moment.'
+      if (epModels.loading) next.modelId = MODELS_LOADING
       else if (epModels.error) next.modelId = 'Could not load models for this endpoint. Try again.'
       else if (servedIds.length === 0) next.modelId = 'This endpoint serves no models.'
       else if (!effectiveModelId.trim()) next.modelId = 'Pick a model from this endpoint.'
@@ -315,12 +320,12 @@ export default function AgentForm({
                   </label>
                   <select
                     id="af-model-name"
-                    className={`select${errors.modelId ? ' input--invalid' : ''}`}
+                    className={`select${modelError ? ' input--invalid' : ''}`}
                     value={effectiveModelId}
                     onChange={(e) => set('modelId', e.target.value)}
                     disabled={epModels.loading || Boolean(epModels.error) || (epModels.data ?? []).length === 0}
-                    aria-invalid={Boolean(errors.modelId)}
-                    aria-describedby={errors.modelId ? 'af-model-err' : 'af-model-hint'}
+                    aria-invalid={Boolean(modelError)}
+                    aria-describedby={modelError ? 'af-model-err' : 'af-model-hint'}
                   >
                     {epModels.loading ? (
                       <option value="">Loading models…</option>
@@ -335,9 +340,9 @@ export default function AgentForm({
                       </>
                     )}
                   </select>
-                  {errors.modelId ? (
+                  {modelError ? (
                     <p className="field__err" id="af-model-err">
-                      {errors.modelId}
+                      {modelError}
                       {epModels.error && (
                         <>
                           {' '}

@@ -46,6 +46,9 @@ function EndpointForm({
   const [name, setName] = useState(initial?.name ?? '')
   const [kind, setKind] = useState<EndpointKind>(initial?.kind ?? 'openai-compatible')
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? DEFAULT_ENDPOINT_BASE_URL)
+  // The URL is the user's once typed (or saved, when editing); only an untouched
+  // prefill may be swapped when the kind changes.
+  const [urlTouched, setUrlTouched] = useState(initial !== null)
   const [defaultModel, setDefaultModel] = useState(initial?.defaultModel ?? '')
   const [contextWindow, setContextWindow] = useState(String(initial?.contextWindow ?? 8192))
   const [apiKey, setApiKey] = useState('')
@@ -53,14 +56,10 @@ function EndpointForm({
 
   const pickKind = (next: EndpointKind) => {
     setKind(next)
-    // Swap between the two prefills when the URL field still holds the other
-    // kind's default (or nothing); never clobber a typed URL.
-    const url = baseUrl.trim()
-    if (next === 'openrouter' && (url === '' || url === DEFAULT_ENDPOINT_BASE_URL)) {
-      setBaseUrl(OPENROUTER_DEFAULT_BASE_URL)
-    } else if (next === 'openai-compatible' && (url === '' || url === OPENROUTER_DEFAULT_BASE_URL)) {
-      setBaseUrl(DEFAULT_ENDPOINT_BASE_URL)
-    }
+    // Swap to the new kind's prefill unless the URL is the user's; never clobber
+    // a typed or saved URL (an emptied field gets the prefill again).
+    if (urlTouched && baseUrl.trim() !== '') return
+    setBaseUrl(next === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : DEFAULT_ENDPOINT_BASE_URL)
   }
 
   const submit = (e: FormEvent) => {
@@ -68,7 +67,7 @@ function EndpointForm({
     const next: typeof errors = {}
     if (!name.trim()) next.name = 'Give the endpoint a name.'
     const resolvedUrl = baseUrl.trim() === '' && kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : baseUrl.trim()
-    if (!resolvedUrl) next.baseUrl = 'Set the server origin, e.g. http://127.0.0.1:8080.'
+    if (!resolvedUrl) next.baseUrl = `Set the server origin, e.g. ${DEFAULT_ENDPOINT_BASE_URL}.`
     else {
       try {
         const url = new URL(resolvedUrl.replace(/\/+$/, ''))
@@ -119,7 +118,7 @@ function EndpointForm({
         <label className="field__label" htmlFor="ep-url">
           Base URL
         </label>
-        <input id="ep-url" className={`input${errors.baseUrl ? ' input--invalid' : ''}`} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : DEFAULT_ENDPOINT_BASE_URL} inputMode="url" />
+        <input id="ep-url" className={`input${errors.baseUrl ? ' input--invalid' : ''}`} value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setUrlTouched(true) }} placeholder={kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : DEFAULT_ENDPOINT_BASE_URL} inputMode="url" />
         {errors.baseUrl ? <p className="field__err">{errors.baseUrl}</p> : <p className="field__hint">Origin only — the backend calls {(baseUrl.trim() || (kind === 'openrouter' ? OPENROUTER_DEFAULT_BASE_URL : '…')).replace(/\/+$/, '')}/v1/models server-side.</p>}
       </div>
       <div className="field">

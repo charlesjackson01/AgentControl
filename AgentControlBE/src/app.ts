@@ -11,6 +11,7 @@ import {
 } from './upstream.js'
 import { executeToolCall } from './tools.js'
 import {
+  DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
   type AgentInput,
@@ -53,7 +54,7 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
   try {
     url = new URL(baseUrl)
   } catch {
-    fail(400, 'Base URL must be a valid http(s) URL, e.g. http://127.0.0.1:8080.')
+    fail(400, `Base URL must be a valid http(s) URL, e.g. ${DEFAULT_ENDPOINT_BASE_URL}.`)
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     fail(400, 'Base URL must start with http:// or https://.')

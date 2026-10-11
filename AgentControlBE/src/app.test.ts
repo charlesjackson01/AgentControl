@@ -7,6 +7,7 @@ import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import type { Agent, AgentRun, Endpoint, Skill } from './shared/types.js'
 import { DEFAULT_ENDPOINT_BASE_URL } from './shared/types.js'
+import { seedEndpointModels, seedEndpoints } from './db/seed.js'
 
 /**
  * Hermetic HTTP tests via fastify.inject() — no sockets, no real network.
@@ -1110,6 +1111,85 @@ describe('seed skill merge', () => {
     expect(reloaded.skills.some((s) => s.id === 'web-research')).toBe(true)
 
     rmSync(oldDir, { recursive: true, force: true })
+  })
+})
+
+describe('default endpoint placeholder', () => {
+  const oldSeedEndpoint = {
+    id: 'ep_local_llama',
+    kind: 'openai-compatible',
+    name: 'Local llama.cpp',
+    baseUrl: 'http://127.0.0.1:8080',
+    defaultModel: 'llama-3-8b',
+    contextWindow: 8192,
+    apiKeySet: false,
+    status: 'unknown',
+    lastCheckedAt: null,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }
+  const legacyStore = (endpoint: Record<string, unknown>) =>
+    JSON.stringify({
+      agents: [
+        {
+          id: 'agt_lead',
+          name: 'Lead',
+          role: 'Team Lead',
+          description: '',
+          instructions: '',
+          modelId: 'llama-3-8b',
+          endpointId: 'ep_local_llama',
+          isPrimary: true,
+          skillIds: [],
+          status: 'idle',
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      ],
+      runs: [],
+      projects: [],
+      skills: [],
+      endpoints: [endpoint],
+      endpointModels: { ep_local_llama: ['llama-3-8b'] },
+      settings: { autoRun: true, notify: true, telemetry: false },
+    })
+
+  it('repoints the untouched old seed endpoint and keeps its agents on it', () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-oldseed-'))
+    const oldPath = join(oldDir, 'store.json')
+    writeFileSync(oldPath, legacyStore(oldSeedEndpoint), 'utf8')
+
+    const loaded = createStore(oldPath)
+    const ep = loaded.endpoints.find((e) => e.id === 'ep_local_llama')
+    expect(ep).toMatchObject({ baseUrl: DEFAULT_ENDPOINT_BASE_URL, name: 'Test endpoint (placeholder)' })
+    expect(loaded.agents[0]?.endpointId).toBe('ep_local_llama')
+
+    const rewritten = JSON.parse(readFileSync(oldPath, 'utf8')) as { endpoints: Endpoint[] }
+    expect(rewritten.endpoints[0]?.baseUrl).toBe(DEFAULT_ENDPOINT_BASE_URL)
+
+    rmSync(oldDir, { recursive: true, force: true })
+  })
+
+  it('leaves an old seed endpoint the user edited alone', () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-editedseed-'))
+    const oldPath = join(oldDir, 'store.json')
+    writeFileSync(oldPath, legacyStore({ ...oldSeedEndpoint, baseUrl: 'http://127.0.0.1:9090' }), 'utf8')
+
+    const loaded = createStore(oldPath)
+    expect(loaded.endpoints.find((e) => e.id === 'ep_local_llama')).toMatchObject({
+      baseUrl: 'http://127.0.0.1:9090',
+      name: 'Local llama.cpp',
+    })
+
+    rmSync(oldDir, { recursive: true, force: true })
+  })
+
+  it('keeps store.example.json in sync with the seeded endpoints', () => {
+    const example = JSON.parse(
+      readFileSync(new URL('../data/store.example.json', import.meta.url), 'utf8'),
+    ) as { endpoints: Endpoint[]; endpointModels: Record<string, string[]> }
+    const shape = (eps: Endpoint[]) =>
+      eps.map(({ id, kind, name, baseUrl, defaultModel, contextWindow }) => ({ id, kind, name, baseUrl, defaultModel, contextWindow }))
+    expect(shape(example.endpoints)).toEqual(shape(seedEndpoints))
+    expect(example.endpointModels).toEqual(seedEndpointModels)
   })
 })
 

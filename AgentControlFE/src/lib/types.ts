@@ -2,16 +2,6 @@ export type AgentStatus = 'running' | 'idle' | 'queued' | 'error'
 
 export type RunStatus = 'succeeded' | 'failed' | 'running'
 
-export type ModelTier = 'fast' | 'balanced' | 'deep'
-
-export type Model = {
-  id: string
-  name: string
-  provider: string
-  tier: ModelTier
-  contextWindow: number
-}
-
 export type EndpointStatus = 'unknown' | 'reachable' | 'unreachable'
 
 export type EndpointKind = 'openai-compatible' | 'openrouter'
@@ -20,9 +10,9 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
    FROZEN API CONTRACT (FE is source of truth — BE implements this).
    --------------------------------------------------------------------------
    Endpoints (self-hosted llama.cpp --server / vLLM, or OpenRouter):
-   - `GET    /api/models`                 -> Model[] (static curated list,
-     served by BE from its seed; NOT an OpenRouter passthrough. OpenRouter
-     access is an Endpoint with kind 'openrouter'.)
+   - No global model catalog: model choice is per endpoint via
+     `GET /api/endpoints/:id/models` (live, cached in endpointModels).
+     OpenRouter access is an Endpoint with kind 'openrouter'.
    - `GET    /api/endpoints`              -> Endpoint[]
    - `POST   /api/endpoints`              (EndpointInput) -> Endpoint (201)
    - `PATCH  /api/endpoints/:id`          (Partial<EndpointInput>) -> Endpoint

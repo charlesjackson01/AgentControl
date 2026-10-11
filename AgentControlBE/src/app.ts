@@ -202,7 +202,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   }
 
   app.get('/health', async () => ({ status: 'ok' }))
-  app.get('/api/models', async () => store.models)
   app.get('/api/skills', async () => store.skills)
   app.get('/api/projects', async () => store.projects)
   app.get('/api/settings', async () => store.settings)

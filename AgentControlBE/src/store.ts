@@ -4,14 +4,13 @@ import {
   seedAgents,
   seedEndpointModels,
   seedEndpoints,
-  seedModels,
   seedProjects,
   seedRuns,
   seedSettings,
   seedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
-import type { Agent, AgentRun, Endpoint, Model, Project, Skill, WorkspaceSettings } from './shared/types.js'
+import type { Agent, AgentRun, Endpoint, Project, Skill, WorkspaceSettings } from './shared/types.js'
 
 export interface WorkspaceStore {
   agents: Agent[]
@@ -19,7 +18,6 @@ export interface WorkspaceStore {
   runs: AgentRun[]
   projects: Project[]
   skills: Skill[]
-  models: Model[]
   endpoints: Endpoint[]
   /** endpoint id -> cached model ids (live GET /v1/models refreshes this). */
   endpointModels: Record<string, string[]>
@@ -38,7 +36,6 @@ interface Persisted {
   runs: AgentRun[]
   projects: Project[]
   skills: Skill[]
-  models: Model[]
   endpoints: Endpoint[]
   endpointModels: Record<string, string[]>
   settings: WorkspaceSettings
@@ -52,9 +49,13 @@ type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary' | 'role'> & {
   recentRuns?: Partial<AgentRun>[]
 }
 
-/** Older workspaces stored `endpointKeys` in plaintext and runs on each agent. */
+/**
+ * Older workspaces stored `endpointKeys` in plaintext, runs on each agent, and
+ * a seeded `models` catalog (dropped: model choice comes from endpointModels).
+ */
 type StoredShape = Partial<Persisted> & {
   endpointKeys?: Record<string, string>
+  models?: unknown
   agents?: LegacyAgent[]
 }
 
@@ -68,7 +69,6 @@ function seed(): Persisted {
     runs: structuredClone(seedRuns),
     projects: structuredClone(seedProjects),
     skills: structuredClone(seedSkills),
-    models: structuredClone(seedModels),
     endpoints: structuredClone(seedEndpoints),
     endpointModels: structuredClone(seedEndpointModels),
     settings: structuredClone(seedSettings),
@@ -152,13 +152,15 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
   const missingSkills = base.skills.filter((s) => !savedSkills.some((saved) => saved.id === s.id))
   if (missingSkills.length > 0) changed = true
 
+  // Drop the retired model catalog so the next save rewrites store.json without it.
+  if (raw.models !== undefined) changed = true
+
   return {
     data: {
       agents: agents as Agent[],
       runs,
       projects: raw.projects ?? base.projects,
       skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
-      models: raw.models ?? base.models,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
       settings: raw.settings ?? base.settings,
@@ -204,7 +206,6 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           runs: store.runs,
           projects: store.projects,
           skills: store.skills,
-          models: store.models,
           endpoints: store.endpoints,
           endpointModels: store.endpointModels,
           settings: store.settings,

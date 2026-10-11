@@ -2,20 +2,9 @@ export type AgentStatus = 'running' | 'idle' | 'queued' | 'error'
 
 export type RunStatus = 'succeeded' | 'failed' | 'running'
 
-export type ModelTier = 'fast' | 'balanced' | 'deep'
-
 export type EndpointStatus = 'unknown' | 'reachable' | 'unreachable'
 
 export type EndpointKind = 'openai-compatible' | 'openrouter'
-
-/** Curated hosted-model catalog served from the seed (GET /api/models). */
-export interface Model {
-  id: string
-  name: string
-  provider: string
-  tier: ModelTier
-  contextWindow: number
-}
 
 /**
  * Self-hosted OpenAI-compatible server (llama.cpp `--server`, vLLM) or

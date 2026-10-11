@@ -58,7 +58,8 @@ shape of the store.
 
 ## API surface
 
-- `GET /api/models`, `GET /api/skills`, `GET /api/projects`, `GET /api/settings`
+- `GET /api/skills`, `GET /api/projects`, `GET /api/settings`. There is no global
+  model catalog: model choice comes from `GET /api/endpoints/:id/models`.
 - Agents: `GET/POST /api/agents`, `GET/PUT/DELETE /api/agents/:id`. Every agent
   requires an `endpointId` (400 otherwise); exactly one agent is `isPrimary`
   (the Team Lead) and its endpoint is the workspace default. Creating a second

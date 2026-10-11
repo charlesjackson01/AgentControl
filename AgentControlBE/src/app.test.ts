@@ -819,7 +819,12 @@ describe('fresh install', () => {
     expect(agents.json()).toEqual([])
     expect((await inject('GET', '/api/endpoints')).json()).toHaveLength(2)
     expect(((await inject('GET', '/api/skills')).json() as unknown[]).length).toBeGreaterThan(0)
-    expect(((await inject('GET', '/api/models')).json() as unknown[]).length).toBeGreaterThan(0)
+  })
+
+  it('has no seeded model catalog; model choice is per endpoint', async () => {
+    expect((await inject('GET', '/api/models')).statusCode).toBe(404)
+    expect(store).not.toHaveProperty('models')
+    expect(Object.keys(store.endpointModels).length).toBeGreaterThan(0)
   })
 })
 
@@ -1096,6 +1101,38 @@ describe('seed skill merge', () => {
     const reloaded = JSON.parse(readFileSync(oldPath, 'utf8')) as { skills: { id: string }[] }
     expect(reloaded.skills.some((s) => s.id === 'deep-research')).toBe(true)
     expect(reloaded.skills.some((s) => s.id === 'web-research')).toBe(true)
+
+    rmSync(oldDir, { recursive: true, force: true })
+  })
+})
+
+describe('retired model catalog', () => {
+  it('loads a store that still has `models` and rewrites it without them', () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-oldmodels-'))
+    const oldPath = join(oldDir, 'store.json')
+    const endpointModels = { ep_x: ['m-1', 'm-2'] }
+    writeFileSync(
+      oldPath,
+      JSON.stringify({
+        agents: [],
+        runs: [],
+        projects: [],
+        skills: [],
+        models: [{ id: 'gpt-5.2', name: 'GPT-5.2', provider: 'OpenAI', tier: 'balanced', contextWindow: 400_000 }],
+        endpoints: [],
+        endpointModels,
+        settings: { autoRun: true, notify: true, telemetry: false },
+      }),
+      'utf8',
+    )
+
+    const loaded = createStore(oldPath)
+    expect(loaded).not.toHaveProperty('models')
+    expect(loaded.endpointModels).toEqual(endpointModels)
+
+    const rewritten = JSON.parse(readFileSync(oldPath, 'utf8')) as Record<string, unknown>
+    expect(rewritten).not.toHaveProperty('models')
+    expect(rewritten.endpointModels).toEqual(endpointModels)
 
     rmSync(oldDir, { recursive: true, force: true })
   })

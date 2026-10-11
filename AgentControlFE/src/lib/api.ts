@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Model, Skill, SkillInput } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Skill, SkillInput } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -84,10 +84,6 @@ export const api = {
 
   async getAgent(id: string): Promise<Agent> {
     return request<Agent>(`/api/agents/${encodeURIComponent(id)}`)
-  },
-
-  async listModels(): Promise<Model[]> {
-    return request<Model[]>('/api/models')
   },
 
   async listSkills(): Promise<Skill[]> {
@@ -193,12 +189,6 @@ export const STATUS_LABELS: Record<AgentStatus, string> = {
   idle: 'Idle',
   queued: 'Queued',
   error: 'Error',
-}
-
-export const TIER_LABELS: Record<Model['tier'], string> = {
-  fast: 'Fast',
-  balanced: 'Balanced',
-  deep: 'Deep reasoning',
 }
 
 export const ENDPOINT_STATUS_LABELS: Record<EndpointStatus, string> = {

@@ -5,4 +5,5 @@ AgentControlBE/data/*
 AgentControlBE/start-be.cmd
 .env
 .env.*
+!.env.example
 *.log

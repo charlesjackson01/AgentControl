@@ -51,6 +51,7 @@ type ChatRequest = {
     tool_calls?: { id: string; type?: string; function?: { name?: string; arguments?: string } }[]
   }[]
   max_tokens?: number
+  temperature?: number
   tools?: unknown
 }
 
@@ -980,6 +981,61 @@ describe('agent role', () => {
     const res = await inject('POST', '/api/agents', { ...base, name: 'No Role' })
     expect(res.statusCode).toBe(201)
     expect((res.json() as Agent).role).toBe('')
+  })
+})
+
+describe('agent temperature', () => {
+  const base = {
+    description: '',
+    instructions: '',
+    modelId: 'llama-3-8b',
+    endpointId: 'ep_local_llama',
+    role: '',
+    skillIds: [],
+  }
+
+  it('persists temperature on create and leaves it unset when omitted', async () => {
+    const warm = await inject('POST', '/api/agents', { ...base, name: 'Warm', temperature: 0.7 })
+    expect(warm.statusCode).toBe(201)
+    expect((warm.json() as Agent).temperature).toBe(0.7)
+    const plain = await inject('POST', '/api/agents', { ...base, name: 'Plain' })
+    expect((plain.json() as Agent).temperature).toBeUndefined()
+  })
+
+  it('updates temperature on PUT and keeps it when the PUT omits it', async () => {
+    const agent = (await inject('POST', '/api/agents', { ...base, name: 'T', temperature: 0.2 })).json() as Agent
+    const changed = await inject('PUT', `/api/agents/${agent.id}`, { ...base, name: 'T', temperature: 1.5 })
+    expect((changed.json() as Agent).temperature).toBe(1.5)
+    const kept = await inject('PUT', `/api/agents/${agent.id}`, { ...base, name: 'T renamed' })
+    expect((kept.json() as Agent).temperature).toBe(1.5)
+  })
+
+  it('rejects a temperature outside 0-2 or not a number', async () => {
+    for (const temperature of [-0.1, 2.5, 'hot', true]) {
+      const res = await inject('POST', '/api/agents', { ...base, name: 'Bad', temperature })
+      expect(res.statusCode).toBe(400)
+    }
+  })
+
+  it('sends the agent temperature upstream, and nothing when unset', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner()
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect(lastRequest(mock)).not.toHaveProperty('temperature')
+
+    const put = await inject('PUT', `/api/agents/${agent.id}`, {
+      name: agent.name,
+      description: '',
+      instructions: agent.instructions,
+      modelId: agent.modelId,
+      endpointId: agent.endpointId,
+      role: '',
+      skillIds: agent.skillIds,
+      temperature: 0.3,
+    })
+    expect(put.statusCode).toBe(200)
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'again' })
+    expect(lastRequest(mock).temperature).toBe(0.3)
   })
 })
 

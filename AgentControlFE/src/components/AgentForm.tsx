@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
-import { api, ENDPOINT_KIND_LABELS } from '../lib/api'
+import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
 import type { Agent, AgentInput, Endpoint, Skill } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
@@ -78,6 +78,9 @@ export default function AgentForm({
       ? {
           ...EMPTY,
           role: 'Team Lead',
+          // Preselect the default endpoint (else the first); still changeable. The
+          // Team Lead's endpoint then becomes every later agent's default.
+          endpointId: (endpoints.find((ep) => ep.baseUrl === DEFAULT_ENDPOINT_BASE_URL) ?? endpoints[0])?.id ?? '',
           instructions: LEAD_INSTRUCTIONS,
           temperature: 0.7,
           // Pre-check the starter skills that exist in this workspace.

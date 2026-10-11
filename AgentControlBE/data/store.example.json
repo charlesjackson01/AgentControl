@@ -75,8 +75,8 @@
     {
       "id": "ep_local_llama",
       "kind": "openai-compatible",
-      "name": "Local llama.cpp",
-      "baseUrl": "http://127.0.0.1:8080",
+      "name": "Test endpoint (placeholder)",
+      "baseUrl": "http://100.79.242.24:8791",
       "defaultModel": "llama-3-8b",
       "contextWindow": 8192,
       "apiKeySet": false,

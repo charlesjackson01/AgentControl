@@ -56,8 +56,10 @@ npm install
 npm run dev        # Vite, http://localhost:5173
 ```
 
-- **Dev:** the FE sends `/api/*` to Vite's dev proxy → `http://localhost:3101`
+- **Dev:** the FE sends `/api/*` to Vite's dev proxy → `http://localhost:3001`
   (see `AgentControlFE/vite.config.ts`). Same-origin, so **no CORS** in dev.
+  To target another BE (e.g. a sandbox on `:3101`), set
+  `AGENTCONTROL_API_TARGET=http://localhost:3101` in `AgentControlFE/.env.local`.
 - **Preview/prod:** `npm run serve` builds and serves on `100.110.232.85:4173`;
   the preview inherits the same proxy, so it also stays same-origin.
 - **Auth:** set `AGENTCONTROL_AUTH_TOKEN` on the BE (loopback-only by default;
@@ -138,8 +140,7 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 
 ## What's genuinely open (verify before touching)
 
-1. **FE README is stale.** `AgentControlFE/README.md` says the dev proxy targets
-   `:3001`, but `vite.config.ts` actually proxies to `:3101`. It also still
+1. **FE README is stale.** `AgentControlFE/README.md` still
    documents "hosted agents" (`HOSTED_BASE_URL` / `HOSTED_API_KEY`), which the BE
    **no longer has** — every agent needs an endpoint now. Fix the README to match
    the code, not the other way around.
@@ -149,9 +150,8 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
    so model choices come from `GET /api/endpoints/:id/models`. This was an
    original goal ("replace seeded catalog with live discovery") and is only
    *partially* done.
-3. **No CI.** There is no `.github/workflows` in the tree. A minimal workflow
-   running BE `typecheck`+`test` and FE `typecheck`+`build` on push is a low-risk
-   win.
+3. ~~**No CI.**~~ Done: `.github/workflows/ci.yml` runs BE `typecheck`+`test`
+   and FE `lint`+`typecheck`+`build` on pushes to `master` and on PRs.
 4. **`role` field surfacing.** BE has it (`317039b`); confirm the FE AgentForm
    actually lets you set/read it end-to-end before calling it done.
 

@@ -95,23 +95,36 @@ export const seedEndpointModels: Record<string, string[]> = {
   ep_openrouter: ['anthropic/claude-sonnet-4', 'openai/gpt-5.2', 'meta-llama/llama-3-70b'],
 }
 
-export const seedProjects: Project[] = [
+/**
+ * Seed projects. Folders live under the runtime projects root (resolved by
+ * the store), so this is a function rather than a static list.
+ */
+export const seedProjects = (projectsRoot: string): Project[] => [
   {
     id: 'proj-support-automation',
     name: 'Support Automation',
     desc: 'Triage and reply pipeline for inbound tickets.',
+    folder: join(projectsRoot, 'support-automation'),
+    teamAgentIds: [],
+    createdAt: daysAgo(7),
     updatedAt: daysAgo(0),
   },
   {
     id: 'proj-docs-refresh',
     name: 'Docs Refresh',
     desc: 'Rewrites stale guides from the product changelog.',
+    folder: join(projectsRoot, 'docs-refresh'),
+    teamAgentIds: [],
+    createdAt: daysAgo(7),
     updatedAt: daysAgo(1),
   },
   {
     id: 'proj-data-platform',
     name: 'Data Platform',
     desc: 'Nightly ETL plus schema drift monitoring.',
+    folder: join(projectsRoot, 'data-platform'),
+    teamAgentIds: [],
+    createdAt: daysAgo(7),
     updatedAt: daysAgo(3),
   },
 ]

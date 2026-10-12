@@ -1,6 +1,8 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { createStore, type WorkspaceStore } from './store.js'
+import { existsSync, mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import {
   chatCompletion,
@@ -27,6 +29,8 @@ import {
   type EndpointInput,
   type EndpointKind,
   type PromptBudget,
+  type Project,
+  type ProjectInput,
   type Skill,
   type SkillInput,
   type SkillTool,
@@ -80,6 +84,47 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
   if (input.timeoutMs !== undefined && (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0)) {
     fail(400, 'Timeout must be a positive number of milliseconds.')
   }
+}
+
+/**
+ * Validate a project create/patch body. `existing` is the record being
+ * patched (name-uniqueness skips it) or null on create. Absent fields on a
+ * patch come back as undefined and keep their stored value.
+ */
+function parseProjectInput(store: WorkspaceStore, body: unknown, existing: Project | null): ProjectInput {
+  const raw = (body ?? {}) as Record<string, unknown>
+
+  let name: string | undefined
+  if (raw.name !== undefined) {
+    name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    if (!name) fail(400, 'Give the project a name.')
+    if (name.length > 80) fail(400, 'Project name must be 80 characters or fewer.')
+    if (store.projects.some((p) => p.id !== existing?.id && p.name.toLowerCase() === name!.toLowerCase())) {
+      fail(409, `A project named "${name}" already exists.`)
+    }
+  } else if (existing === null) {
+    fail(400, 'Give the project a name.')
+  }
+
+  let desc: string | undefined
+  if (raw.desc !== undefined) {
+    if (typeof raw.desc !== 'string') fail(400, 'Description must be a string.')
+    desc = raw.desc.trim()
+  }
+
+  let teamAgentIds: string[] | undefined
+  if (raw.teamAgentIds !== undefined) {
+    if (!Array.isArray(raw.teamAgentIds) || !raw.teamAgentIds.every((s) => typeof s === 'string')) {
+      fail(400, 'teamAgentIds must be a list of agent ids.')
+    }
+    const ids = [...new Set(raw.teamAgentIds as string[])]
+    for (const id of ids) {
+      if (!store.agents.some((a) => a.id === id)) fail(400, `No agent with id "${id}". Pick agents from the library.`)
+    }
+    teamAgentIds = ids
+  }
+
+  return { ...(name !== undefined ? { name } : {}), ...(desc !== undefined ? { desc } : {}), ...(teamAgentIds !== undefined ? { teamAgentIds } : {}) } as ProjectInput
 }
 
 function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
@@ -270,6 +315,71 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return reply.status(204).send()
   })
   app.get('/api/projects', async () => store.projects)
+
+  app.post('/api/projects', async (request, reply) => {
+    const input = parseProjectInput(store, request.body, null)
+    const id = uid('proj')
+    const now = new Date().toISOString()
+    // Folder name: slug of the project name, suffixed on collision with an
+    // existing project folder or a real directory on disk.
+    let folder = join(store.projectsRoot, slugifyProjectName(input.name))
+    for (let n = 2; store.projects.some((p) => p.folder === folder) || existsSync(folder); n++) {
+      folder = join(store.projectsRoot, `${slugifyProjectName(input.name)}-${n}`)
+    }
+    const project: Project = {
+      id,
+      name: input.name,
+      desc: input.desc ?? '',
+      folder,
+      teamAgentIds: input.teamAgentIds ?? [],
+      createdAt: now,
+      updatedAt: now,
+    }
+    try {
+      mkdirSync(folder, { recursive: true })
+    } catch (err) {
+      fail(500, `Could not create the project folder: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    store.projects = [...store.projects, project]
+    if (!store.save()) {
+      store.projects = store.projects.filter((p) => p.id !== id)
+      fail(500, 'The project could not be saved. Please retry.')
+    }
+    return reply.status(201).send(project)
+  })
+
+  app.patch('/api/projects/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const existing = store.projects.find((p) => p.id === id)
+    if (!existing) fail(404, `No project with id "${id}"`)
+    const input = parseProjectInput(store, request.body, existing)
+    const updated: Project = {
+      ...existing,
+      name: input.name ?? existing.name,
+      desc: input.desc !== undefined ? input.desc : existing.desc,
+      teamAgentIds: input.teamAgentIds !== undefined ? input.teamAgentIds : existing.teamAgentIds,
+      updatedAt: new Date().toISOString(),
+    }
+    // Rename never moves the folder; the folder is the stable identity on disk.
+    store.projects = store.projects.map((p) => (p.id === id ? updated : p))
+    if (!store.save()) {
+      store.projects = store.projects.map((p) => (p.id === id ? existing : p))
+      fail(500, 'The project could not be saved. Please retry.')
+    }
+    return updated
+  })
+
+  app.delete('/api/projects/:id', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
+    // The record goes; the folder stays on disk (removal is an explicit user
+    // action, a later milestone).
+    store.projects = store.projects.filter((p) => p.id !== id)
+    if (!store.save()) {
+      fail(500, 'The project could not be deleted from storage. Please retry.')
+    }
+    return reply.status(204).send()
+  })
   app.get('/api/settings', async () => store.settings)
 
   app.get('/api/agents', async () => store.agents)

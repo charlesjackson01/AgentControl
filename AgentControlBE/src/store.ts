@@ -28,6 +28,8 @@ export interface WorkspaceStore {
   settings: WorkspaceSettings
   /** Shared workspace memory written by the notes tools. */
   notes: Note[]
+  /** Absolute root under which project folders are created. */
+  projectsRoot: string
   /** Migration bookkeeping. Persisted, never served by any route. */
   meta: StoreMeta
   /** Persist to disk; returns false (and logs) when the write fails. */
@@ -150,11 +152,24 @@ const LEGACY_SEED_ENDPOINT = { id: 'ep_local_llama', name: 'Local llama.cpp', ba
 const DATA_DIR = process.env.AGENTCONTROL_DATA_DIR ?? resolve(process.cwd(), 'data')
 const DEFAULT_PATH = resolve(DATA_DIR, 'store.json')
 
-function seed(): Persisted {
+/**
+ * Folder name for a project: lowercase, alphanumerics and dashes. Names that
+ * slugify to nothing fall back to `project`.
+ */
+export function slugifyProjectName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'project'
+}
+
+function seed(projectsRoot: string): Persisted {
   return {
     agents: structuredClone(seedAgents),
     runs: structuredClone(seedRuns),
-    projects: structuredClone(seedProjects),
+    projects: seedProjects(projectsRoot),
     skills: structuredClone(seedSkills),
     endpoints: structuredClone(seedEndpoints),
     endpointModels: structuredClone(seedEndpointModels),
@@ -199,6 +214,31 @@ function normalizeNotes(raw: unknown): Note[] {
   return out
 }
 
+/** Keep well-formed projects; backfill fields added after the first shape. */
+function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
+  if (!Array.isArray(raw)) return []
+  const out: Project[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const p = item as Partial<Project>
+    if (typeof p.id !== 'string' || typeof p.name !== 'string') continue
+    const updatedAt = typeof p.updatedAt === 'string' ? p.updatedAt : new Date(0).toISOString()
+    out.push({
+      id: p.id,
+      name: p.name,
+      desc: typeof p.desc === 'string' ? p.desc : '',
+      folder:
+        typeof p.folder === 'string' && p.folder
+          ? p.folder
+          : join(projectsRoot, slugifyProjectName(p.name)),
+      teamAgentIds: isStringArray(p.teamAgentIds) ? [...p.teamAgentIds] : [],
+      createdAt: typeof p.createdAt === 'string' ? p.createdAt : updatedAt,
+      updatedAt,
+    })
+  }
+  return out
+}
+
 function normalizeRun(r: Partial<AgentRun>): AgentRun {
   return {
     id: r.id ?? `run_${Math.random().toString(36).slice(2, 10)}`,
@@ -218,8 +258,8 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
 }
 
 /** Backfill fields added after a workspace was first written. */
-function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
-  const base = seed()
+function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; changed: boolean } {
+  const base = seed(projectsRoot)
   let changed = false
 
   // Runs used to live on each agent (agent.recentRuns); hoist them to `runs`.
@@ -347,7 +387,7 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     data: {
       agents: agents as Agent[],
       runs,
-      projects: raw.projects ?? base.projects,
+      projects: raw.projects === undefined ? base.projects : normalizeProjects(raw.projects, projectsRoot),
       skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
@@ -359,23 +399,25 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
   }
 }
 
-function read(path: string): { data: Persisted; legacyKeys: Record<string, string>; changed: boolean } {
+function read(path: string, projectsRoot: string): { data: Persisted; legacyKeys: Record<string, string>; changed: boolean } {
   if (existsSync(path)) {
     try {
       const raw = JSON.parse(readFileSync(path, 'utf8')) as StoredShape
-      const { data, changed } = reconcile(raw)
+      const { data, changed } = reconcile(raw, projectsRoot)
       return { data, legacyKeys: raw.endpointKeys ?? {}, changed }
     } catch {
       // Corrupt or unreadable file falls back to a fresh seed below.
     }
   }
-  return { data: seed(), legacyKeys: {}, changed: false }
+  return { data: seed(projectsRoot), legacyKeys: {}, changed: false }
 }
 
 export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
   const dir = dirname(path)
   const vault = createVault(join(dir, 'vault.enc'), join(dir, 'vault.key'))
-  const { data, legacyKeys, changed } = read(path)
+  // Projects live under AGENTCONTROL_PROJECTS_DIR, defaulting beside the store.
+  const projectsRoot = resolve(process.env.AGENTCONTROL_PROJECTS_DIR ?? join(dir, 'projects'))
+  const { data, legacyKeys, changed } = read(path, projectsRoot)
 
   let endpointKeys = vault.load()
   let migrated = changed
@@ -387,6 +429,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
 
   const store: WorkspaceStore = {
     ...data,
+    projectsRoot,
     endpointKeys,
     save() {
       const temporary = `${path}.${randomUUID()}.tmp`

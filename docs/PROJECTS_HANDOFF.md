@@ -1,8 +1,7 @@
 # Projects — implementation handoff (draft)
 
-Status: DRAFT. Do not start implementation until the skills-library branch
-(Claude) merges to master. Projects touches app.ts, store.ts, seed.ts, and
-shared/types.ts — the same files the skills work edits.
+Status: APPROVED FOR IMPLEMENTATION (2026-10-12). Skills work merged to
+master (PR #5). D-P1, D-P2, D-P3 confirmed as recommended — see below.
 
 ## Goal
 
@@ -27,7 +26,7 @@ specialties the project doesn't have.
 6. Work begins — agents communicate, delegate, and report progress in the
    project chat while the user oversees.
 
-## Decisions to confirm before coding
+## Decisions (all confirmed by owner, 2026-10-12)
 
 - D-P1: Primary's team picks and new-specialist creations are shown to
   the user for confirmation before tasks are assigned (matches the

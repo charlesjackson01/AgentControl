@@ -6,19 +6,28 @@
       "id": "proj-support-automation",
       "name": "Support Automation",
       "desc": "Triage and reply pipeline for inbound tickets.",
-      "updatedAt": "2026-10-07T21:06:34.202Z"
+      "updatedAt": "2026-10-07T21:06:34.202Z",
+      "folder": "<projects-root>/support-automation",
+      "teamAgentIds": [],
+      "createdAt": "2026-10-07T21:06:34.202Z"
     },
     {
       "id": "proj-docs-refresh",
       "name": "Docs Refresh",
       "desc": "Rewrites stale guides from the product changelog.",
-      "updatedAt": "2026-10-06T21:06:34.202Z"
+      "updatedAt": "2026-10-06T21:06:34.202Z",
+      "folder": "<projects-root>/docs-refresh",
+      "teamAgentIds": [],
+      "createdAt": "2026-10-06T21:06:34.202Z"
     },
     {
       "id": "proj-data-platform",
       "name": "Data Platform",
       "desc": "Nightly ETL plus schema drift monitoring.",
-      "updatedAt": "2026-10-04T21:06:34.202Z"
+      "updatedAt": "2026-10-04T21:06:34.202Z",
+      "folder": "<projects-root>/data-platform",
+      "teamAgentIds": [],
+      "createdAt": "2026-10-04T21:06:34.202Z"
     }
   ],
   "endpoints": [

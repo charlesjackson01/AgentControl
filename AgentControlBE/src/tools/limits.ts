@@ -8,7 +8,12 @@
 export const RESULT_MAX_CHARS = 3_500
 
 export function clipText(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text
+  if (text.length <= max) return text
+  let end = Math.max(0, max - 1)
+  // Never leave half of a surrogate pair (emoji, rare CJK) before the ellipsis.
+  const last = text.charCodeAt(end - 1)
+  if (end > 0 && last >= 0xd800 && last <= 0xdbff) end -= 1
+  return `${text.slice(0, end)}…`
 }
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }

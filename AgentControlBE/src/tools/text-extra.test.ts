@@ -403,7 +403,9 @@ describe('extract_entities', () => {
     const outcome = await run('extract_entities', { kinds: ['urls'] }, { input: `see https://x.io/?key=${SECRET} now` })
     expect(outcome.ok).toBe(true)
     expect(outcome.content).not.toContain(SECRET)
-    expect(JSON.parse(outcome.content)).toMatchObject({ urls: ['https://x.io/?key=[redacted]'], sources: { text: '@input' } })
+    // "@input" is redacted before extraction, so the URL ends at the marker
+    // (brackets are not URL characters): no secret, no secret prefix.
+    expect(JSON.parse(outcome.content)).toMatchObject({ urls: ['https://x.io/?key='], sources: { text: '@input' } })
     const proto = await run('extract_entities', '{"__proto__":{"kinds":["urls"]},"constructor":"x","text":"a@b.io"}')
     expect(JSON.parse(proto.content)).toMatchObject({ emails: ['a@b.io'], counts: { urls: 0, emails: 1 } })
   })
@@ -485,7 +487,10 @@ describe('redaction happens before clipping', () => {
       const outcome = await run(name, args, { store: keyStore })
       expect(outcome.ok, outcome.content).toBe(true)
       expect(outcome.content, name).not.toContain('sk-or-v1-0')
-      expect(outcome.content, name).toContain('[redacted]')
+      // Note text is redacted before the handler: lines keep the marker, and a
+      // URL ends where the redacted key began.
+      if (name === 'process_lines') expect(outcome.content, name).toContain('[redacted]')
+      else expect(outcome.content, name).toContain('?k="')
     }
   })
 

@@ -132,6 +132,12 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
 
   try {
     const { args: resolved, sources } = resolveContentRefs(entry.contentParams, args, ctx)
+    // Text pulled in by "@note:"/"@input" is redacted before the handler sees
+    // it, so counts or match flags cannot probe a secret stored in a note.
+    for (const param of Object.keys(sources)) {
+      const value = resolved[param]
+      if (typeof value === 'string') resolved[param] = redactSecrets(value, ctx.store)
+    }
     let value = await withTimeout(
       Promise.resolve().then(() => entry.handler(resolved, ctx)),
       TOOL_TIMEOUT_MS,

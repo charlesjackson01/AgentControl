@@ -43,6 +43,15 @@ export function ProjectsIcon(props: IconProps) {
   )
 }
 
+export function NotesIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M14 3H5a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9z" />
+      <path d="M14 3v6h6M8 13h8M8 17h6" />
+    </Svg>
+  )
+}
+
 export function SkillLibraryIcon(props: IconProps) {
   return (
     <Svg {...props}>

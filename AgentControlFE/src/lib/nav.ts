@@ -1,5 +1,5 @@
 import type { ComponentType } from 'react'
-import { AgentsIcon, ProjectsIcon, SettingsIcon, SkillLibraryIcon } from '../components/icons'
+import { AgentsIcon, NotesIcon, ProjectsIcon, SettingsIcon, SkillLibraryIcon } from '../components/icons'
 
 export type NavItem = {
   label: string
@@ -13,6 +13,7 @@ export const primaryNav: NavItem[] = [
   { label: 'Agents', to: '/agents', icon: AgentsIcon },
   { label: 'Projects', to: '/projects', icon: ProjectsIcon },
   { label: 'Skill Library', to: '/skills', icon: SkillLibraryIcon },
+  { label: 'Notes', to: '/notes', icon: NotesIcon },
 ]
 
 export const secondaryNav: NavItem[] = [

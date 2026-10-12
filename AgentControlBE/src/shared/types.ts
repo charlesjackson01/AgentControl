@@ -133,6 +133,11 @@ export interface AgentRun {
   skillSnapshot?: { id: string; name: string; contentChars: number; mode?: SkillPromptMode }[]
   /** Per-tool-call audit for runs that used the tool loop. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
+  /**
+   * Set on runs made for a project task. Such runs only see earlier runs of
+   * the same project as history, and the agent's own chat never sees them.
+   */
+  projectId?: string
 }
 
 export interface Agent {
@@ -154,6 +159,12 @@ export interface Agent {
   createdAt: string
   lastRunAt: string | null
   runCount: number
+  /**
+   * D-P2: set on project-scoped specialists (created by Primary for that
+   * project). Still a normal library agent. Set only when a team plan is
+   * applied, kept by agent updates, and cleared when the project is deleted.
+   */
+  projectId?: string
 }
 
 export interface AgentInput {
@@ -193,16 +204,100 @@ export type ProjectPatch = Partial<ProjectInput>
 
 /**
  * One message in a project's chat. `author` is 'user' or an agent id.
- * `kind` separates plain messages from system-ish team events; Part 2 adds
- * 'team-update' and 'task-assignment'.
+ * - 'message': plain text from the user or an agent.
+ * - 'team-plan': Primary's answer to a user prompt (`plan`, `planStatus`,
+ *   `replyTo`). Team changes wait for the user (D-P1); a plan with only tasks
+ *   is applied at once.
+ * - 'team-update': who joined the team or was created when a plan applied.
+ * - 'task-assignment': one task for `assigneeId`, with its `taskStatus`.
+ * - 'task-result': the assignee's output (`taskId`, `runId`).
  */
 export interface ProjectMessage {
   id: string
   projectId: string
   author: string
   text: string
-  kind: 'message'
+  kind: ProjectMessageKind
   createdAt: string
+  /** Set when the BE changes the message after creation (plan or task status). */
+  updatedAt?: string
+  /** team-plan: the user message it answers. */
+  replyTo?: string
+  /** team-plan: the validated proposal. */
+  plan?: TeamPlan
+  /** team-plan: 'pending' until applied or cancelled. */
+  planStatus?: PlanStatus
+  /** task-assignment and task-result: the team-plan message they came from. */
+  planId?: string
+  /** task-assignment: who does the task. */
+  assigneeId?: string
+  /** task-assignment: queued → running → done | failed. */
+  taskStatus?: TaskStatus
+  /** task-result: the task-assignment message it answers. */
+  taskId?: string
+  /** task-result: the agent run that produced it (GET /api/agents/:id/runs). */
+  runId?: string
+}
+
+export type ProjectMessageKind = 'message' | 'team-plan' | 'team-update' | 'task-assignment' | 'task-result'
+export type PlanStatus = 'pending' | 'applied' | 'cancelled'
+export type TaskStatus = 'queued' | 'running' | 'done' | 'failed'
+
+/** A library agent Primary proposes to add to the team. */
+export interface TeamPlanAdd {
+  agentId: string
+  reason: string
+}
+
+/** A project-scoped specialist Primary proposes to create (D-P2: a library agent tagged with projectId). */
+export interface TeamPlanCreate {
+  name: string
+  role: string
+  instructions: string
+  /** Library skill ids to attach (unknown ids are dropped while validating). */
+  skillIds: string[]
+  reason: string
+}
+
+/** A task for a team member: `agent` is an agent id, or the name of an agent in `create`. */
+export interface TeamPlanTask {
+  agent: string
+  task: string
+}
+
+/** Primary's validated answer to a project prompt. */
+export interface TeamPlan {
+  /** What Primary tells the user (always shown). */
+  reply: string
+  add: TeamPlanAdd[]
+  create: TeamPlanCreate[]
+  tasks: TeamPlanTask[]
+  /** Entries the BE dropped while validating Primary's output, in plain words. */
+  warnings: string[]
+}
+
+/** Body for POST /api/projects/:id/team-plan: the user message Primary answers. */
+export interface TeamPlanRequest {
+  messageId: string
+}
+
+/** Response of POST /api/projects/:id/team-plan and of the apply/cancel routes. */
+export interface TeamPlanResponse {
+  project: Project
+  /** Messages created or changed by the call, oldest first (the plan message first). */
+  messages: ProjectMessage[]
+}
+
+/**
+ * Body for POST /api/projects/:id/plans/:messageId/apply. Each list selects
+ * what to accept (indexes into plan.create / plan.tasks, agent ids from
+ * plan.add); an omitted list accepts everything. Tasks for an agent whose
+ * creation was not accepted are dropped.
+ */
+export interface TeamPlanApply {
+  add?: string[]
+  create?: number[]
+  tasks?: number[]
 }
 
 /** Body for POST /api/projects/:id/messages. */

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import {
@@ -44,7 +44,22 @@ export interface StoreMeta {
 }
 
 /** Every one-shot migration; fresh stores are born with all of them applied. */
-const MIGRATIONS = ['seed-skill-tools-v1'] as const
+const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2'] as const
+
+/**
+ * Seed skills whose shipped definition changed after installs could already
+ * hold them (v2: new workspace/text/time tools). A stored copy that still
+ * matches the previously shipped body (sha256) AND tool list exactly is
+ * upgraded once to the current seed; anything the user edited is left alone.
+ */
+const SEED_UPGRADES_V2: { id: string; fromContentSha256: string; fromTools: string[] }[] = [
+  { id: 'workspace-audit', fromContentSha256: '3ea11690d365886afa3b17ecb9fb8050066550fee1e937e61771e905a032caa5', fromTools: ['list_agents', 'list_skills', 'read_run_log'] },
+  { id: 'date-arithmetic', fromContentSha256: '9264e35940d390adc46c5f86a0e9304b93dc5e26a83edfe4002de87f2f562549', fromTools: ['current_time', 'date_difference', 'add_date'] },
+  { id: 'text-cleanup', fromContentSha256: '0f4d16c98168500b2b77e370d28d0b35c6dd7e674d351db88aca729664fd764a', fromTools: ['text_stats', 'transform_text', 'read_note'] },
+  { id: 'multi-agent-orchestration', fromContentSha256: '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5', fromTools: [] },
+]
+
+const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
 
 /** Everything written to `store.json`. Key material is deliberately excluded. */
 interface Persisted {
@@ -244,6 +259,28 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
       }
     }
     meta.migrations.push('seed-skill-tools-v1')
+    changed = true
+  }
+
+  // One-shot: untouched copies of seeds whose definition changed since they
+  // were offered get the current definition (body, description, tools).
+  if (!meta.migrations.includes('seed-skill-upgrade-v2')) {
+    for (const upgrade of SEED_UPGRADES_V2) {
+      const i = savedSkills.findIndex((s) => s.id === upgrade.id)
+      const seed = base.skills.find((s) => s.id === upgrade.id)
+      const saved = savedSkills[i]
+      if (!saved || !seed) continue
+      const savedTools = saved.tools.map((t) => t.name)
+      const untouched =
+        typeof saved.content === 'string' &&
+        sha256(saved.content) === upgrade.fromContentSha256 &&
+        savedTools.length === upgrade.fromTools.length &&
+        savedTools.every((name, k) => name === upgrade.fromTools[k])
+      if (untouched) {
+        savedSkills[i] = { ...saved, description: seed.description, content: seed.content, tools: structuredClone(seed.tools) }
+      }
+    }
+    meta.migrations.push('seed-skill-upgrade-v2')
     changed = true
   }
 

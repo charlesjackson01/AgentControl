@@ -32,6 +32,40 @@ describe('tool registry', () => {
     }
   })
 
+  it('registers the newer read-only tools under their categories', () => {
+    const expected: Record<string, string> = {
+      get_skill: 'workspace', diff_text: 'text', encode_text: 'text',
+      json_query: 'data', csv_summary: 'data', calculate: 'math', convert_units: 'math',
+    }
+    for (const [name, category] of Object.entries(expected)) {
+      const t = builtinTools.get(name)
+      expect(t, name).toBeDefined()
+      expect(t?.category, name).toBe(category)
+      expect(t?.effect, name).toBe('read')
+      expect(t?.description.length, name).toBeLessThanOrEqual(240)
+      expect(t?.description, name).toContain('Example:')
+    }
+  })
+
+  it('keeps the parameters the seed skills tell the model to pass', () => {
+    const documented: Record<string, string[]> = {
+      get_skill: ['skill', 'offset'],
+      diff_text: ['before', 'after'],
+      encode_text: ['operation', 'text'],
+      compare_text: ['left', 'right', 'ignore_case', 'ignore_whitespace'],
+      json_query: ['json', 'path', 'shape'],
+      csv_summary: ['csv', 'delimiter', 'has_header', 'group_by', 'sum_column'],
+      calculate: ['expression'],
+      convert_units: ['value', 'from', 'to'],
+    }
+    for (const [name, params] of Object.entries(documented)) {
+      const props = (builtinTools.get(name)?.parameters as { properties?: Record<string, unknown> } | undefined)?.properties ?? {}
+      for (const p of params) expect(Object.hasOwn(props, p), `${name}.${p}`).toBe(true)
+    }
+    const encodeOps = (builtinTools.get('encode_text')?.parameters as { properties: { operation: { enum: string[] } } }).properties.operation.enum
+    expect([...encodeOps].sort()).toEqual(['base64_decode', 'base64_encode', 'sha256', 'url_decode', 'url_encode'])
+  })
+
   it('declares content params that exist in the schema', () => {
     for (const t of builtinTools.values()) {
       const props = (t.parameters as { properties?: Record<string, unknown> }).properties ?? {}

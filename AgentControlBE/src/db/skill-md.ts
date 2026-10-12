@@ -11,6 +11,8 @@ export class SkillMarkdownError extends Error {}
 export type ParsedSkillMarkdown = {
   name: string
   description: string
+  /** Optional `tag:` (the Skill Library's category label); '' when absent. */
+  tag: string
   /** Body with the frontmatter block stripped. */
   content: string
   /**
@@ -84,5 +86,5 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
   if (!description) throw new SkillMarkdownError('SKILL.md frontmatter is missing a "description" field.')
 
   const content = text.slice(match[0].length).replace(/^\n+/, '').trimEnd()
-  return { name, description, content, tools: [...new Set(tools)].slice(0, 64) }
+  return { name, description, tag: meta.get('tag') ?? '', content, tools: [...new Set(tools)].slice(0, 64) }
 }

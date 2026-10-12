@@ -15,8 +15,10 @@ const VENDORED_SOURCE = 'seb1n/awesome-ai-agent-skills'
  * uses; the frontmatter `name` becomes the id and its `tools:` list is
  * resolved strictly against the built-in registry (an unknown name is a bug).
  * The first six are vendored (MIT, seb1n/awesome-ai-agent-skills): their
- * bodies must stay byte-identical — the seed-skill-tools migration compares
- * content — so only their frontmatter `tools:` line is ours.
+ * bodies must stay byte-identical — the seed-skill migrations compare
+ * content — so only their frontmatter `tools:` line is ours. Changing any
+ * shipped seed's body, description or tools needs a seed-upgrade entry in
+ * store.ts, or existing installs keep the old copy.
  */
 const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
   { file: 'code-review', tag: 'Core', source: VENDORED_SOURCE },
@@ -37,6 +39,9 @@ const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
   { file: 'notes-organizer', tag: 'Notes', source: 'AgentControl' },
   { file: 'meeting-notes', tag: 'Notes', source: 'AgentControl' },
   { file: 'workspace-audit', tag: 'Workspace', source: 'AgentControl' },
+  // Added with seed-skill-upgrade-v3; existing stores gain them as never-offered seeds.
+  { file: 'encoding-and-hashing', tag: 'Data', source: 'AgentControl' },
+  { file: 'release-notes', tag: 'Text', source: 'AgentControl' },
 ]
 
 const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')

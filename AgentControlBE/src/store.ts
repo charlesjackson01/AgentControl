@@ -44,22 +44,69 @@ export interface StoreMeta {
 }
 
 /** Every one-shot migration; fresh stores are born with all of them applied. */
-const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2'] as const
+const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3'] as const
+
+/** A seed exactly as an earlier release shipped it: body sha256 and tool names in order. */
+interface SeedUpgrade {
+  id: string
+  fromContentSha256: string
+  fromTools: string[]
+}
 
 /**
  * Seed skills whose shipped definition changed after installs could already
- * hold them (v2: new workspace/text/time tools). A stored copy that still
+ * hold them, one batch per one-shot migration. A stored copy that still
  * matches the previously shipped body (sha256) AND tool list exactly is
- * upgraded once to the current seed; anything the user edited is left alone.
+ * upgraded once to the current seed (description, body, tools); anything the
+ * user edited, cleared or deleted is left alone. Batches run oldest first, so
+ * an older store reaches the current seed through whichever batch matches.
+ * The previous versions are snapshotted in src/db/seed-upgrade-fixtures/.
  */
-const SEED_UPGRADES_V2: { id: string; fromContentSha256: string; fromTools: string[] }[] = [
-  { id: 'workspace-audit', fromContentSha256: '3ea11690d365886afa3b17ecb9fb8050066550fee1e937e61771e905a032caa5', fromTools: ['list_agents', 'list_skills', 'read_run_log'] },
-  { id: 'date-arithmetic', fromContentSha256: '9264e35940d390adc46c5f86a0e9304b93dc5e26a83edfe4002de87f2f562549', fromTools: ['current_time', 'date_difference', 'add_date'] },
-  { id: 'text-cleanup', fromContentSha256: '0f4d16c98168500b2b77e370d28d0b35c6dd7e674d351db88aca729664fd764a', fromTools: ['text_stats', 'transform_text', 'read_note'] },
-  { id: 'multi-agent-orchestration', fromContentSha256: '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5', fromTools: [] },
+const SEED_UPGRADES: readonly { migration: (typeof MIGRATIONS)[number]; skills: readonly SeedUpgrade[] }[] = [
+  {
+    // v2: new workspace/text/time tools.
+    migration: 'seed-skill-upgrade-v2',
+    skills: [
+      { id: 'workspace-audit', fromContentSha256: '3ea11690d365886afa3b17ecb9fb8050066550fee1e937e61771e905a032caa5', fromTools: ['list_agents', 'list_skills', 'read_run_log'] },
+      { id: 'date-arithmetic', fromContentSha256: '9264e35940d390adc46c5f86a0e9304b93dc5e26a83edfe4002de87f2f562549', fromTools: ['current_time', 'date_difference', 'add_date'] },
+      { id: 'text-cleanup', fromContentSha256: '0f4d16c98168500b2b77e370d28d0b35c6dd7e674d351db88aca729664fd764a', fromTools: ['text_stats', 'transform_text', 'read_note'] },
+      { id: 'multi-agent-orchestration', fromContentSha256: '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5', fromTools: [] },
+    ],
+  },
+  {
+    // v3: get_skill, diff_text, encode_text and the data/math upgrades; the
+    // vendored seeds (bodies unchanged) gain frontmatter tools.
+    migration: 'seed-skill-upgrade-v3',
+    skills: [
+      { id: 'code-review', fromContentSha256: '306c451504e224af7b2b02839e71c5c72ec9b7eb1734980e29a7b73c5db88af0', fromTools: [] },
+      { id: 'debugging', fromContentSha256: 'e4163cedaecee9abf765750fe8813fea8569d969819eab30abd1e2a5800552c2', fromTools: [] },
+      { id: 'deep-research', fromContentSha256: 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67', fromTools: [] },
+      { id: 'multi-agent-orchestration', fromContentSha256: '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5', fromTools: ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log'] },
+      { id: 'summarization', fromContentSha256: 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a', fromTools: [] },
+      { id: 'technical-writing', fromContentSha256: '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229', fromTools: [] },
+      { id: 'calculation-checker', fromContentSha256: 'e6fa9cd2c096cfe7e0bbfa775779f185d160cba9d01bebecf2992656866e0337', fromTools: ['calculate'] },
+      { id: 'unit-conversion', fromContentSha256: '21346d77d42a53a8477eb19002103cbcd6c03a57ea11c2eeb5a15600893d7690', fromTools: ['convert_units', 'calculate'] },
+      { id: 'text-comparison', fromContentSha256: 'f1e4e77680b36a8f927edf079e7d934c6f98376eee0c50c75029569242ad1c22', fromTools: ['compare_text', 'read_note'] },
+      { id: 'json-inspection', fromContentSha256: '0554323d8f540b857f8c2b9076619cac60af54f73af958b5cf66834b7538fca7', fromTools: ['json_query', 'read_note'] },
+      { id: 'csv-analysis', fromContentSha256: '63ad70fea13c2bb21d3327b93904827b2c92b1897caae988482f55b45fcccb7b', fromTools: ['csv_summary', 'read_note'] },
+      { id: 'workspace-audit', fromContentSha256: '60ac72c694861e4f9361c4452db690107426df2634e6b28b73f8f6c3768b7ccd', fromTools: ['list_agents', 'list_skills', 'read_run_log', 'get_agent', 'workspace_overview'] },
+    ],
+  },
 ]
 
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex')
+
+/** True when a stored copy is byte-for-byte the shipped body with the shipped tool names, in order. */
+function isUntouchedSeed(saved: Skill, upgrade: SeedUpgrade): boolean {
+  // Tolerate hand-edited entries (a null tool) rather than failing the whole load.
+  const tools = Array.isArray(saved.tools) ? saved.tools.map((t) => (t as { name?: unknown } | null)?.name) : []
+  return (
+    typeof saved.content === 'string' &&
+    sha256(saved.content) === upgrade.fromContentSha256 &&
+    tools.length === upgrade.fromTools.length &&
+    tools.every((name, k) => name === upgrade.fromTools[k])
+  )
+}
 
 /** Everything written to `store.json`. Key material is deliberately excluded. */
 interface Persisted {
@@ -262,25 +309,19 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     changed = true
   }
 
-  // One-shot: untouched copies of seeds whose definition changed since they
-  // were offered get the current definition (body, description, tools).
-  if (!meta.migrations.includes('seed-skill-upgrade-v2')) {
-    for (const upgrade of SEED_UPGRADES_V2) {
+  // One-shot, oldest batch first: untouched copies of seeds whose definition
+  // changed since they were offered get the current definition.
+  for (const { migration, skills } of SEED_UPGRADES) {
+    if (meta.migrations.includes(migration)) continue
+    for (const upgrade of skills) {
       const i = savedSkills.findIndex((s) => s.id === upgrade.id)
       const seed = base.skills.find((s) => s.id === upgrade.id)
       const saved = savedSkills[i]
-      if (!saved || !seed) continue
-      const savedTools = saved.tools.map((t) => t.name)
-      const untouched =
-        typeof saved.content === 'string' &&
-        sha256(saved.content) === upgrade.fromContentSha256 &&
-        savedTools.length === upgrade.fromTools.length &&
-        savedTools.every((name, k) => name === upgrade.fromTools[k])
-      if (untouched) {
+      if (saved && seed && isUntouchedSeed(saved, upgrade)) {
         savedSkills[i] = { ...saved, description: seed.description, content: seed.content, tools: structuredClone(seed.tools) }
       }
     }
-    meta.migrations.push('seed-skill-upgrade-v2')
+    meta.migrations.push(migration)
     changed = true
   }
 

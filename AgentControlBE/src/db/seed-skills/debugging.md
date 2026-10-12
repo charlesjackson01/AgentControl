@@ -1,6 +1,7 @@
 ---
 name: debugging
 description: Systematically diagnose and fix software bugs by analyzing error messages, stack traces, logs, and runtime behavior across multiple languages. Use when the user requests debugging or provides relevant inputs for this workflow.
+tools: process_lines, extract_entities, diff_text, read_run_log
 license: MIT
 metadata:
   author: awesome-ai-agent-skills contributors

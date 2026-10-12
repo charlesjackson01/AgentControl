@@ -6,6 +6,7 @@ import Agents from './pages/Agents'
 import Projects from './pages/Projects'
 import Settings from './pages/Settings'
 import SkillLibrary from './pages/SkillLibrary'
+import Notes from './pages/Notes'
 
 export default function App() {
   return (
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="agents/:id/edit" element={<AgentFormPage />} />
         <Route path="projects" element={<Projects />} />
         <Route path="skills" element={<SkillLibrary />} />
+        <Route path="notes" element={<Notes />} />
         <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/agents" replace />} />
       </Route>

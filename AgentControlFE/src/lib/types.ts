@@ -97,6 +97,26 @@ export type SkillTool = {
   parameters: object
 }
 
+export type ToolInfo = SkillTool & {
+  category: 'workspace' | 'notes' | 'time' | 'math' | 'text' | 'data'
+  effect: 'read' | 'write'
+}
+
+export type Note = {
+  id: string
+  title: string
+  body: string
+  tags: string[]
+  authorAgentId: string
+  authorName: string | null
+  updatedByAgentId: string
+  runId: string
+  createdAt: string
+  updatedAt: string
+}
+
+export type NoteSummary = Omit<Note, 'body'> & { snippet: string; chars: number }
+
 export type Skill = {
   id: string
   name: string

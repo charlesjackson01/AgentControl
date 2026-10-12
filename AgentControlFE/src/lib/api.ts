@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Skill, SkillInput } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -95,6 +95,22 @@ export const api = {
 
   async listSkills(): Promise<Skill[]> {
     return request<Skill[]>('/api/skills')
+  },
+
+  async listTools(): Promise<ToolInfo[]> {
+    return request<ToolInfo[]>('/api/tools')
+  },
+
+  async listNotes(): Promise<NoteSummary[]> {
+    return request<NoteSummary[]>('/api/notes')
+  },
+
+  async getNote(id: string): Promise<Note> {
+    return request<Note>(`/api/notes/${encodeURIComponent(id)}`)
+  },
+
+  async deleteNote(id: string): Promise<void> {
+    return request<void>(`/api/notes/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   async createSkill(input: SkillInput): Promise<Skill> {

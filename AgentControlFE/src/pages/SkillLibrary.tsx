@@ -2,10 +2,13 @@ import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
 import PageShell from '../components/PageShell'
 import Dialog from '../components/Dialog'
 import ConfirmDialog from '../components/ConfirmDialog'
+import ToolPicker from '../components/ToolPicker'
 import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { PlusIcon, SearchIcon, SkillLibraryIcon } from '../components/icons'
 import { api } from '../lib/api'
 import type { Skill, SkillInput } from '../lib/types'
+import { parsePreview } from '../lib/skill-markdown'
+import { classifyImportTools } from '../lib/skill-tools'
 import { useAsync } from '../hooks/useAsync'
 
 const DISCOVERY_HINT: ReactNode = (
@@ -22,36 +25,14 @@ const DISCOVERY_HINT: ReactNode = (
   </>
 )
 
-type SkillPreview = { name: string; description: string; content: string }
-
-/** Mirrors the BE's SKILL.md parser so the preview matches what import will save. */
-function parsePreview(markdown: string): SkillPreview | { error: string } {
-  const text = markdown.replace(/\r\n/g, '\n').trim()
-  const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text)
-  if (!match) {
-    return { error: 'SKILL.md has no frontmatter block — start the file with a "--- name … ---" header.' }
-  }
-  const meta: Record<string, string> = {}
-  for (const line of (match[1] ?? '').split('\n')) {
-    if (/^\s/.test(line)) continue
-    const idx = line.indexOf(':')
-    if (idx <= 0) continue
-    const key = line.slice(0, idx).trim()
-    const value = line.slice(idx + 1).trim()
-    if (key) meta[key] = value
-  }
-  if (!meta.name) return { error: 'SKILL.md frontmatter is missing a "name" field.' }
-  if (!meta.description) return { error: 'SKILL.md frontmatter is missing a "description" field.' }
-  const content = text.slice(match[0].length).replace(/^\n+/, '').trimEnd()
-  return { name: meta.name, description: meta.description, content }
-}
-
 function SkillForm({
   initial,
   saving,
   serverError,
   onSubmit,
+  registry,
 }: {
+  registry: ReturnType<typeof useAsync<Awaited<ReturnType<typeof api.listTools>>>>
   initial: Skill | null
   saving: boolean
   serverError: string | null
@@ -61,6 +42,8 @@ function SkillForm({
   const [tag, setTag] = useState(initial?.tag ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
   const [content, setContent] = useState(initial?.content ?? '')
+  const [tools, setTools] = useState(initial?.tools ?? [])
+  const [toolsChanged, setToolsChanged] = useState(false)
   const [errors, setErrors] = useState<{ name?: string; content?: string }>({})
 
   const submit = (e: FormEvent) => {
@@ -70,7 +53,7 @@ function SkillForm({
     if (!content.trim()) next.content = 'Skills need content — it is injected into the run prompt.'
     setErrors(next)
     if (Object.keys(next).length > 0) return
-    onSubmit({ name: name.trim(), tag: tag.trim(), description: description.trim(), content: content.trim() })
+    onSubmit({ name: name.trim(), tag: tag.trim(), description: description.trim(), content: content.trim(), ...(!initial || toolsChanged ? { tools } : {}) })
   }
 
   return (
@@ -126,26 +109,8 @@ function SkillForm({
         )}
       </div>
 
-      <div className="field">
-        <p className="field__label">Tools</p>
-        {initial && initial.tools.length > 0 ? (
-          <>
-            <div className="rows">
-              {initial.tools.map((t) => (
-                <div className="row" key={t.name}>
-                  <div className="row__text">
-                    <p className="row__label meta__v--mono">{t.name}</p>
-                    {t.description && <p className="row__hint">{t.description}</p>}
-                  </div>
-                </div>
-              ))}
-            </div>
-            <p className="field__hint">Available to agents that attach this skill.</p>
-          </>
-        ) : (
-          <p className="field__hint">No tools declared.</p>
-        )}
-      </div>
+      <ToolPicker selected={tools} registry={registry.data} loading={registry.loading} error={registry.error}
+        disabled={saving} onRetry={registry.reload} onChange={(next) => { setTools(next); setToolsChanged(true) }} />
 
       {serverError && (
         <p className="field__err" role="alert">
@@ -172,6 +137,7 @@ type DialogState =
 
 export default function SkillLibrary() {
   const skills = useAsync(api.listSkills, [])
+  const registry = useAsync(api.listTools, [])
   const agents = useAsync(api.listAgents, [])
 
   const [dialog, setDialog] = useState<DialogState>(null)
@@ -408,8 +374,8 @@ export default function SkillLibrary() {
                     </div>
                     <p className="tile__desc">{s.description || 'No description yet.'}</p>
                     <pre className="tile__preview">
-                      {s.content.slice(0, 160)}
-                      {s.content.length > 160 ? '…' : ''}
+                      {(s.content ?? '').slice(0, 160)}
+                      {(s.content ?? '').length > 160 ? '…' : ''}
                     </pre>
                     <div className="tile__meta">
                       <span>
@@ -417,7 +383,7 @@ export default function SkillLibrary() {
                       </span>
                       <span>·</span>
                       <span className="pill" title="Executed at run time">
-                        {s.tools.length} {s.tools.length === 1 ? 'tool' : 'tools'}
+                        {(s.tools ?? []).length} {(s.tools ?? []).length === 1 ? 'tool' : 'tools'}
                       </span>
                       {s.source && (
                         <>
@@ -455,10 +421,10 @@ export default function SkillLibrary() {
         }
       >
         {dialog?.mode === 'edit' && (
-          <SkillForm key={dialog.skill.id} initial={dialog.skill} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
+          <SkillForm registry={registry} key={dialog.skill.id} initial={dialog.skill} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
         )}
         {dialog?.mode === 'create' && (
-          <SkillForm key="create" initial={null} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
+          <SkillForm registry={registry} key="create" initial={null} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
         )}
       </Dialog>
 
@@ -512,7 +478,12 @@ export default function SkillLibrary() {
                     {users.length > 0 ? `Used by: ${users.join(', ')}` : 'Not attached to any agent'}
                   </p>
                 </div>
-                <pre className="skillview__content">{viewSkill.content}</pre>
+                <div className="field">
+                  <p className="field__label">Tools</p>
+                  <div className="chips">{(viewSkill.tools ?? []).map((tool) => <span className="pill" key={tool.name} title={tool.description}>{tool.name}</span>)}</div>
+                  {(viewSkill.tools ?? []).length === 0 && <p className="field__hint">No tools declared.</p>}
+                </div>
+                <pre className="skillview__content">{viewSkill.content ?? ''}</pre>
               </>
             )
           })()}
@@ -608,6 +579,17 @@ export default function SkillLibrary() {
               <p className="field__label">Preview — what will be saved</p>
               <p className="row__label">{preview.name}</p>
               <p className="row__hint">{preview.description}</p>
+              {preview.tools.length > 0 && (registry.loading ? <p className="field__hint">Loading tool preview…</p> : registry.error ? (
+                <ErrorState error={registry.error} onRetry={registry.reload} />
+              ) : (() => {
+                const resolved = classifyImportTools(preview.tools, registry.data ?? [])
+                return <>
+                  <p className="field__label">Tools to import</p>
+                  <div className="chips">{resolved.tools.map((name) => <span className="pill" key={name}>{name}</span>)}</div>
+                  {resolved.tools.length === 0 && <p className="field__hint">No recognized tools declared.</p>}
+                  {resolved.ignored.length > 0 && <p className="field__hint">Ignored (unavailable or over the 16-tool limit): {resolved.ignored.join(', ')}</p>}
+                </>
+              })())}
               <pre className="tile__preview">
                 {preview.content.slice(0, 240)}
                 {preview.content.length > 240 ? '…' : ''}

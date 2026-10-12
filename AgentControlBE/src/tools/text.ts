@@ -1,5 +1,6 @@
 /** Bounded, offline text operations. All replacements are literal. */
-import { randomInt } from 'node:crypto'
+import { Buffer } from 'node:buffer'
+import { createHash, randomInt } from 'node:crypto'
 import { argError, readBoolean, readEnum, readList, readNumber, readString } from './args.js'
 import { clipText, fitJson, RESULT_MAX_CHARS } from './limits.js'
 import { redactSecrets } from './redact.js'
@@ -638,6 +639,441 @@ function extractEntities(text: string, kinds: readonly EntityKind[], ctx: ToolCo
   return result
 }
 
+// --- diff_text and encode_text ---------------------------------------------------
+
+/**
+ * A required content param after executeToolCall resolved "@input"/"@note:".
+ * Unlike readString, "" is text (an empty message is still text). With
+ * `maxLines`, a JSON list of lines is joined with "\n" once both caps pass.
+ */
+function requiredText(args: Record<string, unknown>, key: string, max: number, example: Record<string, unknown>, maxLines?: number): string {
+  const raw = Object.hasOwn(args, key) ? args[key] : undefined
+  if (raw === undefined || raw === null) throw argError(`"${key}" is required: literal text, "@input" or "@note:<title>".`, example)
+  let text: string
+  if (typeof raw === 'string') {
+    text = raw
+  } else if (typeof raw === 'number' || typeof raw === 'boolean') {
+    text = String(raw)
+  } else if (Array.isArray(raw) && maxLines !== undefined) {
+    if (raw.length > maxLines) throw argError(`"${key}" has ${raw.length} lines (max ${maxLines}).`, example)
+    let length = Math.max(0, raw.length - 1)
+    for (const item of raw) {
+      if (typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean') {
+        throw argError(`"${key}" must be text (a string or a list of lines).`, example)
+      }
+      length += String(item).length
+    }
+    if (length > max) throw argError(`"${key}" is too long (${length} chars, max ${max}). Pass a shorter excerpt.`, example)
+    text = raw.join('\n')
+  } else {
+    throw argError(`"${key}" must be text${maxLines !== undefined ? ' (a string or a list of lines)' : ''}.`, example)
+  }
+  if (text.length > max) throw argError(`"${key}" is too long (${text.length} chars, max ${max}). Pass a shorter excerpt.`, example)
+  return text
+}
+
+// diff_text
+// Each side is capped at 400 lines, so the LCS table is at most 401 × 401
+// cells: the aligner's work is bounded whatever the lines hold.
+
+const DIFF_MAX_LINES = 400
+const DIFF_MAX_CHARS = 50_000
+/** Cells the LCS table may hold (both sides at the line cap). */
+const DIFF_MAX_CELLS = (DIFF_MAX_LINES + 1) ** 2
+const DIFF_CONTEXT = 2
+const DIFF_OUT_LINES = 80
+const DIFF_LINE_CHARS = 200
+const diffExample = { before: 'old text', after: '@input' }
+
+const SAME = 0
+const REMOVED = 1
+const ADDED = 2
+
+interface DiffOp {
+  kind: typeof SAME | typeof REMOVED | typeof ADDED
+  text: string
+}
+
+function readDiffSide(args: Record<string, unknown>, key: string): string {
+  const text = requiredText(args, key, DIFF_MAX_CHARS, diffExample, DIFF_MAX_LINES)
+  const lines = countLines(text)
+  if (lines > DIFF_MAX_LINES) throw argError(`"${key}" has ${lines} lines (max ${DIFF_MAX_LINES}). Diff a smaller section.`, diffExample)
+  return text
+}
+
+/** Lines as countLines counts them: CRLF, CR or LF; a final line break does not start a line. */
+function splitLines(text: string): string[] {
+  if (text === '') return []
+  const lines = text.split(/\r\n|\r|\n/)
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+/**
+ * Line ops: common prefix and suffix are trimmed first, then the middle is
+ * aligned with an LCS table (Uint16Array, lines compared as interned integer
+ * ids so each cell is O(1); a Map, so "__proto__" is an ordinary line).
+ */
+function diffOps(a: string[], b: string[]): DiffOp[] {
+  let prefix = 0
+  while (prefix < a.length && prefix < b.length && a[prefix] === b[prefix]) prefix++
+  let suffix = 0
+  while (suffix < a.length - prefix && suffix < b.length - prefix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++
+  const midA = a.slice(prefix, a.length - suffix)
+  const midB = b.slice(prefix, b.length - suffix)
+  const n = midA.length
+  const m = midB.length
+  if ((n + 1) * (m + 1) > DIFF_MAX_CELLS) throw argError(`The changed region is too large to align (max ${DIFF_MAX_LINES} lines per side).`, diffExample)
+
+  const ids = new Map<string, number>()
+  const intern = (line: string): number => {
+    let id = ids.get(line)
+    if (id === undefined) {
+      id = ids.size
+      ids.set(line, id)
+    }
+    return id
+  }
+  const idA = Int32Array.from(midA, intern)
+  const idB = Int32Array.from(midB, intern)
+  const width = m + 1
+  const lcs = new Uint16Array((n + 1) * width)
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i * width + j] = idA[i] === idB[j]
+        ? (lcs[(i + 1) * width + j + 1] ?? 0) + 1
+        : Math.max(lcs[(i + 1) * width + j] ?? 0, lcs[i * width + j + 1] ?? 0)
+    }
+  }
+
+  const ops: DiffOp[] = []
+  for (let k = 0; k < prefix; k++) ops.push({ kind: SAME, text: a[k] ?? '' })
+  let i = 0
+  let j = 0
+  while (i < n && j < m) {
+    if (idA[i] === idB[j]) {
+      ops.push({ kind: SAME, text: midA[i] ?? '' })
+      i++
+      j++
+    } else if ((lcs[(i + 1) * width + j] ?? 0) >= (lcs[i * width + j + 1] ?? 0)) {
+      ops.push({ kind: REMOVED, text: midA[i] ?? '' })
+      i++
+    } else {
+      ops.push({ kind: ADDED, text: midB[j] ?? '' })
+      j++
+    }
+  }
+  for (; i < n; i++) ops.push({ kind: REMOVED, text: midA[i] ?? '' })
+  for (; j < m; j++) ops.push({ kind: ADDED, text: midB[j] ?? '' })
+  for (let k = a.length - suffix; k < a.length; k++) ops.push({ kind: SAME, text: a[k] ?? '' })
+  return ops
+}
+
+/**
+ * One output line of at most DIFF_LINE_CHARS (text already redacted). A long
+ * changed line paired with its replacement is windowed around the first
+ * differing column, so an edit deep inside a long paragraph stays visible.
+ */
+function diffLine(marker: string, line: string, partner: string | undefined): string {
+  const room = DIFF_LINE_CHARS - 1
+  if (line.length <= room) return marker + line
+  if (partner === undefined) return marker + clipText(line, room)
+  const n = Math.min(line.length, partner.length)
+  let first = 0
+  while (first < n && line.charCodeAt(first) === partner.charCodeAt(first)) first++
+  let start = Math.max(0, first - 40)
+  const c = line.charCodeAt(start)
+  if (start > 0 && c >= 0xdc00 && c <= 0xdfff) start-- // keep a surrogate pair whole
+  return marker + (start === 0 ? clipText(line, room) : clipText(`…${line.slice(start)}`, room))
+}
+
+function renderDiff(ops: DiffOp[]): { diff: string[]; hunks: number; total: number; truncated: boolean } {
+  // Pair each run of removed lines with the run of added lines right after it.
+  const partner = new Int32Array(ops.length).fill(-1)
+  for (let k = 0; k < ops.length;) {
+    if (ops[k]?.kind !== REMOVED) {
+      k++
+      continue
+    }
+    let r = k
+    while (ops[r]?.kind === REMOVED) r++
+    let q = r
+    while (ops[q]?.kind === ADDED) q++
+    for (let t = 0; t < Math.min(r - k, q - r); t++) {
+      partner[k + t] = r + t
+      partner[r + t] = k + t
+    }
+    k = q
+  }
+
+  // Lines of each side consumed before each op (hunk header positions).
+  const beforeA = new Int32Array(ops.length + 1)
+  const beforeB = new Int32Array(ops.length + 1)
+  for (let k = 0; k < ops.length; k++) {
+    const kind = ops[k]?.kind
+    beforeA[k + 1] = (beforeA[k] ?? 0) + (kind === ADDED ? 0 : 1)
+    beforeB[k + 1] = (beforeB[k] ?? 0) + (kind === REMOVED ? 0 : 1)
+  }
+
+  // Hunks: changes plus DIFF_CONTEXT lines either side; gaps of at most 2 × DIFF_CONTEXT merge.
+  const ranges: [number, number][] = []
+  for (let k = 0; k < ops.length;) {
+    if (ops[k]?.kind === SAME) {
+      k++
+      continue
+    }
+    const start = Math.max(k - DIFF_CONTEXT, ranges.length > 0 ? (ranges[ranges.length - 1]?.[1] ?? 0) : 0)
+    let last = k
+    let scan = k
+    while (scan < ops.length) {
+      if (ops[scan]?.kind !== SAME) {
+        last = scan
+        scan++
+        continue
+      }
+      let run = scan
+      while (run < ops.length && ops[run]?.kind === SAME) run++
+      if (run < ops.length && run - scan <= DIFF_CONTEXT * 2) {
+        scan = run
+        continue
+      }
+      break
+    }
+    const end = Math.min(ops.length, last + 1 + DIFF_CONTEXT)
+    ranges.push([start, end])
+    k = end
+  }
+
+  // Whole lines until DIFF_OUT_LINES or LIST_BUDGET; the rest are only counted.
+  const diff: string[] = []
+  let total = 0
+  let used = 2
+  let truncated = false
+  const emit = (line: string) => {
+    const cost = JSON.stringify(line).length + 1
+    if (diff.length >= DIFF_OUT_LINES || used + cost > LIST_BUDGET) {
+      truncated = true
+      return
+    }
+    diff.push(line)
+    used += cost
+  }
+  for (const [start, end] of ranges) {
+    const aBefore = beforeA[start] ?? 0
+    const bBefore = beforeB[start] ?? 0
+    const aCount = (beforeA[end] ?? 0) - aBefore
+    const bCount = (beforeB[end] ?? 0) - bBefore
+    total += 1 + end - start
+    if (truncated) continue
+    emit(`@@ -${aCount > 0 ? aBefore + 1 : aBefore},${aCount} +${bCount > 0 ? bBefore + 1 : bBefore},${bCount} @@`)
+    for (let k = start; k < end && !truncated; k++) {
+      const op = ops[k]
+      if (!op) continue
+      const p = partner[k] ?? -1
+      emit(diffLine(op.kind === SAME ? ' ' : op.kind === REMOVED ? '-' : '+', op.text, p >= 0 ? ops[p]?.text : undefined))
+    }
+  }
+  return { diff, hunks: ranges.length, total, truncated }
+}
+
+/**
+ * Both sides are redacted before diffing, so no line is clipped through a
+ * secret (refs already arrive redacted; this covers literal text too). A line
+ * that differs only by a configured secret therefore compares equal.
+ */
+function diffText(rawBefore: string, rawAfter: string, ctx: ToolContext): Record<string, unknown> {
+  const before = redacted(rawBefore, ctx)
+  const after = redacted(rawAfter, ctx)
+  const ops = diffOps(splitLines(before), splitLines(after))
+  let added = 0
+  let removed = 0
+  let unchanged = 0
+  for (const op of ops) {
+    if (op.kind === ADDED) added++
+    else if (op.kind === REMOVED) removed++
+    else unchanged++
+  }
+  if (added === 0 && removed === 0) {
+    return { identical: true, added, removed, unchanged, ...(before !== after ? { note: 'Only line endings or a final line break differ.' } : {}) }
+  }
+  const { diff, hunks, total, truncated } = renderDiff(ops)
+  return {
+    identical: false, added, removed, unchanged, hunks, diff,
+    ...(truncated ? { truncated: true, diff_lines: total, hint: 'Diff a smaller section to see every hunk.' } : {}),
+  }
+}
+
+// encode_text
+
+const encodeOperations = ['base64_encode', 'base64_decode', 'url_encode', 'url_decode', 'sha256'] as const
+type EncodeOperation = (typeof encodeOperations)[number]
+const encodeExample = { operation: 'base64_decode', text: 'aGVsbG8=' }
+/** Keyed by compactKey: "Base64 Encode", "BASE64-DECODE" and "SHA-256" all match. */
+const encodeAliases = new Map<string, EncodeOperation>([
+  ...['base64encode', 'b64encode', 'encodebase64', 'tobase64', 'btoa'].map((k) => [k, 'base64_encode'] as const),
+  ...['base64decode', 'b64decode', 'decodebase64', 'frombase64', 'atob', 'base64urldecode', 'decodebase64url'].map((k) => [k, 'base64_decode'] as const),
+  ...['urlencode', 'encodeurl', 'percentencode', 'uriencode', 'encodeuricomponent'].map((k) => [k, 'url_encode'] as const),
+  ...['urldecode', 'decodeurl', 'percentdecode', 'uridecode', 'decodeuricomponent'].map((k) => [k, 'url_decode'] as const),
+  ...['sha256', 'sha2', 'hash', 'sha256hash', 'hashsha256'].map((k) => [k, 'sha256'] as const),
+])
+/** Input caps so the encoded or decoded result fits in one tool result. */
+const encodeCaps = new Map<EncodeOperation, { max: number; unit: 'bytes' | 'chars' }>([
+  ['base64_encode', { max: 2_500, unit: 'bytes' }],
+  ['url_encode', { max: 1_100, unit: 'bytes' }],
+  ['base64_decode', { max: 5_000, unit: 'chars' }],
+  ['url_decode', { max: 3_500, unit: 'chars' }],
+  ['sha256', { max: MAX_LONG_TEXT, unit: 'chars' }],
+])
+/** JSON chars the decoded `result` string may use. */
+const DECODED_BUDGET = RESULT_MAX_CHARS - 300
+const BASE64_CHARS = /^[A-Za-z0-9+/_-]*={0,2}$/
+const utf8 = new TextDecoder('utf-8', { fatal: true })
+
+/** Lowercase ASCII letters and digits only ("SHA-256" → "sha256"); reads at most 64 chars. */
+function compactKey(value: string): string {
+  let out = ''
+  const lower = value.slice(0, 64).toLowerCase()
+  for (let i = 0; i < lower.length; i++) {
+    const c = lower.charCodeAt(i)
+    if (isDigit(c) || (c >= 97 && c <= 122)) out += lower.charAt(i)
+  }
+  return out
+}
+
+function readEncodeOperation(args: Record<string, unknown>): EncodeOperation {
+  const raw = Object.hasOwn(args, 'operation') ? args.operation : undefined
+  if (typeof raw === 'string' && raw.length <= 64) {
+    const key = compactKey(raw)
+    const found = encodeAliases.get(key) ?? (key.endsWith('s') ? encodeAliases.get(key.slice(0, -1)) : undefined)
+    if (found) return found
+  }
+  return readEnum(args, 'operation', encodeOperations, { required: true, example: encodeExample })!
+}
+
+/** The longest prefix of `text` whose JSON string encoding fits in `budget` chars (never half a surrogate pair). */
+function jsonPrefix(text: string, budget: number): { text: string; truncated: boolean } {
+  let used = 0
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    let cost = 1
+    let units = 1
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = text.charCodeAt(i + 1)
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        cost = 2
+        units = 2
+      } else {
+        cost = 6
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      cost = 6
+    } else if (c === 0x22 || c === 0x5c || c === 0x08 || c === 0x09 || c === 0x0a || c === 0x0c || c === 0x0d) {
+      cost = 2
+    } else if (c < 0x20) {
+      cost = 6
+    }
+    if (used + cost > budget) return { text: text.slice(0, i), truncated: true }
+    used += cost
+    i += units - 1
+  }
+  return { text, truncated: false }
+}
+
+/** Standard or base64url (JWT segments), padding optional; whitespace and a data: URI prefix tolerated. */
+function decodeBase64(input: string): Buffer {
+  let s = input.trim()
+  if (s.slice(0, 5).toLowerCase() === 'data:') {
+    const comma = s.indexOf(';base64,')
+    if (comma !== -1 && comma < 200) s = s.slice(comma + 8)
+  }
+  s = s.replace(/\s/g, '')
+  if (!BASE64_CHARS.test(s)) {
+    const jwt = s.includes('.') ? ' A JWT has three dot-separated parts: decode one part at a time.' : ''
+    throw argError(`"text" is not valid base64: use only A-Z a-z 0-9 + / (or - _ for base64url) and at most two trailing "=".${jwt}`, encodeExample)
+  }
+  let pad = 0
+  while (pad < s.length && s.charCodeAt(s.length - 1 - pad) === 0x3d) pad++
+  const body = s.slice(0, s.length - pad)
+  if ((pad > 0 && s.length % 4 !== 0) || body.length % 4 === 1) {
+    throw argError(`"text" is not valid base64: its length (${body.length} chars) cannot encode whole bytes.`, encodeExample)
+  }
+  const standard = body.includes('+') || body.includes('/')
+  const urlSafe = body.includes('-') || body.includes('_')
+  if (standard && urlSafe) throw argError('"text" mixes base64 (+ /) and base64url (- _) characters.', encodeExample)
+  const normalized = urlSafe ? body.split('-').join('+').split('_').join('/') : body
+  const bytes = Buffer.from(normalized, 'base64')
+  let canonical = bytes.toString('base64')
+  while (canonical.endsWith('=')) canonical = canonical.slice(0, -1)
+  if (canonical !== normalized) throw argError('"text" is not valid base64: the last character has stray bits set.', encodeExample)
+  return bytes
+}
+
+/** UTF-8 text without control characters (other than tab, CR and LF); otherwise undefined. */
+function asText(bytes: Buffer): string | undefined {
+  let text: string
+  try {
+    text = utf8.decode(bytes)
+  } catch {
+    return undefined
+  }
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i)
+    if ((c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) || c === 0x7f) return undefined
+  }
+  return text
+}
+
+/**
+ * Decoded text is new text that executeToolCall's pre-handler redaction never
+ * saw (a base64 or %-encoded key), so it is redacted in full before the clip:
+ * a clip through a secret would leave a prefix no later pass can match.
+ */
+function decodedResult(operation: EncodeOperation, decoded: string, ctx: ToolContext, extra: Record<string, unknown>): Record<string, unknown> {
+  const safe = redacted(decoded, ctx)
+  const fit = jsonPrefix(safe, DECODED_BUDGET)
+  return { operation, result: fit.text, ...extra, ...(fit.truncated ? { truncated: true, chars: safe.length, shown_chars: fit.text.length } : {}) }
+}
+
+function encodeText(operation: EncodeOperation, text: string, ctx: ToolContext): Record<string, unknown> {
+  const cap = encodeCaps.get(operation) ?? { max: 0, unit: 'chars' }
+  // UTF-8 bytes ≥ UTF-16 length, so an over-long string is rejected before counting bytes.
+  const overByLength = text.length > cap.max
+  const size = overByLength || cap.unit === 'chars' ? text.length : Buffer.byteLength(text, 'utf8')
+  if (size > cap.max) {
+    const atLeast = overByLength && cap.unit === 'bytes' ? '+' : ''
+    throw argError(`"text" is too long for ${operation} (${size}${atLeast} ${cap.unit}, max ${cap.max}). Split it into parts.`, encodeExample)
+  }
+  switch (operation) {
+    case 'base64_encode':
+      return { operation, result: Buffer.from(text, 'utf8').toString('base64') }
+    case 'url_encode':
+      try {
+        return { operation, result: encodeURIComponent(text) }
+      } catch {
+        throw argError('"text" contains an unpaired surrogate character and cannot be URL-encoded.', encodeExample)
+      }
+    case 'sha256':
+      return { operation, result: createHash('sha256').update(text, 'utf8').digest('hex'), bytes: Buffer.byteLength(text, 'utf8') }
+    case 'url_decode': {
+      const plus = text.includes('+')
+      let decoded: string
+      try {
+        decoded = decodeURIComponent(plus ? text.split('+').join(' ') : text)
+      } catch {
+        throw argError('"text" has malformed percent-encoding: each % must start a valid %XX UTF-8 sequence.', encodeExample)
+      }
+      return decodedResult(operation, decoded, ctx, plus ? { plus_as_space: true } : {})
+    }
+    case 'base64_decode': {
+      const bytes = decodeBase64(text)
+      const decoded = asText(bytes)
+      if (decoded !== undefined) return decodedResult(operation, decoded, ctx, { bytes: bytes.length })
+      // No hex or other rendering: bytes the redactor cannot read must not leave as text.
+      return { operation, binary: true, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    }
+  }
+}
+
 export const textTools: ToolEntry[] = [
   {
     name: 'text_stats', category: 'text', effect: 'read',
@@ -768,6 +1204,37 @@ export const textTools: ToolEntry[] = [
     handler(args, ctx) {
       const kinds = readKinds(args)
       return fitJson(extractEntities(longText(args, entitiesExample), kinds, ctx))
+    },
+  },
+  {
+    name: 'diff_text', category: 'text', effect: 'read',
+    description: 'Line diff of two texts (max 400 lines, 50,000 chars each): unified hunks with 2 context lines plus added/removed/unchanged counts. Each side: text, "@input" or "@note:<title>". Example: {"before":"@note:Draft v1","after":"@input"}',
+    parameters: {
+      type: 'object', properties: {
+        before: { type: 'string', description: 'Original text, "@input" or "@note:<title>".' },
+        after: { type: 'string', description: 'Changed text, "@input" or "@note:<title>".' },
+      }, required: ['before', 'after'],
+    },
+    contentParams: { names: ['before', 'after'] },
+    handler(args, ctx) {
+      const before = readDiffSide(args, 'before')
+      const after = readDiffSide(args, 'after')
+      return fitJson(diffText(before, after, ctx))
+    },
+  },
+  {
+    name: 'encode_text', category: 'text', effect: 'read',
+    description: 'base64_encode, base64_decode (also base64url/JWT parts), url_encode, url_decode or sha256 (hex) of text: literal, "@input" or "@note:<title>". Example: {"operation":"base64_decode","text":"aGVsbG8="}',
+    parameters: {
+      type: 'object', properties: {
+        operation: { type: 'string', enum: encodeOperations },
+        text: { type: 'string', description: 'Text, "@input" or "@note:<title>".' },
+      }, required: ['operation', 'text'],
+    },
+    contentParams: { names: ['text'] },
+    handler(args, ctx) {
+      const operation = readEncodeOperation(args)
+      return fitJson(encodeText(operation, requiredText(args, 'text', MAX_LONG_TEXT, encodeExample), ctx))
     },
   },
 ]

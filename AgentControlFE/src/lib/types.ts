@@ -50,6 +50,10 @@ export type EndpointKind = 'openai-compatible' | 'openrouter'
       YAML frontmatter -> name + description, body -> content; id is the
       slugified name. 422 when the frontmatter is missing/incomplete,
       409 when the id already exists.
+    - `POST   /api/prompt-budget`        (PromptBudgetInput) -> PromptBudget
+      Additive: how an agent draft's instructions + skills fit its
+      endpoint's context window (the plan a run would use). 400 on an
+      unknown endpoint.
     --------------------------------------------------------------------------
    Canonical shapes (BE adopts these; FE does not rename):
    - Agent: { id, name, description (not `desc`), instructions, modelId,
@@ -165,10 +169,45 @@ export type AgentRun = {
   input: string
   /** Exact system message the run sent upstream; absent on pre-audit runs/BEs. */
   systemPrompt?: string
-  /** Skills injected into that prompt (content itself is never sent). */
-  skillSnapshot?: { id: string; name: string; contentChars: number }[]
+  /**
+   * Skills injected into that prompt (content itself is never sent). `mode`
+   * 'summary' means only a short summary went in (the agent reads the full
+   * text with get_skill); absent on runs recorded before summaries existed.
+   */
+  skillSnapshot?: { id: string; name: string; contentChars: number; mode?: SkillPromptMode }[]
   /** Tool calls executed during the run; absent on pre-tool-execution runs/BEs. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
+}
+
+/** How one attached skill went into a run's system prompt. */
+export type SkillPromptMode = 'full' | 'summary'
+
+/**
+ * How a draft's prompt fits its endpoint: every skill in full, the largest
+ * skills as summaries (read in full with get_skill), or over budget even then
+ * (runs are rejected).
+ */
+export type PromptBudgetMode = 'full' | 'summary' | 'too-large'
+
+/** Body for POST /api/prompt-budget. Unknown skill ids are ignored. */
+export type PromptBudgetInput = {
+  endpointId: string
+  skillIds: string[]
+  instructions?: string
+}
+
+/** POST /api/prompt-budget response: the plan a run would use, with an empty message. */
+export type PromptBudget = {
+  contextWindow: number
+  /** Tokens kept free for the reply. */
+  responseReserve: number
+  /** chars/4 estimate of the system prompt + tool schemas. */
+  estimatedTokens: number
+  mode: PromptBudgetMode
+  /** Skills sent as summaries, in attachment order. */
+  summarizedSkillIds: string[]
+  /** Tools a run would offer, in the order sent upstream. */
+  toolNames: string[]
 }
 
 /** Body for POST /api/agents/:id/runs. */

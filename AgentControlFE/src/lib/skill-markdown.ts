@@ -12,6 +12,8 @@ export class SkillMarkdownError extends Error {}
 export type ParsedSkillMarkdown = {
   name: string
   description: string
+  /** Optional `tag:` (the Skill Library's category label); '' when absent. */
+  tag: string
   /** Body with the frontmatter block stripped. */
   content: string
   /**
@@ -85,7 +87,7 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
   if (!description) throw new SkillMarkdownError('SKILL.md frontmatter is missing a "description" field.')
 
   const content = text.slice(match[0].length).replace(/^\n+/, '').trimEnd()
-  return { name, description, content, tools: [...new Set(tools)].slice(0, 64) }
+  return { name, description, tag: meta.get('tag') ?? '', content, tools: [...new Set(tools)].slice(0, 64) }
 }
 
 export function parsePreview(markdown: string): ParsedSkillMarkdown | { error: string } {
@@ -94,4 +96,76 @@ export function parsePreview(markdown: string): ParsedSkillMarkdown | { error: s
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not parse SKILL.md.' }
   }
+}
+
+/* --------------------------------------------------------------------------
+   Export (FE only, no BE mirror): a skill as a SKILL.md file that the parser
+   above — and so POST /api/skills/import — reads back to the same name,
+   description, tag, body and tools.
+   -------------------------------------------------------------------------- */
+
+/** What an export needs from a Skill (structural, so tests can pass plain objects). */
+export type SkillMarkdownSource = {
+  name: string
+  description: string
+  tag?: string
+  content: string
+  tools?: readonly { name: string }[]
+}
+
+/** Tool names the BE accepts; anything else would split or vanish in `tools:`. */
+const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/
+
+/**
+ * A single-line frontmatter value the parser reads back verbatim. Values are
+ * never unquoted, so nothing can be escaped: line breaks fold to one space, and
+ * a `#` that stripComment would take for a comment (first character, or after
+ * whitespace, outside quotes) becomes a fullwidth `＃` instead of cutting the
+ * value short. Same quote/escape walk as stripComment, so every other character
+ * survives as-is.
+ */
+function frontmatterValue(text: string): string {
+  const value = text.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+  let quote = ''
+  let out = ''
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]!
+    if (quote === '"' && char === '\\') {
+      out += value.slice(i, i + 2)
+      i++
+      continue
+    }
+    if (quote) {
+      if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (char === '#' && (i === 0 || /\s/.test(value[i - 1]!))) {
+      out += '＃'
+      continue
+    }
+    out += char
+  }
+  return out
+}
+
+/** Serialize a skill as SKILL.md: `name`, `description`, optional `tag` and `tools`, then the body. */
+export function serializeSkillMarkdown(skill: SkillMarkdownSource): string {
+  const name = frontmatterValue(skill.name) || 'skill'
+  // The importer requires a description; a skill saved without one exports its name.
+  const description = frontmatterValue(skill.description) || name
+  const tag = frontmatterValue(skill.tag ?? '')
+  const tools = [...new Set((skill.tools ?? []).map((t) => t.name).filter((n) => TOOL_NAME.test(n)))].slice(0, 64)
+  const header = ['---', `name: ${name}`, `description: ${description}`]
+  if (tag) header.push(`tag: ${tag}`)
+  if (tools.length > 0) header.push(`tools: ${tools.join(', ')}`)
+  header.push('---')
+  // The parser drops leading blank lines and trailing whitespace of the body.
+  const body = skill.content.replace(/\r\n/g, '\n').trimEnd()
+  return `${header.join('\n')}\n\n${body}\n`
+}
+
+/** Download name for an exported skill: `<id>.md`, limited to filename-safe characters. */
+export function skillFileName(id: string): string {
+  const safe = id.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 120)
+  return `${safe || 'skill'}.md`
 }

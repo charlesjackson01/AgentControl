@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
@@ -1763,5 +1763,131 @@ describe('seed data integrity', () => {
     expect(loaded.skills.map((s) => s.id)).toEqual(seedSkills.map((s) => s.id))
     for (const s of loaded.skills) expect(typeof s.content === 'string' && s.content.length > 0).toBe(true)
     rmSync(d, { recursive: true, force: true })
+  })
+})
+
+describe('projects CRUD', () => {
+  async function makeAgent(name: string) {
+    const res = await inject('POST', '/api/agents', {
+      name,
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
+    expect(res.statusCode).toBe(201)
+    return res.json() as { id: string }
+  }
+
+  it('creates a project with a folder on disk and empty team by default', async () => {
+    const res = await inject('POST', '/api/projects', { name: 'Widget Lab' })
+    expect(res.statusCode).toBe(201)
+    const p = res.json() as { id: string; name: string; folder: string; teamAgentIds: string[]; createdAt: string; updatedAt: string }
+    expect(p.name).toBe('Widget Lab')
+    expect(p.teamAgentIds).toEqual([])
+    expect(p.folder).toBe(join(store.projectsRoot, 'widget-lab'))
+    expect(existsSync(p.folder)).toBe(true)
+    expect(p.createdAt).toBe(p.updatedAt)
+
+    const list = await inject('GET', '/api/projects')
+    const projects = list.json() as { id: string }[]
+    expect(projects.some((x) => x.id === p.id)).toBe(true)
+  })
+
+  it('accepts a team at creation and rejects unknown agent ids', async () => {
+    const a = await makeAgent('Coder One')
+    const ok = await inject('POST', '/api/projects', { name: 'Team Project', teamAgentIds: [a.id, a.id] })
+    expect(ok.statusCode).toBe(201)
+    expect((ok.json() as { teamAgentIds: string[] }).teamAgentIds).toEqual([a.id])
+
+    const bad = await inject('POST', '/api/projects', { name: 'Bad Team', teamAgentIds: ['agent_nope'] })
+    expect(bad.statusCode).toBe(400)
+    expect(bad.json().message).toMatch(/agent_nope/)
+  })
+
+  it('requires a name, rejects duplicates case-insensitively, and 409s', async () => {
+    const noName = await inject('POST', '/api/projects', {})
+    expect(noName.statusCode).toBe(400)
+
+    const first = await inject('POST', '/api/projects', { name: 'Dup Check' })
+    expect(first.statusCode).toBe(201)
+    const dup = await inject('POST', '/api/projects', { name: 'dup check' })
+    expect(dup.statusCode).toBe(409)
+  })
+
+  it('suffixes the folder on slug collision and keeps folders distinct', async () => {
+    const a = await inject('POST', '/api/projects', { name: 'Same Name!' })
+    const b = await inject('POST', '/api/projects', { name: 'Same Name?' })
+    expect(a.statusCode).toBe(201)
+    expect(b.statusCode).toBe(201)
+    const fa = (a.json() as { folder: string }).folder
+    const fb = (b.json() as { folder: string }).folder
+    expect(fa).toBe(join(store.projectsRoot, 'same-name'))
+    expect(fb).toBe(join(store.projectsRoot, 'same-name-2'))
+    expect(existsSync(fa) && existsSync(fb)).toBe(true)
+  })
+
+  it('patches name/desc/team, never moves the folder, and 404s on unknown id', async () => {
+    const created = await inject('POST', '/api/projects', { name: 'Rename Me', desc: 'old' })
+    const p = created.json() as { id: string; folder: string; updatedAt: string }
+    const a = await makeAgent('Patcher')
+
+    const patched = await inject('PATCH', `/api/projects/${p.id}`, { name: 'Renamed', desc: 'new', teamAgentIds: [a.id] })
+    expect(patched.statusCode).toBe(200)
+    const got = patched.json() as { name: string; desc: string; folder: string; teamAgentIds: string[]; updatedAt: string }
+    expect(got).toMatchObject({ name: 'Renamed', desc: 'new', folder: p.folder, teamAgentIds: [a.id] })
+    expect(got.updatedAt >= p.updatedAt).toBe(true)
+    // The old slug folder still exists; the folder never moves on rename.
+    expect(existsSync(p.folder)).toBe(true)
+
+    const missing = await inject('PATCH', '/api/projects/proj_nope', { desc: 'x' })
+    expect(missing.statusCode).toBe(404)
+  })
+
+  it('deletes the record but leaves the folder on disk', async () => {
+    const created = await inject('POST', '/api/projects', { name: 'Delete Me' })
+    const p = created.json() as { id: string; folder: string }
+    const del = await inject('DELETE', `/api/projects/${p.id}`)
+    expect(del.statusCode).toBe(204)
+    const list = await inject('GET', '/api/projects')
+    expect((list.json() as { id: string }[]).some((x) => x.id === p.id)).toBe(false)
+    expect(existsSync(p.folder)).toBe(true)
+
+    const again = await inject('DELETE', `/api/projects/${p.id}`)
+    expect(again.statusCode).toBe(404)
+  })
+
+  it('persists created projects across a store reload', async () => {
+    const created = await inject('POST', '/api/projects', { name: 'Persisted Project' })
+    const p = created.json() as { id: string }
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.projects.some((x) => x.id === p.id)).toBe(true)
+  })
+
+  it('backfills folder/teamAgentIds/createdAt on legacy project rows', () => {
+    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-oldprojects-'))
+    const oldPath = join(oldDir, 'store.json')
+    writeFileSync(
+      oldPath,
+      JSON.stringify({
+        agents: [],
+        runs: [],
+        projects: [{ id: 'proj-legacy', name: 'Legacy One', desc: 'old shape', updatedAt: '2026-01-01T00:00:00.000Z' }],
+        endpoints: [],
+        endpointModels: {},
+        settings: { autoRun: true, notify: true, telemetry: false },
+        skills: [],
+      }),
+      'utf8',
+    )
+    const loaded = createStore(oldPath)
+    const legacy = loaded.projects.find((x) => x.id === 'proj-legacy')
+    expect(legacy).toMatchObject({
+      folder: join(oldDir, 'projects', 'legacy-one'),
+      teamAgentIds: [],
+      createdAt: '2026-01-01T00:00:00.000Z',
+    })
+    rmSync(oldDir, { recursive: true, force: true })
   })
 })

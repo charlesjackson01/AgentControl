@@ -254,3 +254,23 @@ export type AgentInput = {
   /** Bootstrap only: set true when creating the first (Team Lead) agent. */
   isPrimary?: boolean
 }
+
+/** A project: a folder owned by AgentControl plus its team of library agents. */
+export type Project = {
+  id: string
+  name: string
+  desc: string
+  /** Absolute path created by the BE under the projects root. */
+  folder: string
+  /** Library agents on this project's team. Empty is allowed. */
+  teamAgentIds: string[]
+  createdAt: string
+  updatedAt: string
+}
+
+/** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
+export type ProjectInput = {
+  name: string
+  desc?: string
+  teamAgentIds?: string[]
+}

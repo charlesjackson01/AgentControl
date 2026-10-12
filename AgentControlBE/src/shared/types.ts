@@ -174,8 +174,22 @@ export interface Project {
   id: string
   name: string
   desc: string
+  /** Absolute path created by the BE under the projects root when the project is made. */
+  folder: string
+  /** Library agents on this project's team. Empty is allowed (Primary assembles later). */
+  teamAgentIds: string[]
+  createdAt: string
   updatedAt: string
 }
+
+/** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
+export interface ProjectInput {
+  name: string
+  desc?: string
+  teamAgentIds?: string[]
+}
+
+export type ProjectPatch = Partial<ProjectInput>
 
 /**
  * Shared workspace memory written by agents through the notes tools. Bodies are

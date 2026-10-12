@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -205,6 +205,29 @@ export const api = {
       `/api/endpoints/${encodeURIComponent(id)}/models`,
     )
     return body.models
+  },
+
+  /* -- Projects: a project owns a folder under the BE projects root and a team
+     of library agents. Rename never moves the folder; delete leaves it on disk. */
+
+  async listProjects(): Promise<Project[]> {
+    return request<Project[]>('/api/projects')
+  },
+
+  async createProject(input: ProjectInput): Promise<Project> {
+    return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) })
+  },
+
+  async updateProject(id: string, patch: Partial<ProjectInput>): Promise<Project> {
+    return request<Project>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    })
+  },
+
+  /** 204; the folder stays on disk. */
+  async deleteProject(id: string): Promise<void> {
+    await request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {

@@ -4,9 +4,11 @@
  * POST /api/prompt-budget both call planPrompt, so the budget preview is
  * exactly the plan a run would use.
  *
- * Full mode is the original construction, byte for byte. When the full prompt
- * leaves too little room, the largest skills become short summary blocks and
- * get_skill is offered so the model can read a summarized skill on demand.
+ * Full mode is the original construction, byte for byte, and is used whenever
+ * it fits (prompt + RESPONSE_RESERVE within the window): anything a run
+ * accepted before summaries existed is sent exactly as before. Only a prompt
+ * that would be rejected has its largest skills turned into short summary
+ * blocks, with get_skill offered so the model can read one on demand.
  */
 import type { PromptMode, Skill } from './shared/types.js'
 import { clipText } from './tools/limits.js'
@@ -16,8 +18,9 @@ import type { ToolDeclaration } from './upstream.js'
 /** Tokens kept free for the model's reply (the upstream max_tokens ceiling). */
 export const RESPONSE_RESERVE = 4096
 /**
- * Tokens a plan must also leave free for history turns and tool results.
- * Kept small so agents that fit today keep their full, byte-identical prompt.
+ * Tokens a summarized plan aims to leave free for history turns and tool
+ * results (so a summarized skill can actually be read). Full mode does not
+ * need it: a full prompt that fits is never summarized.
  */
 export const SKILL_HEADROOM = 1024
 /** A summary block quotes at most this much of the skill's description. */
@@ -123,16 +126,18 @@ function schemaChars(tools: ToolDeclaration[]): number {
 }
 
 /**
- * Plan a run prompt for this context window. Full mode when
- * estimate + RESPONSE_RESERVE + SKILL_HEADROOM fits; otherwise skills are
- * summarized largest first (ties: attachment order) until it fits, blocks
- * staying in attachment order, and get_skill joins the offered tools. A skill
- * whose summary would not be shorter stays full. The mode is 'too-large' only
- * when the plan breaks the hard limit the run route enforces (prompt +
- * RESPONSE_RESERVE over the window); short headroom alone still runs.
+ * Plan a run prompt for this context window. Full mode whenever
+ * estimate + RESPONSE_RESERVE fits (the hard limit the run route enforces).
+ * Otherwise skills are summarized largest first (ties: attachment order) until
+ * the plan also leaves SKILL_HEADROOM, blocks staying in attachment order, and
+ * get_skill joins the offered tools (its schema counts). A skill whose summary
+ * would not be shorter stays full, and a summary plan that is not smaller than
+ * the full one is dropped. 'too-large' means the plan still breaks the hard
+ * limit, so the run would be rejected.
  */
 export function planPrompt({ instructions, skills, input, contextWindow }: PromptPlanInput): PromptPlan {
-  const budget = contextWindow - RESPONSE_RESERVE - SKILL_HEADROOM
+  const hardLimit = contextWindow - RESPONSE_RESERVE
+  const budget = hardLimit - SKILL_HEADROOM
   const baseTools = skillTools(skills)
   const getSkill = baseTools.some((t) => t.name === GET_SKILL) ? undefined : toolDeclaration(GET_SKILL)
   const summaryTools = getSkill ? [...baseTools, getSkill] : baseTools
@@ -145,8 +150,9 @@ export function planPrompt({ instructions, skills, input, contextWindow }: Promp
   const estimate = (toolChars: number): number =>
     estimateTokens(systemLength(instructions, skills.length, blockChars) + input.length + toolChars)
 
+  const fullEstimate = estimate(fullSchema)
   const summaries = new Map<string, string>()
-  if (estimate(fullSchema) > budget) {
+  if (fullEstimate > hardLimit) {
     // Each id is one candidate, ranked at its first attachment; a repeated id
     // is summarized at every attachment.
     const byId = new Map<string, { skill: Skill; index: number; count: number; fullChars: number }>()
@@ -172,12 +178,15 @@ export function planPrompt({ instructions, skills, input, contextWindow }: Promp
     }
   }
 
+  // Summaries plus the get_skill schema can outweigh what they save (small
+  // skills): then the full plan is the better one to send or to reject.
+  if (summaries.size > 0 && estimate(summarySchema) >= fullEstimate) summaries.clear()
+
   const blocks = skills.map((s) => summaries.get(s.id) ?? fullBlock(s))
   const system = buildSystem(instructions, blocks)
   const toolDeclarations = summaries.size > 0 ? summaryTools : baseTools
   const estimatedTokens = estimateTokens(system.length + input.length + schemaChars(toolDeclarations))
-  const mode: PromptMode =
-    estimatedTokens + RESPONSE_RESERVE > contextWindow ? 'too-large' : summaries.size > 0 ? 'summary' : 'full'
+  const mode: PromptMode = estimatedTokens > hardLimit ? 'too-large' : summaries.size > 0 ? 'summary' : 'full'
   return {
     system,
     toolDeclarations,

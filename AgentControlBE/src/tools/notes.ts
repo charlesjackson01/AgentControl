@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Note } from '../shared/types.js'
 import { argError, findNote, readEnum, readList, readNumber, readString } from './args.js'
-import { clipJsonText, fitJson, pageText, RESULT_MAX_CHARS, type TextPage } from './limits.js'
+import { clipJsonText, fitJson, pageJsonBudget, pageText, type TextPage } from './limits.js'
 import { redactSecrets } from './redact.js'
 import type { ToolEntry } from './types.js'
 import { safeText } from './workspace.js'
@@ -75,7 +75,7 @@ export const notesTools: ToolEntry[] = [
       const skeleton = JSON.stringify({ ...head, body: '', offset: total, nextOffset: total, totalChars: total, untrusted: true }).length
       let page: TextPage
       try {
-        page = pageText(body, offset, NOTE_PAGE_CHARS, RESULT_MAX_CHARS - skeleton - 2)
+        page = pageText(body, offset, NOTE_PAGE_CHARS, pageJsonBudget(skeleton, ctx.resultMaxChars))
       } catch (err) {
         if (!(err instanceof RangeError)) throw err
         throw argError(`${err.message} Start at 0, or pass the previous page's nextOffset.`, { note: head.id, offset: 0 })

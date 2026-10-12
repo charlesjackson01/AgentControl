@@ -5,8 +5,8 @@
  */
 import type { Agent, AgentRun, Endpoint, Skill } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
-import { argError, findAgent, findSkill, readNumber, readString } from './args.js'
-import { clipJsonText, clipText, fitJson, pageText, RESULT_MAX_CHARS, type TextPage } from './limits.js'
+import { argError, findAgent, findSkillIn, readNumber, readString } from './args.js'
+import { clipJsonText, clipText, fitJson, pageJsonBudget, pageText, type TextPage } from './limits.js'
 import { REDACTED, redactSecrets } from './redact.js'
 import type { ToolContext, ToolEntry } from './types.js'
 
@@ -144,9 +144,9 @@ function usableSkillName(store: WorkspaceStore): string | undefined {
 }
 
 /** Missing or unknown skill: lists up to 10 known names, and an example naming a real one. */
-function skillNotFound(ref: string | undefined, store: WorkspaceStore): Error {
-  const names = store.skills.slice(0, 10).map((s) => JSON.stringify(safeText(s?.name, 40, store)))
-  const listed = names.length === 0 ? 'none' : `${names.join(', ')}${store.skills.length > 10 ? ', …' : ''}`
+function skillNotFound(ref: string | undefined, store: WorkspaceStore, pool: readonly Skill[] = store.skills): Error {
+  const names = pool.slice(0, 10).map((s) => JSON.stringify(safeText(s?.name, 40, store)))
+  const listed = names.length === 0 ? 'none' : `${names.join(', ')}${pool.length > 10 ? ', …' : ''}`
   const lead = ref === undefined ? '"skill" is required: a skill id or name from list_skills.' : `No skill "${safeText(ref, 60, store)}".`
   const usable = usableSkillName(store)
   return argError(`${lead} Known skills: ${listed}.`, usable ? { skill: usable } : SKILL_EXAMPLE)
@@ -496,8 +496,11 @@ export const workspaceTools: ToolEntry[] = [
     handler: (args, ctx) => {
       const { store } = ctx
       const ref = readRef(args, SKILL_REF_KEYS, SKILL_EXAMPLE)
-      const skill = ref ? findSkill(store, ref) : undefined
-      if (!skill) throw skillNotFound(ref, store)
+      // Offered by the prompt planner, get_skill reads only the agent's own skills.
+      const scope = ctx.skillScope
+      const pool = scope ? store.skills.filter((s) => scope.has(s.id)) : store.skills
+      const skill = ref ? findSkillIn(pool, ref) : undefined
+      if (!skill) throw skillNotFound(ref, store, pool)
       const offset = Math.floor(readNumber(args, 'offset', { min: 0, example: SKILL_EXAMPLE }) ?? 0)
 
       // The whole text is redacted before it is paged: offsets index the
@@ -517,7 +520,7 @@ export const workspaceTools: ToolEntry[] = [
       const skeleton = JSON.stringify({ ...head, totalChars: total, offset: total, content: '', nextOffset: total }).length
       let page: TextPage
       try {
-        page = pageText(content, offset, SKILL_PAGE_CHARS, RESULT_MAX_CHARS - skeleton - 2)
+        page = pageText(content, offset, SKILL_PAGE_CHARS, pageJsonBudget(skeleton, ctx.resultMaxChars))
       } catch (err) {
         if (!(err instanceof RangeError)) throw err
         throw argError(`${err.message} Start at 0, or pass the previous page's nextOffset.`, {

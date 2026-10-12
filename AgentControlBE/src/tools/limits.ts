@@ -95,6 +95,24 @@ export function pageText(text: string, offset: number, pageChars: number, jsonBu
   return { content: text.slice(start, end), offset: start, nextOffset: end < total ? end : null, totalChars: total }
 }
 
+/** Smallest page JSON budget worth returning; below it a paging tool says the run is out of room. */
+const MIN_PAGE_JSON = 200
+
+/**
+ * JSON chars a paged result may give its page: what the result cap (or the
+ * run's remaining room, when smaller) leaves after the `skeleton` of the other
+ * fields. Throws when that is too little to read anything useful, so the
+ * model is told to answer instead of receiving JSON the loop had to cut.
+ */
+export function pageJsonBudget(skeleton: number, resultMaxChars: number | undefined): number {
+  const cap = Math.min(RESULT_MAX_CHARS, resultMaxChars ?? RESULT_MAX_CHARS)
+  const room = cap - skeleton - 2
+  if (room < MIN_PAGE_JSON) {
+    throw new Error('Not enough room left in this conversation to read more. Answer with what you have.')
+  }
+  return room
+}
+
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
 function toJson(value: unknown): Json {

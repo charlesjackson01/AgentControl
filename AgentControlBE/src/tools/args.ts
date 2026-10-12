@@ -137,7 +137,12 @@ export function findAgent(store: WorkspaceStore, ref: string): Agent | undefined
 
 /** Skill by id or case-insensitive name. */
 export function findSkill(store: WorkspaceStore, ref: string): Skill | undefined {
-  return store.skills.find((s) => s.id === ref) ?? store.skills.find((s) => fold(s.name) === fold(ref))
+  return findSkillIn(store.skills, ref)
+}
+
+/** findSkill over a given list (e.g. the skills a run may read). */
+export function findSkillIn(skills: readonly Skill[], ref: string): Skill | undefined {
+  return skills.find((s) => s.id === ref) ?? skills.find((s) => fold(s.name) === fold(ref))
 }
 
 /** Note by id or case-insensitive title. */

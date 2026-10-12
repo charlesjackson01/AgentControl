@@ -67,6 +67,10 @@ shape of the store.
 - Runs: `POST/GET /api/agents/:id/runs` (newest-first, capped at 50), `DELETE /api/agents/:id/runs` (clear chat history).
   `POST` assembles multi-turn context: system prompt + the agent's last 10 successful
   runs as user/assistant pairs + the new input (failed runs excluded).
+- `POST /api/prompt-budget` `{ endpointId, skillIds, instructions? }` →
+  `{ contextWindow, responseReserve, estimatedTokens, mode, summarizedSkillIds, toolNames }`:
+  the prompt plan a run would use (see *Skills that don't fit* below), without
+  calling the endpoint. The agent form uses it to show the prompt size.
 - Endpoints: `GET/POST /api/endpoints`, `PATCH/DELETE /api/endpoints/:id`
   (`DELETE` returns `{ ok, reassignedAgents }`, moving attached agents to the
   Team Lead's endpoint; deleting the Team Lead's own endpoint → 409),
@@ -74,9 +78,10 @@ shape of the store.
 
 ## Skills and tools
 
-The library ships six unchanged vendored skills and ten AgentControl skills.
-`GET /api/tools` serves canonical declarations for 21 built-in tools across
-workspace, notes, time, math, text, and data modules. Skills declare tool names;
+The library ships six vendored skills (bodies unchanged; only their `tools:`
+frontmatter is ours) and twelve AgentControl skills, and every one of them
+declares tools. `GET /api/tools` serves canonical declarations for 24 built-in
+tools across workspace, notes, time, math, text, and data modules. Skills declare tool names;
 only attached registry tools are offered to the model and allowed to execute.
 Legacy unknown declarations remain stored but are not executable. SKILL.md
 imports accept inline or block `tools:` lists, ignore comments outside quotes,
@@ -92,10 +97,31 @@ match flags cannot probe a stored secret. Conventional placeholder keys for
 local servers (`EMPTY`, `none`, `ollama`, …) and values under 3 characters are
 not treated as secrets.
 
+`get_skill` and `read_note` return long text in pages (pass `nextOffset` to
+continue). Both redact the whole text before paging, so a secret that straddles
+a page edge is still caught; every tool that clips user-written text redacts it
+first for the same reason. `encode_text` redacts decoded text and never renders
+bytes that are not valid UTF-8 (it returns their count and sha256 instead).
+
 Seed skills a store already holds are upgraded once when their shipped
-definition changes (`seed-skill-upgrade-v2`), but only while they still match
-the previous definition exactly; a skill you edited, cleared or deleted is left
-as it is.
+definition changes (`seed-skill-upgrade-v2`, `seed-skill-upgrade-v3`), but only
+while they still match the previous definition exactly (body sha256 and tool
+list); a skill you edited, cleared or deleted is left as it is. To customize a
+built-in skill and keep receiving upgrades of the original, duplicate it in the
+Skill Library. Caveat: a vendored skill whose tools you cleared looks the same
+as one shipped without tools, so v3 gives it its new tools once.
+
+### Skills that don't fit
+
+A run puts each attached skill's full text in the system prompt when the
+prompt, the 4,096-token reply reserve and 1,024 tokens of headroom fit the
+endpoint's context window (estimated at 4 chars per token); that prompt is the
+same, byte for byte, as before summaries existed. Otherwise the largest skills
+are sent as short summaries (name, description, and an instruction to call
+`get_skill`), and `get_skill` is offered so the model reads a summarized skill
+when it needs it. The run audit records each skill's `mode` (`full` or
+`summary`). A run is rejected with 413 only when even the summarized prompt
+plus the reply reserve exceeds the window; the message gives the numbers.
 
 `save_note` creates or updates shared workspace notes. Only the creating agent
 may replace a note; other agents may append body text. Limits are four writes

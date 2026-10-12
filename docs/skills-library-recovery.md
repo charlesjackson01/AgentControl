@@ -1,5 +1,15 @@
 # Skills library recovery
 
+> **Historical record of PR #3.** The inventory below is the state at that PR.
+> Since then: PR #4 added `get_agent`, `workspace_overview`, `process_lines`,
+> `extract_entities` and `resolve_date` (21 tools) and `seed-skill-upgrade-v2`;
+> `feat/skills-complete` added `get_skill`, `encode_text` and `diff_text` (24
+> tools), upgraded the data and math tools, gave every seed skill tools, added
+> `encoding-and-hashing` and `release-notes` (18 seeds) with
+> `seed-skill-upgrade-v3`, and sends skills that don't fit the endpoint's
+> context window as summaries. The current reference is the
+> [backend README](../AgentControlBE/README.md#skills-and-tools).
+
 ## Recovered state
 
 The initial checkout was a clean `work` branch at `5f46be2`, identical to

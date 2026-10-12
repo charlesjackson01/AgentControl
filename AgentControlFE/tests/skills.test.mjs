@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { parsePreview } from '../src/lib/skill-markdown.ts'
+import { parsePreview, serializeSkillMarkdown, skillFileName } from '../src/lib/skill-markdown.ts'
 import { parseSkillMarkdown } from '../../AgentControlBE/src/db/skill-md.ts'
 import { classifyImportTools, toggleTool } from '../src/lib/skill-tools.ts'
+import { filterSkills, matchesSkillQuery } from '../src/lib/skill-search.ts'
 
 const markdown = (header) => `---\nname: sample\ndescription: a skill\n${header}\n---\n\nFollow these instructions.\n`
 
@@ -56,5 +57,111 @@ describe('tool selection and import', () => {
     assert.equal(result.tools.length, 16)
     assert.equal(new Set(result.tools).size, 16)
     assert.deepEqual(result.ignored, ['unknown', 'tool_16'])
+  })
+})
+
+describe('SKILL.md export round-trips through the import parser', () => {
+  const tool = (name) => ({ name, description: `${name} tool`, parameters: {} })
+  /** Export, then parse with the BE importer's parser and the FE preview; both must agree. */
+  const roundTrip = (skill) => {
+    const markdown = serializeSkillMarkdown(skill)
+    const parsed = parseSkillMarkdown(markdown)
+    assert.deepEqual(parsePreview(markdown), parsed)
+    return { markdown, parsed }
+  }
+
+  it('keeps name, description, tag, body, and tools', () => {
+    const skill = {
+      name: 'csv-analysis',
+      description: 'Summarize supplied CSV structure and numeric columns.',
+      tag: 'Data',
+      content: '# CSV Analysis\n\n1. Call `csv_summary`.\n2. Report the columns.',
+      tools: [tool('csv_summary'), tool('read_note')],
+    }
+    const { markdown, parsed } = roundTrip(skill)
+    assert.deepEqual(parsed, { name: skill.name, description: skill.description, tag: 'Data', content: skill.content, tools: ['csv_summary', 'read_note'] })
+    assert.match(markdown, /^---\nname: csv-analysis\ndescription: .+\ntag: Data\ntools: csv_summary, read_note\n---\n\n# CSV Analysis/)
+  })
+
+  it('keeps special characters in the description verbatim', () => {
+    const descriptions = [
+      `Quotes "double" and 'single', colons: yes: twice, [brackets], {braces}, - dash`,
+      'C# & F#, 100% <b>html</b> & back\\slash \\"escaped\\" — ünïcödé 🚀',
+      `Don't strip # this: an open single quote makes the hash literal`,
+      'A "quoted # hash" and a trailing backslash \\',
+      '---',
+      '__proto__: constructor',
+    ]
+    for (const description of descriptions) {
+      const { parsed } = roundTrip({ name: 'Special: "chars" & #1', description, tag: '', content: 'Body.', tools: [] })
+      assert.equal(parsed.description, description)
+      // The hash follows a space outside quotes, so it would start a comment.
+      assert.equal(parsed.name, 'Special: "chars" & ＃1')
+    }
+  })
+
+  it('swaps a comment-starting hash for a fullwidth one instead of truncating', () => {
+    const { parsed } = roundTrip({ name: '#tagged', description: '#1 pick for #urgent work # really', tag: '#core', content: 'Body.', tools: [] })
+    assert.equal(parsed.name, '＃tagged')
+    assert.equal(parsed.description, '＃1 pick for ＃urgent work ＃ really')
+  })
+
+  it('folds line breaks, falls back to the name, and stays importable', () => {
+    assert.equal(roundTrip({ name: 'multi', description: 'line one\r\n  line two\nline three', tag: '', content: 'Body.' }).parsed.description, 'line one line two line three')
+    assert.equal(roundTrip({ name: 'no-desc', description: '   ', tag: '', content: 'Body.' }).parsed.description, 'no-desc')
+  })
+
+  it('keeps a body that looks like frontmatter, normalizing CRLF', () => {
+    const content = '---\nname: evil\ndescription: injected\ntools: save_note\n---\n\n  indented line\r\nlast # line'
+    const { parsed } = roundTrip({ name: 'body', description: 'Body test.', tag: '', content, tools: [] })
+    assert.equal(parsed.name, 'body')
+    assert.deepEqual(parsed.tools, [])
+    assert.equal(parsed.content, content.replace(/\r\n/g, '\n'))
+  })
+
+  it('writes each valid tool name once, in order', () => {
+    const tools = [tool('save_note'), tool('list_notes'), tool('save_note'), tool('bad name'), tool('a,b'), tool('get_skill')]
+    assert.deepEqual(roundTrip({ name: 'tools', description: 'Tools.', content: 'Body.', tools }).parsed.tools, ['save_note', 'list_notes', 'get_skill'])
+  })
+
+  it('names the file after the id, filename-safe', () => {
+    assert.equal(skillFileName('code-review'), 'code-review.md')
+    assert.equal(skillFileName('skl_9f2a'), 'skl_9f2a.md')
+    assert.equal(skillFileName('../../etc/passwd'), 'etc-passwd.md')
+    assert.equal(skillFileName('..'), 'skill.md')
+  })
+
+  it('serializes a large description in linear time', () => {
+    const description = 'word #tag "quote" '.repeat(20_000)
+    const started = performance.now()
+    const { parsed } = roundTrip({ name: 'big', description, tag: '', content: 'Body.' })
+    assert.ok(performance.now() - started < 1000)
+    assert.equal(parsed.description.length, description.trim().length)
+  })
+})
+
+describe('skill library search', () => {
+  const skills = [
+    { id: 'csv', name: 'CSV Analysis', description: 'Summarize CSV files.', tag: 'Data', tools: [{ name: 'csv_summary' }, { name: 'read_note' }] },
+    { id: 'notes', name: 'Notes Organizer', description: 'Tidy shared notes.', tag: 'Notes', tools: [{ name: 'save_note' }, { name: 'read_note' }] },
+    { id: 'legacy', name: 'Legacy', description: '', tag: '' },
+  ]
+  const ids = (list) => list.map((s) => s.id)
+
+  it('matches declared tool names as well as name, description, and tag', () => {
+    assert.deepEqual(ids(filterSkills(skills, 'csv_summary')), ['csv'])
+    assert.deepEqual(ids(filterSkills(skills, ' READ_NOTE ')), ['csv', 'notes'])
+    assert.deepEqual(ids(filterSkills(skills, 'save_')), ['notes'])
+    assert.deepEqual(ids(filterSkills(skills, 'tidy')), ['notes'])
+    assert.deepEqual(ids(filterSkills(skills, 'data')), ['csv'])
+    assert.deepEqual(ids(filterSkills(skills, '')), ['csv', 'notes', 'legacy'])
+    assert.deepEqual(filterSkills(skills, 'get_skill'), [])
+    assert.equal(matchesSkillQuery(skills[2], 'legacy'), true)
+  })
+
+  it('applies tag filters before the query', () => {
+    assert.deepEqual(ids(filterSkills(skills, 'read_note', ['Notes'])), ['notes'])
+    assert.deepEqual(ids(filterSkills(skills, '', ['Data', 'Notes'])), ['csv', 'notes'])
+    assert.deepEqual(filterSkills(skills, 'csv_summary', ['Notes']), [])
   })
 })

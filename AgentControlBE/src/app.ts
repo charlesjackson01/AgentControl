@@ -844,7 +844,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       id,
       name: parsed.name,
       description: parsed.description,
-      tag: '',
+      tag: parsed.tag,
       content: parsed.content,
       tools,
     }

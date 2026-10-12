@@ -941,6 +941,15 @@ describe('POST /api/skills/import', () => {
     expect(skill.name).toBe('my-skill')
     expect(skill.description).toBe('Does a thing.')
     expect(skill.content).toBe('# Body\n\nStep one.')
+    expect(skill.tag).toBe('')
+  })
+
+  it('keeps the tag an exported SKILL.md carries', async () => {
+    const res = await inject('POST', '/api/skills/import', {
+      markdown: '---\nname: tagged-skill\ndescription: Has a tag.\ntag: Data\n---\n\nBody.\n',
+    })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as Skill).tag).toBe('Data')
   })
 
   it('422s when frontmatter is missing', async () => {

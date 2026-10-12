@@ -41,10 +41,12 @@ function TurnAudit({ run }: { run: AgentRun }) {
   if (run.systemPrompt === undefined && run.toolCalls === undefined) return null
   const skills = run.skillSnapshot ?? []
   const tools = run.toolCalls ?? []
+  const summarized = skills.filter((s) => s.mode === 'summary').length
   const summaryParts: string[] = []
   if (run.systemPrompt !== undefined) {
     const kb = (run.systemPrompt.length / 1024).toFixed(1)
-    summaryParts.push(`System prompt (${kb} KB · ${skills.length} ${skills.length === 1 ? 'skill' : 'skills'})`)
+    const asSummaries = summarized > 0 ? `, ${summarized} as ${summarized === 1 ? 'summary' : 'summaries'}` : ''
+    summaryParts.push(`System prompt (${kb} KB · ${skills.length} ${skills.length === 1 ? 'skill' : 'skills'}${asSummaries})`)
   }
   if (tools.length > 0) {
     summaryParts.push(`${tools.length} tool ${tools.length === 1 ? 'call' : 'calls'}`)
@@ -69,7 +71,16 @@ function TurnAudit({ run }: { run: AgentRun }) {
         <ul className="turn-audit__skills">
           {skills.map((s) => (
             <li key={s.id}>
-              {s.name} — {s.contentChars.toLocaleString('en-US')} chars
+              {s.name}
+              {s.mode === 'summary' && (
+                <span
+                  className="pill turn-audit__mode"
+                  title="Only a short summary went into the prompt; the agent could read the full text with get_skill."
+                >
+                  summary
+                </span>
+              )}{' '}
+              — {s.contentChars.toLocaleString('en-US')} chars
             </li>
           ))}
         </ul>

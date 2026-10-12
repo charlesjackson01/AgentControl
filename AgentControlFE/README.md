@@ -44,7 +44,7 @@ host; requests then go cross-origin and the BE's CORS applies.
 | `npm run serve` | `build` + `preview` bound to `100.110.232.85:4173` (a machine-specific Tailscale address; edit for your host) |
 | `npm run typecheck` | `tsc -b --noEmit` |
 | `npm run lint` | Oxlint |
-| `npm test` | Hermetic parser parity, tool selection, and note search tests (Node 22.6+) |
+| `npm test` | Hermetic parser parity, SKILL.md export round trip, tool selection, skill and note search, and prompt-size message tests (Node 22.6+) |
 
 ## Skills and notes
 
@@ -53,6 +53,22 @@ The Skill Library editor loads built-in tools from `GET /api/tools`. Select up t
 their chips. Existing declarations unavailable in the current registry stay
 attached until explicitly removed. Import previews show recognized SKILL.md
 `tools:` entries and identify declarations the backend will ignore.
+
+Library search also matches the tools a skill declares (e.g. `csv_summary`).
+A skill's view dialog can **Export** it as `<id>.md` — a SKILL.md file with
+`name`, `description`, `tag` and `tools` frontmatter that Import SKILL.md reads
+back (frontmatter values are not unquoted, so line breaks fold to a space and a
+`#` that would start a comment is written as a fullwidth `＃`) — and
+**Duplicate** it as "<name> (copy)" through the regular create API. Built-in
+skills (those with a `source`) say that editing them stops future built-in
+upgrades; duplicate one to customize it.
+
+The agent form lists the tools the selected skills grant and a prompt-size line
+from `POST /api/prompt-budget` (debounced; stale or failed requests are ignored):
+whether the instructions and skills fit the endpoint's context window in full,
+which skills go in as short summaries the agent reads with `get_skill`, or that
+runs will be rejected. A chat turn's run audit marks skills that were sent as
+summaries.
 
 **Notes** lists shared notes written by agents, newest update first. Search
 covers titles, tags, authors, and visible snippets; open a note for its full

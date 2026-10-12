@@ -7,7 +7,8 @@ import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { PlusIcon, SearchIcon, SkillLibraryIcon } from '../components/icons'
 import { api } from '../lib/api'
 import type { Skill, SkillInput } from '../lib/types'
-import { parsePreview } from '../lib/skill-markdown'
+import { parsePreview, serializeSkillMarkdown, skillFileName } from '../lib/skill-markdown'
+import { filterSkills } from '../lib/skill-search'
 import { classifyImportTools } from '../lib/skill-tools'
 import { useAsync } from '../hooks/useAsync'
 
@@ -24,6 +25,29 @@ const DISCOVERY_HINT: ReactNode = (
     .
   </>
 )
+
+/**
+ * Built-in (seeded) skills carry a `source`; the library's create and import
+ * never set one, and Duplicate drops it, so copies count as the user's own.
+ */
+const isBuiltIn = (skill: Skill): boolean => Boolean(skill.source)
+
+const BUILT_IN_HINT =
+  'Built-in skill: editing it stops it from receiving future built-in upgrades. To customize it, duplicate it and edit the copy.'
+
+/** Save the skill as `<id>.md`, a SKILL.md file the Import dialog accepts. */
+function downloadSkill(skill: Skill) {
+  const blob = new Blob([serializeSkillMarkdown(skill)], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = skillFileName(skill.id)
+  document.body.append(link)
+  link.click()
+  link.remove()
+  // Revoke once the click has handed the blob to the download.
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 function SkillForm({
   initial,
@@ -143,6 +167,7 @@ export default function SkillLibrary() {
   const [dialog, setDialog] = useState<DialogState>(null)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
 
   const [importText, setImportText] = useState('')
@@ -171,18 +196,8 @@ export default function SkillLibrary() {
   }, [skills.data])
 
   // Skill has no createdAt in the contract (types.ts), so the list keeps BE order.
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return (skills.data ?? []).filter((s) => {
-      if (activeTags.length > 0 && !activeTags.includes(s.tag)) return false
-      if (!q) return true
-      return (
-        s.name.toLowerCase().includes(q) ||
-        s.description.toLowerCase().includes(q) ||
-        s.tag.toLowerCase().includes(q)
-      )
-    })
-  }, [skills.data, query, activeTags])
+  // Search covers the name, description, tag, and declared tool names.
+  const visible = useMemo(() => filterSkills(skills.data ?? [], query, activeTags), [skills.data, query, activeTags])
 
   const toggleTag = (tag: string) =>
     setActiveTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
@@ -195,7 +210,7 @@ export default function SkillLibrary() {
   const viewSkill = dialog?.mode === 'view' ? dialog.skill : null
 
   const closeDialog = () => {
-    if (saving || deleting || importing) return
+    if (saving || deleting || importing || duplicating) return
     setDialog(null)
     setServerError(null)
   }
@@ -230,6 +245,27 @@ export default function SkillLibrary() {
     }
   }
 
+  /** Copy through the regular create API (no `source`, so it is the user's own) and open it for editing. */
+  const duplicate = async (skill: Skill) => {
+    setDuplicating(true)
+    setServerError(null)
+    try {
+      const copy = await api.createSkill({
+        name: `${skill.name} (copy)`,
+        description: skill.description,
+        tag: skill.tag,
+        content: skill.content,
+        tools: skill.tools ?? [],
+      })
+      await skills.reload()
+      setDialog({ mode: 'edit', skill: copy })
+    } catch (err) {
+      setServerError(err instanceof Error ? err.message : 'Could not duplicate the skill.')
+    } finally {
+      setDuplicating(false)
+    }
+  }
+
   const runImport = async () => {
     setImporting(true)
     setImportError(null)
@@ -260,8 +296,8 @@ export default function SkillLibrary() {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search skills…"
-              aria-label="Search skills"
+              placeholder="Search skills or tools…"
+              aria-label="Search skills by name, description, tag, or tool"
             />
             {query && (
               <button type="button" className="search__clear" onClick={() => setQuery('')} aria-label="Clear search">
@@ -420,6 +456,21 @@ export default function SkillLibrary() {
           ) : null
         }
       >
+        {dialog?.mode === 'edit' && isBuiltIn(dialog.skill) && (
+          <div className="notice notice--info skillview__builtin">
+            <p>{BUILT_IN_HINT}</p>
+            <button
+              type="button"
+              className="btn"
+              disabled={saving || duplicating}
+              onClick={() => void duplicate(dialog.skill)}
+              title="Copies the saved skill; edits not yet saved here are not copied."
+            >
+              {duplicating && <span className="spinner" aria-hidden="true" />}
+              {duplicating ? 'Duplicating…' : 'Duplicate instead'}
+            </button>
+          </div>
+        )}
         {dialog?.mode === 'edit' && (
           <SkillForm registry={registry} key={dialog.skill.id} initial={dialog.skill} saving={saving} serverError={serverError} onSubmit={(input) => void save(input)} />
         )}
@@ -438,6 +489,7 @@ export default function SkillLibrary() {
               <button
                 type="button"
                 className="btn btn--danger"
+                disabled={duplicating}
                 onClick={() => {
                   setServerError(null)
                   setDialog({ mode: 'delete', skill: viewSkill })
@@ -445,12 +497,31 @@ export default function SkillLibrary() {
               >
                 Delete…
               </button>
-              <button type="button" className="btn" onClick={closeDialog}>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => downloadSkill(viewSkill)}
+                title={`Download ${skillFileName(viewSkill.id)} — import it back with Import SKILL.md`}
+              >
+                Export
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={duplicating}
+                onClick={() => void duplicate(viewSkill)}
+                title={`Create “${viewSkill.name} (copy)” and open it for editing`}
+              >
+                {duplicating && <span className="spinner" aria-hidden="true" />}
+                {duplicating ? 'Duplicating…' : 'Duplicate'}
+              </button>
+              <button type="button" className="btn" onClick={closeDialog} disabled={duplicating}>
                 Close
               </button>
               <button
                 type="button"
                 className="btn btn--primary"
+                disabled={duplicating}
                 onClick={() => {
                   setServerError(null)
                   setDialog({ mode: 'edit', skill: viewSkill })
@@ -477,6 +548,7 @@ export default function SkillLibrary() {
                   <p className="skillview__usedby">
                     {users.length > 0 ? `Used by: ${users.join(', ')}` : 'Not attached to any agent'}
                   </p>
+                  {isBuiltIn(viewSkill) && <p className="notice notice--info">{BUILT_IN_HINT}</p>}
                 </div>
                 <div className="field">
                   <p className="field__label">Tools</p>
@@ -484,6 +556,11 @@ export default function SkillLibrary() {
                   {(viewSkill.tools ?? []).length === 0 && <p className="field__hint">No tools declared.</p>}
                 </div>
                 <pre className="skillview__content">{viewSkill.content ?? ''}</pre>
+                {serverError && (
+                  <p className="field__err skillview__err" role="alert">
+                    {serverError}
+                  </p>
+                )}
               </>
             )
           })()}

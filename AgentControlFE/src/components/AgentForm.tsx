@@ -1,12 +1,17 @@
-import { useCallback, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
 import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
-import type { Agent, AgentInput, Endpoint, Skill } from '../lib/types'
+import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, Skill } from '../lib/types'
+import { describePromptBudget, grantedToolNames } from '../lib/prompt-budget'
+import { matchesSkillQuery } from '../lib/skill-search'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
 
 const MODELS_LOADING = 'Models are still loading — wait a moment.'
+
+/** Quiet period after the last endpoint/skills/instructions edit before the prompt-size preview refetches. */
+const BUDGET_DEBOUNCE_MS = 300
 
 const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [] }
 
@@ -111,14 +116,46 @@ export default function AgentForm({
     }))
   }
 
-  const filteredSkills = useMemo(() => {
-    const q = skillQuery.trim().toLowerCase()
-    if (!q) return skills
-    return skills.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.tag.toLowerCase().includes(q),
-    )
-  }, [skills, skillQuery])
+  const filteredSkills = useMemo(() => skills.filter((s) => matchesSkillQuery(s, skillQuery)), [skills, skillQuery])
+
+  // Tools the selected skills declare, derived locally so the chips follow every toggle.
+  const grantedTools = useMemo(() => grantedToolNames(skills, draft.skillIds), [skills, draft.skillIds])
+  const skillNames = useMemo(() => new Map(skills.map((s) => [s.id, s.name])), [skills])
+
+  // Prompt-size preview (POST /api/prompt-budget), debounced. Only the current
+  // request's response lands (superseded ones are aborted and ignored); a
+  // failed request just hides the line, so the form never shows a budget error.
+  const budgetRequest = useMemo<PromptBudgetInput | null>(() => {
+    if (isBootstrap || !draft.endpointId) return null
+    if (draft.skillIds.length === 0 && !draft.instructions.trim()) return null
+    return { endpointId: draft.endpointId, skillIds: draft.skillIds, instructions: draft.instructions }
+  }, [isBootstrap, draft.endpointId, draft.skillIds, draft.instructions])
+  const [budget, setBudget] = useState<{ request: PromptBudgetInput; value: PromptBudget } | null>(null)
+  useEffect(() => {
+    if (!budgetRequest) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      api.getPromptBudget(budgetRequest, { signal: controller.signal }).then(
+        (value) => {
+          if (!controller.signal.aborted) setBudget({ request: budgetRequest, value })
+        },
+        () => {
+          if (!controller.signal.aborted) setBudget(null)
+        },
+      )
+    }, BUDGET_DEBOUNCE_MS)
+    return () => {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }, [budgetRequest])
+  // The last answer stays up (dimmed) while a newer request is in flight.
+  const shownBudget = budgetRequest ? budget : null
+  const budgetStale = shownBudget !== null && shownBudget.request !== budgetRequest
+  const budgetMessage = useMemo(
+    () => (shownBudget ? describePromptBudget(shownBudget.value, skillNames) : null),
+    [shownBudget, skillNames],
+  )
 
   const selectedEndpoint = endpoints.find((e) => e.id === draft.endpointId) ?? null
 
@@ -425,6 +462,31 @@ export default function AgentForm({
                 </div>
               )}
 
+              {grantedTools.length > 0 && (
+                <div className="grantedtools">
+                  <p className="field__label" id="af-granted-tools">
+                    Tools these skills grant
+                  </p>
+                  <div className="chips" role="list" aria-labelledby="af-granted-tools">
+                    {grantedTools.map((name) => (
+                      <span className="pill" role="listitem" key={name}>
+                        {name}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="promptbudget" role="status">
+                {budgetMessage && (
+                  <p
+                    className={`notice notice--${budgetMessage.tone}${budgetStale ? ' notice--stale' : ''}`}
+                    aria-busy={budgetStale || undefined}
+                  >
+                    {budgetMessage.text}
+                  </p>
+                )}
+              </div>
             </div>
 
             <div className="formsection">

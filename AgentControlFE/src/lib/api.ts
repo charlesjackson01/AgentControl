@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Skill, SkillInput, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -132,6 +132,19 @@ export const api = {
   /** Paste a SKILL.md file; the BE parses frontmatter -> name/description, body -> content. */
   async importSkill(markdown: string): Promise<Skill> {
     return request<Skill>('/api/skills/import', { method: 'POST', body: JSON.stringify({ markdown }) })
+  },
+
+  /**
+   * How an agent draft's instructions and skills fit its endpoint's window
+   * (full, skills as summaries, or too large). Pass `signal` to abort a
+   * superseded preview.
+   */
+  async getPromptBudget(body: PromptBudgetInput, options?: { signal?: AbortSignal }): Promise<PromptBudget> {
+    return request<PromptBudget>('/api/prompt-budget', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    })
   },
 
   async createAgent(input: AgentInput): Promise<Agent> {

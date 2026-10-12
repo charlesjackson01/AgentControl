@@ -5,21 +5,24 @@
  */
 import type { Agent, AgentRun, Endpoint, Skill } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
-import { argError, findAgent, readNumber, readString } from './args.js'
-import { clipText, fitJson } from './limits.js'
+import { argError, findAgent, findSkill, readNumber, readString } from './args.js'
+import { clipJsonText, clipText, fitJson, pageText, RESULT_MAX_CHARS, type TextPage } from './limits.js'
 import { REDACTED, redactSecrets } from './redact.js'
 import type { ToolContext, ToolEntry } from './types.js'
 
 const NO_PARAMS = { type: 'object', properties: {}, additionalProperties: false }
 
-function clip(value: unknown): unknown {
-  return typeof value === 'string' && value.length > 500 ? value.slice(0, 500) : value
+/** Run text (input, output, error) as read_run_log shows it: redacted, then clipped. */
+function runText(value: unknown, store: WorkspaceStore): unknown {
+  return typeof value === 'string' ? safeText(value, 500, store) : value
 }
 
-// --- get_agent / workspace_overview helpers ---------------------------------
+// --- get_agent / get_skill / workspace_overview helpers ---------------------
 
-/** Longest agent reference accepted (ids and names are short). */
+/** Longest agent or skill reference accepted (ids and names are short). */
 const REF_MAX = 200
+/** get_skill content page, in chars; it shrinks to keep the whole result under RESULT_MAX_CHARS. */
+const SKILL_PAGE_CHARS = 2_500
 /** Decision 14: an agent's instructions are clipped before they go upstream. */
 const INSTRUCTIONS_MAX = 1_500
 /** workspace_overview counts failures among each agent's newest N runs. */
@@ -57,6 +60,9 @@ const AGENT_EXAMPLE = { agentId: 'Researcher' }
  * silently describe the caller instead of the agent it asked about.
  */
 const AGENT_REF_KEYS = ['agentId', 'agent_id', 'agent', 'agentName', 'agent_name', 'name', 'id'] as const
+const SKILL_EXAMPLE = { skill: 'code-review' }
+/** Same idea for skills: "skill" first, then {"skillId": ...}, {"name": ...} and friends. */
+const SKILL_REF_KEYS = ['skill', 'skillId', 'skill_id', 'id', 'name'] as const
 /** Same shape the skills API accepts; anchored with one bounded quantifier (linear). */
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -94,19 +100,23 @@ function boundedPrefix(text: string, keep: number, transform: (s: string) => str
 /**
  * User-written text, redacted BEFORE it is clipped. executeToolCall redacts
  * exact secret values, but a clip that cuts through a pasted key leaves a
- * prefix nothing can match any more (decision 14).
+ * prefix nothing can match any more (decision 14). Exported for notes.ts.
  */
-function safeText(value: unknown, max: number, store: WorkspaceStore): string {
+export function safeText(value: unknown, max: number, store: WorkspaceStore): string {
   return clipSafe(boundedPrefix(str(value), max, (s) => redactSecrets(s, store)), max)
 }
 
-/** First non-blank reference among AGENT_REF_KEYS (own keys only, via readString). */
-function readAgentRef(args: Record<string, unknown>): string | undefined {
-  for (const key of AGENT_REF_KEYS) {
-    const value = readString(args, key, { max: REF_MAX, example: AGENT_EXAMPLE })?.trim()
+/** First non-blank reference among `keys` (own keys only, via readString). */
+function readRef(args: Record<string, unknown>, keys: readonly string[], example: Record<string, unknown>): string | undefined {
+  for (const key of keys) {
+    const value = readString(args, key, { max: REF_MAX, example })?.trim()
     if (value) return value
   }
   return undefined
+}
+
+function readAgentRef(args: Record<string, unknown>): string | undefined {
+  return readRef(args, AGENT_REF_KEYS, AGENT_EXAMPLE)
 }
 
 /**
@@ -120,8 +130,26 @@ function agentNotFound(ref: string | undefined, store: WorkspaceStore): Error {
   const listed = names.length === 0 ? 'none' : names.map((n) => JSON.stringify(n)).join(', ')
   const more = store.agents.length > 10 ? ', …' : ''
   const usable = names.find((n, i) => n.trim() !== '' && n === agents[i]?.name)
-  const lead = ref === undefined ? 'The current agent no longer exists; pass "agentId".' : `No agent "${clipSafe(ref, 60)}".`
+  const lead = ref === undefined ? 'The current agent no longer exists; pass "agentId".' : `No agent "${safeText(ref, 60, store)}".`
   return argError(`${lead} Known agents: ${listed}${more}.`, usable ? { agentId: usable } : AGENT_EXAMPLE)
+}
+
+/** A skill name the model can copy into get_skill: unchanged by redaction and clipping. */
+function usableSkillName(store: WorkspaceStore): string | undefined {
+  for (const skill of store.skills.slice(0, 10)) {
+    const name = str(skill?.name)
+    if (name.trim() !== '' && safeText(name, 40, store) === name) return name
+  }
+  return undefined
+}
+
+/** Missing or unknown skill: lists up to 10 known names, and an example naming a real one. */
+function skillNotFound(ref: string | undefined, store: WorkspaceStore): Error {
+  const names = store.skills.slice(0, 10).map((s) => JSON.stringify(safeText(s?.name, 40, store)))
+  const listed = names.length === 0 ? 'none' : `${names.join(', ')}${store.skills.length > 10 ? ', …' : ''}`
+  const lead = ref === undefined ? '"skill" is required: a skill id or name from list_skills.' : `No skill "${safeText(ref, 60, store)}".`
+  const usable = usableSkillName(store)
+  return argError(`${lead} Known skills: ${listed}.`, usable ? { skill: usable } : SKILL_EXAMPLE)
 }
 
 /** ASCII-only lowercase: same length as the input, so indexes map back to the original. */
@@ -294,8 +322,13 @@ export const workspaceTools: ToolEntry[] = [
     effect: 'read',
     description: 'List every skill in the workspace with its id, name, and description. Example: {}',
     parameters: NO_PARAMS,
+    // Redacted before any clip, ours or fitJson's (decision 14).
     handler: (_args, ctx) => fitJson(
-      ctx.store.skills.map((s) => ({ id: s.id, name: s.name, description: clipText(s.description, 100) })),
+      ctx.store.skills.map((s) => ({
+        id: safeText(s.id, REF_MAX, ctx.store),
+        name: safeText(s.name, REF_MAX, ctx.store),
+        description: safeText(s.description, 100, ctx.store),
+      })),
     ),
   },
   {
@@ -318,7 +351,7 @@ export const workspaceTools: ToolEntry[] = [
       let agentId = ctx.agentId
       if (ref) {
         const agent = findAgent(ctx.store, ref)
-        if (!agent) throw argError(`No agent "${ref.slice(0, 60)}". Use list_agents for ids and names.`, example)
+        if (!agent) throw argError(`No agent "${safeText(ref, 60, ctx.store)}". Use list_agents for ids and names.`, example)
         agentId = agent.id
       }
       const requested = readNumber(args, 'limit', { example }) ?? 5
@@ -332,9 +365,9 @@ export const workspaceTools: ToolEntry[] = [
           status: r.status,
           startedAt: r.startedAt,
           durationMs: r.durationMs,
-          input: clip(r.input),
-          output: clip(r.output),
-          error: clip(r.error),
+          input: runText(r.input, ctx.store),
+          output: runText(r.output, ctx.store),
+          error: runText(r.error, ctx.store),
         }))
     },
   },
@@ -443,6 +476,62 @@ export const workspaceTools: ToolEntry[] = [
         fitted.totals = { ...(totals as Record<string, unknown>), ...capped }
       }
       return fitted
+    },
+  },
+  {
+    name: 'get_skill',
+    category: 'workspace',
+    effect: 'read',
+    description:
+      'Read one skill by id or name: description, tool names and its full instructions in pages; pass nextOffset to continue. Example: {"skill":"code-review"}',
+    parameters: {
+      type: 'object',
+      properties: {
+        skill: { type: 'string', description: 'Skill id or name (see list_skills).' },
+        offset: { type: 'number', description: "Where to start reading: the previous page's nextOffset. Default 0." },
+      },
+      required: ['skill'],
+      additionalProperties: false,
+    },
+    handler: (args, ctx) => {
+      const { store } = ctx
+      const ref = readRef(args, SKILL_REF_KEYS, SKILL_EXAMPLE)
+      const skill = ref ? findSkill(store, ref) : undefined
+      if (!skill) throw skillNotFound(ref, store)
+      const offset = Math.floor(readNumber(args, 'offset', { min: 0, example: SKILL_EXAMPLE }) ?? 0)
+
+      // The whole text is redacted before it is paged: offsets index the
+      // redacted text, and a key straddling a page edge is gone before any cut.
+      const content = redactSecrets(str(skill.content), store)
+      // Short fields are bounded in JSON chars too, so the page always has room.
+      const head = {
+        id: clipJsonText(safeText(skill.id, 100, store), 100, 120),
+        name: clipJsonText(safeText(skill.name, 100, store), 100, 120),
+        description: clipJsonText(safeText(skill.description, 300, store), 300, 360),
+        tools: declaredToolNames([skill]),
+      }
+      // The page gets what the rest of the result leaves under the cap (the
+      // skeleton's "" is counted twice, and nextOffset: null may outgrow the
+      // digits), so fitJson never clips it and nextOffset stays exact.
+      const total = content.length
+      const skeleton = JSON.stringify({ ...head, totalChars: total, offset: total, content: '', nextOffset: total }).length
+      let page: TextPage
+      try {
+        page = pageText(content, offset, SKILL_PAGE_CHARS, RESULT_MAX_CHARS - skeleton - 2)
+      } catch (err) {
+        if (!(err instanceof RangeError)) throw err
+        throw argError(`${err.message} Start at 0, or pass the previous page's nextOffset.`, {
+          skill: safeText(skill.id, REF_MAX, store),
+          offset: 0,
+        })
+      }
+      return fitJson({
+        ...head,
+        totalChars: page.totalChars,
+        offset: page.offset,
+        content: page.content,
+        nextOffset: page.nextOffset,
+      })
     },
   },
 ]

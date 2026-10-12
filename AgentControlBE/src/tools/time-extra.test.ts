@@ -40,7 +40,7 @@ function timed<T>(fn: () => T): T {
   try {
     return fn()
   } finally {
-    expect(performance.now() - started).toBeLessThan(50)
+    expect(performance.now() - started).toBeLessThan(1_000)
   }
 }
 

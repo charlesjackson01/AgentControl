@@ -1,5 +1,15 @@
 # AgentControl — Handoff for Claude (Opus)
 
+> **Skills-library recovery update (October 11, 2026):** Continue from
+> `feat/skills-library-tools` and PR #3, not the older `master` snapshot below.
+> The recovered commits through `af38617` are preserved. The six tool modules
+> now provide 16 tools; ten original AgentControl skills join the six unchanged
+> vendored skills. The tool picker, import previews, and Notes page are complete.
+> See [the recovery report](docs/skills-library-recovery.md) for current scope,
+> verification, known limits, and the browser smoke command. The remaining text
+> describes the earlier PR #2 baseline; its old test count and follow-up list
+> are historical.
+
 > **Read this first.** This is a working, tested app. The bar is: keep the
 > existing tests green (`npm test` in `AgentControlBE`, 60 passing), keep
 > typecheck green in both packages, and make additive changes. Prefer small,

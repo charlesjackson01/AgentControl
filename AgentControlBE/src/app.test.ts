@@ -1891,3 +1891,65 @@ describe('projects CRUD', () => {
     rmSync(oldDir, { recursive: true, force: true })
   })
 })
+
+describe('project chat', () => {
+  async function makeProject(name = 'Chat Project') {
+    const res = await inject('POST', '/api/projects', { name })
+    expect(res.statusCode).toBe(201)
+    return res.json() as { id: string }
+  }
+
+  it('posts user and agent messages and lists them oldest first', async () => {
+    const p = await makeProject()
+    const a = await inject('POST', '/api/agents', {
+      name: 'Chatty',
+      description: '',
+      instructions: '',
+      modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama',
+      skillIds: [],
+    })
+    const agent = a.json() as { id: string }
+
+    const m1 = await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'first' })
+    expect(m1.statusCode).toBe(201)
+    const m2 = await inject('POST', `/api/projects/${p.id}/messages`, { author: agent.id, text: 'second' })
+    expect(m2.statusCode).toBe(201)
+    expect(m2.json()).toMatchObject({ projectId: p.id, author: agent.id, text: 'second', kind: 'message' })
+
+    const list = await inject('GET', `/api/projects/${p.id}/messages`)
+    const msgs = list.json() as { text: string }[]
+    expect(msgs.map((m) => m.text)).toEqual(['first', 'second'])
+  })
+
+  it('rejects empty text, unknown authors, and unknown projects', async () => {
+    const p = await makeProject('Validation Chat')
+    expect((await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: '  ' })).statusCode).toBe(400)
+    expect((await inject('POST', `/api/projects/${p.id}/messages`, { author: 'agent_nope', text: 'x' })).statusCode).toBe(400)
+    expect((await inject('POST', `/api/projects/${p.id}/messages`, { text: 'x' })).statusCode).toBe(400)
+    expect((await inject('POST', '/api/projects/proj_nope/messages', { author: 'user', text: 'x' })).statusCode).toBe(404)
+    expect((await inject('GET', '/api/projects/proj_nope/messages')).statusCode).toBe(404)
+  })
+
+  it('keeps chats separate per project and deletes them with the project', async () => {
+    const a = await makeProject('Chat A')
+    const b = await makeProject('Chat B')
+    await inject('POST', `/api/projects/${a.id}/messages`, { author: 'user', text: 'in A' })
+    await inject('POST', `/api/projects/${b.id}/messages`, { author: 'user', text: 'in B' })
+
+    const listA = await inject('GET', `/api/projects/${a.id}/messages`)
+    expect((listA.json() as unknown[]).length).toBe(1)
+
+    await inject('DELETE', `/api/projects/${a.id}`)
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.projectMessages.some((m) => m.projectId === a.id)).toBe(false)
+    expect(reloaded.projectMessages.some((m) => m.projectId === b.id)).toBe(true)
+  })
+
+  it('persists messages across a store reload', async () => {
+    const p = await makeProject('Persisted Chat')
+    await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'durable' })
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.projectMessages.filter((m) => m.projectId === p.id).map((m) => m.text)).toEqual(['durable'])
+  })
+})

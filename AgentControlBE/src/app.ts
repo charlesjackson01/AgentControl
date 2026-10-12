@@ -31,6 +31,7 @@ import {
   type PromptBudget,
   type Project,
   type ProjectInput,
+  type ProjectMessage,
   type Skill,
   type SkillInput,
   type SkillTool,
@@ -372,13 +373,54 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.delete('/api/projects/:id', async (request, reply) => {
     const { id } = request.params as { id: string }
     if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    // The record goes; the folder stays on disk (removal is an explicit user
-    // action, a later milestone).
+    // The record and its chat go; the folder stays on disk (removal is an
+    // explicit user action, a later milestone).
+    const previousProjects = store.projects
+    const previousMessages = store.projectMessages
     store.projects = store.projects.filter((p) => p.id !== id)
+    store.projectMessages = store.projectMessages.filter((m) => m.projectId !== id)
     if (!store.save()) {
+      store.projects = previousProjects
+      store.projectMessages = previousMessages
       fail(500, 'The project could not be deleted from storage. Please retry.')
     }
     return reply.status(204).send()
+  })
+
+  app.get('/api/projects/:id/messages', async (request) => {
+    const { id } = request.params as { id: string }
+    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
+    return store.projectMessages
+      .filter((m) => m.projectId === id)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+  })
+
+  app.post('/api/projects/:id/messages', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
+    const raw = (request.body ?? {}) as Record<string, unknown>
+    const author = typeof raw.author === 'string' ? raw.author.trim() : ''
+    if (!author) fail(400, 'Set the author: "user" or an agent id.')
+    if (author !== 'user' && !store.agents.some((a) => a.id === author)) {
+      fail(400, `No agent with id "${author}".`)
+    }
+    const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+    if (!text) fail(400, 'Message text cannot be empty.')
+    if (text.length > 20_000) fail(400, 'Message text must be 20,000 characters or fewer.')
+    const message: ProjectMessage = {
+      id: uid('msg'),
+      projectId: id,
+      author,
+      text,
+      kind: 'message',
+      createdAt: new Date().toISOString(),
+    }
+    store.projectMessages = [...store.projectMessages, message]
+    if (!store.save()) {
+      store.projectMessages = store.projectMessages.filter((m) => m.id !== message.id)
+      fail(500, 'The message could not be saved. Please retry.')
+    }
+    return reply.status(201).send(message)
   })
   app.get('/api/settings', async () => store.settings)
 

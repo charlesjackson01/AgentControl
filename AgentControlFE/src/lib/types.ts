@@ -268,6 +268,22 @@ export type Project = {
   updatedAt: string
 }
 
+/** Body for POST /api/projects/:id/messages. */
+export type ProjectMessageInput = {
+  author: string
+  text: string
+}
+
+/** One message in a project's chat. `author` is 'user' or an agent id. */
+export type ProjectMessage = {
+  id: string
+  projectId: string
+  author: string
+  text: string
+  kind: 'message'
+  createdAt: string
+}
+
 /** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
 export type ProjectInput = {
   name: string

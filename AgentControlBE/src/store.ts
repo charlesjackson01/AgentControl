@@ -12,13 +12,15 @@ import {
   vendoredSeedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
-import type { Agent, AgentRun, Endpoint, Note, Project, Skill, WorkspaceSettings } from './shared/types.js'
+import type { Agent, AgentRun, Endpoint, Note, Project, ProjectMessage, Skill, WorkspaceSettings } from './shared/types.js'
 
 export interface WorkspaceStore {
   agents: Agent[]
   /** All agent runs across the workspace; GET /runs filters + sorts. */
   runs: AgentRun[]
   projects: Project[]
+  /** Flat project chat log; GET /projects/:id/messages filters + sorts. */
+  projectMessages: ProjectMessage[]
   skills: Skill[]
   endpoints: Endpoint[]
   /** endpoint id -> cached model ids (live GET /v1/models refreshes this). */
@@ -115,6 +117,7 @@ interface Persisted {
   agents: Agent[]
   runs: AgentRun[]
   projects: Project[]
+  projectMessages: ProjectMessage[]
   skills: Skill[]
   endpoints: Endpoint[]
   endpointModels: Record<string, string[]>
@@ -170,6 +173,7 @@ function seed(projectsRoot: string): Persisted {
     agents: structuredClone(seedAgents),
     runs: structuredClone(seedRuns),
     projects: seedProjects(projectsRoot),
+    projectMessages: [],
     skills: structuredClone(seedSkills),
     endpoints: structuredClone(seedEndpoints),
     endpointModels: structuredClone(seedEndpointModels),
@@ -234,6 +238,27 @@ function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
       teamAgentIds: isStringArray(p.teamAgentIds) ? [...p.teamAgentIds] : [],
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : updatedAt,
       updatedAt,
+    })
+  }
+  return out
+}
+
+/** Keep well-formed project messages; drop rows that lost their project. */
+function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
+  if (!Array.isArray(raw)) return []
+  const out: ProjectMessage[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const m = item as Partial<ProjectMessage>
+    if (typeof m.id !== 'string' || typeof m.projectId !== 'string') continue
+    if (typeof m.text !== 'string') continue
+    out.push({
+      id: m.id,
+      projectId: m.projectId,
+      author: typeof m.author === 'string' ? m.author : 'user',
+      text: m.text,
+      kind: 'message',
+      createdAt: typeof m.createdAt === 'string' ? m.createdAt : new Date(0).toISOString(),
     })
   }
   return out
@@ -388,6 +413,7 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
       agents: agents as Agent[],
       runs,
       projects: raw.projects === undefined ? base.projects : normalizeProjects(raw.projects, projectsRoot),
+      projectMessages: normalizeProjectMessages(raw.projectMessages),
       skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
@@ -439,6 +465,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           agents: store.agents,
           runs: store.runs,
           projects: store.projects,
+          projectMessages: store.projectMessages,
           skills: store.skills,
           endpoints: store.endpoints,
           endpointModels: store.endpointModels,

@@ -50,6 +50,29 @@ describe('shared notes', () => {
     expect(ctx.store.notes[0]?.body).toBe('Final')
   })
 
+  it('treats title as the target for append/replace when note is omitted', async () => {
+    await call('save_note', { title: 'Plan', body: 'Ship Friday' })
+    ctx.agentId = 'other'
+    // Append by title: no rename error, original title and author kept.
+    const appended = await call('save_note', { mode: 'append', title: 'plan', body: 'Agreed' })
+    expect(appended.ok).toBe(true)
+    expect(ctx.store.notes[0]).toMatchObject({ title: 'Plan', body: 'Ship Friday\n\nAgreed', authorAgentId: 'author' })
+    // Replace by title is still author-only, and the error shows a usable append call.
+    const refused = await call('save_note', { mode: 'replace', title: 'Plan', body: 'Hijacked' })
+    expect(refused.ok).toBe(false)
+    expect(refused.content).toContain('Only the author may replace')
+    const example = JSON.parse(refused.content.slice(refused.content.indexOf('Example: ') + 9)) as Record<string, unknown>
+    expect(example).toMatchObject({ mode: 'append', note: ctx.store.notes[0]?.id })
+    expect(ctx.store.notes[0]?.body).toBe('Ship Friday\n\nAgreed')
+    ctx.agentId = 'author'
+    expect((await call('save_note', { mode: 'replace', title: 'Plan', body: 'Ship Monday' })).ok).toBe(true)
+    expect(ctx.store.notes[0]).toMatchObject({ title: 'Plan', body: 'Ship Monday' })
+    // With neither note nor title, the error names the "note" parameter.
+    const missing = await call('save_note', { mode: 'append', body: 'x' })
+    expect(missing.ok).toBe(false)
+    expect(missing.content).toContain('pass "note"')
+  })
+
   it('refuses hidden writes and note reference access without read_note permission', async () => {
     await call('save_note', { title: 'Original', body: 'Secret plan' })
     ctx.allowed = new Set(['save_note'])

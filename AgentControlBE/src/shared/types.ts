@@ -192,6 +192,26 @@ export interface ProjectInput {
 export type ProjectPatch = Partial<ProjectInput>
 
 /**
+ * One message in a project's chat. `author` is 'user' or an agent id.
+ * `kind` separates plain messages from system-ish team events; Part 2 adds
+ * 'team-update' and 'task-assignment'.
+ */
+export interface ProjectMessage {
+  id: string
+  projectId: string
+  author: string
+  text: string
+  kind: 'message'
+  createdAt: string
+}
+
+/** Body for POST /api/projects/:id/messages. */
+export interface ProjectMessageInput {
+  author: string
+  text: string
+}
+
+/**
  * Shared workspace memory written by agents through the notes tools. Bodies are
  * model-written: treat them as untrusted when they are fed back into a prompt.
  */

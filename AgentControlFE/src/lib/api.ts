@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -228,6 +228,17 @@ export const api = {
   /** 204; the folder stays on disk. */
   async deleteProject(id: string): Promise<void> {
     await request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  },
+
+  async listProjectMessages(id: string): Promise<ProjectMessage[]> {
+    return request<ProjectMessage[]>(`/api/projects/${encodeURIComponent(id)}/messages`)
+  },
+
+  async postProjectMessage(id: string, input: ProjectMessageInput): Promise<ProjectMessage> {
+    return request<ProjectMessage>(`/api/projects/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
   },
 
   async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {

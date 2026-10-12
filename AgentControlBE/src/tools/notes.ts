@@ -46,7 +46,7 @@ export const notesTools: ToolEntry[] = [
   },
   {
     name: 'save_note', category: 'notes', effect: 'write',
-    description: 'Create a shared note, append to an existing note, or replace your own. Four writes per run. Example: {"title":"Decision","body":"Use the stable API."}',
+    description: 'Create a shared note, append to an existing note, or replace your own. Four writes per run. Example: {"title":"Decision","body":"Use the stable API."} Append: {"mode":"append","note":"Decision","body":"More."}',
     parameters: { type: 'object', properties: {
       title: { type: 'string' }, body: { type: 'string', description: 'Text, @input (default), or @note:id.' },
       mode: { type: 'string', enum: ['create', 'append', 'replace'] }, note: { type: 'string', description: 'Existing id or exact title for append/replace.' },
@@ -62,7 +62,12 @@ export const notesTools: ToolEntry[] = [
       const title = readString(args, 'title', { max: 160, example: EXAMPLE })?.trim()
       const tags = readList(args, 'tags', { max: 10, example: EXAMPLE })
       if (tags?.some((t) => t.length > 40)) throw argError('Each tag must be at most 40 characters.', EXAMPLE)
-      const ref = readString(args, 'note', { max: 200, example: EXAMPLE })?.trim()
+      // Small models often name the target in `title`; for append/replace that
+      // is the note to update, not a rename (an explicit `note` keeps rename semantics).
+      const explicitRef = readString(args, 'note', { max: 200, example: EXAMPLE })?.trim()
+      const titleIsRef = mode !== 'create' && !explicitRef && !!title
+      const ref = titleIsRef ? title : explicitRef
+      const renameTo = titleIsRef ? undefined : title
       const now = ctx.now().toISOString()
       const previous = ctx.store.notes
       let next: Note
@@ -75,16 +80,16 @@ export const notesTools: ToolEntry[] = [
           authorAgentId: ctx.agentId, updatedByAgentId: ctx.agentId, runId: ctx.runId, createdAt: now, updatedAt: now }
         ctx.store.notes = [...previous, next]
       } else {
-        if (!ref) throw argError('Append/replace needs a note id or exact title.', { mode, note: 'Decision', body: 'Updated decision.' })
+        if (!ref) throw argError('Append/replace needs the existing note: pass "note" (its id or exact title).', { mode, note: 'Decision', body: 'Updated decision.' })
         const existing = findNote(ctx.store, ref)
         if (!existing) throw argError('No matching note. Use list_notes first.', EXAMPLE)
-        if (mode === 'replace' && existing.authorAgentId !== ctx.agentId) throw argError('Only the author may replace a note. Use append instead.', EXAMPLE)
+        if (mode === 'replace' && existing.authorAgentId !== ctx.agentId) throw argError('Only the author may replace a note. Use append instead.', { mode: 'append', note: existing.id, body: 'Additional context.' })
         // Appending does not rename another author's note or replace its tags.
-        if (mode === 'append' && (title !== undefined || tags !== undefined)) throw argError('Append accepts body only; omit title and tags.', { mode, note: ref, body: 'Additional context.' })
-        if (title && previous.some((n) => n.id !== existing.id && n.title.toLowerCase() === title.toLowerCase())) throw argError('That title already exists.', EXAMPLE)
+        if (mode === 'append' && (renameTo !== undefined || tags !== undefined)) throw argError('Append accepts body only; omit title and tags.', { mode, note: ref, body: 'Additional context.' })
+        if (renameTo && previous.some((n) => n.id !== existing.id && n.title.toLowerCase() === renameTo.toLowerCase())) throw argError('That title already exists.', EXAMPLE)
         const combined = mode === 'append' ? `${existing.body}\n\n${body}` : body
         if (combined.length > MAX_NOTE_CHARS) throw argError(`Combined note exceeds ${MAX_NOTE_CHARS} characters.`, EXAMPLE)
-        next = { ...existing, body: combined, title: title || existing.title,
+        next = { ...existing, body: combined, title: renameTo || existing.title,
           tags: tags ? [...new Set(tags)] : existing.tags, updatedByAgentId: ctx.agentId, runId: ctx.runId, updatedAt: now }
         ctx.store.notes = previous.map((n) => n.id === existing.id ? next : n)
       }

@@ -324,7 +324,9 @@ describe('run audit fields', () => {
     expect(run.systemPrompt).toContain('Be brief.')
     expect(run.systemPrompt).toContain('## summarization')
     expect(run.systemPrompt).toContain(skill.content.slice(0, 120))
-    expect(run.skillSnapshot).toEqual([{ id: 'summarization', name: 'summarization', contentChars: skill.content.length }])
+    expect(run.skillSnapshot).toEqual([
+      { id: 'summarization', name: 'summarization', contentChars: skill.content.length, mode: 'full' },
+    ])
 
     // Byte-identical to what went upstream.
     expect(lastRequest(mock).messages?.[0]?.content).toBe(run.systemPrompt)
@@ -533,8 +535,10 @@ describe('context budget before upstream', () => {
     const agentId = await makeBudgetRunner(100)
     const res = await inject('POST', `/api/agents/${agentId}/runs`, { input: 'x'.repeat(1000) })
     expect(res.statusCode).toBe(413)
-    // ceil(1000 / 4) = 250 estimated of a 100-token window.
-    expect((res.json() as { message: string }).message).toContain('estimated 250 of 100 tokens')
+    // ceil(1000 / 4) = 250 estimated, plus the reply reserve, against a 100-token window.
+    const { message } = res.json() as { message: string }
+    expect(message).toContain("Prompt too large for this endpoint's context window")
+    expect(message).toContain('about 250 tokens of prompt plus 4096 reserved for the reply exceed the 100-token window')
   })
 
   it('sends an explicit max_tokens in the upstream payload', async () => {

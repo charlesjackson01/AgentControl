@@ -82,6 +82,37 @@ export interface SkillInput {
 
 export type SkillPatch = Partial<SkillInput>
 
+/** How one attached skill went into a run's system prompt. */
+export type SkillPromptMode = 'full' | 'summary'
+
+/**
+ * How a run prompt fits its endpoint: every skill in full, some skills as
+ * summaries (read in full with get_skill), or over budget even with every
+ * skill summarized (the run may still be rejected with 413).
+ */
+export type PromptMode = 'full' | 'summary' | 'too-large'
+
+/** POST /api/prompt-budget body: the agent draft to plan for. Unknown skill ids are ignored. */
+export interface PromptBudgetInput {
+  endpointId: string
+  skillIds: string[]
+  instructions?: string
+}
+
+/** POST /api/prompt-budget response: the plan a run would use (computed with an empty input). */
+export interface PromptBudget {
+  contextWindow: number
+  /** Tokens kept free for the reply. */
+  responseReserve: number
+  /** chars/4 estimate of system prompt + tool schemas. */
+  estimatedTokens: number
+  mode: PromptMode
+  /** Skills sent as summaries, in attachment order. */
+  summarizedSkillIds: string[]
+  /** Tools the run would offer, in the order sent upstream. */
+  toolNames: string[]
+}
+
 export interface AgentRun {
   id: string
   agentId: string
@@ -94,8 +125,12 @@ export interface AgentRun {
   error: string | null
   /** Exact system message sent ('' when none was). Optional: pre-audit runs parse as-is. */
   systemPrompt?: string
-  /** Per-injected-skill audit (content itself is never stored). */
-  skillSnapshot?: { id: string; name: string; contentChars: number }[]
+  /**
+   * Per-injected-skill audit (content itself is never stored). `mode` says
+   * whether the full content or only a summary went into the prompt; runs
+   * recorded before summaries existed have no mode (they were all full).
+   */
+  skillSnapshot?: { id: string; name: string; contentChars: number; mode?: SkillPromptMode }[]
   /** Per-tool-call audit for runs that used the tool loop. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
 }

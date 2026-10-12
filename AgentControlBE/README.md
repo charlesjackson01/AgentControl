@@ -113,15 +113,20 @@ as one shipped without tools, so v3 gives it its new tools once.
 
 ### Skills that don't fit
 
-A run puts each attached skill's full text in the system prompt when the
-prompt, the 4,096-token reply reserve and 1,024 tokens of headroom fit the
-endpoint's context window (estimated at 4 chars per token); that prompt is the
-same, byte for byte, as before summaries existed. Otherwise the largest skills
-are sent as short summaries (name, description, and an instruction to call
-`get_skill`), and `get_skill` is offered so the model reads a summarized skill
-when it needs it. The run audit records each skill's `mode` (`full` or
-`summary`). A run is rejected with 413 only when even the summarized prompt
-plus the reply reserve exceeds the window; the message gives the numbers.
+A run puts each attached skill's full text in the system prompt whenever the
+prompt plus the 4,096-token reply reserve fits the endpoint's context window
+(estimated at 4 chars per token); that prompt is the same, byte for byte, as
+before summaries existed. Only a prompt that would not fit has its largest
+skills sent as short summaries (name, description, and an instruction to call
+`get_skill`), summarizing until 1,024 tokens of headroom are also free, and
+`get_skill` is offered so the model reads a summarized skill when it needs it.
+A summary plan that would not be smaller than the full prompt is not used.
+When the planner adds `get_skill` itself, it reads only the agent's own
+skills. `get_skill` and `read_note` size each page to the room the run has left,
+so a page is never cut mid-JSON; when there is no room they say so. The run
+audit records each skill's `mode` (`full` or `summary`). A run is rejected with
+413 only when even the summarized prompt plus the reply reserve exceeds the
+window; the message gives the numbers.
 
 `save_note` creates or updates shared workspace notes. Only the creating agent
 may replace a note; other agents may append body text. Limits are four writes

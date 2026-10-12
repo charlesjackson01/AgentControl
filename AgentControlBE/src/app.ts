@@ -464,6 +464,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const system = plan.system
     const toolDeclarations: ToolDeclaration[] = plan.toolDeclarations
     const summarized = new Set(plan.summarizedSkillIds)
+    // get_skill the planner added (no attached skill declares it) reads only
+    // this agent's skills, not every skill in the workspace.
+    const plannerGetSkill =
+      summarized.size > 0 && !injectedSkills.some((s) => (s.tools ?? []).some((t) => t.name === 'get_skill'))
     const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
     const toolSchemaChars = sendTools ? JSON.stringify(sendTools).length : 0
 
@@ -530,6 +534,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       now: () => new Date(),
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       writes: { count: 0 },
+      ...(plannerGetSkill ? { skillScope: new Set(injectedSkills.map((s) => s.id)) } : {}),
     }
 
     const startedAt = new Date().toISOString()
@@ -600,6 +605,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         let callsThisTurn = 0
         for (const call of result.toolCalls) {
           callsThisTurn += 1
+          // What the context window still holds for this result. Paging tools
+          // size their page to it; anything larger is clipped below.
+          const remainingChars = (contextWindow - RESPONSE_RESERVE - estimate([], true)) * 4
+          const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
+          toolCtx.resultMaxChars = limit
           let outcome: ToolOutcome
           if (callsThisTurn > MAX_CALLS_PER_TURN || callsThisRun >= MAX_CALLS_PER_RUN) {
             outcome = {
@@ -612,8 +622,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
           }
           // Clip to what the context window still holds; when almost nothing is
           // left, say so and make the next call the tools-off final call.
-          const remainingChars = (contextWindow - RESPONSE_RESERVE - estimate([], true)) * 4
-          const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
           let content = outcome.content
           let ok = outcome.ok
           if (content.length > limit) {

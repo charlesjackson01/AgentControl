@@ -23,6 +23,18 @@ export interface ToolContext {
   timeZone: string
   /** Per-run counters shared by all calls of one run (save_note write cap). */
   writes: { count: number }
+  /**
+   * Result size the run's context window can still hold, set by the run loop
+   * before each call. Paging tools shrink their page to it, so the loop never
+   * has to cut their JSON (and nextOffset stays exact). Unset: RESULT_MAX_CHARS.
+   */
+  resultMaxChars?: number
+  /**
+   * Skill ids get_skill may read. Set when the prompt planner offered
+   * get_skill on its own to read the agent's summarized skills; unset when an
+   * attached skill declares get_skill (then any skill is readable).
+   */
+  skillScope?: ReadonlySet<string>
 }
 
 /**

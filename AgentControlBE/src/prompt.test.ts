@@ -97,24 +97,26 @@ describe('planPrompt full mode', () => {
     expect(plan.toolDeclarations.some((t) => t.name === 'get_skill')).toBe(declared)
   })
 
-  it('stays full exactly up to the boundary, then summarizes', () => {
+  it('stays full exactly up to the hard limit (no headroom needed), then summarizes', () => {
     const skills = [skill('one', 3000), skill('two', 2000)]
     const old = legacy('Lead.', skills)
-    const needed = estimateOf(old.system, 'q', old.toolDeclarations) + OVERHEAD
+    const needed = estimateOf(old.system, 'q', old.toolDeclarations) + RESPONSE_RESERVE
     const atBoundary = planPrompt({ instructions: 'Lead.', skills, input: 'q', contextWindow: needed })
     expect(atBoundary.mode).toBe('full')
     expect(atBoundary.system).toBe(old.system)
-    expect(atBoundary.estimatedTokens + OVERHEAD).toBe(needed)
+    expect(atBoundary.estimatedTokens + RESPONSE_RESERVE).toBe(needed)
 
+    // One token short: summarize largest first until the headroom is there too.
     const below = planPrompt({ instructions: 'Lead.', skills, input: 'q', contextWindow: needed - 1 })
     expect(below.mode).toBe('summary')
-    expect(below.summarizedSkillIds).toEqual(['one'])
+    expect(below.summarizedSkillIds).toEqual(['one', 'two'])
+    expect(below.estimatedTokens + OVERHEAD).toBeLessThanOrEqual(needed - 1)
   })
 
   it('counts the input toward the estimate', () => {
     const skills = [skill('one', 3000)]
     const old = legacy('', skills)
-    const window = estimateOf(old.system, '', []) + OVERHEAD
+    const window = estimateOf(old.system, '', []) + RESPONSE_RESERVE
     expect(planPrompt({ instructions: '', skills, input: '', contextWindow: window }).mode).toBe('full')
     expect(planPrompt({ instructions: '', skills, input: 'x'.repeat(40), contextWindow: window }).mode).toBe('summary')
   })
@@ -183,7 +185,7 @@ describe('planPrompt summary mode', () => {
   it('appends get_skill once, after the tools the skills declare, which stay offered', () => {
     const big = skill('big', 8000, { tools: stored('calculate', 'list_agents') })
     const small = skill('small', 200, { tools: stored('list_agents', 'read_note') })
-    const plan = planPrompt({ instructions: '', skills: [big, small], input: '', contextWindow: 6500 })
+    const plan = planPrompt({ instructions: '', skills: [big, small], input: '', contextWindow: 6000 })
     expect(plan.mode).toBe('summary')
     expect(plan.summarizedSkillIds).toEqual(['big'])
     expect(plan.toolDeclarations).toEqual([decl('calculate'), decl('list_agents'), decl('read_note'), getSkill])
@@ -193,7 +195,7 @@ describe('planPrompt summary mode', () => {
 
   it('does not add a second get_skill when a skill already declares it', () => {
     const big = skill('big', 8000, { tools: stored('get_skill', 'calculate') })
-    const plan = planPrompt({ instructions: '', skills: [big], input: '', contextWindow: 6500 })
+    const plan = planPrompt({ instructions: '', skills: [big], input: '', contextWindow: 6000 })
     expect(plan.mode).toBe('summary')
     expect(plan.toolDeclarations.map((t) => t.name)).toEqual(['get_skill', 'calculate'])
   })

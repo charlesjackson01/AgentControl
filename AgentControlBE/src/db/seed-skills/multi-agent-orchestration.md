@@ -1,7 +1,7 @@
 ---
 name: multi-agent-orchestration
 description: Design and operate bounded multi-agent workflows with task decomposition, dependency graphs, ownership, handoff contracts, shared-state controls, approvals, recovery, and synthesis. Use when a task contains genuinely independent workstreams, specialized roles, parallel research or implementation, reviewer-worker loops, or coordination problems that one agent should not execute sequentially.
-tools: list_agents, get_agent, workspace_overview, read_run_log
+tools: list_agents, get_agent, workspace_overview, read_run_log, get_skill
 ---
 
 # Multi-Agent Orchestration

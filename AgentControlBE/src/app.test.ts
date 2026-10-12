@@ -298,6 +298,8 @@ describe('POST /api/agents/:id/runs', () => {
   it('injects skill content into the system prompt and never sends tools', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner() // attached: the real "summarization" seed
+    // The seed now declares tools; with them cleared it is a content-only skill.
+    store.skills.find((s) => s.id === 'summarization')!.tools = []
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
     expect(res.statusCode).toBe(200)
 
@@ -626,7 +628,8 @@ describe('tool execution loop', () => {
 
   it('omits the tools key when no attached skill declares tools', async () => {
     const mock = mockChat('ok')
-    const { agent } = await makeRunner() // summarization seed declares no tools
+    const { agent } = await makeRunner()
+    store.skills.find((s) => s.id === 'summarization')!.tools = [] // the attached seed, tools cleared
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
     expect(lastRequest(mock)).not.toHaveProperty('tools')
   })
@@ -844,10 +847,18 @@ describe('fresh install', () => {
 })
 
 describe('skill seeds', () => {
-  it('preserves the six vendored skills alongside the ten new skills', async () => {
+  it('preserves the six vendored skills alongside the twelve authored skills', async () => {
     const skills = (await inject('GET', '/api/skills')).json() as Skill[]
-    expect(skills).toHaveLength(16)
+    expect(skills).toHaveLength(18)
     const vendored = skills.filter((s) => s.source === 'seb1n/awesome-ai-agent-skills')
+    const vendoredTools: Record<string, string[]> = {
+      'code-review': ['diff_text', 'process_lines', 'extract_entities'],
+      debugging: ['process_lines', 'extract_entities', 'diff_text', 'read_run_log'],
+      'deep-research': ['list_notes', 'read_note', 'save_note', 'extract_entities'],
+      'multi-agent-orchestration': ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log', 'get_skill'],
+      summarization: ['text_stats', 'read_note', 'save_note'],
+      'technical-writing': ['text_stats', 'diff_text', 'read_note', 'save_note'],
+    }
     expect(vendored.map((s) => s.id)).toEqual([
       'code-review',
       'debugging',
@@ -860,10 +871,8 @@ describe('skill seeds', () => {
       expect(s.content.length).toBeGreaterThan(100)
       expect(s.content).not.toMatch(/^---/)
       expect(s.source).toBe('seb1n/awesome-ai-agent-skills')
-      // Bodies stay vendored; only multi-agent-orchestration declares tools (frontmatter).
-      expect(s.tools.map((t) => t.name)).toEqual(
-        s.id === 'multi-agent-orchestration' ? ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log'] : [],
-      )
+      // Bodies stay vendored; each declares its tools in frontmatter only.
+      expect(s.tools.map((t) => t.name)).toEqual(vendoredTools[s.id])
     }
   })
 })
@@ -1461,7 +1470,8 @@ describe('tool plumbing', () => {
 
   it('executes nothing when the model calls tools no skill offered', async () => {
     const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
-    const { agent } = await makeRunner() // summarization: no tools
+    const { agent } = await makeRunner()
+    store.skills.find((s) => s.id === 'summarization')!.tools = [] // the attached seed, tools cleared
     await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
     expect(toolMessages(mock)[0]?.content).toContain('Available: none')
   })

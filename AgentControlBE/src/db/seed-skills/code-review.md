@@ -1,6 +1,7 @@
 ---
 name: code-review
 description: Perform thorough code reviews on files or pull requests, checking for bugs, security vulnerabilities, performance issues, and style violations. Use when the user requests code review or provides relevant inputs for this workflow.
+tools: diff_text, process_lines, extract_entities
 license: MIT
 metadata:
   author: awesome-ai-agent-skills contributors

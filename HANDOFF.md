@@ -1,14 +1,19 @@
 # AgentControl — Handoff for Claude (Opus)
 
-> **Skills-library recovery update (October 11, 2026):** Continue from
-> `feat/skills-library-tools` and PR #3, not the older `master` snapshot below.
-> The recovered commits through `af38617` are preserved. The six tool modules
-> now provide 16 tools; ten original AgentControl skills join the six unchanged
-> vendored skills. The tool picker, import previews, and Notes page are complete.
-> See [the recovery report](docs/skills-library-recovery.md) for current scope,
-> verification, known limits, and the browser smoke command. The remaining text
-> describes the earlier PR #2 baseline; its old test count and follow-up list
-> are historical.
+> **Current state (October 12, 2026):** `master` includes PR #3 (skills
+> library: built-in tools, ten AgentControl skills, tool picker, Notes page;
+> history in [the recovery report](docs/skills-library-recovery.md)). The
+> follow-up `feat/more-tools` adds `get_agent`, `workspace_overview`,
+> `process_lines`, `extract_entities` and `resolve_date` (21 tools) and the
+> one-shot `seed-skill-upgrade-v2` migration, which upgrades untouched copies of
+> `workspace-audit`, `date-arithmetic`, `text-cleanup` and the vendored
+> `multi-agent-orchestration` to use them (edited copies are left alone).
+> `backup/skills-workflow-partial` holds unreviewed drafts, not for merge;
+> `get_skill` and `encode_text` there are candidates only. Verify with
+> `npm run typecheck && npm test && npm run build` (backend) and
+> `npm run lint && npm run typecheck && npm test && npm run build` (frontend).
+> The remaining text describes the earlier PR #2 baseline; its old test count
+> and follow-up list are historical.
 
 > **Read this first.** This is a working, tested app. The bar is: keep the
 > existing tests green (`npm test` in `AgentControlBE`, 60 passing), keep

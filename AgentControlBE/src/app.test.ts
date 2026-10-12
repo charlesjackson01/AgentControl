@@ -860,7 +860,10 @@ describe('skill seeds', () => {
       expect(s.content.length).toBeGreaterThan(100)
       expect(s.content).not.toMatch(/^---/)
       expect(s.source).toBe('seb1n/awesome-ai-agent-skills')
-      expect(s.tools).toEqual([])
+      // Bodies stay vendored; only multi-agent-orchestration declares tools (frontmatter).
+      expect(s.tools.map((t) => t.name)).toEqual(
+        s.id === 'multi-agent-orchestration' ? ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log'] : [],
+      )
     }
   })
 })

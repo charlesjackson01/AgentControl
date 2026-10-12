@@ -8,9 +8,10 @@ import {
   seedRuns,
   seedSettings,
   seedSkills,
+  vendoredSeedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
-import type { Agent, AgentRun, Endpoint, Project, Skill, WorkspaceSettings } from './shared/types.js'
+import type { Agent, AgentRun, Endpoint, Note, Project, Skill, WorkspaceSettings } from './shared/types.js'
 
 export interface WorkspaceStore {
   agents: Agent[]
@@ -24,11 +25,25 @@ export interface WorkspaceStore {
   /** Secret vault: endpoint id -> bearer key. Never serialized to clients. */
   endpointKeys: Record<string, string>
   settings: WorkspaceSettings
+  /** Shared workspace memory written by the notes tools. */
+  notes: Note[]
+  /** Migration bookkeeping. Persisted, never served by any route. */
+  meta: StoreMeta
   /** Persist to disk; returns false (and logs) when the write fails. */
   save(): boolean
   /** Strip a skill id from every agent's skillIds (call before removing the skill, then save once). */
   detachSkill(skillId: string): void
 }
+
+export interface StoreMeta {
+  /** One-shot migrations already applied to this store. */
+  migrations: string[]
+  /** Seed skill ids ever offered; a seed the user deleted is not re-added. */
+  seededSkillIds: string[]
+}
+
+/** Every one-shot migration; fresh stores are born with all of them applied. */
+const MIGRATIONS = ['seed-skill-tools-v1'] as const
 
 /** Everything written to `store.json`. Key material is deliberately excluded. */
 interface Persisted {
@@ -39,6 +54,8 @@ interface Persisted {
   endpoints: Endpoint[]
   endpointModels: Record<string, string[]>
   settings: WorkspaceSettings
+  notes: Note[]
+  meta: StoreMeta
 }
 
 /** Agents from older installs may lack `role`, `isPrimary`, or have a null `endpointId`. */
@@ -79,7 +96,44 @@ function seed(): Persisted {
     endpoints: structuredClone(seedEndpoints),
     endpointModels: structuredClone(seedEndpointModels),
     settings: structuredClone(seedSettings),
+    notes: [],
+    meta: { migrations: [...MIGRATIONS], seededSkillIds: seedSkills.map((s) => s.id) },
   }
+}
+
+const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string')
+
+function normalizeMeta(raw: unknown): StoreMeta | null {
+  if (!raw || typeof raw !== 'object') return null
+  const m = raw as Partial<StoreMeta>
+  return {
+    migrations: isStringArray(m.migrations) ? [...m.migrations] : [],
+    seededSkillIds: isStringArray(m.seededSkillIds) ? [...m.seededSkillIds] : [],
+  }
+}
+
+/** Keep well-formed notes only (model-written data; be strict on load). */
+function normalizeNotes(raw: unknown): Note[] {
+  if (!Array.isArray(raw)) return []
+  const out: Note[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const n = item as Partial<Note>
+    if (typeof n.id !== 'string' || typeof n.title !== 'string' || typeof n.body !== 'string') continue
+    const createdAt = typeof n.createdAt === 'string' ? n.createdAt : new Date(0).toISOString()
+    out.push({
+      id: n.id,
+      title: n.title,
+      body: n.body,
+      tags: isStringArray(n.tags) ? n.tags : [],
+      authorAgentId: typeof n.authorAgentId === 'string' ? n.authorAgentId : '',
+      updatedByAgentId: typeof n.updatedByAgentId === 'string' ? n.updatedByAgentId : (n.authorAgentId ?? ''),
+      runId: typeof n.runId === 'string' ? n.runId : '',
+      createdAt,
+      updatedAt: typeof n.updatedAt === 'string' ? n.updatedAt : createdAt,
+    })
+  }
+  return out
 }
 
 function normalizeRun(r: Partial<AgentRun>): AgentRun {
@@ -173,8 +227,39 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     changed = true
     return { ...s, content: legacy.content ?? '', tools: legacy.tools ?? [] }
   })
-  const missingSkills = base.skills.filter((s) => !savedSkills.some((saved) => saved.id === s.id))
+  const storedMeta = normalizeMeta(raw.meta)
+  if (!storedMeta) changed = true
+  const meta: StoreMeta = storedMeta ?? { migrations: [], seededSkillIds: [] }
+
+  // One-shot: vendored seed skills the user never edited (same content, no
+  // tools) gain the tools they now ship with. Runs once, so tools a user
+  // later clears stay cleared.
+  if (!meta.migrations.includes('seed-skill-tools-v1')) {
+    for (let i = 0; i < savedSkills.length; i++) {
+      const saved = savedSkills[i] as Skill
+      const seed = vendoredSeedSkills.find((v) => v.id === saved.id)
+      if (seed && seed.tools.length > 0 && saved.tools.length === 0 && saved.content === seed.content) {
+        savedSkills[i] = { ...saved, tools: structuredClone(seed.tools) }
+      }
+    }
+    meta.migrations.push('seed-skill-tools-v1')
+    changed = true
+  }
+
+  // Append seed skills that are missing and were never offered before; a seed
+  // the user deleted (already in seededSkillIds) stays deleted.
+  const missingSkills = base.skills.filter(
+    (s) => !savedSkills.some((saved) => saved.id === s.id) && !meta.seededSkillIds.includes(s.id),
+  )
   if (missingSkills.length > 0) changed = true
+  const neverOffered = base.skills.filter((s) => !meta.seededSkillIds.includes(s.id)).map((s) => s.id)
+  if (neverOffered.length > 0) {
+    meta.seededSkillIds.push(...neverOffered)
+    changed = true
+  }
+
+  const notes = normalizeNotes(raw.notes)
+  if (Array.isArray(raw.notes) && notes.length !== raw.notes.length) changed = true
 
   // Drop the retired model catalog so the next save rewrites store.json without it.
   if (raw.models !== undefined) changed = true
@@ -188,6 +273,8 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
       settings: raw.settings ?? base.settings,
+      notes,
+      meta,
     },
     changed,
   }
@@ -233,6 +320,8 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           endpoints: store.endpoints,
           endpointModels: store.endpointModels,
           settings: store.settings,
+          notes: store.notes,
+          meta: store.meta,
         }
         writeFileSync(path, JSON.stringify(snapshot, null, 2), 'utf8')
         vault.save(store.endpointKeys)

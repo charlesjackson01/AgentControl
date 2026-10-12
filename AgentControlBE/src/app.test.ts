@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -5,9 +6,10 @@ import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
-import type { Agent, AgentRun, Endpoint, Skill } from './shared/types.js'
+import type { Agent, AgentRun, Endpoint, Note, Skill } from './shared/types.js'
 import { DEFAULT_ENDPOINT_BASE_URL } from './shared/types.js'
-import { seedEndpointModels, seedEndpoints } from './db/seed.js'
+import { seedEndpointModels, seedEndpoints, seedSkills, vendoredSeedSkills } from './db/seed.js'
+import { builtinTools, executeToolCall, toolDeclaration, type ToolEntry } from './tools.js'
 
 /**
  * Hermetic HTTP tests via fastify.inject() — no sockets, no real network.
@@ -557,12 +559,14 @@ describe('tool execution loop', () => {
     expect(run.output).toBe('all good')
     expect(mock).toHaveBeenCalledTimes(2)
 
-    // Call 1 advertised the declared tool in OpenAI function format.
+    // Call 1 advertised the declared tool in OpenAI function format, with the
+    // registry's current description and schema (not the skill's stored copy).
     const first = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}') as ChatRequest
+    const decl = toolDeclaration('list_skills')
     expect(first.tools).toEqual([
       {
         type: 'function',
-        function: { name: 'list_skills', description: 'Built-in list_skills', parameters: {} },
+        function: { name: 'list_skills', description: decl?.description, parameters: decl?.parameters },
       },
     ])
 
@@ -612,7 +616,9 @@ describe('tool execution loop', () => {
 
     const toolMsg = lastRequest(mock).messages?.find((m) => m.role === 'tool')
     expect(toolMsg?.content).toContain('Unknown tool "frobnicate"')
-    expect(toolMsg?.content).toContain('list_agents, list_skills, read_run_log')
+    // Only the tools this run offered are listed, not the whole registry.
+    expect(toolMsg?.content).toContain('Available: list_skills')
+    expect(toolMsg?.content).not.toContain('list_agents')
     expect(run.toolCalls).toEqual([
       { name: 'frobnicate', arguments: '{}', resultChars: expect.any(Number), ok: false },
     ])
@@ -1413,5 +1419,289 @@ describe('AGENTCONTROL_AUTH_TOKEN', () => {
       await gated.close()
       delete process.env.AGENTCONTROL_AUTH_TOKEN
     }
+  })
+})
+
+describe('tool plumbing', () => {
+  /** One assistant turn carrying several tool calls. */
+  function multiCallResponse(calls: { name: string; args?: string }[]) {
+    return {
+      choices: [
+        {
+          index: 0,
+          finish_reason: 'tool_calls',
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: calls.map((c, i) => ({
+              id: `call_${i + 1}`,
+              type: 'function',
+              function: { name: c.name, arguments: c.args ?? '{}' },
+            })),
+          },
+        },
+      ],
+    }
+  }
+  const toolMessages = (mock: ReturnType<typeof mockChat>) =>
+    (lastRequest(mock).messages ?? []).filter((m) => m.role === 'tool')
+
+  it('refuses a registry tool this agent was not offered', async () => {
+    const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
+    const { agent } = await makeToolRunner(['list_skills'])
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })).json() as AgentRun
+    expect(toolMessages(mock)[0]?.content).toContain('Tool "list_agents" is not enabled for this agent. Available: list_skills')
+    expect(run.toolCalls?.[0]?.ok).toBe(false)
+  })
+
+  it('executes nothing when the model calls tools no skill offered', async () => {
+    const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
+    const { agent } = await makeRunner() // summarization: no tools
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
+    expect(toolMessages(mock)[0]?.content).toContain('Available: none')
+  })
+
+  it('answers every call but executes at most 8 per turn', async () => {
+    // read_run_log on a fresh agent returns "[]": tiny results, no budget pressure.
+    const calls = Array.from({ length: 9 }, () => ({ name: 'read_run_log' }))
+    const mock = mockChatSequence([multiCallResponse(calls), contentResponse('ok')])
+    const { agent } = await makeToolRunner(['read_run_log'])
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })).json() as AgentRun
+    const msgs = toolMessages(mock)
+    expect(msgs).toHaveLength(9)
+    expect(msgs[8]?.content).toContain('Too many tool calls')
+    expect(run.toolCalls?.map((c) => c.ok)).toEqual([...Array(8).fill(true), false])
+  })
+
+  it('refuses oversized arguments and clips them in the audit', async () => {
+    const huge = JSON.stringify({ pad: 'x'.repeat(70_000) })
+    const outcome = await executeToolCall(
+      { id: 'c1', name: 'list_skills', arguments: huge },
+      {
+        store, agentId: 'a', runId: 'r', input: '', allowed: new Set(['list_skills']),
+        now: () => new Date(), timeZone: 'UTC', writes: { count: 0 },
+      },
+    )
+    expect(outcome.ok).toBe(false)
+    expect(outcome.content).toContain('Tool arguments are too large')
+
+    // In a run, 70k chars of arguments also overflow the window: the run is
+    // saved as failed (not a 413) and the audit keeps only 1,000 chars.
+    mockChatSequence([toolCallResponse('list_skills', huge), contentResponse('ok')])
+    const { agent } = await makeToolRunner(['list_skills'])
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.toolCalls?.[0]?.ok).toBe(false)
+    expect(run.toolCalls?.[0]?.arguments.endsWith('…[truncated]')).toBe(true)
+    expect(run.toolCalls?.[0]?.arguments.length).toBeLessThanOrEqual(1012)
+  })
+
+  it('redacts stored keys and key-shaped strings from tool output', async () => {
+    const secret = 'sk-or-v1-0123456789abcdef0123456789abcdef'
+    const keyed = await inject('POST', '/api/endpoints', {
+      kind: 'openrouter',
+      name: 'Keyed',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      defaultModel: 'm',
+      contextWindow: 8192,
+      apiKey: 'plain-vault-secret-value',
+    })
+    expect(keyed.statusCode).toBe(201)
+    const { agent, endpointId } = await makeToolRunner(['list_agents'])
+    for (const name of [`Leak ${secret}`, 'Vault plain-vault-secret-value', 'Gh ghp_abcdefghijklmnopqrstuvwxyz0123']) {
+      const created = await inject('POST', '/api/agents', {
+        name, description: '', instructions: '', modelId: 'test-model', endpointId, skillIds: [],
+      })
+      expect(created.statusCode).toBe(201)
+    }
+    const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'who is here?' })
+    const content = toolMessages(mock)[0]?.content ?? ''
+    expect(content).not.toContain(secret)
+    expect(content).not.toContain('plain-vault-secret-value')
+    expect(content).not.toContain('ghp_abcdefghijklmnopqrstuvwxyz0123')
+    expect(content.split('[redacted]').length - 1).toBe(3)
+  })
+
+  it('serializes a handler that returns undefined as "null" instead of crashing', async () => {
+    const registry = builtinTools as Map<string, ToolEntry>
+    registry.set('tmp_undefined', {
+      name: 'tmp_undefined', category: 'workspace', effect: 'read', description: 'test. Example: {}',
+      parameters: { type: 'object', properties: {} }, handler: () => undefined,
+    })
+    try {
+      const outcome = await executeToolCall(
+        { id: 'c1', name: 'tmp_undefined', arguments: '{}' },
+        {
+          store, agentId: 'a', runId: 'r', input: '', allowed: new Set(['tmp_undefined']),
+          now: () => new Date(), timeZone: 'UTC', writes: { count: 0 },
+        },
+      )
+      expect(outcome).toEqual({ ok: true, content: 'null' })
+    } finally {
+      registry.delete('tmp_undefined')
+    }
+  })
+
+  it('saves a failed run instead of 413 when tool traffic overflows the window', async () => {
+    const ep = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible', name: 'Tiny', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 4400,
+    })
+    const sk = await inject('POST', '/api/skills', {
+      name: 'Tiny tools', content: 'Use tools.', tools: [{ name: 'list_skills', description: 'x' }],
+    })
+    const agent = (await inject('POST', '/api/agents', {
+      name: 'Tiny agent', description: '', instructions: '', modelId: 'm',
+      endpointId: (ep.json() as Endpoint).id, skillIds: [(sk.json() as Skill).id],
+    })).json() as Agent
+    const padded = JSON.stringify({ pad: 'x'.repeat(1200) })
+    const mock = mockChatSequence([toolCallResponse('list_skills', padded), contentResponse('never sent')])
+    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
+    expect(res.statusCode).toBe(200)
+    const run = res.json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.error).toContain('Context exhausted by tool results')
+    expect(mock).toHaveBeenCalledTimes(1)
+    const saved = (await inject('GET', `/api/agents/${agent.id}/runs`)).json() as AgentRun[]
+    expect(saved[0]?.id).toBe(run.id)
+  })
+})
+
+describe('tools and notes routes', () => {
+  const note = (over: Partial<Note> = {}): Note => ({
+    id: 'note_1', title: 'Findings', body: 'b'.repeat(300), tags: ['research'], authorAgentId: 'agt_x',
+    updatedByAgentId: 'agt_x', runId: 'run_1', createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-02T00:00:00.000Z', ...over,
+  })
+
+  it('serves the registry with categories and effects', async () => {
+    const tools = (await inject('GET', '/api/tools')).json() as { name: string; category: string; effect: string }[]
+    expect(tools.slice(0, 3).map((t) => t.name)).toEqual(['list_agents', 'list_skills', 'read_run_log'])
+    expect(tools.every((t) => t.category && t.effect)).toBe(true)
+  })
+
+  it('lists note previews newest first, reads one, deletes one', async () => {
+    store.notes = [note(), note({ id: 'note_2', title: 'Newer', updatedAt: '2026-02-01T00:00:00.000Z' })]
+    const list = (await inject('GET', '/api/notes')).json() as { id: string; snippet: string; chars: number }[]
+    expect(list.map((n) => n.id)).toEqual(['note_2', 'note_1'])
+    expect(list[0]?.snippet.length).toBeLessThanOrEqual(160)
+    expect(list[0]?.chars).toBe(300)
+    const one = (await inject('GET', '/api/notes/note_1')).json() as Note
+    expect(one.body).toHaveLength(300)
+    expect((await inject('DELETE', '/api/notes/note_1')).statusCode).toBe(204)
+    expect((await inject('GET', '/api/notes/note_1')).statusCode).toBe(404)
+    expect((await inject('DELETE', '/api/notes/note_1')).statusCode).toBe(404)
+  })
+
+  it('gates the new routes behind the bearer token', async () => {
+    process.env.AGENTCONTROL_AUTH_TOKEN = 'tok-123'
+    const gated = buildApp(createStore(join(dir, 'store.json')))
+    try {
+      for (const url of ['/api/tools', '/api/notes', '/api/notes/x']) {
+        expect((await gated.inject({ method: 'GET', url })).statusCode).toBe(401)
+      }
+      expect((await gated.inject({ method: 'DELETE', url: '/api/notes/x' })).statusCode).toBe(401)
+    } finally {
+      await gated.close()
+      delete process.env.AGENTCONTROL_AUTH_TOKEN
+    }
+  })
+
+  it('imports SKILL.md tools: registry names kept, others reported but not stored', async () => {
+    const md = '---\nname: Tooled\ndescription: d\ntools: list_skills, Read, list_skills\n---\nBody.'
+    const res = await inject('POST', '/api/skills/import', { markdown: md })
+    expect(res.statusCode).toBe(201)
+    const body = res.json() as Skill & { ignoredTools?: string[] }
+    expect(body.tools.map((t) => t.name)).toEqual(['list_skills'])
+    expect(body.tools[0]).toEqual(toolDeclaration('list_skills'))
+    expect(body.ignoredTools).toEqual(['Read'])
+    const stored = ((await inject('GET', '/api/skills')).json() as Skill[]).find((s) => s.id === body.id)
+    expect(stored).not.toHaveProperty('ignoredTools')
+  })
+
+  it('bounds tool declarations on skill create', async () => {
+    const tooMany = Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'd' }))
+    expect((await inject('POST', '/api/skills', { name: 'Many', content: 'c', tools: tooMany })).statusCode).toBe(400)
+    const badName = [{ name: 'bad name', description: 'd' }]
+    expect((await inject('POST', '/api/skills', { name: 'Bad', content: 'c', tools: badName })).statusCode).toBe(400)
+  })
+})
+
+describe('store meta migrations', () => {
+  const legacy = (extra: Record<string, unknown>) =>
+    JSON.stringify({
+      agents: [], runs: [], projects: [], endpoints: [], endpointModels: {},
+      settings: { autoRun: true, notify: true, telemetry: false }, ...extra,
+    })
+
+  it('appends missing seeds once on an old store and records them', () => {
+    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
+    const path = join(d, 'store.json')
+    writeFileSync(path, legacy({ skills: [] }), 'utf8')
+    const loaded = createStore(path)
+    expect(loaded.skills.map((s) => s.id)).toEqual(seedSkills.map((s) => s.id))
+    expect(loaded.meta.seededSkillIds).toEqual(seedSkills.map((s) => s.id))
+    expect(loaded.meta.migrations).toContain('seed-skill-tools-v1')
+    rmSync(d, { recursive: true, force: true })
+  })
+
+  it('does not resurrect a seed skill the user deleted', () => {
+    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
+    const path = join(d, 'store.json')
+    const kept = seedSkills.filter((s) => s.id !== 'debugging')
+    writeFileSync(
+      path,
+      legacy({ skills: kept, meta: { migrations: ['seed-skill-tools-v1'], seededSkillIds: seedSkills.map((s) => s.id) } }),
+      'utf8',
+    )
+    expect(createStore(path).skills.some((s) => s.id === 'debugging')).toBe(false)
+    rmSync(d, { recursive: true, force: true })
+  })
+
+  it('drops malformed notes on load and keeps good ones', () => {
+    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
+    const path = join(d, 'store.json')
+    writeFileSync(path, legacy({ skills: [], notes: [{ id: 'n1', title: 't', body: 'b' }, { title: 'no id' }, 'junk'] }), 'utf8')
+    const loaded = createStore(path)
+    expect(loaded.notes.map((n) => n.id)).toEqual(['n1'])
+    expect(loaded.notes[0]).toMatchObject({ tags: [], authorAgentId: '', runId: '' })
+    rmSync(d, { recursive: true, force: true })
+  })
+
+  it('never serves meta from any route', async () => {
+    for (const url of ['/api/skills', '/api/settings', '/api/agents', '/api/tools', '/api/notes']) {
+      expect(JSON.stringify((await inject('GET', url)).json())).not.toContain('seededSkillIds')
+    }
+  })
+})
+
+describe('seed data integrity', () => {
+  it('pins the vendored seed bodies (the tools migration compares content)', () => {
+    const pinned: Record<string, string> = {
+      'code-review': '306c451504e224af7b2b02839e71c5c72ec9b7eb1734980e29a7b73c5db88af0',
+      debugging: 'e4163cedaecee9abf765750fe8813fea8569d969819eab30abd1e2a5800552c2',
+      'deep-research': 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67',
+      'multi-agent-orchestration': '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5',
+      summarization: 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a',
+      'technical-writing': '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229',
+    }
+    const actual = Object.fromEntries(
+      vendoredSeedSkills.map((s) => [s.id, createHash('sha256').update(s.content).digest('hex')]),
+    )
+    expect(actual).toEqual(pinned)
+  })
+
+  it('ships store.example.json without skills, so a copy gets the real seeds', () => {
+    const examplePath = new URL('../data/store.example.json', import.meta.url)
+    const example = JSON.parse(readFileSync(examplePath, 'utf8')) as Record<string, unknown>
+    expect(example).not.toHaveProperty('skills')
+    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-example-'))
+    const path = join(d, 'store.json')
+    writeFileSync(path, JSON.stringify(example), 'utf8')
+    const loaded = createStore(path)
+    expect(loaded.skills.map((s) => s.id)).toEqual(seedSkills.map((s) => s.id))
+    for (const s of loaded.skills) expect(typeof s.content === 'string' && s.content.length > 0).toBe(true)
+    rmSync(d, { recursive: true, force: true })
   })
 })

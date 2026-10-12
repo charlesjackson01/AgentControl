@@ -25,7 +25,17 @@ describe('parseSkillMarkdown tools', () => {
     expect(parseSkillMarkdown(withFrontmatter('tools: a a b')).tools).toEqual(['a', 'b'])
   })
 
-  it('rejects names that are not plain identifiers', () => {
-    expect(() => parseSkillMarkdown(withFrontmatter('tools: bad;name'))).toThrow(SkillMarkdownError)
+  it('returns odd tokens raw (the import route keeps only registry names)', () => {
+    expect(parseSkillMarkdown(withFrontmatter('tools: Read, Bash(git:*)')).tools).toEqual(['Read', 'Bash(git:*)'])
+  })
+
+  it('treats a __proto__ frontmatter key as plain data', () => {
+    const parsed = parseSkillMarkdown('---\n__proto__: x\nname: s\ndescription: d\n---\nbody')
+    expect(parsed.name).toBe('s')
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype)
+  })
+
+  it('still requires name and description', () => {
+    expect(() => parseSkillMarkdown('---\ndescription: d\n---\nbody')).toThrow(SkillMarkdownError)
   })
 })

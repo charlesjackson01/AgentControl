@@ -1,0 +1,100 @@
+/**
+ * Output limits shared by tool handlers. The run loop clips every result to
+ * ≤4,000 chars as a backstop; handlers aim lower and shrink structurally so a
+ * small model never receives JSON cut off mid-string.
+ */
+
+/** Default ceiling for one tool result, leaving room under the loop's clip. */
+export const RESULT_MAX_CHARS = 3_500
+
+export function clipText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text
+}
+
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
+
+function toJson(value: unknown): Json {
+  return JSON.parse(JSON.stringify(value ?? null)) as Json
+}
+
+function size(value: Json): number {
+  return JSON.stringify(value).length
+}
+
+/** Own-property write: plain assignment to "__proto__" would set the prototype. */
+function put(target: object, key: string | number, value: Json): void {
+  Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
+}
+
+/** Every array and long string in the tree, with a setter to replace it. */
+function collect(root: Json): { get(): Json; set(v: Json): void; path: string }[] {
+  const out: { get(): Json; set(v: Json): void; path: string }[] = []
+  const walk = (node: Json, get: () => Json, set: (v: Json) => void, path: string, depth: number) => {
+    if (depth > 32) return
+    if (Array.isArray(node)) {
+      out.push({ get, set, path })
+      node.forEach((child, i) =>
+        walk(child, () => (get() as Json[])[i] as Json, (v) => put(get() as Json[], i, v), `${path}[${i}]`, depth + 1),
+      )
+    } else if (node && typeof node === 'object') {
+      for (const key of Object.keys(node)) {
+        walk(
+          node[key] as Json,
+          () => (get() as Record<string, Json>)[key] as Json,
+          (v) => put(get() as Record<string, Json>, key, v),
+          path ? `${path}.${key}` : key,
+          depth + 1,
+        )
+      }
+    } else if (typeof node === 'string' && node.length > 80) {
+      out.push({ get, set, path })
+    }
+  }
+  const holder = { root }
+  walk(root, () => holder.root, (v) => { holder.root = v }, '', 0)
+  return out
+}
+
+/**
+ * Return `value` unchanged when its JSON fits in `max` chars; otherwise shrink
+ * the largest arrays (halving) and longest strings until it fits, and report
+ * `truncated: true` with the original lengths. Top-level arrays are wrapped as
+ * `{ items, truncated, total }` so the marker has somewhere to live.
+ */
+export function fitJson(value: unknown, max: number = RESULT_MAX_CHARS): unknown {
+  const json = toJson(value)
+  if (size(json) <= max) return json
+
+  let root: Json = Array.isArray(json) ? { items: json, total: json.length } : json
+  if (root === null || typeof root !== 'object') {
+    return { truncated: true, preview: clipText(String(root), max - 40) }
+  }
+  const omitted = new Map<string, number>()
+  const holder = { root }
+  for (let pass = 0; pass < 200 && size(holder.root) > max - 120; pass++) {
+    const candidates = collect(holder.root)
+      .map((c) => ({ ...c, bytes: size(c.get()) }))
+      .filter((c) => {
+        const v = c.get()
+        return Array.isArray(v) ? v.length > 1 : typeof v === 'string' && v.length > 40
+      })
+      .sort((a, b) => b.bytes - a.bytes)
+    const target = candidates[0]
+    if (!target) break
+    const current = target.get()
+    if (Array.isArray(current)) {
+      const key = target.path || 'items'
+      if (!omitted.has(key)) omitted.set(key, current.length)
+      target.set(current.slice(0, Math.ceil(current.length / 2)))
+    } else if (typeof current === 'string') {
+      target.set(clipText(current, Math.max(40, Math.floor(current.length / 2))))
+    }
+  }
+  root = holder.root as { [key: string]: Json }
+  const result: { [key: string]: Json } = { ...root, truncated: true }
+  if (omitted.size > 0) result.totals = Object.fromEntries(omitted)
+  if (size(result) > max) {
+    return { truncated: true, preview: clipText(JSON.stringify(root), max - 60) }
+  }
+  return result
+}

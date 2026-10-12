@@ -21,56 +21,6 @@
       "updatedAt": "2026-10-04T21:06:34.202Z"
     }
   ],
-  "skills": [
-    {
-      "id": "web-research",
-      "name": "Web Research",
-      "description": "Search, fetch, and cite with source ranking.",
-      "tag": "Core"
-    },
-    {
-      "id": "summarize",
-      "name": "Summarize",
-      "description": "Condenses long documents to key points.",
-      "tag": "Core"
-    },
-    {
-      "id": "code-interpreter",
-      "name": "Code Interpreter",
-      "description": "Runs sandboxed snippets and plots results.",
-      "tag": "Sandbox"
-    },
-    {
-      "id": "sql-query",
-      "name": "SQL Query",
-      "description": "Read-only warehouse access with a query guard.",
-      "tag": "Integration"
-    },
-    {
-      "id": "crm-lookup",
-      "name": "CRM Lookup",
-      "description": "Reads contact and deal history.",
-      "tag": "Integration"
-    },
-    {
-      "id": "email-draft",
-      "name": "Email Draft",
-      "description": "Writes replies in the account owner’s voice.",
-      "tag": "Core"
-    },
-    {
-      "id": "calendar",
-      "name": "Calendar",
-      "description": "Reads availability and books time.",
-      "tag": "Integration"
-    },
-    {
-      "id": "webhook",
-      "name": "Webhook",
-      "description": "POSTs structured payloads to a signed endpoint.",
-      "tag": "Integration"
-    }
-  ],
   "endpoints": [
     {
       "id": "ep_local_llama",

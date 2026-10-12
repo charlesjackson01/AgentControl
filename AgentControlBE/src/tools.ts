@@ -1,96 +1,85 @@
 /**
- * Built-in workspace tool registry. Skills declare tool names; execution
- * resolves against this Map. Adding a tool later = one entry (phase 2 adds
- * user-defined handlers).
+ * Built-in tool registry. Tools live in src/tools/<category>.ts (see
+ * src/tools/types.ts for the contract); this facade builds the name → entry
+ * Map in a fixed order (the original three first), resolves skill tool
+ * declarations against it, and executes model-requested calls safely.
  */
-import type { WorkspaceStore } from './store.js'
+import type { SkillTool } from './shared/types.js'
 import type { ToolCall } from './upstream.js'
+import { dataTools } from './tools/data.js'
+import { mathTools } from './tools/math.js'
+import { notesTools } from './tools/notes.js'
+import { resolveContentRefs } from './tools/refs.js'
+import { redactSecrets } from './tools/redact.js'
+import { textTools } from './tools/text.js'
+import { timeTools } from './tools/time.js'
+import type { ToolCategory, ToolContext, ToolEffect, ToolEntry } from './tools/types.js'
+import { workspaceTools } from './tools/workspace.js'
 
-export interface ToolContext {
-  store: WorkspaceStore
-  /** Agent whose run triggered the call; read_run_log defaults to it. */
-  agentId: string
-}
-
-export interface ToolDefinition {
-  description: string
-  parameters: object
-  handler(args: Record<string, unknown>, ctx: ToolContext): unknown
-}
+export type { ToolCategory, ToolContext, ToolEffect, ToolEntry } from './tools/types.js'
 
 export interface ToolOutcome {
   content: string
   ok: boolean
 }
 
-/** Handlers are in-process, but keep the discipline anyway. */
+/** Handlers are in-process; this cannot interrupt a synchronous loop, so handlers cap their inputs. */
 export const TOOL_TIMEOUT_MS = 5_000
+/** Raw `arguments` larger than this are refused before JSON.parse. */
+export const MAX_TOOL_ARGUMENT_CHARS = 64_000
 
-const NO_PARAMS = { type: 'object', properties: {}, additionalProperties: false }
+export const builtinTools: ReadonlyMap<string, ToolEntry> = (() => {
+  const map = new Map<string, ToolEntry>()
+  for (const entry of [...workspaceTools, ...notesTools, ...timeTools, ...mathTools, ...textTools, ...dataTools]) {
+    if (map.has(entry.name)) throw new Error(`Duplicate built-in tool "${entry.name}"`)
+    map.set(entry.name, entry)
+  }
+  return map
+})()
 
-function clip(value: unknown): unknown {
-  return typeof value === 'string' && value.length > 500 ? value.slice(0, 500) : value
+/** A registry tool as served by GET /api/tools. */
+export interface ToolInfo extends SkillTool {
+  category: ToolCategory
+  effect: ToolEffect
 }
 
-export const builtinTools = new Map<string, ToolDefinition>([
-  [
-    'list_agents',
-    {
-      description: 'List every agent in the workspace with its id, name, and model id.',
-      parameters: NO_PARAMS,
-      handler: (_args, ctx) =>
-        ctx.store.agents.map((a) => ({ id: a.id, name: a.name, modelId: a.modelId })),
-    },
-  ],
-  [
-    'list_skills',
-    {
-      description: 'List every skill in the workspace with its id, name, and description.',
-      parameters: NO_PARAMS,
-      handler: (_args, ctx) =>
-        ctx.store.skills.map((s) => ({ id: s.id, name: s.name, description: s.description })),
-    },
-  ],
-  [
-    'read_run_log',
-    {
-      description:
-        'Read the most recent runs for an agent (defaults to the current one), newest first.',
-      parameters: {
-        type: 'object',
-        properties: {
-          agentId: {
-            type: 'string',
-            description: 'Agent id to read runs for. Defaults to the current agent.',
-          },
-          limit: { type: 'number', description: 'Max runs to return, 1-10 (default 5).' },
-        },
-      },
-      handler: (args, ctx) => {
-        const agentId =
-          typeof args.agentId === 'string' && args.agentId.trim() !== ''
-            ? args.agentId.trim()
-            : ctx.agentId
-        const requested =
-          typeof args.limit === 'number' && Number.isFinite(args.limit) ? Math.floor(args.limit) : 5
-        const limit = Math.min(Math.max(requested, 1), 10)
-        return ctx.store.runs
-          .filter((r) => r.agentId === agentId)
-          .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-          .slice(0, limit)
-          .map((r) => ({
-            id: r.id,
-            status: r.status,
-            startedAt: r.startedAt,
-            durationMs: r.durationMs,
-            input: clip(r.input),
-            output: clip(r.output),
-            error: clip(r.error),
-          }))
-      },
-    },
-  ],
-])
+export function listToolInfo(): ToolInfo[] {
+  return [...builtinTools.values()].map((t) => ({
+    name: t.name,
+    description: t.description,
+    parameters: t.parameters,
+    category: t.category,
+    effect: t.effect,
+  }))
+}
+
+/** The declaration a skill stores (and the run sends upstream) for a registry tool. */
+export function toolDeclaration(name: string): SkillTool | undefined {
+  const entry = builtinTools.get(name)
+  return entry ? { name: entry.name, description: entry.description, parameters: entry.parameters } : undefined
+}
+
+/**
+ * Map tool names to registry declarations, deduped in order. Unknown names
+ * (and names past `max`) are returned in `ignored`; `strict` throws instead
+ * (seed loading, where an unknown name is a bug).
+ */
+export function resolveToolDeclarations(
+  names: string[],
+  opts: { strict?: boolean; max?: number } = {},
+): { tools: SkillTool[]; ignored: string[] } {
+  const tools: SkillTool[] = []
+  const ignored: string[] = []
+  for (const name of [...new Set(names)]) {
+    const decl = toolDeclaration(name)
+    if (!decl || (opts.max !== undefined && tools.length >= opts.max)) ignored.push(name)
+    else tools.push(decl)
+  }
+  if (opts.strict && ignored.length > 0) {
+    throw new Error(`Unknown built-in tool(s): ${ignored.join(', ')}. Available: ${[...builtinTools.keys()].join(', ')}`)
+  }
+  return { tools, ignored }
+}
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -109,45 +98,50 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Execute one model-requested call. Never throws: unknown tools, bad JSON,
- * and timeouts all come back as error text so the model can recover.
+ * Execute one model-requested call. Never throws: names outside this run's
+ * offered tools, oversized or bad JSON, handler errors and timeouts all come
+ * back as `ok: false` text the model can act on. Output is redacted.
  */
 export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise<ToolOutcome> {
-  const definition = builtinTools.get(call.name)
-  if (!definition) {
-    return {
-      content: `Unknown tool "${call.name}". Available: ${[...builtinTools.keys()].join(', ')}`,
-      ok: false,
-    }
+  const fail = (content: string): ToolOutcome => ({ content: redactSecrets(content, ctx.store), ok: false })
+  const name = call.name.slice(0, 64)
+  const offered = [...ctx.allowed].join(', ') || 'none'
+
+  const entry = builtinTools.get(call.name)
+  if (!entry) return fail(`Unknown tool "${name}". Available: ${offered}`)
+  if (!ctx.allowed.has(entry.name)) return fail(`Tool "${name}" is not enabled for this agent. Available: ${offered}`)
+
+  if (call.arguments.length > MAX_TOOL_ARGUMENT_CHARS) {
+    return fail(
+      `Tool arguments are too large (${call.arguments.length} chars, max ${MAX_TOOL_ARGUMENT_CHARS}). ` +
+        'Pass "@input" or "@note:<id>" instead of pasting the text.',
+    )
   }
 
   let args: Record<string, unknown>
   try {
     const parsed: unknown = JSON.parse(call.arguments.trim() === '' ? '{}' : call.arguments)
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {
-        content: `Tool arguments must be a JSON object, got: ${call.arguments.slice(0, 200)}`,
-        ok: false,
-      }
+      return fail(`Tool arguments must be a JSON object, got: ${call.arguments.slice(0, 200)}`)
     }
     args = parsed as Record<string, unknown>
   } catch {
-    return {
-      content: `Invalid JSON in tool arguments: ${call.arguments.slice(0, 200)}`,
-      ok: false,
-    }
+    return fail(`Invalid JSON in tool arguments: ${call.arguments.slice(0, 200)}`)
   }
 
   try {
-    const value = await withTimeout(
-      Promise.resolve().then(() => definition.handler(args, ctx)),
+    const { args: resolved, sources } = resolveContentRefs(entry.contentParams, args, ctx)
+    let value = await withTimeout(
+      Promise.resolve().then(() => entry.handler(resolved, ctx)),
       TOOL_TIMEOUT_MS,
     )
-    return { content: typeof value === 'string' ? value : JSON.stringify(value), ok: true }
-  } catch (err) {
-    return {
-      content: `Tool "${call.name}" failed: ${err instanceof Error ? err.message : String(err)}`,
-      ok: false,
+    if (Object.keys(sources).length > 0 && value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      value = { ...(value as Record<string, unknown>), sources }
     }
+    // JSON.stringify(undefined) is undefined; never hand the loop a non-string.
+    const content = typeof value === 'string' ? value : (JSON.stringify(value) ?? 'null')
+    return { content: redactSecrets(content, ctx.store), ok: true }
+  } catch (err) {
+    return fail(`Tool "${name}" failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 }

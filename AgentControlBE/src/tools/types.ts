@@ -1,0 +1,52 @@
+/**
+ * Contract shared by every built-in tool module (src/tools/*.ts). Modules may
+ * import store/app/upstream types only (`import type`) so the registry can be
+ * loaded first without cycles (seed.ts resolves declarations at module load).
+ */
+import type { WorkspaceStore } from '../store.js'
+
+export type ToolCategory = 'workspace' | 'notes' | 'time' | 'math' | 'text' | 'data'
+export type ToolEffect = 'read' | 'write'
+
+export interface ToolContext {
+  store: WorkspaceStore
+  /** Agent whose run triggered the call (default target for agent lookups). */
+  agentId: string
+  /** Id the run will be saved under (notes record it). */
+  runId: string
+  /** This run's user message; `"@input"` content refs resolve to it. */
+  input: string
+  /** Registry tool names offered in this run; every other name is refused. */
+  allowed: ReadonlySet<string>
+  now(): Date
+  /** IANA zone used when a tool is not given one (the server's resolved zone). */
+  timeZone: string
+  /** Per-run counters shared by all calls of one run (save_note write cap). */
+  writes: { count: number }
+}
+
+/**
+ * Text-content parameters that accept `"@input"` (this run's message) or
+ * `"@note:<id|title>"` instead of literal text. Refs are resolved centrally in
+ * executeToolCall before the handler runs; handlers then apply their own caps.
+ */
+export interface ContentParams {
+  names: string[]
+  /** Param treated as `"@input"` when omitted (single-content tools). */
+  defaultParam?: string
+  /** JSON/CSV: `"@input"` resolves to the message's first fenced code block, if any. */
+  structured?: boolean
+}
+
+export interface ToolEntry {
+  name: string
+  category: ToolCategory
+  effect: ToolEffect
+  /** ≤240 chars, includes one example argument object. */
+  description: string
+  /** Flat JSON Schema object (llama.cpp grammar-friendly). */
+  parameters: object
+  contentParams?: ContentParams
+  /** Return a JSON-serializable value or a string; throw Error('…') for bad input. */
+  handler(args: Record<string, unknown>, ctx: ToolContext): unknown
+}

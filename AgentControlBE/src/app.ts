@@ -13,10 +13,10 @@ import {
   executeToolCall,
   listToolInfo,
   resolveToolDeclarations,
-  toolDeclaration,
   type ToolContext,
   type ToolOutcome,
 } from './tools.js'
+import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
@@ -26,6 +26,7 @@ import {
   type Endpoint,
   type EndpointInput,
   type EndpointKind,
+  type PromptBudget,
   type Skill,
   type SkillInput,
   type SkillTool,
@@ -135,6 +136,8 @@ function slugify(name: string): string {
 
 const MAX_SKILL_TOOLS = 16
 const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/
+/** POST /api/prompt-budget plans at most this many attached skill ids. */
+const MAX_BUDGET_SKILL_IDS = 500
 
 function parseSkillTools(raw: unknown): SkillTool[] | undefined {
   if (raw === undefined) return undefined
@@ -294,34 +297,21 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const apiKey = store.endpointKeys[endpoint.id]
     const timeoutMs = endpoint.timeoutMs ?? 30_000
 
-    // System prompt = instructions + the full CONTENT of attached skills.
-    const injectedSkills = agent.skillIds
-      .map((sid) => store.skills.find((s) => s.id === sid))
-      .filter((s): s is Skill => s !== undefined)
-    const skillBlocks = injectedSkills.map((s) => `## ${s.name}\n${s.content}`)
-    const system = [
-      agent.instructions,
-      skillBlocks.length > 0 ? `Skills:\n\n${skillBlocks.join('\n\n')}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n')
-
-    // Offered tools: names declared by attached skills that exist in the
-    // built-in registry, deduped, sent with the registry's CURRENT description
-    // and schema (stored copies are display-only). Only these may execute.
+    // System prompt = instructions + the full CONTENT of attached skills, or,
+    // when that leaves too little of the window, summaries of the largest
+    // skills plus get_skill to read them (see planPrompt). Offered tools are
+    // the registry tools the skills declare; only these may execute.
     // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
-    const toolDeclarations: ToolDeclaration[] = []
-    {
-      const seen = new Set<string>()
-      for (const s of injectedSkills) {
-        for (const t of s.tools ?? []) {
-          if (seen.has(t.name)) continue
-          seen.add(t.name)
-          const decl = toolDeclaration(t.name)
-          if (decl) toolDeclarations.push(decl)
-        }
-      }
-    }
+    const injectedSkills = attachedSkills(store.skills, agent.skillIds)
+    const plan = planPrompt({
+      instructions: agent.instructions,
+      skills: injectedSkills,
+      input,
+      contextWindow: endpoint.contextWindow,
+    })
+    const system = plan.system
+    const toolDeclarations: ToolDeclaration[] = plan.toolDeclarations
+    const summarized = new Set(plan.summarizedSkillIds)
     const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
     const toolSchemaChars = sendTools ? JSON.stringify(sendTools).length : 0
 
@@ -346,7 +336,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // count toward the estimate and the whole check re-runs each loop iteration.
     // Tool-call turns (assistant content + call arguments) and tool results
     // count too, as do the tool schemas on calls that send them.
-    const RESPONSE_RESERVE = 4096
     const contextWindow = endpoint.contextWindow
     let loopChars = 0
     const estimate = (turns: AgentRun[], withSchemas: boolean): number => {
@@ -409,7 +398,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         if (toolAudit.length === 0) {
           fail(
             413,
-            `Prompt too large for this endpoint's context window (estimated ${baseEstimated} of ${contextWindow} tokens).`,
+            `Prompt too large for this endpoint's context window: about ${baseEstimated} tokens of prompt ` +
+              `plus ${RESPONSE_RESERVE} reserved for the reply exceed the ${contextWindow}-token window. ` +
+              "Detach skills, shorten the instructions or the message, or raise the endpoint's context window in Settings.",
           )
         }
         // Tools already ran (and may have written notes): never drop the run.
@@ -525,6 +516,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         id: s.id,
         name: s.name,
         contentChars: s.content.length,
+        mode: summarized.has(s.id) ? ('summary' as const) : ('full' as const),
       })),
       ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
     }
@@ -545,6 +537,48 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       fail(500, 'Run completed but its result could not be persisted.')
     }
     return run
+  })
+
+  // Prompt budget preview for an agent draft: the same planPrompt a run uses
+  // (with an empty input), so the form can show whether the skills fit in
+  // full, as summaries, or not at all before anything is saved or run.
+  app.post('/api/prompt-budget', async (request): Promise<PromptBudget> => {
+    const body = request.body
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+      fail(400, 'Send a JSON object, e.g. {"endpointId":"ep_local_llama","skillIds":["summarization"]}.')
+    }
+    const raw = body as Record<string, unknown>
+    const endpointId = typeof raw.endpointId === 'string' ? raw.endpointId : ''
+    if (!endpointId) fail(400, 'Provide "endpointId", the endpoint the agent runs on.')
+    const skillIds = raw.skillIds ?? []
+    if (!Array.isArray(skillIds) || !skillIds.every((s): s is string => typeof s === 'string')) {
+      fail(400, '"skillIds" must be an array of skill id strings.')
+    }
+    if (skillIds.length > MAX_BUDGET_SKILL_IDS) {
+      fail(400, `"skillIds" can list at most ${MAX_BUDGET_SKILL_IDS} skills.`)
+    }
+    if (raw.instructions !== undefined && typeof raw.instructions !== 'string') {
+      fail(400, '"instructions" must be a string.')
+    }
+    const endpoint = store.endpoints.find((e) => e.id === endpointId)
+    if (!endpoint) fail(400, `No endpoint with id "${endpointId.slice(0, 100)}". Pick an existing endpoint.`)
+
+    // Unknown skill ids are skipped, as a run skips deleted skills; the
+    // instructions are trimmed the way saving the agent trims them.
+    const plan = planPrompt({
+      instructions: typeof raw.instructions === 'string' ? raw.instructions.trim() : '',
+      skills: attachedSkills(store.skills, skillIds),
+      input: '',
+      contextWindow: endpoint.contextWindow,
+    })
+    return {
+      contextWindow: endpoint.contextWindow,
+      responseReserve: RESPONSE_RESERVE,
+      estimatedTokens: plan.estimatedTokens,
+      mode: plan.mode,
+      summarizedSkillIds: plan.summarizedSkillIds,
+      toolNames: plan.toolDeclarations.map((t) => t.name),
+    }
   })
 
   app.get('/api/agents/:id/runs', async (request) => {

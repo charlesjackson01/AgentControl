@@ -1,22 +1,24 @@
 # AgentControl — Handoff for Claude (Opus)
 
-> **Current state (October 12, 2026):** `master` includes PR #3 (skills
-> library: built-in tools, ten AgentControl skills, tool picker, Notes page;
-> history in [the recovery report](docs/skills-library-recovery.md)). The
-> follow-up `feat/more-tools` adds `get_agent`, `workspace_overview`,
-> `process_lines`, `extract_entities` and `resolve_date` (21 tools) and the
-> one-shot `seed-skill-upgrade-v2` migration, which upgrades untouched copies of
-> `workspace-audit`, `date-arithmetic`, `text-cleanup` and the vendored
-> `multi-agent-orchestration` to use them (edited copies are left alone).
-> `backup/skills-workflow-partial` holds unreviewed drafts, not for merge;
-> `get_skill` and `encode_text` there are candidates only. Verify with
+> **Current state (October 12, 2026):** `master` includes PRs #1–#4 (CI, the
+> skills library with tools and a Notes page, 21 tools). The branch
+> `feat/skills-complete` finishes the skills section: `get_skill`,
+> `encode_text` and `diff_text` (24 tools); `read_note` paging; richer
+> `json_query`, `csv_summary`, `calculate` and `convert_units`; tools on every
+> seed skill plus `encoding-and-hashing` and `release-notes` (18 seeds) via the
+> one-shot `seed-skill-upgrade-v3`; skills that don't fit an endpoint's context
+> window are sent as summaries (`src/prompt.ts`), which fixes the fresh-install
+> Team Lead's 413 on the 8,192-token placeholder endpoint; and Skill Library
+> export/duplicate plus a prompt-size line in the agent form. Every draft on
+> `backup/skills-workflow-partial` is now ported (its `%`-as-percent change to
+> `calculate` was deliberately not), so that branch can be deleted. Reference:
+> [backend README](AgentControlBE/README.md#skills-and-tools). Verify with
 > `npm run typecheck && npm test && npm run build` (backend) and
 > `npm run lint && npm run typecheck && npm test && npm run build` (frontend).
-> The remaining text describes the earlier PR #2 baseline; its old test count
-> and follow-up list are historical.
+> Sections below marked historical describe the earlier PR #2 baseline.
 
 > **Read this first.** This is a working, tested app. The bar is: keep the
-> existing tests green (`npm test` in `AgentControlBE`, 60 passing), keep
+> existing tests green (`npm test` in both packages), keep
 > typecheck green in both packages, and make additive changes. Prefer small,
 > verified, committed steps over big rewrites. Every claim below is grounded in
 > the tree as of PR #2 (the table below cites commits and PRs).
@@ -98,8 +100,8 @@ npm run dev        # Vite, http://localhost:5173
 ### Verify it works (run these before claiming a change is done)
 
 ```bash
-cd AgentControlBE && npm run typecheck && npm test          # expect 60 passing
-cd AgentControlFE && npm run typecheck && npm run build     # expect clean
+cd AgentControlBE && npm run typecheck && npm test && npm run build
+cd AgentControlFE && npm run lint && npm run typecheck && npm test && npm run build
 ```
 
 ## Architecture
@@ -167,6 +169,9 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 | CI workflow + FE dev proxy port fix | PR #1 |
 | FE README cleanup, seeded model catalog removed, role verified | PR #2 |
 | Default endpoint placeholder (`100.79.242.24:8791`) | PR #2 |
+| Skills library: registry tools, ten AgentControl skills, tool picker, Notes page | PR #3 |
+| `get_agent`, `workspace_overview`, `process_lines`, `extract_entities`, `resolve_date`; seed upgrade v2 | PR #4 |
+| Skills section finished: 24 tools, summaries for oversized skills, tools on every seed, seed upgrade v3, export/duplicate | `feat/skills-complete` |
 
 ## Former open items (all closed)
 
@@ -204,19 +209,27 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 
 ## Suggested next task (if you want one)
 
-The original open items are closed. Small follow-ups noticed along the way:
+The skills section is complete. The earlier follow-up list (temperature,
+endpoint delete confirmation, legacy example skills, the `xcopy` build) is done.
+What remains, roughly in order:
 
-- `store.example.json` ships 8 legacy placeholder skills with no `content`/`tools`
-  (the seed has 6 SKILL.md skills). Copying it yields 14 skills, and the 8 legacy
-  ones crash the Skill Library (`s.content.slice` on undefined). Regenerate the
-  example from the seed and/or backfill those fields in `reconcile`.
-- The BE ignores agent `temperature` (not parsed, stored, or sent upstream),
-  though the FE form sets it (the Team Lead defaults to 0.7).
-- Settings' endpoint Delete button deletes immediately; its confirmation dialog
-  (with the "agents move to the Team Lead's endpoint" notice) is never opened.
-- The BE `build` script uses Windows-only `xcopy`; CI skips it, but it breaks on
-  Linux/macOS.
-- FE `npm run serve` binds a machine-specific address (`100.110.232.85`).
+1. **Projects** (CRUD; today only `GET /api/projects` and a hard-coded page).
+2. **Project lead and default endpoint**, moved from the agent form into the
+   backend. Open questions for the owner: can an agent be in several projects;
+   does a project lead replace the workspace Team Lead or fall back to it; does
+   an agent's endpoint follow its lead's later changes or stay as created?
+3. **Endpoint customization**: the placeholder URL as configuration, an
+   onboarding step to connect an endpoint, `timeoutMs` in the UI.
+4. **Delegation** (`ask_agent`): needs the run loop moved out of the route
+   handler first, plus depth and budget limits.
+
+Small items: FE `npm run serve` binds a machine-specific address
+(`100.110.232.85`); the Retry buttons on onboarding and the agent form do
+nothing; deleting an endpoint keeps its agents' old `modelId`; notes cannot be
+created or edited from the UI. Deliberately not built: a regex tool (a
+catastrophic pattern would block the event loop; the tool timeout cannot
+interrupt synchronous code) and a web fetch tool (SSRF against the local API
+and LAN; it needs an allowlist and a security review).
 
 Whatever you pick: run the verify block above (CI runs it too), and commit with
 a message that matches the existing `type(scope): summary` convention.

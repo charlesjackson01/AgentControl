@@ -653,8 +653,8 @@ describe('tool execution loop', () => {
 
     const toolMsg = lastRequest(mock).messages?.find((m) => m.role === 'tool')
     expect(toolMsg?.content.endsWith('…[truncated]')).toBe(true)
-    expect(toolMsg?.content).toHaveLength(4012)
-    expect(run.toolCalls?.[0]?.resultChars).toBe(4012)
+    expect(toolMsg?.content).toHaveLength(4000)
+    expect(run.toolCalls?.[0]?.resultChars).toBe(4000)
   })
 })
 
@@ -844,9 +844,11 @@ describe('fresh install', () => {
 })
 
 describe('skill seeds', () => {
-  it('ships the six real SKILL.md skills with content and provenance', async () => {
+  it('preserves the six vendored skills alongside the ten new skills', async () => {
     const skills = (await inject('GET', '/api/skills')).json() as Skill[]
-    expect(skills.map((s) => s.id)).toEqual([
+    expect(skills).toHaveLength(16)
+    const vendored = skills.filter((s) => s.source === 'seb1n/awesome-ai-agent-skills')
+    expect(vendored.map((s) => s.id)).toEqual([
       'code-review',
       'debugging',
       'deep-research',
@@ -854,7 +856,7 @@ describe('skill seeds', () => {
       'summarization',
       'technical-writing',
     ])
-    for (const s of skills) {
+    for (const s of vendored) {
       expect(s.content.length).toBeGreaterThan(100)
       expect(s.content).not.toMatch(/^---/)
       expect(s.source).toBe('seb1n/awesome-ai-agent-skills')
@@ -1569,6 +1571,38 @@ describe('tool plumbing', () => {
 })
 
 describe('tools and notes routes', () => {
+  it('runs the new tools with canonical schemas and persists notes through an agent run', async () => {
+    const mock = mockChatSequence([
+      toolCallResponse('calculate', '{"expression":"2 + 2"}', 'math'),
+      toolCallResponse('save_note', '{"title":"Verified answer","body":"4"}', 'note'),
+      contentResponse('Saved the verified answer.'),
+    ])
+    const { agent } = await makeToolRunner(['calculate', 'save_note'])
+    const response = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Calculate and save 2 + 2.' })
+    const run = response.json() as AgentRun
+    expect(response.statusCode).toBe(200)
+    expect(run.status).toBe('succeeded')
+    expect(run.toolCalls?.map((t) => [t.name, t.ok])).toEqual([['calculate', true], ['save_note', true]])
+    expect(store.notes[0]).toMatchObject({ title: 'Verified answer', body: '4', authorAgentId: agent.id, runId: run.id })
+    const sent = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}')
+    expect(sent.tools[0].function).toEqual(toolDeclaration('calculate'))
+    expect((await inject('GET', '/api/notes')).json()[0]).toMatchObject({ title: 'Verified answer', authorName: agent.name })
+    expect(createStore(join(dir, 'store.json')).notes[0]?.body).toBe('4')
+  })
+
+  it('reports a failed note deletion and preserves the note for retry', async () => {
+    const { agent } = await makeToolRunner(['save_note'])
+    mockChatSequence([toolCallResponse('save_note', '{"title":"Keep me","body":"Saved"}'), contentResponse('ok')])
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Save note' })
+    const id = store.notes[0]!.id
+    const save = vi.spyOn(store, 'save').mockReturnValue(false)
+    expect((await inject('DELETE', `/api/notes/${id}`)).statusCode).toBe(500)
+    expect((await inject('GET', `/api/notes/${id}`)).statusCode).toBe(200)
+    save.mockRestore()
+    expect((await inject('DELETE', `/api/notes/${id}`)).statusCode).toBe(204)
+    expect(createStore(join(dir, 'store.json')).notes).toEqual([])
+  })
+
   const note = (over: Partial<Note> = {}): Note => ({
     id: 'note_1', title: 'Findings', body: 'b'.repeat(300), tags: ['research'], authorAgentId: 'agt_x',
     updatedByAgentId: 'agt_x', runId: 'run_1', createdAt: '2026-01-01T00:00:00.000Z',

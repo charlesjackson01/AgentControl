@@ -11,6 +11,7 @@ import { mathTools } from './tools/math.js'
 import { notesTools } from './tools/notes.js'
 import { resolveContentRefs } from './tools/refs.js'
 import { redactSecrets } from './tools/redact.js'
+import { clipText, RESULT_MAX_CHARS } from './tools/limits.js'
 import { textTools } from './tools/text.js'
 import { timeTools } from './tools/time.js'
 import type { ToolCategory, ToolContext, ToolEffect, ToolEntry } from './tools/types.js'
@@ -103,7 +104,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
  * back as `ok: false` text the model can act on. Output is redacted.
  */
 export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise<ToolOutcome> {
-  const fail = (content: string): ToolOutcome => ({ content: redactSecrets(content, ctx.store), ok: false })
+  const fail = (content: string): ToolOutcome => ({ content: clipText(redactSecrets(content, ctx.store), RESULT_MAX_CHARS), ok: false })
   const name = call.name.slice(0, 64)
   const offered = [...ctx.allowed].join(', ') || 'none'
 

@@ -8,7 +8,7 @@ store plus an encrypted key vault under `data/`.
 ```sh
 npm install
 npm run dev      # tsx watch on http://127.0.0.1:3001
-npm run build    # tsc -> dist/
+npm run build    # tsc -> dist/ and copy SKILL.md seeds (cross-platform)
 npm start        # node dist/index.js
 npm test         # vitest (hermetic, no network)
 npm run typecheck
@@ -71,3 +71,36 @@ shape of the store.
   (`DELETE` returns `{ ok, reassignedAgents }`, moving attached agents to the
   Team Lead's endpoint; deleting the Team Lead's own endpoint → 409),
   `GET /api/endpoints/:id/models`, `POST /api/endpoints/:id/test`
+
+## Skills and tools
+
+The library ships six unchanged vendored skills and ten AgentControl skills.
+`GET /api/tools` serves canonical declarations for 16 built-in tools across
+workspace, notes, time, math, text, and data modules. Skills declare tool names;
+only attached registry tools are offered to the model and allowed to execute.
+Legacy unknown declarations remain stored but are not executable. SKILL.md
+imports accept inline or block `tools:` lists, ignore comments outside quotes,
+and return unknown names in `ignoredTools`.
+
+Text tools accept `@input` (current user message) and `@note:<id or title>`.
+Note references require the `read_note` capability. JSON/CSV references select
+the first fenced block when present. Tools operate locally: they cannot access
+files, execute code, contact services, or schedule reminders. Output is bounded;
+tool results redact configured endpoint keys and the API auth token.
+
+`save_note` creates or updates shared workspace notes. Only the creating agent
+may replace a note; other agents may append body text. Limits are four writes
+per run, 200 notes per workspace, 20,000 characters per body, ten tags of up to
+40 characters, and titles up to 160 characters. Read-only tools never write.
+
+- `GET /api/notes`: summaries with snippets and author names.
+- `GET /api/notes/:id`: full note body and provenance.
+- `DELETE /api/notes/:id`: user deletion (204), or 500 if persistence fails.
+
+These routes use the same bearer authentication as other API routes. Notes
+survive restart, while seed migration tracking preserves edited skills and
+keeps deleted seeds deleted. Workspace snapshots are replaced atomically after
+vault writes succeed. The two files are not a database transaction.
+
+See [recovery and verification notes](../docs/skills-library-recovery.md) for
+the recovered state, tool/skill inventory, review findings, and smoke test.

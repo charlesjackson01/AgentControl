@@ -4,6 +4,7 @@
  * tool-call arguments: results may be sent to a hosted provider.
  */
 import { argError, findAgent, readNumber, readString } from './args.js'
+import { clipText, fitJson } from './limits.js'
 import type { ToolEntry } from './types.js'
 
 const NO_PARAMS = { type: 'object', properties: {}, additionalProperties: false }
@@ -37,8 +38,9 @@ export const workspaceTools: ToolEntry[] = [
     effect: 'read',
     description: 'List every skill in the workspace with its id, name, and description. Example: {}',
     parameters: NO_PARAMS,
-    handler: (_args, ctx) =>
-      ctx.store.skills.map((s) => ({ id: s.id, name: s.name, description: s.description })),
+    handler: (_args, ctx) => fitJson(
+      ctx.store.skills.map((s) => ({ id: s.id, name: s.name, description: clipText(s.description, 100) })),
+    ),
   },
   {
     name: 'read_run_log',

@@ -258,8 +258,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.delete('/api/notes/:id', async (request, reply) => {
     const { id } = request.params as { id: string }
     if (!store.notes.some((n) => n.id === id)) fail(404, `No note with id "${id}"`)
+    const previous = store.notes
     store.notes = store.notes.filter((n) => n.id !== id)
-    store.save()
+    if (!store.save()) {
+      store.notes = previous
+      fail(500, 'The note could not be deleted from storage. Please retry.')
+    }
     return reply.status(204).send()
   })
   app.get('/api/projects', async () => store.projects)
@@ -475,7 +479,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
               ok = false
               forceFinal = true
             } else {
-              content = `${content.slice(0, limit)}…[truncated]`
+              const marker = '…[truncated]'
+              content = `${content.slice(0, Math.max(0, limit - marker.length))}${marker}`
             }
           }
           loopChars += content.length

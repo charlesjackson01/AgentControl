@@ -12,14 +12,14 @@ import { seedSkills, vendoredSeedSkills } from './seed.js'
 const expectedTools: Record<string, string[]> = {
   'calculation-checker': ['calculate'],
   'unit-conversion': ['convert_units', 'calculate'],
-  'date-arithmetic': ['current_time', 'date_difference', 'add_date'],
-  'text-cleanup': ['text_stats', 'transform_text', 'read_note'],
+  'date-arithmetic': ['current_time', 'date_difference', 'add_date', 'resolve_date'],
+  'text-cleanup': ['text_stats', 'transform_text', 'read_note', 'process_lines', 'extract_entities'],
   'text-comparison': ['compare_text', 'read_note'],
   'json-inspection': ['json_query', 'read_note'],
   'csv-analysis': ['csv_summary', 'read_note'],
   'notes-organizer': ['list_notes', 'read_note', 'save_note'],
   'meeting-notes': ['list_notes', 'read_note', 'save_note'],
-  'workspace-audit': ['list_agents', 'list_skills', 'read_run_log'],
+  'workspace-audit': ['list_agents', 'list_skills', 'read_run_log', 'get_agent', 'workspace_overview'],
 }
 
 const authored = seedSkills.filter((skill) => skill.source === 'AgentControl')

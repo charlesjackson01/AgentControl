@@ -75,7 +75,7 @@ shape of the store.
 ## Skills and tools
 
 The library ships six unchanged vendored skills and ten AgentControl skills.
-`GET /api/tools` serves canonical declarations for 16 built-in tools across
+`GET /api/tools` serves canonical declarations for 21 built-in tools across
 workspace, notes, time, math, text, and data modules. Skills declare tool names;
 only attached registry tools are offered to the model and allowed to execute.
 Legacy unknown declarations remain stored but are not executable. SKILL.md
@@ -86,7 +86,16 @@ Text tools accept `@input` (current user message) and `@note:<id or title>`.
 Note references require the `read_note` capability. JSON/CSV references select
 the first fenced block when present. Tools operate locally: they cannot access
 files, execute code, contact services, or schedule reminders. Output is bounded;
-tool results redact configured endpoint keys and the API auth token.
+tool results redact configured endpoint keys and the API auth token, and text
+pulled in by `@input`/`@note:` is redacted before a tool sees it, so counts and
+match flags cannot probe a stored secret. Conventional placeholder keys for
+local servers (`EMPTY`, `none`, `ollama`, …) and values under 3 characters are
+not treated as secrets.
+
+Seed skills a store already holds are upgraded once when their shipped
+definition changes (`seed-skill-upgrade-v2`), but only while they still match
+the previous definition exactly; a skill you edited, cleared or deleted is left
+as it is.
 
 `save_note` creates or updates shared workspace notes. Only the creating agent
 may replace a note; other agents may append body text. Limits are four writes

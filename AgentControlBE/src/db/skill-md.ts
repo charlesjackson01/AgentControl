@@ -13,11 +13,12 @@ export type ParsedSkillMarkdown = {
   description: string
   /** Body with the frontmatter block stripped. */
   content: string
-  /** Built-in tool names from a `tools:` field, in order, deduped; [] when absent. */
+  /**
+   * Tokens from a `tools:` field, in order, deduped; [] when absent. Raw: the
+   * caller decides which are built-in tools (import ignores the rest).
+   */
   tools: string[]
 }
-
-const TOOL_NAME = /^[A-Za-z0-9_-]+$/
 
 function splitToolList(value: string): string[] {
   return value
@@ -34,7 +35,8 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
     throw new SkillMarkdownError('SKILL.md has no frontmatter block — start the file with a "--- name … ---" header.')
   }
 
-  const meta: Record<string, string> = {}
+  // A Map, so a `__proto__:` key in untrusted frontmatter is just a key.
+  const meta = new Map<string, string>()
   const tools: string[] = []
   let inToolsBlock = false
   for (const line of (match[1] ?? '').split('\n')) {
@@ -54,14 +56,14 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
       else inToolsBlock = true
       continue
     }
-    if (key) meta[key] = value
+    if (key) meta.set(key, value)
   }
-  const badTool = tools.find((t) => !TOOL_NAME.test(t))
-  if (badTool) throw new SkillMarkdownError(`SKILL.md "tools" has an invalid tool name: "${badTool.slice(0, 60)}".`)
 
-  if (!meta.name) throw new SkillMarkdownError('SKILL.md frontmatter is missing a "name" field.')
-  if (!meta.description) throw new SkillMarkdownError('SKILL.md frontmatter is missing a "description" field.')
+  const name = meta.get('name')
+  const description = meta.get('description')
+  if (!name) throw new SkillMarkdownError('SKILL.md frontmatter is missing a "name" field.')
+  if (!description) throw new SkillMarkdownError('SKILL.md frontmatter is missing a "description" field.')
 
   const content = text.slice(match[0].length).replace(/^\n+/, '').trimEnd()
-  return { name: meta.name, description: meta.description, content, tools: [...new Set(tools)] }
+  return { name, description, content, tools: [...new Set(tools)].slice(0, 64) }
 }

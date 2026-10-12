@@ -3,38 +3,47 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Agent, AgentRun, Endpoint, Project, Skill, WorkspaceSettings } from '../shared/types.js'
 import { DEFAULT_ENDPOINT_BASE_URL, OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
+import { resolveToolDeclarations } from '../tools.js'
 import { parseSkillMarkdown } from './skill-md.js'
 
 const daysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString()
 
+const VENDORED_SOURCE = 'seb1n/awesome-ai-agent-skills'
+
 /**
- * Real SKILL.md files (MIT, seb1n/awesome-ai-agent-skills) shipped under
- * `src/db/seed-skills/` and loaded through the same parser the import
- * endpoint uses. The frontmatter `name` becomes the skill id.
+ * Seed skills, loaded through the same SKILL.md parser the import endpoint
+ * uses; the frontmatter `name` becomes the id and its `tools:` list is
+ * resolved strictly against the built-in registry (an unknown name is a bug).
+ * The first six are vendored (MIT, seb1n/awesome-ai-agent-skills): their
+ * bodies must stay byte-identical — the seed-skill-tools migration compares
+ * content — so only their frontmatter `tools:` line is ours.
  */
-const SEED_SKILL_FILES = [
-  'code-review',
-  'debugging',
-  'deep-research',
-  'multi-agent-orchestration',
-  'summarization',
-  'technical-writing',
+const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
+  { file: 'code-review', tag: 'Core', source: VENDORED_SOURCE },
+  { file: 'debugging', tag: 'Core', source: VENDORED_SOURCE },
+  { file: 'deep-research', tag: 'Core', source: VENDORED_SOURCE },
+  { file: 'multi-agent-orchestration', tag: 'Core', source: VENDORED_SOURCE },
+  { file: 'summarization', tag: 'Core', source: VENDORED_SOURCE },
+  { file: 'technical-writing', tag: 'Core', source: VENDORED_SOURCE },
 ]
 
 const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')
 
-export const seedSkills: Skill[] = SEED_SKILL_FILES.map((file) => {
+export const seedSkills: Skill[] = SEED_SKILL_MANIFEST.map(({ file, tag, source }) => {
   const parsed = parseSkillMarkdown(readFileSync(join(SEED_SKILLS_DIR, `${file}.md`), 'utf8'))
   return {
     id: parsed.name,
     name: parsed.name,
     description: parsed.description,
-    tag: 'Core',
+    tag,
     content: parsed.content,
-    tools: [],
-    source: 'seb1n/awesome-ai-agent-skills',
+    tools: resolveToolDeclarations(parsed.tools, { strict: true }).tools,
+    source,
   }
 })
+
+/** The vendored seeds (bodies pinned by a test; the tools migration targets them). */
+export const vendoredSeedSkills: Skill[] = seedSkills.filter((s) => s.source === VENDORED_SOURCE)
 
 export const seedEndpoints: Endpoint[] = [
   {

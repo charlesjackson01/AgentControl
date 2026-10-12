@@ -142,6 +142,25 @@ export interface Project {
   updatedAt: string
 }
 
+/**
+ * Shared workspace memory written by agents through the notes tools. Bodies are
+ * model-written: treat them as untrusted when they are fed back into a prompt.
+ */
+export interface Note {
+  id: string
+  title: string
+  body: string
+  tags: string[]
+  /** Agent that created the note; only it may replace the body. */
+  authorAgentId: string
+  /** Agent behind the latest write (an append may come from another agent). */
+  updatedByAgentId: string
+  /** Run that made the latest write. */
+  runId: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface WorkspaceSettings {
   autoRun: boolean
   notify: boolean

@@ -9,7 +9,14 @@ import {
   type ChatResult,
   type ToolDeclaration,
 } from './upstream.js'
-import { executeToolCall } from './tools.js'
+import {
+  executeToolCall,
+  listToolInfo,
+  resolveToolDeclarations,
+  toolDeclaration,
+  type ToolContext,
+  type ToolOutcome,
+} from './tools.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
@@ -126,9 +133,13 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
+const MAX_SKILL_TOOLS = 16
+const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/
+
 function parseSkillTools(raw: unknown): SkillTool[] | undefined {
   if (raw === undefined) return undefined
   if (!Array.isArray(raw)) fail(400, '"tools" must be an array of tool declarations.')
+  if (raw.length > MAX_SKILL_TOOLS) fail(400, `A skill can declare at most ${MAX_SKILL_TOOLS} tools.`)
   return raw.map((entry, i) => {
     const tool = (entry ?? {}) as Record<string, unknown>
     const name = typeof tool.name === 'string' ? tool.name.trim() : ''
@@ -136,8 +147,11 @@ function parseSkillTools(raw: unknown): SkillTool[] | undefined {
     if (!name || !description) {
       fail(400, `Each tool needs a "name" and a "description" (tool #${i + 1}).`)
     }
+    if (!TOOL_NAME.test(name)) fail(400, `Tool names use letters, digits, "_" or "-" (max 64): "${name.slice(0, 64)}".`)
+    if (description.length > 1024) fail(400, `Tool "${name}" description is over 1,024 chars.`)
     const parameters =
       typeof tool.parameters === 'object' && tool.parameters !== null ? tool.parameters : {}
+    if (JSON.stringify(parameters).length > 8192) fail(400, `Tool "${name}" parameters schema is over 8 KB.`)
     return { name, description, parameters }
   })
 }
@@ -214,6 +228,40 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
   app.get('/health', async () => ({ status: 'ok' }))
   app.get('/api/skills', async () => store.skills)
+  app.get('/api/tools', async () => listToolInfo())
+
+  // Notes: shared memory written by agents' notes tools. Users read and delete here.
+  const authorName = (agentId: string): string | null => store.agents.find((a) => a.id === agentId)?.name ?? null
+  app.get('/api/notes', async () =>
+    [...store.notes]
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map((n) => ({
+        id: n.id,
+        title: n.title,
+        tags: n.tags,
+        authorAgentId: n.authorAgentId,
+        authorName: authorName(n.authorAgentId),
+        updatedByAgentId: n.updatedByAgentId,
+        runId: n.runId,
+        createdAt: n.createdAt,
+        updatedAt: n.updatedAt,
+        chars: n.body.length,
+        snippet: n.body.length > 160 ? `${n.body.slice(0, 159)}…` : n.body,
+      })),
+  )
+  app.get('/api/notes/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const note = store.notes.find((n) => n.id === id)
+    if (!note) fail(404, `No note with id "${id}"`)
+    return { ...note, authorName: authorName(note.authorAgentId) }
+  })
+  app.delete('/api/notes/:id', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    if (!store.notes.some((n) => n.id === id)) fail(404, `No note with id "${id}"`)
+    store.notes = store.notes.filter((n) => n.id !== id)
+    store.save()
+    return reply.status(204).send()
+  })
   app.get('/api/projects', async () => store.projects)
   app.get('/api/settings', async () => store.settings)
 
@@ -254,21 +302,24 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       .filter(Boolean)
       .join('\n\n')
 
-    // Tool list: union of tools declared by attached skills, deduped by name.
+    // Offered tools: names declared by attached skills that exist in the
+    // built-in registry, deduped, sent with the registry's CURRENT description
+    // and schema (stored copies are display-only). Only these may execute.
     // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
     const toolDeclarations: ToolDeclaration[] = []
     {
       const seen = new Set<string>()
       for (const s of injectedSkills) {
         for (const t of s.tools ?? []) {
-          if (!seen.has(t.name)) {
-            seen.add(t.name)
-            toolDeclarations.push({ name: t.name, description: t.description, parameters: t.parameters })
-          }
+          if (seen.has(t.name)) continue
+          seen.add(t.name)
+          const decl = toolDeclaration(t.name)
+          if (decl) toolDeclarations.push(decl)
         }
       }
     }
     const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
+    const toolSchemaChars = sendTools ? JSON.stringify(sendTools).length : 0
 
     // Prior turns: the most recent successful runs become user/assistant pairs
     // (oldest first). Placeholder seed runs with empty text are skipped.
@@ -289,11 +340,13 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // oldest history turns until the prompt fits. The system prompt + this input
     // can't be trimmed, so if they alone overflow, reject with 413. Tool results
     // count toward the estimate and the whole check re-runs each loop iteration.
+    // Tool-call turns (assistant content + call arguments) and tool results
+    // count too, as do the tool schemas on calls that send them.
     const RESPONSE_RESERVE = 4096
     const contextWindow = endpoint.contextWindow
-    let toolChars = 0
-    const estimate = (turns: AgentRun[]): number => {
-      let chars = system.length + input.length + toolChars
+    let loopChars = 0
+    const estimate = (turns: AgentRun[], withSchemas: boolean): number => {
+      let chars = system.length + input.length + loopChars + (withSchemas ? toolSchemaChars : 0)
       for (const t of turns) chars += t.input.length + t.output.length
       return Math.ceil(chars / 4)
     }
@@ -301,8 +354,14 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // Tool loop: bounded by MAX_TOOL_ITERATIONS tool-enabled calls, then one
     // final tools-off call. Unknown tools / bad JSON come back as tool messages
     // so the model can recover; they never 500 the run.
+    // Per-run caps keep one looping model from flooding the store or the
+    // event loop; over-cap calls are still answered (every tool_call_id must be).
     const MAX_TOOL_ITERATIONS = 4
+    const MAX_CALLS_PER_TURN = 8
+    const MAX_CALLS_PER_RUN = 16
     const TOOL_RESULT_MAX_CHARS = 4_000
+    const MIN_TOOL_RESULT_CHARS = 300
+    const AUDIT_ARGUMENT_MAX_CHARS = 1_000
     const DIRECT_ANSWER_INSTRUCTION =
       'Tool use is no longer available. Answer the user directly in plain text now.'
 
@@ -311,26 +370,52 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     let totalLatency = 0
     let steps = 0
     let exhausted = false
+    let contextExhausted = false
+    let forceFinal = false
+    let callsThisRun = 0
     let result: ChatResult | undefined
+
+    const runId = uid('run')
+    const toolCtx: ToolContext = {
+      store,
+      agentId: agent.id,
+      runId,
+      input,
+      allowed: new Set(toolDeclarations.map((t) => t.name)),
+      now: () => new Date(),
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      writes: { count: 0 },
+    }
 
     const startedAt = new Date().toISOString()
     for (let iteration = 0; ; iteration++) {
-      const finalCall = iteration >= MAX_TOOL_ITERATIONS
+      const finalCall = iteration >= MAX_TOOL_ITERATIONS || forceFinal
+      const withSchemas = !finalCall && sendTools !== undefined
       const systemText =
         finalCall && system ? `${system}\n\n${DIRECT_ANSWER_INSTRUCTION}` : system
 
       let turns = history
-      let estimated = estimate(turns)
+      let estimated = estimate(turns, withSchemas)
       while (estimated + RESPONSE_RESERVE > contextWindow && turns.length > 0) {
         turns = turns.slice(1)
-        estimated = estimate(turns)
+        estimated = estimate(turns, withSchemas)
       }
-      const baseEstimated = estimate([])
+      const baseEstimated = estimate([], withSchemas)
       if (baseEstimated + RESPONSE_RESERVE > contextWindow) {
-        fail(
-          413,
-          `Prompt too large for this endpoint's context window (estimated ${baseEstimated} of ${contextWindow} tokens).`,
-        )
+        if (toolAudit.length === 0) {
+          fail(
+            413,
+            `Prompt too large for this endpoint's context window (estimated ${baseEstimated} of ${contextWindow} tokens).`,
+          )
+        }
+        // Tools already ran (and may have written notes): never drop the run.
+        // Retry as the tools-off final call; if even that overflows, record a failure.
+        if (!finalCall) {
+          forceFinal = true
+          continue
+        }
+        contextExhausted = true
+        break
       }
       const maxTokens = Math.min(RESPONSE_RESERVE, contextWindow - estimated)
 
@@ -363,19 +448,46 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
           break
         }
         loopMessages.push({ role: 'assistant', content: result.content, toolCalls: result.toolCalls })
+        loopChars += result.content.length
+        for (const call of result.toolCalls) loopChars += call.name.length + call.arguments.length
+        let callsThisTurn = 0
         for (const call of result.toolCalls) {
-          const outcome = await executeToolCall(call, { store, agentId: agent.id })
-          const content =
-            outcome.content.length > TOOL_RESULT_MAX_CHARS
-              ? `${outcome.content.slice(0, TOOL_RESULT_MAX_CHARS)}…[truncated]`
-              : outcome.content
-          toolChars += content.length
+          callsThisTurn += 1
+          let outcome: ToolOutcome
+          if (callsThisTurn > MAX_CALLS_PER_TURN || callsThisRun >= MAX_CALLS_PER_RUN) {
+            outcome = {
+              ok: false,
+              content: `Too many tool calls: at most ${MAX_CALLS_PER_TURN} per turn and ${MAX_CALLS_PER_RUN} per run. Answer with what you have.`,
+            }
+          } else {
+            callsThisRun += 1
+            outcome = await executeToolCall(call, toolCtx)
+          }
+          // Clip to what the context window still holds; when almost nothing is
+          // left, say so and make the next call the tools-off final call.
+          const remainingChars = (contextWindow - RESPONSE_RESERVE - estimate([], true)) * 4
+          const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
+          let content = outcome.content
+          let ok = outcome.ok
+          if (content.length > limit) {
+            if (limit < MIN_TOOL_RESULT_CHARS) {
+              content = 'Context budget exhausted; answer with what you have.'
+              ok = false
+              forceFinal = true
+            } else {
+              content = `${content.slice(0, limit)}…[truncated]`
+            }
+          }
+          loopChars += content.length
           loopMessages.push({ role: 'tool', content, toolCallId: call.id })
           toolAudit.push({
             name: call.name,
-            arguments: call.arguments,
+            arguments:
+              call.arguments.length > AUDIT_ARGUMENT_MAX_CHARS
+                ? `${call.arguments.slice(0, AUDIT_ARGUMENT_MAX_CHARS)}…[truncated]`
+                : call.arguments,
             resultChars: content.length,
-            ok: outcome.ok,
+            ok,
           })
         }
         continue
@@ -384,9 +496,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
 
     const upstream = result as ChatResult
-    const failed = exhausted || !upstream.ok
+    const failed = exhausted || contextExhausted || !upstream.ok
     const run: AgentRun = {
-      id: uid('run'),
+      id: runId,
       agentId: agent.id,
       startedAt,
       status: failed ? 'failed' : 'succeeded',
@@ -397,7 +509,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       error: failed
         ? exhausted
           ? `Tool-call loop exhausted after ${MAX_TOOL_ITERATIONS} iterations; the model kept requesting tools.`
-          : (upstream.error ?? 'Request failed')
+          : contextExhausted
+            ? "Context exhausted by tool results: the conversation no longer fits this endpoint's context window."
+            : (upstream.error ?? 'Request failed')
         : null,
       // Audit: exactly what went upstream. Failed runs record it too —
       // injection happens before the upstream call.
@@ -684,18 +798,21 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (store.skills.some((s) => s.id === id)) {
       fail(409, `A skill with id "${id}" already exists.`)
     }
+    // Keep built-in tool names only: third-party SKILL.md files (e.g. Claude
+    // Code's `tools: Read, Bash`) still import, and nothing unknown is granted.
+    const { tools, ignored } = resolveToolDeclarations(parsed.tools, { max: MAX_SKILL_TOOLS })
     const skill: Skill = {
       id,
       name: parsed.name,
       description: parsed.description,
       tag: '',
       content: parsed.content,
-      tools: [],
+      tools,
     }
     store.skills = [...store.skills, skill]
     store.save()
     void reply.status(201)
-    return skill
+    return ignored.length > 0 ? { ...skill, ignoredTools: ignored } : skill
   })
 
   app.patch('/api/skills/:id', async (request) => {

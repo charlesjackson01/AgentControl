@@ -21,6 +21,18 @@ function size(value: Json): number {
   return JSON.stringify(value).length
 }
 
+/** Account for escaping in the enclosing JSON, not just the preview text. */
+function preview(value: string, max: number): Json {
+  let low = 0
+  let high = Math.min(value.length, max)
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (size({ truncated: true, preview: clipText(value, mid) }) <= max) low = mid
+    else high = mid - 1
+  }
+  return { truncated: true, preview: clipText(value, low) }
+}
+
 /** Own-property write: plain assignment to "__proto__" would set the prototype. */
 function put(target: object, key: string | number, value: Json): void {
   Object.defineProperty(target, key, { value, writable: true, enumerable: true, configurable: true })
@@ -62,12 +74,13 @@ function collect(root: Json): { get(): Json; set(v: Json): void; path: string }[
  * `{ items, truncated, total }` so the marker has somewhere to live.
  */
 export function fitJson(value: unknown, max: number = RESULT_MAX_CHARS): unknown {
+  if (!Number.isInteger(max) || max < 64) throw new Error('JSON result budget must be at least 64 characters.')
   const json = toJson(value)
   if (size(json) <= max) return json
 
   let root: Json = Array.isArray(json) ? { items: json, total: json.length } : json
   if (root === null || typeof root !== 'object') {
-    return { truncated: true, preview: clipText(String(root), max - 40) }
+    return preview(String(root), max)
   }
   const omitted = new Map<string, number>()
   const holder = { root }
@@ -94,7 +107,7 @@ export function fitJson(value: unknown, max: number = RESULT_MAX_CHARS): unknown
   const result: { [key: string]: Json } = { ...root, truncated: true }
   if (omitted.size > 0) result.totals = Object.fromEntries(omitted)
   if (size(result) > max) {
-    return { truncated: true, preview: clipText(JSON.stringify(root), max - 60) }
+    return preview(JSON.stringify(root), max)
   }
   return result
 }

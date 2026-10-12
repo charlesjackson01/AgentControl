@@ -38,4 +38,20 @@ describe('parseSkillMarkdown tools', () => {
   it('still requires name and description', () => {
     expect(() => parseSkillMarkdown('---\ndescription: d\n---\nbody')).toThrow(SkillMarkdownError)
   })
+
+  it('ignores comments at key and value positions without losing underscores', () => {
+    const parsed = parseSkillMarkdown(withFrontmatter('tools # comment: [save_note]\ntools: [text_stats, read_note] # ignored: save_note'))
+    expect(parsed.tools).toEqual(['text_stats', 'read_note'])
+  })
+
+  it('keeps a block active across blank and comment lines, including after its key', () => {
+    expect(parseSkillMarkdown(withFrontmatter('tools: # tools below\n  - text_stats # first\n\n# note\n  # second\n  - read_note\nlicense: MIT\n  - not_a_tool')).tools).toEqual(['text_stats', 'read_note'])
+  })
+
+  it('preserves hashes inside quoted values and tokens', () => {
+    const parsed = parseSkillMarkdown('---\nname: hash#name\ndescription: "Keep # literal" # comment\ntools: ["a#b", read_note] # end\n---\nbody')
+    expect(parsed.name).toBe('hash#name')
+    expect(parsed.description).toBe('"Keep # literal"')
+    expect(parsed.tools).toEqual(['a#b', 'read_note'])
+  })
 })

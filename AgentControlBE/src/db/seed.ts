@@ -25,6 +25,18 @@ const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
   { file: 'multi-agent-orchestration', tag: 'Core', source: VENDORED_SOURCE },
   { file: 'summarization', tag: 'Core', source: VENDORED_SOURCE },
   { file: 'technical-writing', tag: 'Core', source: VENDORED_SOURCE },
+  // Locally authored replacements: the interrupted work's original ten names
+  // were not recoverable. These names describe the available offline tools.
+  { file: 'calculation-checker', tag: 'Math', source: 'AgentControl' },
+  { file: 'unit-conversion', tag: 'Math', source: 'AgentControl' },
+  { file: 'date-arithmetic', tag: 'Time', source: 'AgentControl' },
+  { file: 'text-cleanup', tag: 'Text', source: 'AgentControl' },
+  { file: 'text-comparison', tag: 'Text', source: 'AgentControl' },
+  { file: 'json-inspection', tag: 'Data', source: 'AgentControl' },
+  { file: 'csv-analysis', tag: 'Data', source: 'AgentControl' },
+  { file: 'notes-organizer', tag: 'Notes', source: 'AgentControl' },
+  { file: 'meeting-notes', tag: 'Notes', source: 'AgentControl' },
+  { file: 'workspace-audit', tag: 'Workspace', source: 'AgentControl' },
 ]
 
 const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')

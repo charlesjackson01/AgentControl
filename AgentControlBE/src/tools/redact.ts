@@ -18,8 +18,10 @@ function exactSecrets(store: WorkspaceStore): string[] {
   const values = Object.values(store.endpointKeys ?? {})
   const token = process.env.AGENTCONTROL_AUTH_TOKEN
   if (token) values.push(token)
-  // Longest first so a secret containing another is replaced whole.
-  return values.filter((v) => typeof v === 'string' && v.length >= 8).sort((a, b) => b.length - a.length)
+  // Results may be JSON: quotes, slashes and newlines in a configured secret
+  // are escaped there. Cover both forms, longest first, including short keys.
+  return [...new Set(values.filter((v) => typeof v === 'string' && v.length > 0)
+    .flatMap((v) => [v, JSON.stringify(v).slice(1, -1)]))].sort((a, b) => b.length - a.length)
 }
 
 export function redactSecrets(text: string, store: WorkspaceStore): string {

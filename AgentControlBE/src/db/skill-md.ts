@@ -28,6 +28,23 @@ function splitToolList(value: string): string[] {
     .filter(Boolean)
 }
 
+/** YAML-style comments outside quotes; a hash embedded in a token is literal. */
+function stripComment(line: string): string {
+  let quote = ''
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+    if (quote === '"' && char === '\\') { i++; continue }
+    if (quote) {
+      if (char === quote) quote = ''
+    } else if (char === '"' || char === "'") {
+      quote = char
+    } else if (char === '#' && (i === 0 || /\s/.test(line[i - 1]!))) {
+      return line.slice(0, i).trimEnd()
+    }
+  }
+  return line
+}
+
 export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
   const text = markdown.replace(/\r\n/g, '\n').trim()
   const match = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text)
@@ -39,7 +56,9 @@ export function parseSkillMarkdown(markdown: string): ParsedSkillMarkdown {
   const meta = new Map<string, string>()
   const tools: string[] = []
   let inToolsBlock = false
-  for (const line of (match[1] ?? '').split('\n')) {
+  for (const rawLine of (match[1] ?? '').split('\n')) {
+    const line = stripComment(rawLine)
+    if (!line.trim()) continue
     if (/^\s/.test(line)) {
       // Indented continuation: only `- name` items under `tools:` are read.
       const item = inToolsBlock ? /^\s+-\s*(.+)$/.exec(line) : null

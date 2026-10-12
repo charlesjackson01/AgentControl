@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import {
   seedAgents,
@@ -225,7 +226,7 @@ function reconcile(raw: StoredShape): { data: Persisted; changed: boolean } {
     const legacy = s as Partial<Skill> & { id: string }
     if (typeof legacy.content === 'string' && Array.isArray(legacy.tools)) return s
     changed = true
-    return { ...s, content: legacy.content ?? '', tools: legacy.tools ?? [] }
+    return { ...s, content: typeof legacy.content === 'string' ? legacy.content : '', tools: Array.isArray(legacy.tools) ? legacy.tools : [] }
   })
   const storedMeta = normalizeMeta(raw.meta)
   if (!storedMeta) changed = true
@@ -310,6 +311,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
     ...data,
     endpointKeys,
     save() {
+      const temporary = `${path}.${randomUUID()}.tmp`
       try {
         mkdirSync(dir, { recursive: true })
         const snapshot: Persisted = {
@@ -323,14 +325,21 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           notes: store.notes,
           meta: store.meta,
         }
-        writeFileSync(path, JSON.stringify(snapshot, null, 2), 'utf8')
+        // Finish fallible vault work before publishing the workspace snapshot.
+        // Atomic replacement keeps failed note writes/deletes off disk as well
+        // as out of memory; an interrupted write cannot truncate store.json.
+        const serialized = JSON.stringify(snapshot, null, 2)
         vault.save(store.endpointKeys)
+        writeFileSync(temporary, serialized, { encoding: 'utf8', mode: 0o600 })
+        renameSync(temporary, path)
         return true
       } catch (err) {
         console.error(
           `[store] failed to persist ${path}: ${err instanceof Error ? err.message : String(err)}`,
         )
         return false
+      } finally {
+        try { rmSync(temporary, { force: true }) } catch { /* Preserve the original failure. */ }
       }
     },
     detachSkill(skillId: string) {

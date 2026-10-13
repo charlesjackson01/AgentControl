@@ -64,9 +64,19 @@ shape of the store.
   requires an `endpointId` (400 otherwise); exactly one agent is `isPrimary`
   (the Team Lead) and its endpoint is the workspace default. Creating a second
   primary or deleting the primary → 409.
-- Runs: `POST/GET /api/agents/:id/runs` (newest-first, capped at 50), `DELETE /api/agents/:id/runs` (clear chat history).
+- Runs: `POST/GET /api/agents/:id/runs` (the agent's own chat, newest-first, capped at 50), `DELETE /api/agents/:id/runs` (clear chat history).
   `POST` assembles multi-turn context: system prompt + the agent's last 10 successful
-  runs as user/assistant pairs + the new input (failed runs excluded).
+  runs as user/assistant pairs + the new input (failed runs excluded). Project task
+  runs are kept apart: they never show in or count against the agent's chat (50
+  kept per agent per project), and clearing the chat leaves them.
+- Projects: `GET/POST /api/projects`, `PATCH/DELETE /api/projects/:id`,
+  `GET/POST /api/projects/:id/messages`. `POST /api/projects/:id/team-plan`
+  `{ messageId } | { prompt }` asks the Team Lead for a plan and returns
+  `{ plan, replyTo? }` without writing anything; `POST /api/projects/:id/team-plan/apply`
+  `{ plan, replyTo?, add?, create?, tasks? }` validates the plan again and commits
+  the accepted part (reply, team update, task assignments), then runs the tasks one
+  at a time per project; `POST /api/projects/:id/tasks/:messageId/retry` re-queues a
+  failed task.
 - `POST /api/prompt-budget` `{ endpointId, skillIds, instructions? }` →
   `{ contextWindow, responseReserve, estimatedTokens, mode, summarizedSkillIds, toolNames }`:
   the prompt plan a run would use (see *Skills that don't fit* below), without

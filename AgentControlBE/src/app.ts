@@ -8,8 +8,8 @@ import { fetchModels } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
-import { runAgent } from './runs.js'
-import { applyTeamPlan, cancelTeamPlan, createTaskRunner, requestTeamPlan, retryTask } from './projects.js'
+import { runAgent, RUNS_PER_SCOPE } from './runs.js'
+import { applyTeamPlan, createTaskRunner, requestTeamPlan, retryTask } from './projects.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
@@ -416,27 +416,23 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return reply.status(201).send(message)
   })
 
-  // Primary answers a user message with a team plan (D-P1: team changes wait
-  // for apply/cancel; a tasks-only plan applies at once and its tasks run).
-  app.post('/api/projects/:id/team-plan', async (request, reply) => {
+  // D-P1: team-plan returns Primary's PLAN and writes nothing; the user
+  // confirms it (or a part of it) and apply commits it. Cancel is client-side.
+  app.post('/api/projects/:id/team-plan', async (request) => {
     const { id } = request.params as { id: string }
-    return reply.status(201).send(await requestTeamPlan(store, tasks, id, request.body))
+    return requestTeamPlan(store, id, request.body)
   })
 
-  app.post('/api/projects/:id/plans/:messageId/apply', async (request) => {
-    const { id, messageId } = request.params as { id: string; messageId: string }
-    return applyTeamPlan(store, tasks, id, messageId, request.body)
-  })
-
-  app.post('/api/projects/:id/plans/:messageId/cancel', async (request) => {
-    const { id, messageId } = request.params as { id: string; messageId: string }
-    return cancelTeamPlan(store, id, messageId)
+  app.post('/api/projects/:id/team-plan/apply', async (request) => {
+    const { id } = request.params as { id: string }
+    return applyTeamPlan(store, tasks, id, request.body)
   })
 
   app.post('/api/projects/:id/tasks/:messageId/retry', async (request) => {
     const { id, messageId } = request.params as { id: string; messageId: string }
     return retryTask(store, tasks, id, messageId)
   })
+
   app.get('/api/settings', async () => store.settings)
 
   app.get('/api/agents', async () => store.agents)
@@ -505,17 +501,19 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
+    // The agent's own chat only: project task runs are kept apart.
     return store.runs
-      .filter((r) => r.agentId === id)
+      .filter((r) => r.agentId === id && r.projectId === undefined)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-      .slice(0, 50)
+      .slice(0, RUNS_PER_SCOPE)
   })
 
   app.delete('/api/agents/:id/runs', async (request, reply) => {
     const { id } = request.params as { id: string }
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
-    store.runs = store.runs.filter((r) => r.agentId !== id)
+    // Clears the agent's own chat; its project task runs stay (deleting the agent removes them).
+    store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined)
     store.save()
     void reply.status(204)
     return null

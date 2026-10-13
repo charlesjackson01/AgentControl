@@ -124,8 +124,8 @@ interface Project {
 
 ## Out of scope (later milestones)
 
-- Inter-agent delegation loops / real orchestration. Draft design, with
-  decisions D-O1…D-O10 to confirm: docs/ORCHESTRATION_HANDOFF.md.
+- Inter-agent delegation loops / real orchestration: the next milestone,
+  approved in docs/ORCHESTRATION_HANDOFF.md (D-O1…D-O11, with @mentions).
 - Per-project notes scope.
 - Folder browsing UI and folder deletion.
 - Budgets/schedules per project.

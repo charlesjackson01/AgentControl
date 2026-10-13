@@ -1,9 +1,12 @@
-# Project orchestration — implementation handoff (draft)
+# Project orchestration — implementation handoff
 
-Status: DRAFT — decisions D-O1…D-O10 need the owner's confirmation before coding.
+Status: APPROVED FOR IMPLEMENTATION (2026-10-13). D-O1…D-O10 confirmed as
+recommended. D-O11 (@mentions) added at the owner's request: "the tagging
+system should be part of the chat system; agents should tag when there are
+hand-offs or delegation of tasks."
 
-Base: `feat/projects-chat` (PR #9). D-P1…D-P3 (docs/PROJECTS_HANDOFF.md)
-stand unchanged.
+Base: master after PR #9 (Projects Parts 0–3). D-P1…D-P3
+(docs/PROJECTS_HANDOFF.md) stand unchanged.
 
 ## Goal
 
@@ -18,20 +21,23 @@ orchestrator: it extends the plan → confirm → serial runner path in
 
 Steps 1–5 are unchanged. Step 6 becomes:
 
-6. Primary's plan card numbers tasks t1…tn and shows hand-off chips, for
-   example "t2 Copy Editor: Edit the draft · uses t1". A task can also use an
+6. Primary's plan card numbers tasks t1…tn and shows hand-off chips with
+   @tags, for example "t2 @Copy Editor: Edit the draft · uses @Ana (t1)". A task can also use an
    earlier result in the project. Unticking t1 greys out t2 ("Skipped: needs
    t1"). A chip that sends work to an agent on an OpenRouter endpoint says
    "goes to a hosted endpoint". The footer adds "3 tasks · one at a time · up
    to 15 model calls". Apply works as today (D-P1).
 7. Tasks run one at a time in plan order. A task waits for its inputs
    ("Waiting for t1"), then receives them in its task text, cut to fit its
-   agent's window. Its result says "Used t1 (cut to 1,800 of 6,200
+   agent's window. Its result says "Used @Ana's t1 (cut to 1,800 of 6,200
    characters)".
-8. Agents report through their results. An agent that is stuck ends its
-   result with "Question for Primary: …". The runner adds progress lines
-   without a model call, for example "t2 failed. t3 is on hold until you
-   retry or cancel t2."
+8. Agents report through their results and tag who they mean (D-O11): a
+   stuck agent ends its result with "@Atlas …" (Primary's name), and an
+   agent that wants a teammate to take its work further tags them, for
+   example "@Copy Editor this draft is ready for editing". The runner adds
+   progress lines without a model call, for example "@Ana finished t1;
+   @Copy Editor is next" or "t2 failed. t3 is on hold until you retry or
+   cancel t2."
 9. A work bar replaces the composer hint: "Round 1 · 1 running · 1 on hold
    [Pause] [Stop]". Task rows get Cancel, Stop and Retry. Stop and Cancel
    ask for confirmation first and name every task they affect.
@@ -54,7 +60,7 @@ Steps 1–5 are unchanged. Step 6 becomes:
 
 - D-O1: Who delegates while work runs? Recommended: only Primary, through
   plans the user applies (the first plan and each review). Agents get no
-  delegate or ask tools; they ask upward with "Question for Primary:". Why:
+  delegate or ask tools; they ask upward by tagging Primary (D-O11). Why:
   every delegation stays a visible plan behind D-P1, and no tool calling is
   needed.
 - D-O2: How does one agent's work reach another? Recommended: a plan task
@@ -103,6 +109,22 @@ Steps 1–5 are unchanged. Step 6 becomes:
 - D-O10: Should `read_run_log` be scoped to the run's project? Recommended:
   yes, first. Why: it filters by agentId only, so a run can read any agent's
   runs across projects and chats.
+- D-O11 (owner's request): Tagging is part of the chat system. Every agent
+  named in the project chat is an @Name tag, shown as a chip: Primary's
+  replies and assignments ("@Atlas → @Ana"), hand-offs ("@Ana → @Copy
+  Editor · t1"), team updates, progress lines and results.
+  - Agents are told to address teammates and the lead by @Name. An agent's
+    tag of a teammate is a hand-off request: it starts nothing by itself
+    (D-O1), and the next review card proposes it as a task with the tagging
+    agent's result as its input. A tag of Primary is a question (it replaces
+    "Question for Primary:").
+  - The user tags too: typing @ in the composer opens a picker of Primary
+    and the team. A message that tags team members goes to each of them as
+    a task (the user's own delegation, so no confirm card; tasks run one at
+    a time as usual). A message with no tag, or tagging Primary, goes to
+    Primary's plan as today.
+  Why: the owner asked for it, and it makes who hands what to whom readable
+  at a glance in a chat-style thread.
 
 ## Data model
 
@@ -122,16 +144,36 @@ interface ProjectMessage {
   round?: number            // written by an apply; absent = 1
   verdict?: 'done' | 'ask'  // Primary's reply that closes a request
   used?: { taskId: string; chars: number; sentChars: number }[]  // result: what it got
+  mentions?: string[]       // D-O11: agent ids tagged in `text`, in order, deduped
 }
 interface Project      { ...; paused?: boolean }
 interface ReviewResult { plan: TeamPlan; replyTo: string; round: number }
 ```
 
 - "Waiting" and "on hold" are derived from `inputs` and never stored.
+- Mentions (D-O11): `mentions` is resolved by the BE on every write, from
+  the client's picked ids (user messages) or by parsing `@Name` in the text
+  (agent and system messages): `@` followed by the longest matching agent
+  name, case-insensitive, ending at a word boundary, preferring Primary and
+  the team over other library agents. Unmatched `@words` stay plain text.
 - store.ts: extend MESSAGE_KINDS and TASK_STATUSES. normalizeProjectMessages
   keeps the new fields and normalizeProjects keeps `paused`. No schema bump.
 
 ## Backend
+
+- Mentions (D-O11, src/mentions.ts, pure): `resolveMentions(text,
+  candidates)` returns the tagged agent ids and their spans; every project
+  message write fills `mentions`. Text the BE writes (assignments,
+  team updates, progress lines, hand-off notes) names agents as `@Name`.
+  buildTaskInput and the planner/review prompts tell agents to tag teammates
+  and the lead with `@Name`, and list the exact names they can use.
+  `POST /api/projects/:id/messages` accepts `mentions` (agent ids, validated
+  against Primary and the team); when a user message tags team members (not
+  Primary), it also queues one task-assignment per tagged member (author
+  'user', the message as the task) and returns them with the message.
+  Review: a done result whose `mentions` tag a teammate becomes a proposed
+  task for that teammate with the result as its input (still confirmed on
+  the review card).
 
 - Scope (tools/types.ts, tools/workspace.ts): ToolContext gains `projectId`,
   set by executeRun. `read_run_log` keeps only runs with the same projectId,
@@ -217,6 +259,13 @@ interface ReviewResult { plan: TeamPlan; replyTo: string; round: number }
 
 ## Frontend
 
+- Mentions (D-O11): a shared `MentionText` renders `@Name` spans from
+  `mentions` as chips (agent colour, role on hover) in every message kind,
+  task row, team update, progress line and plan/review card. The composer's
+  `@` opens a picker of Primary and the team (keyboard: ↑↓, Enter, Esc) and
+  sends the picked ids; the send button says who will get the message
+  ("Send to @Ana" / "Ask @Atlas").
+
 - lib/project-chat.ts (pure, tested):
   - `taskState` (ready, waiting, onHold, paused…, each with a reason),
     `descendants`, `roundOf`, `reviewDue`, `planCallBudget` (tasks × 5).
@@ -243,9 +292,15 @@ interface ReviewResult { plan: TeamPlan; replyTo: string; round: number }
   - An 8,192-token fixture endpoint: clipping, early failure with zero
     upstream calls, an injection string kept inside its frame, redaction.
   - Review writes nothing; 409/502/413; 409 for a stale round.
-- Byte-identical checks: a task without inputs and a run without a signal
-  send exactly today's upstream body.
-- FE: tests/project-chat.test.mjs covers every new helper.
+  - Mentions: resolveMentions (longest name, case, word boundaries, names
+    with spaces, unknown @words, Primary and team preferred), `mentions` on
+    every message kind, user tags queue direct tasks (and only for team
+    members), an agent's tag becomes a proposed hand-off on the review card.
+- Byte-identical checks: an agent's own chat run and a run without a signal
+  send exactly today's upstream body; a task without inputs differs from
+  today's only by the D-O11 tagging lines.
+- FE: tests/project-chat.test.mjs covers every new helper, including the
+  mention picker's filtering and the chip spans.
 
 ## Out of scope (later milestones)
 
@@ -262,7 +317,9 @@ interface ReviewResult { plan: TeamPlan; replyTo: string; round: number }
 1. Part 0 (docs only): this file as docs/ORCHESTRATION_HANDOFF.md, linked
    from PROJECTS_HANDOFF.md and from HANDOFF.md "Suggested next task". The
    owner confirms D-O1…D-O10.
-2. Part 1: read_run_log scope, contract and store fields.
+2. Part 1: read_run_log scope, contract and store fields, and mentions
+   (resolveMentions, `mentions` on every message, chips, the composer
+   picker, user tags as direct tasks).
 3. Part 2: work controls and WorkBar. Useful for today's tasks on their own.
 4. Part 3: hand-offs in the backend (planner, validation, apply,
    nextReadyTask, fitTaskInput, progress lines), shipped with `taskState`

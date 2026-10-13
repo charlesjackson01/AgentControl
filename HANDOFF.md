@@ -213,8 +213,8 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 
 Projects milestone follow-ups, all listed as out of scope in
 `docs/PROJECTS_HANDOFF.md`: inter-agent delegation loops (agents asking each
-other; draft design with decisions to confirm in
-`docs/ORCHESTRATION_HANDOFF.md`), per-project notes, folder browsing and deletion, and per-project
+other, with @mentions; approved design in
+`docs/ORCHESTRATION_HANDOFF.md`, being built), per-project notes, folder browsing and deletion, and per-project
 budgets or schedules. Smaller items: a listing for a project's task runs (task
 results carry `runId`, but `GET /api/agents/:id/runs` serves only an agent's
 own chat), a single-project `GET /api/projects/:id` (the chat page polls the

@@ -1,6 +1,6 @@
 # Current state
 
-**Last updated:** 2026-10-04, by Codex (N2 Part 0 committed separately; N2 implemented; Opus review pending).
+**Last updated:** 2026-10-12, by Hermes agent (independent N2 verification at `2e98015`: chat 308/308; the Python blocker was a test_modes.py verifier bug on Python 3.12+, fixed test-side, 10/10; remaining full-suite failures flaky at pre-N2 baselines. Recommend accept; Opus sign-off still required).
 **Rule:** every session that changes the redesign updates this file before it pushes. Keep it short and true.
 History belongs in git, and rules belong in `docs/REDESIGN_ARCHITECTURE.md`.
 

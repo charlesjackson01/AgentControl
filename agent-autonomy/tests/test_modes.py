@@ -19,7 +19,7 @@ from test_workflow import complete
 
 TEAM_BRIEF = 'Build a REST API with SQLite storage, a web UI page that lists items, unittest tests, and a README.'
 TINY_BRIEF = 'Fix the typo in the greeting.'
-VERIFY = 'python3 -m unittest'
+VERIFY = 'test -f all.txt -o -f fix.txt'
 
 
 class DecisionTableTests(unittest.TestCase):

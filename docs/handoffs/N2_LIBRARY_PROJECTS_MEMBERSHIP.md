@@ -708,3 +708,21 @@ project-file browsing are unavailable. Classic remains compatible and required f
 No physical-device testing is claimed; browser emulation does not verify native iOS/Android keyboards.
 The previously excluded in-flight skill-fetch race remains out of scope; D7 and approval behavior are unchanged.
 Stop for Opus review; no next milestone, route change, classic retirement or main merge.
+
+## Independent review (2026-10-12, Hermes agent — preliminary; Opus sign-off still required)
+
+Re-verified at `2e98015` on this machine (Python 3.14.7):
+
+- Chat UI suite: **308/308 passed** (`NODE_PATH=/tmp/ac-tests/node_modules node agent-autonomy/tests/test_chat_ui.cjs`).
+- The "full Python non-green" blocker is an **environment bug in test_modes.py, not an N2 regression**. Its
+  `VERIFY = 'python3 -m unittest'` runs inside the scratch worktree, which contains no tests; Python 3.12+ exits 5
+  ("NO TESTS RAN") where 3.11 exited 0, so the fake run's verifier always fails. The identical 5 failures reproduce
+  at three baselines predating N2, including `cdb2690` which introduced the file.
+- Test-side fix applied: `VERIFY = 'test -f all.txt -o -f fix.txt'` (asserts the fake agent's actual output).
+  test_modes now **10/10**; full suite moves from 5 failed to 0–3 failed.
+- Remaining full-suite failures are **flaky, not regressions**: a different single test fails per run
+  (test_vm, test_agents, test_specialists across three runs), each passing in isolation, with the same behavior at
+  the pre-N2 baseline `0be0edb`. Assessment: pre-existing backend/runtime flakiness, unrelated to N2.
+
+**Recommendation: accept N2.** The frontend, route, and N2 record checks hold; the flagged blocker was this box's
+Python version. Formal acceptance remains Opus's per the process; this note records the independent verification.

@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, PromptBudget, PromptBudgetInput, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResponse, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -214,6 +214,13 @@ export const api = {
     return request<Project[]>('/api/projects')
   },
 
+  /** There is no GET /api/projects/:id: read the list and pick the project (404 when it is gone). */
+  async getProject(id: string): Promise<Project> {
+    const project = (await request<Project[]>('/api/projects')).find((p) => p.id === id)
+    if (!project) throw new ApiError(`No project with id "${id}"`, 404)
+    return project
+  },
+
   async createProject(input: ProjectInput): Promise<Project> {
     return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) })
   },
@@ -239,6 +246,43 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     })
+  },
+
+  /* -- Project team plans and tasks. Primary answers a user prompt with a plan;
+     team changes wait for Apply (D-P1), a tasks-only plan applies at once.
+     Each call answers with the project and the messages it created or changed. */
+
+  /** 201; 409 without a Team Lead or when the prompt already has a plan, 502 when Primary's answer is unusable. */
+  async requestTeamPlan(projectId: string, messageId: string): Promise<TeamPlanResponse> {
+    const body: TeamPlanRequest = { messageId }
+    return request<TeamPlanResponse>(`/api/projects/${encodeURIComponent(projectId)}/team-plan`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /** 409 unless the plan is pending. Creates and adds the accepted agents, then queues the accepted tasks. */
+  async applyTeamPlan(projectId: string, messageId: string, selection: TeamPlanApply): Promise<TeamPlanResponse> {
+    return request<TeamPlanResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(messageId)}/apply`,
+      { method: 'POST', body: JSON.stringify(selection) },
+    )
+  },
+
+  /** 409 unless the plan is pending. */
+  async cancelTeamPlan(projectId: string, messageId: string): Promise<TeamPlanResponse> {
+    return request<TeamPlanResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(messageId)}/cancel`,
+      { method: 'POST' },
+    )
+  },
+
+  /** 409 unless the task failed; re-queues it. */
+  async retryProjectTask(projectId: string, messageId: string): Promise<TeamPlanResponse> {
+    return request<TeamPlanResponse>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/retry`,
+      { method: 'POST' },
+    )
   },
 
   async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {

@@ -45,8 +45,11 @@ export default function Agents() {
 
   const agents = useAsync(api.listAgents, [])
   const endpoints = useAsync(api.listEndpoints, [])
+  // Names for the project tag on project-scoped specialists (D-P2).
+  const projects = useAsync(api.listProjects, [])
 
   const endpointById = useMemo(() => new Map((endpoints.data ?? []).map((e) => [e.id, e])), [endpoints.data])
+  const projectNameById = useMemo(() => new Map((projects.data ?? []).map((p) => [p.id, p.name])), [projects.data])
 
   const displayModel = useMemo(() => {
     return (a: { modelId: string; endpointId: string }) => {
@@ -202,6 +205,13 @@ export default function Agents() {
                 </span>
               </div>
               {a.role && <p className="tile__role">{a.role}</p>}
+              {a.projectId && (
+                <p className="tile__project">
+                  <span className="pill pill--project" title="Created by the Team Lead for this project">
+                    {projectNameById.has(a.projectId) ? `Project: ${projectNameById.get(a.projectId)}` : 'Project'}
+                  </span>
+                </p>
+              )}
               <p className="tile__desc">{a.description || 'No description yet.'}</p>
               <div className="tile__meta">
                 <span>{displayModel(a)}</span>

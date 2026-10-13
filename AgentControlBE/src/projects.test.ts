@@ -1537,6 +1537,8 @@ describe('D-O11 mentions', () => {
     const ana = await makeAgent('Ana')
     const ben = await makeAgent('Ben')
     const p = await makeProject('Direct', [ana.id, ben.id])
+    // The direct tasks run: answer them so nothing reaches the network.
+    const requests = mockTeam({ reply: 'unused' })
 
     const res = await inject('POST', `/api/projects/${p.id}/messages`, {
       author: 'user',
@@ -1549,11 +1551,16 @@ describe('D-O11 mentions', () => {
     expect(body.messages[1]).toMatchObject({ author: 'user', assigneeId: ana.id, taskStatus: 'queued', text: 'please polish this' })
     expect(body.messages[2]).toMatchObject({ author: 'user', assigneeId: ben.id, taskStatus: 'queued' })
 
+    await whenProjectIdle(store, p.id)
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(2)
+
     // Tagging only Primary: a question, no direct tasks.
     const res2 = await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'what next?', mentions: [lead.id] })
     const body2 = res2.json() as ProjectUpdate
     expect(body2.messages).toHaveLength(1)
     expect(body2.messages[0]?.mentions).toEqual([lead.id])
+    await whenProjectIdle(store, p.id)
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(2)
   })
 
   it('ignores picked ids outside Primary and the team, and dedupes', async () => {
@@ -1561,6 +1568,7 @@ describe('D-O11 mentions', () => {
     const ana = await makeAgent('Ana')
     const outsider = await makeAgent('Outsider')
     const p = await makeProject('Picky', [ana.id])
+    mockTeam({ reply: 'unused' })
     const res = await inject('POST', `/api/projects/${p.id}/messages`, {
       author: 'user',
       text: 'hi',
@@ -1569,6 +1577,7 @@ describe('D-O11 mentions', () => {
     const body = res.json() as ProjectUpdate
     expect(body.messages).toHaveLength(2) // the message + one direct task for Ana
     expect(body.messages[0]?.mentions).toEqual([ana.id])
+    await whenProjectIdle(store, p.id)
   })
 
   it('an agent result that tags a teammate records the mention and starts nothing', async () => {

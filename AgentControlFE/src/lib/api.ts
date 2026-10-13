@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, PromptBudget, PromptBudgetInput, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResponse, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -248,38 +248,40 @@ export const api = {
     })
   },
 
-  /* -- Project team plans and tasks. Primary answers a user prompt with a plan;
-     team changes wait for Apply (D-P1), a tasks-only plan applies at once.
-     Each call answers with the project and the messages it created or changed. */
+  /* -- Project team plans and tasks (D-P1). POST team-plan only returns
+     Primary's plan; nothing is stored until the user applies it, so Cancel is
+     local. Apply and retry answer with the project and the messages they
+     created or changed. */
 
-  /** 201; 409 without a Team Lead or when the prompt already has a plan, 502 when Primary's answer is unusable. */
-  async requestTeamPlan(projectId: string, messageId: string): Promise<TeamPlanResponse> {
-    const body: TeamPlanRequest = { messageId }
-    return request<TeamPlanResponse>(`/api/projects/${encodeURIComponent(projectId)}/team-plan`, {
+  /**
+   * Ask Primary for a plan: `messageId` names the user's message it answers,
+   * or `prompt` asks without one. 400 when the message is not a user message
+   * of this project, 409 without a Team Lead, 413 when the prompt cannot fit,
+   * 502 when Primary's answer is unusable. Writes nothing.
+   */
+  async requestTeamPlan(projectId: string, body: TeamPlanRequest): Promise<TeamPlanResult> {
+    return request<TeamPlanResult>(`/api/projects/${encodeURIComponent(projectId)}/team-plan`, {
       method: 'POST',
       body: JSON.stringify(body),
     })
   },
 
-  /** 409 unless the plan is pending. Creates and adds the accepted agents, then queues the accepted tasks. */
-  async applyTeamPlan(projectId: string, messageId: string, selection: TeamPlanApply): Promise<TeamPlanResponse> {
-    return request<TeamPlanResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(messageId)}/apply`,
-      { method: 'POST', body: JSON.stringify(selection) },
-    )
-  },
-
-  /** 409 unless the plan is pending. */
-  async cancelTeamPlan(projectId: string, messageId: string): Promise<TeamPlanResponse> {
-    return request<TeamPlanResponse>(
-      `/api/projects/${encodeURIComponent(projectId)}/plans/${encodeURIComponent(messageId)}/cancel`,
-      { method: 'POST' },
-    )
+  /**
+   * Commit a plan the user confirmed: the BE validates `plan` again against
+   * the current library and team, creates and adds the accepted agents, then
+   * queues the accepted tasks. 400 for a bad selection, 409 when a new
+   * specialist's name is taken.
+   */
+  async applyTeamPlan(projectId: string, body: TeamPlanApply): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/team-plan/apply`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
   },
 
   /** 409 unless the task failed; re-queues it. */
-  async retryProjectTask(projectId: string, messageId: string): Promise<TeamPlanResponse> {
-    return request<TeamPlanResponse>(
+  async retryProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/retry`,
       { method: 'POST' },
     )

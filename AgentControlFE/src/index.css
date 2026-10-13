@@ -2401,12 +2401,6 @@ ul {
   color: var(--c-accent);
 }
 
-.pill--done {
-  border-color: transparent;
-  background: var(--c-success-soft);
-  color: var(--c-success);
-}
-
 .project__folder {
   margin: 1px 0 0;
   overflow: hidden;
@@ -2451,7 +2445,8 @@ ul {
   color: var(--c-text-2);
 }
 
-.teamstrip__add {
+.teamstrip__add,
+.teamstrip__ask {
   height: 28px;
   padding: 0 10px;
   font-size: 12.5px;
@@ -2649,12 +2644,6 @@ a.teamchip__name:hover {
   animation: fade-in var(--t-base) var(--ease-out) both;
 }
 
-.plan--settled {
-  gap: 8px;
-  box-shadow: none;
-  background: var(--c-surface-2);
-}
-
 .plan__head {
   display: flex;
   flex-wrap: wrap;
@@ -2667,9 +2656,11 @@ a.teamchip__name:hover {
   font-weight: 600;
 }
 
-.plan__progress {
-  font-size: 12px;
-  color: var(--c-text-2);
+.plan__reply {
+  font-size: 13.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .plan__section {
@@ -2690,12 +2681,6 @@ a.teamchip__name:hover {
 .plan__item {
   display: flex;
   flex-direction: column;
-}
-
-/* Read-only item once the plan is applied or cancelled */
-.plan__row {
-  display: flex;
-  padding: 6px 11px;
 }
 
 .plan__role {
@@ -2735,17 +2720,6 @@ a.teamchip__name:hover {
   margin: 0 0 4px 38px;
 }
 
-.plan__review {
-  max-width: none;
-}
-
-.plan__review__body {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 8px;
-}
-
 .plan__warnings {
   display: flex;
   flex-direction: column;
@@ -2756,11 +2730,6 @@ a.teamchip__name:hover {
   font-size: 12px;
   line-height: 1.5;
   color: var(--c-text-3);
-}
-
-.plan__warnings--loose {
-  align-self: flex-start;
-  max-width: min(78%, 620px);
 }
 
 .plan__foot {
@@ -2799,7 +2768,8 @@ a.teamchip__name:hover {
   }
 
   .teamchip,
-  .teamstrip__add {
+  .teamstrip__add,
+  .teamstrip__ask {
     flex-shrink: 0;
   }
 

@@ -119,6 +119,7 @@ export default function AgentChat() {
 
   // GET /api/agents/:id/runs is newest-first; the chat reads oldest-first.
   // Runs made for a project task belong to that project's chat, not this one.
+  // The BE now returns personal runs only; the filter just guards older BEs.
   const sortedRuns = (runsList ?? []).filter((r) => !r.projectId).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
 
   // The optimistic turn disappears once the refetched transcript contains it;

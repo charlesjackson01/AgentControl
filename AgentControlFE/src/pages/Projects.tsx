@@ -68,7 +68,7 @@ function CreateProjectDialog({
     <Dialog
       open={open}
       title="New Project"
-      subtitle="AgentControl creates a folder for the project. The team can be empty — the Team Lead assembles one when you send the first prompt."
+      subtitle="AgentControl creates a folder for the project. The team can be empty — the Team Lead proposes one for your approval when you send the first prompt."
       onClose={onClose}
       footer={
         <>
@@ -214,7 +214,7 @@ export default function Projects() {
         <EmptyState
           icon={<ProjectsIcon size={20} />}
           title="No projects yet"
-          text="Create a project and AgentControl makes its folder. Add agents now or let the Team Lead assemble the team when you send the first prompt."
+          text="Create a project and AgentControl makes its folder. Add agents now or let the Team Lead propose a team, for your approval, when you send the first prompt."
           actions={
             <button type="button" className="btn btn--primary" onClick={() => setMode('create')}>
               <PlusIcon size={16} />

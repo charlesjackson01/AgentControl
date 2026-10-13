@@ -8,38 +8,50 @@ import { ChevronLeftIcon, PlusIcon, ProjectsIcon } from '../components/icons'
 import { api, ApiError } from '../lib/api'
 import { friendlyError, turnTime } from '../lib/chat-format'
 import {
-  PLAN_STATUS_LABELS,
   TASK_STATUS_LABELS,
+  addBlock,
   addCandidates,
   applyBody,
+  createBlock,
   describeProgress,
-  failedResultIds,
   initialSelection,
-  isTaskBlocked,
+  isFailedResult,
+  isTaskResult,
   isUserPrompt,
+  latestPrompt,
   latestUnansweredPrompt,
   memberIds,
   mergeMessages,
   needsPolling,
   newerProject,
+  nextTeam,
+  planAnchors,
   planHasItems,
-  planProgress,
   pollDelay,
+  resyncAfter,
   selectedCount,
   sortMessages,
+  stickAfterScroll,
+  taskBlock,
+  taskProgress,
   taskSource,
   toggleAdd,
   toggleCreate,
   toggleTask,
+  type ApplyBody,
+  type PlanContext,
   type PlanSelection,
 } from '../lib/project-chat'
-import type { Agent, Project, ProjectMessage, TaskStatus, TeamPlan, TeamPlanApply, TeamPlanResponse } from '../lib/types'
+import type { Agent, Project, ProjectMessage, ProjectUpdate, TaskStatus, TeamPlan } from '../lib/types'
 
 /* ==========================================================================
    Project chat (/projects/:id): the project's own thread (D-P3). The user
-   prompts, Primary (the Team Lead) answers with a team plan; team changes
-   wait for Apply (D-P1), then tasks run and report back here. The page polls
-   while Primary plans or a task is queued/running.
+   prompts and Primary (the Team Lead) answers with a team plan. The plan is
+   held here, not on the server, as a confirm card: nothing is written until
+   Apply (D-P1), which records Primary's reply, the team change and the tasks.
+   Cancel just drops the card; so does a reload, after which the prompt offers
+   "Ask Primary" again. The page polls while a task is queued or running, and
+   while a refresh is failing.
    ========================================================================== */
 
 const MESSAGE_MAX = 20_000
@@ -67,113 +79,130 @@ type Names = {
   byId: Map<string, Agent>
 }
 
+/** A plan Primary returned for one of the user's prompts, waiting for Apply or Cancel. */
+type PendingPlan = {
+  messageId: string
+  plan: TeamPlan
+  /** Bumped per answer, so asking again resets the card's selection. */
+  seq: number
+}
+
 /* -- Plan confirm card ------------------------------------------------------ */
 
 function PlanCard({
-  message,
-  plan,
+  pending,
+  leadName,
   names,
-  availableIds,
+  ctx,
   skillNames,
-  progress,
   onApply,
   onCancel,
 }: {
-  message: ProjectMessage
-  plan: TeamPlan
+  pending: PendingPlan
+  leadName: string
   names: Names
-  /** Agents a task can go to without a team change: the team and Primary. */
-  availableIds: string[]
+  ctx: PlanContext
   skillNames: Map<string, string>
-  progress: string
-  onApply: (body: Required<TeamPlanApply>) => Promise<void>
-  onCancel: () => Promise<void>
+  onApply: (body: ApplyBody) => Promise<void>
+  onCancel: () => void
 }) {
+  const { plan, messageId } = pending
   const [selection, setSelection] = useState<PlanSelection>(() => initialSelection(plan))
-  const [busy, setBusy] = useState<'apply' | 'cancel' | null>(null)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const status = message.planStatus ?? 'applied'
-  const pending = status === 'pending'
-  const body = applyBody(plan, selection, availableIds)
+  const body = applyBody(plan, selection, ctx, messageId)
   const count = selectedCount(body)
+  const hasItems = planHasItems(plan)
+  // A plan with nothing to change only offers to keep Primary's reply.
+  const canApply = !busy && (hasItems ? count > 0 : Boolean(plan.reply))
 
-  const run = async (kind: 'apply' | 'cancel') => {
-    if (busy) return
-    setBusy(kind)
+  const apply = async () => {
+    if (!canApply) return
+    setBusy(true)
     setError(null)
     try {
-      if (kind === 'apply') await onApply(body)
-      else await onCancel()
+      await onApply(body)
     } catch (err) {
-      setError(friendlyError(err, kind === 'apply' ? 'Could not apply the plan.' : 'Could not cancel the plan.'))
+      setError(friendlyError(err, 'Could not apply the plan.'))
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
+  // A validated plan names agents by id, or new specialists by name.
   const assigneeLabel = (agent: string) => {
-    const source = taskSource(plan, { agent, task: '' }, availableIds)
+    const source = taskSource(plan, { agent, task: '' }, ctx)
     if (source.kind === 'create') return `${plan.create[source.index].name} (new)`
-    return names.of(source.agentId)
+    return names.of(source.kind === 'unknown' ? agent : source.agentId)
   }
 
-  const items = (
-    <>
+  const blockedNote = (reason: string | null) => reason && <span className="plan__blocked">{reason}</span>
+
+  return (
+    <section className="plan" aria-label="Team plan">
+      <div className="plan__head">
+        <span className="plan__title">{leadName}</span>
+        <span className={`pill${hasItems ? ' pill--lead' : ''}`}>{hasItems ? 'Plan · awaiting your approval' : 'Not saved yet'}</span>
+      </div>
+
+      {plan.reply && <div className="plan__reply">{plan.reply}</div>}
+
       {plan.add.length > 0 && (
         <div className="plan__section">
           <p className="plan__section__title">Add to the team</p>
           {plan.add.map((a) => {
             const agent = names.byId.get(a.agentId)
-            const on = selection.add.includes(a.agentId)
-            const text = (
-              <span className="skillrow__text">
-                <span className="skillrow__name">
-                  {names.of(a.agentId)}
-                  {agent?.role && <span className="plan__role">{agent.role}</span>}
+            const blocked = addBlock(a, ctx)
+            const on = !blocked && selection.add.includes(a.agentId)
+            return (
+              <label className={`skillrow${on ? ' skillrow--on' : ''}${blocked ? ' skillrow--blocked' : ''}`} key={a.agentId}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={blocked !== null || busy}
+                  onChange={() => setSelection((s) => toggleAdd(s, a.agentId))}
+                />
+                <span className="skillrow__text">
+                  <span className="skillrow__name">
+                    {names.of(a.agentId)}
+                    {agent?.role && <span className="plan__role">{agent.role}</span>}
+                  </span>
+                  {a.reason && <span className="skillrow__desc">{a.reason}</span>}
+                  {blockedNote(blocked)}
                 </span>
-                {a.reason && <span className="skillrow__desc">{a.reason}</span>}
-              </span>
-            )
-            return pending ? (
-              <label className={`skillrow${on ? ' skillrow--on' : ''}`} key={a.agentId}>
-                <input type="checkbox" checked={on} disabled={busy !== null} onChange={() => setSelection((s) => toggleAdd(s, a.agentId))} />
-                {text}
               </label>
-            ) : (
-              <div className="plan__row" key={a.agentId}>
-                {text}
-              </div>
             )
           })}
         </div>
       )}
+
       {plan.create.length > 0 && (
         <div className="plan__section">
           <p className="plan__section__title">Create project specialists</p>
           {plan.create.map((c, i) => {
-            const on = selection.create.includes(i)
+            const blocked = createBlock(c, ctx)
+            const on = !blocked && selection.create.includes(i)
             const skills = c.skillIds.map((id) => skillNames.get(id) ?? id)
-            const text = (
-              <span className="skillrow__text">
-                <span className="skillrow__name">
-                  {c.name}
-                  {c.role && <span className="plan__role">{c.role}</span>}
-                  <span className="pill pill--project">new</span>
-                </span>
-                {c.reason && <span className="skillrow__desc">{c.reason}</span>}
-                {skills.length > 0 && <span className="plan__skills">Skills: {skills.join(', ')}</span>}
-              </span>
-            )
             return (
               <div className="plan__item" key={i}>
-                {pending ? (
-                  <label className={`skillrow${on ? ' skillrow--on' : ''}`}>
-                    <input type="checkbox" checked={on} disabled={busy !== null} onChange={() => setSelection((s) => toggleCreate(s, i))} />
-                    {text}
-                  </label>
-                ) : (
-                  <div className="plan__row">{text}</div>
-                )}
+                <label className={`skillrow${on ? ' skillrow--on' : ''}${blocked ? ' skillrow--blocked' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={blocked !== null || busy}
+                    onChange={() => setSelection((s) => toggleCreate(s, i))}
+                  />
+                  <span className="skillrow__text">
+                    <span className="skillrow__name">
+                      {c.name}
+                      {c.role && <span className="plan__role">{c.role}</span>}
+                      <span className="pill pill--project">new</span>
+                    </span>
+                    {c.reason && <span className="skillrow__desc">{c.reason}</span>}
+                    {skills.length > 0 && <span className="plan__skills">Skills: {skills.join(', ')}</span>}
+                    {blockedNote(blocked)}
+                  </span>
+                </label>
                 {c.instructions && (
                   <details className="turn-audit plan__instructions">
                     <summary>Instructions</summary>
@@ -185,61 +214,30 @@ function PlanCard({
           })}
         </div>
       )}
+
       {plan.tasks.length > 0 && (
         <div className="plan__section">
           <p className="plan__section__title">Tasks</p>
           {plan.tasks.map((t, i) => {
-            const blocked = pending && isTaskBlocked(plan, selection, i, availableIds)
+            const blocked = taskBlock(plan, selection, i, ctx)
             const on = !blocked && selection.tasks.includes(i)
-            const text = (
-              <span className="skillrow__text">
-                <span className="skillrow__name">{assigneeLabel(t.agent)}</span>
-                <span className="skillrow__desc plan__task">{t.task}</span>
-                {blocked && <span className="plan__blocked">Skipped: its agent is not joining the team.</span>}
-              </span>
-            )
-            return pending ? (
+            return (
               <label className={`skillrow${on ? ' skillrow--on' : ''}${blocked ? ' skillrow--blocked' : ''}`} key={i}>
                 <input
                   type="checkbox"
                   checked={on}
-                  disabled={blocked || busy !== null}
+                  disabled={blocked !== null || busy}
                   onChange={() => setSelection((s) => toggleTask(s, i))}
                 />
-                {text}
+                <span className="skillrow__text">
+                  <span className="skillrow__name">{assigneeLabel(t.agent)}</span>
+                  <span className="skillrow__desc plan__task">{t.task}</span>
+                  {blockedNote(blocked)}
+                </span>
               </label>
-            ) : (
-              <div className="plan__row" key={i}>
-                {text}
-              </div>
             )
           })}
         </div>
-      )}
-    </>
-  )
-
-  const total = plan.add.length + plan.create.length + plan.tasks.length
-
-  return (
-    <section className={`plan${pending ? '' : ' plan--settled'}`} aria-label="Team plan">
-      <div className="plan__head">
-        <span className="plan__title">Team plan</span>
-        <span className={`pill${status === 'pending' ? ' pill--lead' : status === 'applied' ? ' pill--done' : ''}`}>
-          {PLAN_STATUS_LABELS[status] ?? status}
-        </span>
-        {status === 'applied' && progress && <span className="plan__progress">{progress}</span>}
-      </div>
-
-      {pending ? (
-        items
-      ) : (
-        <details className="turn-audit plan__review">
-          <summary>
-            Show proposal ({total} {total === 1 ? 'item' : 'items'})
-          </summary>
-          <div className="plan__review__body">{items}</div>
-        </details>
       )}
 
       {plan.warnings.length > 0 && (
@@ -250,25 +248,31 @@ function PlanCard({
         </ul>
       )}
 
-      {pending && (
-        <div className="plan__foot">
-          <p className="plan__hint">
-            {count === 0 ? 'Nothing selected. Tick what to accept, or cancel the plan.' : 'Team changes happen only when you apply.'}
+      <div className="plan__foot">
+        <p className="plan__hint">
+          {!hasItems
+            ? plan.reply
+              ? 'No team changes or tasks. Keep the reply in the chat, or dismiss it.'
+              : `${leadName} proposed nothing for this prompt.`
+            : count === 0
+              ? 'Nothing selected. Tick what to accept, or cancel the plan.'
+              : 'Nothing changes until you apply.'}
+        </p>
+        {error && (
+          <p className="field__err plan__err" role="alert">
+            {error}
           </p>
-          {error && (
-            <p className="field__err plan__err" role="alert">
-              {error}
-            </p>
-          )}
-          <button type="button" className="btn" onClick={() => void run('cancel')} disabled={busy !== null}>
-            {busy === 'cancel' ? 'Cancelling…' : 'Cancel'}
+        )}
+        <button type="button" className="btn" onClick={onCancel} disabled={busy}>
+          {hasItems ? 'Cancel' : 'Dismiss'}
+        </button>
+        {(hasItems || plan.reply) && (
+          <button type="button" className="btn btn--primary" onClick={() => void apply()} disabled={!canApply}>
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {busy ? 'Applying…' : hasItems ? `Apply (${count})` : 'Keep reply'}
           </button>
-          <button type="button" className="btn btn--primary" onClick={() => void run('apply')} disabled={busy !== null || count === 0}>
-            {busy === 'apply' && <span className="spinner" aria-hidden="true" />}
-            {busy === 'apply' ? 'Applying…' : `Apply (${count})`}
-          </button>
-        </div>
-      )}
+        )}
+      </div>
     </section>
   )
 }
@@ -429,7 +433,7 @@ function AddAgentsDialog({
 
 export default function ProjectChat() {
   const { id = '' } = useParams()
-  // A fresh instance per project: no state (or in-flight response) carries over.
+  // A fresh instance per project: no state (pending plans, in-flight responses) carries over.
   return <ProjectChatPage key={id} id={id} />
 }
 
@@ -447,6 +451,10 @@ function ProjectChatPage({ id }: { id: string }) {
   /** The prompt Primary is planning for, while POST team-plan is in flight. */
   const [planning, setPlanning] = useState<string | null>(null)
   const [planError, setPlanError] = useState<{ messageId: string; message: string } | null>(null)
+  /** Plans waiting for Apply or Cancel, by the prompt they answer. Page state only (D-P1). */
+  const [plans, setPlans] = useState<Map<string, PendingPlan>>(() => new Map())
+  /** "Ask Primary to build a team" with no prompt yet: the composer asks for one. */
+  const [askHint, setAskHint] = useState(false)
 
   const [addOpen, setAddOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
@@ -461,6 +469,8 @@ function ProjectChatPage({ id }: { id: string }) {
   const alive = useRef(true)
   const busy = useRef({ sending: false, planning: false })
   const failures = useRef(0)
+  const planSeq = useRef(0)
+  const composerRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     alive.current = true
@@ -488,8 +498,8 @@ function ProjectChatPage({ id }: { id: string }) {
         const error = err instanceof Error ? err : new Error(String(err))
         failures.current += 1
         // Before the first load the whole page shows the error; afterwards the
-        // thread stays readable and a notice says updates paused. A project
-        // deleted meanwhile drops the thread, which also stops polling.
+        // thread stays readable and polling retries with backoff. A project
+        // deleted meanwhile drops the thread: "Project not found", no polling.
         setLoadError(error)
         setSyncError(friendlyError(error, 'Could not refresh the project.'))
         if (error instanceof ApiError && error.status === 404) setMessages(undefined)
@@ -509,7 +519,7 @@ function ProjectChatPage({ id }: { id: string }) {
   }, [refresh])
 
   /** Fold a route response in and mark it newest, so refreshes already in flight are dropped. */
-  const take = useCallback((res: Partial<TeamPlanResponse>) => {
+  const take = useCallback((res: Partial<ProjectUpdate>) => {
     if (!alive.current) return
     applied.current = ++ticket.current
     const changed = res.messages
@@ -520,7 +530,15 @@ function ProjectChatPage({ id }: { id: string }) {
     if (changed) setMessages((prev) => mergeMessages(prev ?? [], changed))
   }, [])
 
-  const polling = messages !== undefined && needsPolling(messages, planning !== null)
+  /** After a failed action: a 404 or 409 means the page is stale (a deleted project then shows "Project not found"). */
+  const resyncOn = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiError && resyncAfter(err.status)) void refresh()
+    },
+    [refresh],
+  )
+
+  const polling = messages !== undefined && needsPolling(messages, syncError !== null)
 
   // Chained timeouts: one request in flight at a time, backing off on errors,
   // stopped when idle and on unmount.
@@ -554,51 +572,100 @@ function ProjectChatPage({ id }: { id: string }) {
   )
   const members = useMemo(() => memberIds(project?.teamAgentIds ?? [], primary?.id), [project, primary])
   const candidates = useMemo(() => addCandidates(agents ?? [], project?.teamAgentIds ?? []), [agents, project])
-  const availableIds = useMemo(
-    () => [...(project?.teamAgentIds ?? []), ...(primary ? [primary.id] : [])],
-    [project, primary],
+  const planCtx = useMemo<PlanContext>(
+    () => ({ teamAgentIds: project?.teamAgentIds ?? [], primaryId: primary?.id, agents: agents ?? [] }),
+    [project, primary, agents],
   )
-  const answered = useMemo(
-    () => new Set((messages ?? []).filter((m) => m.kind === 'team-plan' && m.replyTo).map((m) => m.replyTo as string)),
-    [messages],
-  )
+  const latest = useMemo(() => latestPrompt(messages ?? []), [messages])
   const unanswered = useMemo(() => latestUnansweredPrompt(messages ?? []), [messages])
-  const failedResults = useMemo(() => failedResultIds(messages ?? []), [messages])
+  const progress = useMemo(() => taskProgress(messages ?? []), [messages])
+  // Where each pending plan, planning indicator or plan error shows.
+  const anchors = useMemo(() => {
+    const ids = [...plans.keys()]
+    if (planning && !plans.has(planning)) ids.push(planning)
+    if (planError && !ids.includes(planError.messageId)) ids.push(planError.messageId)
+    return planAnchors(messages ?? [], ids)
+  }, [messages, plans, planning, planError])
 
   // Stick to the bottom as messages arrive, unless the user scrolled up to read.
   const threadRef = useRef<HTMLElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
+  const lastTop = useRef(0)
   const onScroll = () => {
     const el = threadRef.current
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+    if (!el) return
+    stick.current = stickAfterScroll(stick.current, el, lastTop.current)
+    lastTop.current = el.scrollTop
   }
   const count = messages?.length ?? 0
   useEffect(() => {
     if (stick.current) endRef.current?.scrollIntoView({ block: 'end' })
-  }, [count, planning, planError])
+  }, [count, planning, planError, plans])
 
+  /** Ask Primary to plan a prompt; the answer becomes a pending card (nothing is stored). */
   const requestPlan = useCallback(
     async (messageId: string) => {
       if (busy.current.planning) return
       busy.current.planning = true
       setPlanning(messageId)
       setPlanError(null)
+      setAskHint(false)
       stick.current = true
       try {
-        take(await api.requestTeamPlan(id, messageId))
+        const result = await api.requestTeamPlan(id, { messageId })
+        // The card checks the plan against the team and the library: bring
+        // both up to date before it shows (refresh never rejects).
+        await refresh()
+        if (!alive.current) return
+        const answers = result.replyTo ?? messageId
+        const seq = ++planSeq.current
+        setPlans((prev) => new Map(prev).set(answers, { messageId: answers, plan: result.plan, seq }))
       } catch (err) {
-        if (alive.current) setPlanError({ messageId, message: friendlyError(err, 'Primary could not plan this.') })
+        if (!alive.current) return
+        resyncOn(err)
+        setPlanError({ messageId, message: friendlyError(err, 'Primary could not plan this.') })
       } finally {
         busy.current.planning = false
         if (alive.current) setPlanning(null)
-        // New specialists, a changed team or a plan created by a lost
-        // response: resync either way.
-        void refresh()
       }
     },
-    [id, take, refresh],
+    [id, refresh, resyncOn],
   )
+
+  const dropPlan = (messageId: string, seq: number) => {
+    // Only the card that was answered: asking again meanwhile replaces it with a newer one.
+    setPlans((prev) => {
+      if (prev.get(messageId)?.seq !== seq) return prev
+      const next = new Map(prev)
+      next.delete(messageId)
+      return next
+    })
+  }
+
+  const applyPlan = async (pending: PendingPlan, body: ApplyBody) => {
+    let update: ProjectUpdate
+    try {
+      update = await api.applyTeamPlan(id, body)
+    } catch (err) {
+      resyncOn(err)
+      throw err
+    }
+    stick.current = true
+    take(update)
+    dropPlan(pending.messageId, pending.seq)
+    // New specialists join the library: refetch it for names and the team strip.
+    void refresh()
+  }
+
+  const retryTask = async (messageId: string) => {
+    try {
+      take(await api.retryProjectTask(id, messageId))
+    } catch (err) {
+      resyncOn(err)
+      throw err
+    }
+  }
 
   const send = async () => {
     const text = draft.trim()
@@ -613,50 +680,47 @@ function ProjectChatPage({ id }: { id: string }) {
       setDraft('')
       void requestPlan(message.id)
     } catch (err) {
-      if (alive.current) setSendError(friendlyError(err, 'Could not send the message.'))
+      if (alive.current) {
+        resyncOn(err)
+        setSendError(friendlyError(err, 'Could not send the message.'))
+      }
     } finally {
       busy.current.sending = false
       if (alive.current) setSending(false)
     }
   }
 
-  const applyPlan = async (messageId: string, body: Required<TeamPlanApply>) => {
-    try {
-      take(await api.applyTeamPlan(id, messageId, body))
-    } finally {
-      void refresh()
+  /** "Ask Primary to build a team": plan the latest prompt, or ask for one. */
+  const askPrimary = () => {
+    if (latest) {
+      void requestPlan(latest.id)
+      return
     }
+    setAskHint(true)
+    composerRef.current?.focus()
   }
 
-  const cancelPlan = async (messageId: string) => {
+  // Team edits build on the server's current team and library, not this
+  // page's copy, so a stale cache neither drops valid ids nor undoes edits
+  // made elsewhere; ids of agents deleted since are dropped (PATCH rejects them).
+  const saveTeam = async (change: { add?: string[]; remove?: string }) => {
     try {
-      take(await api.cancelTeamPlan(id, messageId))
-    } finally {
-      void refresh()
+      const [fresh, roster] = await Promise.all([api.getProject(id), api.listAgents()])
+      const teamAgentIds = nextTeam(fresh.teamAgentIds, change, roster.map((a) => a.id))
+      take({ project: await api.updateProject(id, { teamAgentIds }) })
+    } catch (err) {
+      resyncOn(err)
+      throw err
     }
-  }
-
-  const retryTask = async (messageId: string) => {
-    try {
-      take(await api.retryProjectTask(id, messageId))
-    } finally {
-      void refresh()
-    }
-  }
-
-  // PATCH rejects unknown ids, so ids of agents deleted since they joined
-  // (shown as "Removed agent") are dropped with any team edit.
-  const saveTeam = async (teamAgentIds: string[]) => {
-    const known = [...new Set(teamAgentIds)].filter((agentId) => byId.has(agentId))
-    take({ project: await api.updateProject(id, { teamAgentIds: known }) })
+    void refresh()
   }
 
   const removeMember = async () => {
-    if (!project || !removeTarget || removing) return
+    if (!removeTarget || removing) return
     setRemoving(true)
     setRemoveError(null)
     try {
-      await saveTeam(project.teamAgentIds.filter((x) => x !== removeTarget))
+      await saveTeam({ remove: removeTarget })
       setRemoveTarget(null)
     } catch (err) {
       setRemoveError(friendlyError(err, 'Could not update the team.'))
@@ -703,6 +767,39 @@ function ProjectChatPage({ id }: { id: string }) {
   const removeAgent = removeTarget ? byId.get(removeTarget) : undefined
   // Typing stays open while Primary plans; only sending waits.
   const canSend = Boolean(primary) && !sending && planning === null
+  const canAsk = Boolean(primary) && !sending && planning === null
+  const teamEmpty = Boolean(project) && members.length === 0
+  const working = progress.running + progress.queued > 0
+
+  /** What shows after a prompt's last message: planning, the error, the pending card. */
+  const renderPlanSlot = (promptId: string) => {
+    const pending = plans.get(promptId)
+    return (
+      <div className="chat__turn" key={`plan-${promptId}`}>
+        {pending && (
+          <PlanCard
+            key={pending.seq}
+            pending={pending}
+            leadName={primaryName}
+            names={names}
+            ctx={planCtx}
+            skillNames={skillNames}
+            onApply={(body) => applyPlan(pending, body)}
+            onCancel={() => dropPlan(pending.messageId, pending.seq)}
+          />
+        )}
+        {planning === promptId && <TypingBubble label={`${primaryName} is planning`} speaker={`${primaryName} is planning…`} />}
+        {planning !== promptId && planError?.messageId === promptId && (
+          <Bubble kind="error" speaker={primaryName}>
+            <div className="bubble__body">{planError.message}</div>
+            <button type="button" className="chat__retry" onClick={() => void requestPlan(promptId)} disabled={!canAsk}>
+              Retry
+            </button>
+          </Bubble>
+        )}
+      </div>
+    )
+  }
 
   const renderMessage = (m: ProjectMessage, index: number) => {
     const divider =
@@ -713,37 +810,7 @@ function ProjectChatPage({ id }: { id: string }) {
       ) : null
 
     let body: ReactNode
-    if (m.kind === 'team-plan') {
-      const plan = m.plan
-      body = (
-        <>
-          <Bubble kind="assistant" speaker={names.of(m.author)}>
-            <div className="bubble__body">{plan?.reply || m.text}</div>
-          </Bubble>
-          {plan && planHasItems(plan) ? (
-            <PlanCard
-              message={m}
-              plan={plan}
-              names={names}
-              availableIds={availableIds}
-              skillNames={skillNames}
-              progress={describeProgress(planProgress(messages ?? [], m.id))}
-              onApply={(b) => applyPlan(m.id, b)}
-              onCancel={() => cancelPlan(m.id)}
-            />
-          ) : (
-            plan &&
-            plan.warnings.length > 0 && (
-              <ul className="plan__warnings plan__warnings--loose">
-                {plan.warnings.map((w, i) => (
-                  <li key={i}>{w}</li>
-                ))}
-              </ul>
-            )
-          )}
-        </>
-      )
-    } else if (m.kind === 'team-update') {
+    if (m.kind === 'team-update') {
       body = (
         <p className="chat__system" role="status">
           {m.text}
@@ -758,49 +825,45 @@ function ProjectChatPage({ id }: { id: string }) {
         </Bubble>
       )
     } else {
-      // task-result and plain agent messages: the agent's own bubble.
+      // Primary's applied reply, a task result, or any other agent message.
+      const result = isTaskResult(m)
+      const failed = isFailedResult(m)
       body = (
-        <Bubble kind={failedResults.has(m.id) ? 'error' : 'assistant'} speaker={names.of(m.author)}>
+        <Bubble kind={failed ? 'error' : 'assistant'} speaker={names.of(m.author)}>
           <div className="bubble__body">{m.text}</div>
-          {m.kind === 'task-result' && <div className="bubble__meta">Task result</div>}
+          {result && <div className="bubble__meta">{failed ? 'Task failed' : 'Task result'}</div>}
         </Bubble>
       )
     }
 
-    // What follows a prompt Primary has not answered: planning, the error, or a nudge.
-    let after: ReactNode = null
-    if (isUserPrompt(m) && !answered.has(m.id)) {
-      if (planning === m.id) {
-        after = <TypingBubble label={`${primaryName} is planning`} speaker={`${primaryName} is planning…`} />
-      } else if (planError?.messageId === m.id) {
-        after = (
-          <Bubble kind="error" speaker={primaryName}>
-            <div className="bubble__body">{planError.message}</div>
-            <button type="button" className="chat__retry" onClick={() => void requestPlan(m.id)} disabled={planning !== null}>
-              Retry
-            </button>
-          </Bubble>
-        )
-      } else if (unanswered?.id === m.id && primary && planning === null) {
-        after = (
-          <div className="chat__nudge">
-            <span>{primaryName} has not answered this yet.</span>
-            <button type="button" className="chat__retry chat__retry--accent" onClick={() => void requestPlan(m.id)}>
-              Ask {primaryName}
-            </button>
-          </div>
-        )
-      }
-    }
+    // A prompt Primary never answered (or whose plan was cancelled or lost to a reload).
+    const nudge =
+      unanswered?.id === m.id && !plans.has(m.id) && planning === null && planError?.messageId !== m.id && primary ? (
+        <div className="chat__nudge">
+          <span>{primaryName} has not answered this yet.</span>
+          <button type="button" className="chat__retry chat__retry--accent" onClick={() => void requestPlan(m.id)} disabled={!canAsk}>
+            Ask {primaryName}
+          </button>
+        </div>
+      ) : null
 
-    return (
+    return [
       <div className="chat__turn" key={m.id}>
         {divider}
         {body}
-        {after}
-      </div>
-    )
+        {nudge}
+      </div>,
+      ...(anchors.get(m.id) ?? []).map(renderPlanSlot),
+    ]
   }
+
+  const composerHint = planning !== null
+    ? `${primaryName} is planning…`
+    : working
+      ? `Working: ${describeProgress(progress)}`
+      : askHint
+        ? `Describe what to build or accomplish; ${primaryName} proposes a team for it.`
+        : 'Enter to send · Shift+Enter for a new line'
 
   return (
     <main className="page page--chat">
@@ -873,10 +936,18 @@ function ProjectChatPage({ id }: { id: string }) {
                 </span>
               )
             })}
-          {project && primary && members.length === 0 && (
-            <span className="teamstrip__hint">
-              No members yet. Describe what you want and {primaryName} will propose specialists.
-            </span>
+          {teamEmpty && primary && <span className="teamstrip__hint">No members yet.</span>}
+          {project && primary && (teamEmpty || latest) && (
+            <button
+              type="button"
+              className={`btn teamstrip__ask${teamEmpty ? ' btn--primary' : ' btn--ghost'}`}
+              onClick={askPrimary}
+              disabled={!canAsk}
+              title={latest ? `Ask ${primaryName} to plan your latest prompt again` : `Describe the project and ${primaryName} proposes a team`}
+            >
+              {planning !== null && <span className="spinner" aria-hidden="true" />}
+              {teamEmpty ? `Ask ${primaryName} to build a team` : `Ask ${primaryName}`}
+            </button>
           )}
           {project && (
             <button type="button" className="btn btn--ghost teamstrip__add" onClick={() => setAddOpen(true)}>
@@ -906,7 +977,7 @@ function ProjectChatPage({ id }: { id: string }) {
               />
             </div>
           ) : (
-            messages.map(renderMessage)
+            messages.flatMap(renderMessage)
           )}
           <div ref={endRef} />
         </section>
@@ -928,6 +999,7 @@ function ProjectChatPage({ id }: { id: string }) {
           ) : null}
           <div className="chat__composer__input">
             <textarea
+              ref={composerRef}
               className="textarea"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -955,9 +1027,7 @@ function ProjectChatPage({ id }: { id: string }) {
               {sendError}
             </p>
           ) : (
-            <p className="chat__composer__hint">
-              {planning !== null ? `${primaryName} is planning…` : 'Enter to send · Shift+Enter for a new line'}
-            </p>
+            <p className="chat__composer__hint">{composerHint}</p>
           )}
         </div>
       </div>
@@ -967,7 +1037,7 @@ function ProjectChatPage({ id }: { id: string }) {
         candidates={candidates}
         projectId={id}
         onClose={() => setAddOpen(false)}
-        onAdd={(ids) => saveTeam([...(project?.teamAgentIds ?? []), ...ids])}
+        onAdd={(ids) => saveTeam({ add: ids })}
       />
 
       <ConfirmDialog

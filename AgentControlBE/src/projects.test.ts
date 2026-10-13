@@ -1490,3 +1490,17 @@ describe('second review follow-ups', () => {
     expect(lead.id).toBeTruthy()
   })
 })
+
+describe('planner rules', () => {
+  it('never shows Primary a task that depends on another task\'s output', async () => {
+    await makeLead()
+    const p = await makeProject('Rules')
+    const requests = mockTeam({ reply: 'ok' })
+    await askPlan(p.id, 'Write the post')
+    const system = systemOf(requests.filter(isPlanner).at(-1) ?? {})
+    expect(system).toContain("never see each other's results, so no task may depend on another task's output.")
+    // The example's tasks are independent: no task edits or reviews another's draft.
+    const example = system.slice(system.indexOf('Example:'))
+    expect(example).not.toMatch(/\b(edit|review|check)\b[^"]*\b(draft|post)\b/i)
+  })
+})

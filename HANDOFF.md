@@ -1,18 +1,16 @@
 # AgentControl — Handoff for Claude (Opus)
 
-> **Current state (October 12, 2026):** `master` includes PRs #1–#4 (CI, the
-> skills library with tools and a Notes page, 21 tools). The branch
-> `feat/skills-complete` finishes the skills section: `get_skill`,
-> `encode_text` and `diff_text` (24 tools); `read_note` paging; richer
-> `json_query`, `csv_summary`, `calculate` and `convert_units`; tools on every
-> seed skill plus `encoding-and-hashing` and `release-notes` (18 seeds) via the
-> one-shot `seed-skill-upgrade-v3`; skills that don't fit an endpoint's context
-> window are sent as summaries (`src/prompt.ts`), which fixes the fresh-install
-> Team Lead's 413 on the 8,192-token placeholder endpoint; and Skill Library
-> export/duplicate plus a prompt-size line in the agent form. Every draft on
-> `backup/skills-workflow-partial` is now ported (its `%`-as-percent change to
-> `calculate` was deliberately not), so that branch can be deleted. Reference:
-> [backend README](AgentControlBE/README.md#skills-and-tools). Verify with
+> **Current state (October 13, 2026):** `master` has the finished skills
+> section (24 tools, summaries for skills that don't fit an endpoint's context
+> window; [backend README](AgentControlBE/README.md#skills-and-tools)) and
+> Projects Part 0 (folders, teams, CRUD). Projects follows
+> [docs/PROJECTS_HANDOFF.md](docs/PROJECTS_HANDOFF.md), the owner's
+> instructions. Open: PR #7 (project chat routes), PR #8 (prompt-planner
+> review fixes) and `feat/projects-chat`, which builds on both: the project
+> chat page, Primary's team plans (`POST /api/projects/:id/team-plan` returns
+> a plan and writes nothing; `/team-plan/apply` commits the user-confirmed
+> plan, D-P1), project-scoped specialists (D-P2), and task runs whose results
+> post back to the chat. Screenshots: `docs/projects-screenshots/`. Verify with
 > `npm run typecheck && npm test && npm run build` (backend) and
 > `npm run lint && npm run typecheck && npm test && npm run build` (frontend).
 > Sections below marked historical describe the earlier PR #2 baseline.
@@ -171,7 +169,11 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 | Default endpoint placeholder (`100.79.242.24:8791`) | PR #2 |
 | Skills library: registry tools, ten AgentControl skills, tool picker, Notes page | PR #3 |
 | `get_agent`, `workspace_overview`, `process_lines`, `extract_entities`, `resolve_date`; seed upgrade v2 | PR #4 |
-| Skills section finished: 24 tools, summaries for oversized skills, tools on every seed, seed upgrade v3, export/duplicate | `feat/skills-complete` |
+| Skills section finished: 24 tools, summaries for oversized skills, tools on every seed, seed upgrade v3, export/duplicate | PR #5 |
+| Projects Part 0: folders, teams, CRUD | PR #6 |
+| Project chat routes (Part 1 backend) | PR #7 |
+| Prompt-planner review fixes | PR #8 |
+| Project chat page, Primary team plans + apply, task runs (Parts 1–3) | `feat/projects-chat` |
 
 ## Former open items (all closed)
 
@@ -209,27 +211,17 @@ GET/POST/PATCH/DELETE /api/skills(:id)        POST /api/skills/import
 
 ## Suggested next task (if you want one)
 
-The skills section is complete. The earlier follow-up list (temperature,
-endpoint delete confirmation, legacy example skills, the `xcopy` build) is done.
-What remains, roughly in order:
-
-1. **Projects** (CRUD; today only `GET /api/projects` and a hard-coded page).
-2. **Project lead and default endpoint**, moved from the agent form into the
-   backend. Open questions for the owner: can an agent be in several projects;
-   does a project lead replace the workspace Team Lead or fall back to it; does
-   an agent's endpoint follow its lead's later changes or stay as created?
-3. **Endpoint customization**: the placeholder URL as configuration, an
-   onboarding step to connect an endpoint, `timeoutMs` in the UI.
-4. **Delegation** (`ask_agent`): needs the run loop moved out of the route
-   handler first, plus depth and budget limits.
-
-Small items: FE `npm run serve` binds a machine-specific address
-(`100.110.232.85`); the Retry buttons on onboarding and the agent form do
-nothing; deleting an endpoint keeps its agents' old `modelId`; notes cannot be
-created or edited from the UI. Deliberately not built: a regex tool (a
-catastrophic pattern would block the event loop; the tool timeout cannot
-interrupt synchronous code) and a web fetch tool (SSRF against the local API
-and LAN; it needs an allowlist and a security review).
+Projects milestone follow-ups, all listed as out of scope in
+`docs/PROJECTS_HANDOFF.md`: inter-agent delegation loops (agents asking each
+other), per-project notes, folder browsing and deletion, and per-project
+budgets or schedules. Smaller items: a listing for a project's task runs (task
+results carry `runId`, but `GET /api/agents/:id/runs` serves only an agent's
+own chat), a single-project `GET /api/projects/:id` (the chat page polls the
+list), endpoint customization (the placeholder URL as configuration),
+FE `npm run serve` binding a machine-specific address, the no-op Retry buttons
+on onboarding and the agent form, and notes that cannot be created from the UI.
+Deliberately not built: a regex tool (catastrophic patterns block the event
+loop) and a web fetch tool (SSRF; needs an allowlist and a security review).
 
 Whatever you pick: run the verify block above (CI runs it too), and commit with
 a message that matches the existing `type(scope): summary` convention.

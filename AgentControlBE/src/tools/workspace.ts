@@ -271,17 +271,22 @@ function declaredToolNames(skills: readonly Skill[]): string[] {
 }
 
 /**
- * Failures among each listed agent's newest RECENT_RUNS runs. One pass over
+ * Failures among each listed agent's newest RECENT_RUNS runs in one scope
+ * (D-O10: `projectId`, or undefined for the agents' own chats). One pass over
  * the runs with a bounded insertion per agent (O(runs × 10), no full sort),
  * keyed by agent id in a Map so prototype-like ids are plain keys.
  */
-function recentFailureCounts(agents: readonly Agent[], runs: readonly AgentRun[]): Map<string, number> {
+function recentFailureCounts(
+  agents: readonly Agent[],
+  runs: readonly AgentRun[],
+  projectId: string | undefined,
+): Map<string, number> {
   const newest = new Map<string, { at: string; failed: boolean }[]>()
   for (const agent of agents) newest.set(agent.id, [])
   const scan = Math.min(runs.length, MAX_RUN_SCAN)
   for (let r = 0; r < scan; r++) {
     const run = runs[r]
-    if (!run) continue
+    if (!run || run.projectId !== projectId) continue
     const list = newest.get(str(run.agentId))
     if (!list) continue
     const at = str(run.startedAt)
@@ -356,8 +361,9 @@ export const workspaceTools: ToolEntry[] = [
       }
       const requested = readNumber(args, 'limit', { example }) ?? 5
       const limit = Math.min(Math.max(Math.floor(requested), 1), 10)
+      // D-O10: only runs of this run's scope (its project, or the agents' own chats).
       return ctx.store.runs
-        .filter((r) => r.agentId === agentId)
+        .filter((r) => r.agentId === agentId && r.projectId === ctx.projectId)
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
         .slice(0, limit)
         .map((r) => ({
@@ -439,7 +445,8 @@ export const workspaceTools: ToolEntry[] = [
       const capped: Record<string, number> = {}
       if (agents.length < store.agents.length) capped.agents = store.agents.length
       if (endpoints.length < store.endpoints.length) capped.endpoints = store.endpoints.length
-      const failures = recentFailureCounts(agents, store.runs)
+      // D-O10: failures counted in this run's scope only, like read_run_log.
+      const failures = recentFailureCounts(agents, store.runs, ctx.projectId)
 
       const fitted = fitJson({
         now: ctx.now().toISOString(),

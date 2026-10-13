@@ -9,7 +9,7 @@ import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
-import { applyTeamPlan, createTaskRunner, requestTeamPlan, retryTask } from './projects.js'
+import { applyTeamPlan, createTaskRunner, postProjectMessage, requestTeamPlan, retryTask } from './projects.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
@@ -21,7 +21,6 @@ import {
   type PromptBudget,
   type Project,
   type ProjectInput,
-  type ProjectMessage,
   type Skill,
   type SkillInput,
   type SkillTool,
@@ -393,32 +392,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
   })
 
+  // D-O11: mentions are resolved on write; a user message that tags team
+  // members (not Primary) also queues a task for each of them.
   app.post('/api/projects/:id/messages', async (request, reply) => {
     const { id } = request.params as { id: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    const raw = (request.body ?? {}) as Record<string, unknown>
-    const author = typeof raw.author === 'string' ? raw.author.trim() : ''
-    if (!author) fail(400, 'Set the author: "user" or an agent id.')
-    if (author !== 'user' && !store.agents.some((a) => a.id === author)) {
-      fail(400, `No agent with id "${author}".`)
-    }
-    const text = typeof raw.text === 'string' ? raw.text.trim() : ''
-    if (!text) fail(400, 'Message text cannot be empty.')
-    if (text.length > 20_000) fail(400, 'Message text must be 20,000 characters or fewer.')
-    const message: ProjectMessage = {
-      id: uid('msg'),
-      projectId: id,
-      author,
-      text,
-      kind: 'message',
-      createdAt: new Date().toISOString(),
-    }
-    store.projectMessages = [...store.projectMessages, message]
-    if (!store.save()) {
-      store.projectMessages = store.projectMessages.filter((m) => m.id !== message.id)
-      fail(500, 'The message could not be saved. Please retry.')
-    }
-    return reply.status(201).send(message)
+    return reply.status(201).send(postProjectMessage(store, tasks, id, request.body))
   })
 
   // D-P1: team-plan returns Primary's PLAN and writes nothing; the user

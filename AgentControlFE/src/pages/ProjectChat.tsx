@@ -1,12 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Bubble, TypingBubble } from '../components/ChatBubble'
 import ConfirmDialog from '../components/ConfirmDialog'
 import Dialog from '../components/Dialog'
+import { AgentTag, Chip, MentionProvider, MentionText } from '../components/MentionText'
 import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { ChevronLeftIcon, PlusIcon, ProjectsIcon } from '../components/icons'
 import { api, ApiError } from '../lib/api'
 import { friendlyError, turnTime } from '../lib/chat-format'
+import {
+  activeMentionQuery,
+  directTargets,
+  exactCandidate,
+  filterCandidates,
+  insertMention,
+  mentionDismissed,
+  mentionTone,
+  pickedMentionIds,
+  pickerCandidates,
+  sendLabel,
+  type MentionAgent,
+  type MentionQuery,
+} from '../lib/mentions'
 import {
   TASK_STATUS_LABELS,
   addBlock,
@@ -61,7 +76,11 @@ const TASK_PILL: Record<TaskStatus, { cls: string; dot: string }> = {
   running: { cls: ' status--active', dot: ' dot--warn dot--pulse' },
   done: { cls: ' status--done', dot: '' },
   failed: { cls: ' status--error', dot: ' dot--danger' },
+  cancelled: { cls: ' status--cancelled', dot: ' dot--idle' },
 }
+
+const NO_IDS: readonly string[] = []
+const NO_AGENTS: readonly Agent[] = []
 
 function TaskPill({ status }: { status: TaskStatus }) {
   const pill = TASK_PILL[status] ?? TASK_PILL.queued
@@ -130,10 +149,19 @@ function PlanCard({
   }
 
   // A validated plan names agents by id, or new specialists by name.
-  const assigneeLabel = (agent: string) => {
+  const assigneeLabel = (agent: string): ReactNode => {
     const source = taskSource(plan, { agent, task: '' }, ctx)
-    if (source.kind === 'create') return `${plan.create[source.index].name} (new)`
-    return names.of(source.kind === 'unknown' ? agent : source.agentId)
+    if (source.kind === 'create') {
+      const created = plan.create[source.index]
+      return (
+        <>
+          <Chip name={created.name} role={created.role} />
+          <span className="pill pill--project">new</span>
+        </>
+      )
+    }
+    if (source.kind === 'unknown') return names.byId.has(agent) ? <AgentTag id={agent} /> : agent
+    return <AgentTag id={source.agentId} />
   }
 
   const blockedNote = (reason: string | null) => reason && <span className="plan__blocked">{reason}</span>
@@ -145,7 +173,11 @@ function PlanCard({
         <span className={`pill${hasItems ? ' pill--lead' : ''}`}>{hasItems ? 'Plan · awaiting your approval' : 'Not saved yet'}</span>
       </div>
 
-      {plan.reply && <div className="plan__reply">{plan.reply}</div>}
+      {plan.reply && (
+        <div className="plan__reply">
+          <MentionText text={plan.reply} resolveAll />
+        </div>
+      )}
 
       {plan.add.length > 0 && (
         <div className="plan__section">
@@ -164,7 +196,7 @@ function PlanCard({
                 />
                 <span className="skillrow__text">
                   <span className="skillrow__name">
-                    {names.of(a.agentId)}
+                    <AgentTag id={a.agentId} />
                     {agent?.role && <span className="plan__role">{agent.role}</span>}
                   </span>
                   {a.reason && <span className="skillrow__desc">{a.reason}</span>}
@@ -194,7 +226,7 @@ function PlanCard({
                   />
                   <span className="skillrow__text">
                     <span className="skillrow__name">
-                      {c.name}
+                      <Chip name={c.name} role={c.role} />
                       {c.role && <span className="plan__role">{c.role}</span>}
                       <span className="pill pill--project">new</span>
                     </span>
@@ -231,7 +263,9 @@ function PlanCard({
                 />
                 <span className="skillrow__text">
                   <span className="skillrow__name">{assigneeLabel(t.agent)}</span>
-                  <span className="skillrow__desc plan__task">{t.task}</span>
+                  <span className="skillrow__desc plan__task">
+                    <MentionText text={t.task} resolveAll />
+                  </span>
                   {blockedNote(blocked)}
                 </span>
               </label>
@@ -279,15 +313,7 @@ function PlanCard({
 
 /* -- Task assignment row ------------------------------------------------------ */
 
-function TaskAssignment({
-  message,
-  names,
-  onRetry,
-}: {
-  message: ProjectMessage
-  names: Names
-  onRetry: () => Promise<void>
-}) {
+function TaskAssignment({ message, onRetry }: { message: ProjectMessage; onRetry: () => Promise<void> }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const status = message.taskStatus ?? 'queued'
@@ -309,13 +335,26 @@ function TaskAssignment({
     <div className={`task task--${status}`}>
       <div className="task__head">
         <span className="task__route">
-          {message.assigneeId === message.author
-            ? `${names.of(message.author)} took this task`
-            : `${names.of(message.author)} → ${names.of(message.assigneeId)}`}
+          {message.assigneeId === message.author ? (
+            <>
+              <AgentTag id={message.author} /> took this task
+            </>
+          ) : (
+            <>
+              <AgentTag id={message.author} />
+              <span className="task__arrow" aria-hidden="true">
+                →
+              </span>
+              <span className="visually-hidden"> to </span>
+              <AgentTag id={message.assigneeId} />
+            </>
+          )}
         </span>
         <TaskPill status={status} />
       </div>
-      <div className="task__body">{message.text}</div>
+      <div className="task__body">
+        <MentionText text={message.text} mentions={message.mentions} />
+      </div>
       {status === 'failed' && (
         <button type="button" className="chat__retry" onClick={() => void retry()} disabled={busy}>
           {busy ? 'Retrying…' : 'Retry'}
@@ -446,6 +485,15 @@ function ProjectChatPage({ id }: { id: string }) {
   const [syncError, setSyncError] = useState<string | null>(null)
 
   const [draft, setDraft] = useState('')
+  /** Agents tagged with the @ picker (or by typing a whole name); sent while their @Name is still in the draft. */
+  const [picked, setPicked] = useState<MentionAgent[]>([])
+  /** The "@…" at the caret while one is being typed. */
+  const [mention, setMention] = useState<MentionQuery | null>(null)
+  /** Highlighted picker option. */
+  const [optionIndex, setOptionIndex] = useState(0)
+  /** The "@…" the user closed (Esc) or already picked a name for: the picker stays shut while typing on from it. */
+  const [dismissed, setDismissed] = useState<MentionQuery | null>(null)
+  const [composerFocused, setComposerFocused] = useState(false)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   /** The prompt Primary is planning for, while POST team-plan is in flight. */
@@ -471,6 +519,9 @@ function ProjectChatPage({ id }: { id: string }) {
   const failures = useRef(0)
   const planSeq = useRef(0)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  /** Caret to restore after the picker rewrote the draft. */
+  const caretAfter = useRef<number | null>(null)
+  const pickerId = useId()
 
   useEffect(() => {
     alive.current = true
@@ -570,14 +621,30 @@ function ProjectChatPage({ id }: { id: string }) {
     }),
     [byId],
   )
-  const members = useMemo(() => memberIds(project?.teamAgentIds ?? [], primary?.id), [project, primary])
+  const teamIds = project?.teamAgentIds ?? NO_IDS
+  const members = useMemo(() => memberIds(teamIds, primary?.id), [teamIds, primary])
   const candidates = useMemo(() => addCandidates(agents ?? [], project?.teamAgentIds ?? []), [agents, project])
   const planCtx = useMemo<PlanContext>(
     () => ({ teamAgentIds: project?.teamAgentIds ?? [], primaryId: primary?.id, agents: agents ?? [] }),
     [project, primary, agents],
   )
-  const latest = useMemo(() => latestPrompt(messages ?? []), [messages])
-  const unanswered = useMemo(() => latestUnansweredPrompt(messages ?? []), [messages])
+  const latest = useMemo(() => latestPrompt(messages ?? [], primary?.id), [messages, primary])
+  const unanswered = useMemo(() => latestUnansweredPrompt(messages ?? [], primary?.id), [messages, primary])
+  /** Who the composer's @ picker offers: Primary, then the team. */
+  const taggable = useMemo<MentionAgent[]>(
+    () => pickerCandidates(agents ?? [], primary?.id, teamIds).map((a) => ({ id: a.id, name: a.name, role: a.role })),
+    [agents, primary, teamIds],
+  )
+  // Tags still in the draft (and still taggable), and who would get the message directly.
+  const draftTags = useMemo(() => {
+    const allowed = new Set(taggable.map((a) => a.id))
+    return pickedMentionIds(draft, picked.filter((a) => allowed.has(a.id)))
+  }, [draft, picked, taggable])
+  const draftTargets = useMemo(() => directTargets(draftTags, primary?.id), [draftTags, primary])
+  const options = useMemo(
+    () => (mention && !mentionDismissed(mention, dismissed) ? filterCandidates(mention.query, taggable) : []),
+    [mention, dismissed, taggable],
+  )
   const progress = useMemo(() => taskProgress(messages ?? []), [messages])
   // Where each pending plan, planning indicator or plan error shows.
   const anchors = useMemo(() => {
@@ -667,18 +734,30 @@ function ProjectChatPage({ id }: { id: string }) {
     }
   }
 
+  /**
+   * Post the draft with the agents it tags (D-O11). Tagging team members and
+   * not Primary sends it to them directly: the BE queues one task each, so
+   * the page refreshes (and polls) instead of asking Primary for a plan.
+   */
   const send = async () => {
     const text = draft.trim()
     if (!text || !primary || busy.current.sending || busy.current.planning) return
+    const allowed = new Set(taggable.map((a) => a.id))
+    const mentions = pickedMentionIds(text, picked.filter((a) => allowed.has(a.id)))
+    const direct = directTargets(mentions, primary.id).length > 0
     busy.current.sending = true
     setSending(true)
     setSendError(null)
     stick.current = true
     try {
-      const message = await api.postProjectMessage(id, { author: 'user', text })
+      const message = await api.postProjectMessage(id, { author: 'user', text, ...(mentions.length > 0 ? { mentions } : {}) })
       take({ messages: [message] })
       setDraft('')
-      void requestPlan(message.id)
+      setPicked([])
+      setMention(null)
+      setDismissed(null)
+      if (direct) void refresh()
+      else void requestPlan(message.id)
     } catch (err) {
       if (alive.current) {
         resyncOn(err)
@@ -689,6 +768,39 @@ function ProjectChatPage({ id }: { id: string }) {
       if (alive.current) setSending(false)
     }
   }
+
+  /** Follow the "@…" at the caret: open, narrow or close the picker; typing a whole name tags it. */
+  const trackMention = (text: string, caret: number) => {
+    const next = activeMentionQuery(text, caret)
+    if (mention?.start !== next?.start || mention?.query !== next?.query) setOptionIndex(0)
+    setMention(next)
+    if (dismissed && !mentionDismissed(next, dismissed)) setDismissed(null)
+    const exact = next ? exactCandidate(next.query, taggable) : null
+    if (exact) setPicked((prev) => (prev.some((a) => a.id === exact.id) ? prev : [...prev, exact]))
+  }
+
+  /** Put "@Name " in place of the "@…" being typed and tag that agent. */
+  const pickMention = (agent: MentionAgent) => {
+    const el = composerRef.current
+    if (!mention) return
+    const next = insertMention(draft, mention.start, el?.selectionStart ?? draft.length, agent.name)
+    setDraft(next.text)
+    setPicked((prev) => (prev.some((a) => a.id === agent.id) ? prev : [...prev, agent]))
+    setMention(null)
+    // Done with this "@": a longer name sharing the prefix ("@Ana " → Ana Smith) must not reopen it.
+    setDismissed({ start: mention.start, query: next.text.slice(mention.start + 1, next.caret) })
+    caretAfter.current = next.caret
+  }
+
+  // After a pick rewrote the draft, put the caret right after the inserted tag.
+  useLayoutEffect(() => {
+    const caret = caretAfter.current
+    const el = composerRef.current
+    if (caret === null || !el) return
+    caretAfter.current = null
+    el.focus()
+    el.setSelectionRange(caret, caret)
+  }, [draft])
 
   /** "Ask Primary to build a team": plan the latest prompt, or ask for one. */
   const askPrimary = () => {
@@ -810,18 +922,21 @@ function ProjectChatPage({ id }: { id: string }) {
       ) : null
 
     let body: ReactNode
-    if (m.kind === 'team-update') {
+    if (m.kind === 'team-update' || m.kind === 'progress') {
+      // Team changes and the runner's progress lines: grey system lines.
       body = (
-        <p className="chat__system" role="status">
-          {m.text}
+        <p className={`chat__system${m.kind === 'progress' ? ' chat__system--progress' : ''}`} role="status">
+          <MentionText text={m.text} mentions={m.mentions} />
         </p>
       )
     } else if (m.kind === 'task-assignment') {
-      body = <TaskAssignment message={m} names={names} onRetry={() => retryTask(m.id)} />
+      body = <TaskAssignment message={m} onRetry={() => retryTask(m.id)} />
     } else if (m.author === 'user') {
       body = (
         <Bubble kind="user">
-          <div className="bubble__body">{m.text}</div>
+          <div className="bubble__body">
+            <MentionText text={m.text} mentions={m.mentions} />
+          </div>
         </Bubble>
       )
     } else {
@@ -830,7 +945,9 @@ function ProjectChatPage({ id }: { id: string }) {
       const failed = isFailedResult(m)
       body = (
         <Bubble kind={failed ? 'error' : 'assistant'} speaker={names.of(m.author)}>
-          <div className="bubble__body">{m.text}</div>
+          <div className="bubble__body">
+            <MentionText text={m.text} mentions={m.mentions} />
+          </div>
           {result && <div className="bubble__meta">{failed ? 'Task failed' : 'Task result'}</div>}
         </Bubble>
       )
@@ -863,203 +980,266 @@ function ProjectChatPage({ id }: { id: string }) {
       ? `Working: ${describeProgress(progress)}`
       : askHint
         ? `Describe what to build or accomplish; ${primaryName} proposes a team for it.`
-        : 'Enter to send · Shift+Enter for a new line'
+        : 'Enter to send · Shift+Enter for a new line · @ to tag an agent'
+
+  // The @ picker: open while an "@…" being typed matches Primary or a team member.
+  const pickerOpen = options.length > 0 && composerFocused && Boolean(primary) && !sending
+  const activeOption = Math.min(optionIndex, Math.max(options.length - 1, 0))
+  // "Send to @Ana" when the draft tags members and not Primary, otherwise "Ask @Atlas".
+  const sendText = primary ? sendLabel(draftTargets.map((agentId) => names.of(agentId)), primaryName) : 'Send'
 
   return (
-    <main className="page page--chat">
-      <div className="page__inner">
-        <header className="chat__header">
-          <div className="chat__header__left">
-            <Link to="/projects" className="btn btn--ghost btn--icon" aria-label="Back to Projects">
-              <ChevronLeftIcon size={17} />
-            </Link>
-            {project ? (
-              <div className="chat__header__id">
-                <h1 className="chat__header__name">{project.name}</h1>
-                {project.desc && <p className="chat__header__role">{project.desc}</p>}
-                <p className="project__folder" title="Project folder">
-                  {project.folder}
-                </p>
+    <MentionProvider agents={agents ?? NO_AGENTS} primaryId={primary?.id} teamAgentIds={teamIds}>
+      <main className="page page--chat">
+        <div className="page__inner">
+          <header className="chat__header">
+            <div className="chat__header__left">
+              <Link to="/projects" className="btn btn--ghost btn--icon" aria-label="Back to Projects">
+                <ChevronLeftIcon size={17} />
+              </Link>
+              {project ? (
+                <div className="chat__header__id">
+                  <h1 className="chat__header__name">{project.name}</h1>
+                  {project.desc && <p className="chat__header__role">{project.desc}</p>}
+                  <p className="project__folder" title="Project folder">
+                    {project.folder}
+                  </p>
+                </div>
+              ) : (
+                <div className="chat__header__id project__header__skel">
+                  <Skeleton width={180} height={14} />
+                  <Skeleton width={260} height={9} />
+                </div>
+              )}
+            </div>
+          </header>
+
+          <section className="teamstrip" aria-label="Team">
+            <span className="teamstrip__label">Team</span>
+            {primary ? (
+              <span className="teamchip teamchip--lead">
+                <Link to={`/agents/${primary.id}`} className="teamchip__name">
+                  {primary.name}
+                </Link>
+                <span className="pill pill--lead">Team Lead</span>
+              </span>
+            ) : agents ? (
+              <span className="teamchip teamchip--missing">No Team Lead yet</span>
+            ) : (
+              <Skeleton width={120} height={22} />
+            )}
+            {project &&
+              members.map((memberId) => {
+                const agent = byId.get(memberId)
+                const name = names.of(memberId)
+                return (
+                  <span className="teamchip" key={memberId}>
+                    {agent ? (
+                      <Link to={`/agents/${agent.id}`} className="teamchip__name">
+                        {name}
+                      </Link>
+                    ) : (
+                      <span className="teamchip__name">{name}</span>
+                    )}
+                    {agent?.role && <span className="teamchip__role">{agent.role}</span>}
+                    {agent?.projectId === project.id && <span className="pill pill--project">project</span>}
+                    <button
+                      type="button"
+                      className="teamchip__remove"
+                      aria-label={`Remove ${name} from the team`}
+                      title="Remove from the team"
+                      onClick={() => {
+                        setRemoveError(null)
+                        setRemoveTarget(memberId)
+                      }}
+                    >
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" />
+                      </svg>
+                    </button>
+                  </span>
+                )
+              })}
+            {teamEmpty && primary && <span className="teamstrip__hint">No members yet.</span>}
+            {project && primary && (teamEmpty || latest) && (
+              <button
+                type="button"
+                className={`btn teamstrip__ask${teamEmpty ? ' btn--primary' : ' btn--ghost'}`}
+                onClick={askPrimary}
+                disabled={!canAsk}
+                title={latest ? `Ask ${primaryName} to plan your latest prompt again` : `Describe the project and ${primaryName} proposes a team`}
+              >
+                {planning !== null && <span className="spinner" aria-hidden="true" />}
+                {teamEmpty ? `Ask ${primaryName} to build a team` : `Ask ${primaryName}`}
+              </button>
+            )}
+            {project && (
+              <button type="button" className="btn btn--ghost teamstrip__add" onClick={() => setAddOpen(true)}>
+                <PlusIcon size={14} />
+                Add agent
+              </button>
+            )}
+          </section>
+
+          <section className="chat__thread" aria-label="Project conversation" ref={threadRef} onScroll={onScroll}>
+            {!messages ? (
+              <div className="chat__thread__placeholder">
+                <Skeleton height={12} width="30%" />
+                <Skeleton height={64} width="70%" />
+                <Skeleton height={64} width="55%" />
+              </div>
+            ) : messages.length === 0 ? (
+              <div className="chat__thread__empty">
+                <EmptyState
+                  icon={<ProjectsIcon size={20} />}
+                  title="Start the project"
+                  text={
+                    primary
+                      ? `Describe what you want to build or accomplish. ${primaryName} checks the team, proposes specialists if any are missing, and assigns tasks once you approve.`
+                      : 'Create the Team Lead first: it reads your prompt, assembles the team and assigns tasks.'
+                  }
+                />
               </div>
             ) : (
-              <div className="chat__header__id project__header__skel">
-                <Skeleton width={180} height={14} />
-                <Skeleton width={260} height={9} />
+              messages.flatMap(renderMessage)
+            )}
+            <div ref={endRef} />
+          </section>
+
+          <div className="chat__composer">
+            {syncError && messages && (
+              <p className="notice notice--warn" role="status">
+                Updates paused: {syncError} Retrying…
+              </p>
+            )}
+            {!primary && agents ? (
+              <p className="notice notice--info">
+                Project chat needs a Team Lead to plan the work.{' '}
+                <Link to="/agents" className="link">
+                  Set one up in onboarding
+                </Link>
+                .
+              </p>
+            ) : null}
+            <div className="chat__composer__input">
+              {pickerOpen && (
+                <div className="mentionpick" role="listbox" id={pickerId} aria-label="Tag an agent">
+                  {options.map((agent, i) => (
+                    <div
+                      key={agent.id}
+                      id={`${pickerId}-${i}`}
+                      role="option"
+                      aria-selected={i === activeOption}
+                      className={`mentionpick__opt${i === activeOption ? ' mentionpick__opt--active' : ''}`}
+                      // Keep the focus (and the caret) in the composer.
+                      onMouseDown={(e) => e.preventDefault()}
+                      onMouseEnter={() => setOptionIndex(i)}
+                      onClick={() => pickMention(agent)}
+                    >
+                      <Chip name={agent.name} tone={mentionTone(agent.id)} lead={agent.id === primary?.id} />
+                      {agent.role && <span className="mentionpick__role">{agent.role}</span>}
+                      {agent.id === primary?.id && <span className="pill pill--lead">Team Lead</span>}
+                    </div>
+                  ))}
+                  <p className="mentionpick__hint" aria-hidden="true">
+                    ↑↓ to choose · Enter to tag · Esc to close
+                  </p>
+                </div>
+              )}
+              <textarea
+                ref={composerRef}
+                className="textarea"
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value)
+                  trackMention(e.target.value, e.target.selectionStart)
+                }}
+                onSelect={(e) => trackMention(e.currentTarget.value, e.currentTarget.selectionStart)}
+                onFocus={() => setComposerFocused(true)}
+                onBlur={() => setComposerFocused(false)}
+                onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing) return
+                  if (pickerOpen && mention) {
+                    const n = options.length
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      setOptionIndex((activeOption + (e.key === 'ArrowDown' ? 1 : n - 1)) % n)
+                      return
+                    }
+                    if ((e.key === 'Enter' && !e.shiftKey) || (e.key === 'Tab' && !e.shiftKey)) {
+                      e.preventDefault()
+                      pickMention(options[activeOption])
+                      return
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      setDismissed(mention)
+                      return
+                    }
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    void send()
+                  }
+                }}
+                placeholder={primary ? `Tell ${primaryName} what to do, or @tag a teammate…` : 'Create the Team Lead first'}
+                rows={1}
+                maxLength={MESSAGE_MAX}
+                disabled={!primary || sending}
+                aria-label="Message"
+                aria-autocomplete="list"
+                aria-controls={pickerOpen ? pickerId : undefined}
+                aria-activedescendant={pickerOpen ? `${pickerId}-${activeOption}` : undefined}
+              />
+              <span className="visually-hidden" aria-live="polite">
+                {pickerOpen ? `${options.length} ${options.length === 1 ? 'agent' : 'agents'} to tag` : ''}
+              </span>
+              <div className="chat__composer__actions">
+                <button type="button" className="btn btn--primary" onClick={() => void send()} disabled={!canSend || !draft.trim()}>
+                  {(sending || planning !== null) && <span className="spinner" aria-hidden="true" />}
+                  {sending ? 'Sending…' : planning !== null ? 'Planning…' : sendText}
+                </button>
               </div>
+            </div>
+            {sendError ? (
+              <p className="field__err" role="alert">
+                {sendError}
+              </p>
+            ) : (
+              <p className="chat__composer__hint">{composerHint}</p>
             )}
           </div>
-        </header>
-
-        <section className="teamstrip" aria-label="Team">
-          <span className="teamstrip__label">Team</span>
-          {primary ? (
-            <span className="teamchip teamchip--lead">
-              <Link to={`/agents/${primary.id}`} className="teamchip__name">
-                {primary.name}
-              </Link>
-              <span className="pill pill--lead">Team Lead</span>
-            </span>
-          ) : agents ? (
-            <span className="teamchip teamchip--missing">No Team Lead yet</span>
-          ) : (
-            <Skeleton width={120} height={22} />
-          )}
-          {project &&
-            members.map((memberId) => {
-              const agent = byId.get(memberId)
-              const name = names.of(memberId)
-              return (
-                <span className="teamchip" key={memberId}>
-                  {agent ? (
-                    <Link to={`/agents/${agent.id}`} className="teamchip__name">
-                      {name}
-                    </Link>
-                  ) : (
-                    <span className="teamchip__name">{name}</span>
-                  )}
-                  {agent?.role && <span className="teamchip__role">{agent.role}</span>}
-                  {agent?.projectId === project.id && <span className="pill pill--project">project</span>}
-                  <button
-                    type="button"
-                    className="teamchip__remove"
-                    aria-label={`Remove ${name} from the team`}
-                    title="Remove from the team"
-                    onClick={() => {
-                      setRemoveError(null)
-                      setRemoveTarget(memberId)
-                    }}
-                  >
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
-                      <path d="M6 6l12 12M18 6 6 18" />
-                    </svg>
-                  </button>
-                </span>
-              )
-            })}
-          {teamEmpty && primary && <span className="teamstrip__hint">No members yet.</span>}
-          {project && primary && (teamEmpty || latest) && (
-            <button
-              type="button"
-              className={`btn teamstrip__ask${teamEmpty ? ' btn--primary' : ' btn--ghost'}`}
-              onClick={askPrimary}
-              disabled={!canAsk}
-              title={latest ? `Ask ${primaryName} to plan your latest prompt again` : `Describe the project and ${primaryName} proposes a team`}
-            >
-              {planning !== null && <span className="spinner" aria-hidden="true" />}
-              {teamEmpty ? `Ask ${primaryName} to build a team` : `Ask ${primaryName}`}
-            </button>
-          )}
-          {project && (
-            <button type="button" className="btn btn--ghost teamstrip__add" onClick={() => setAddOpen(true)}>
-              <PlusIcon size={14} />
-              Add agent
-            </button>
-          )}
-        </section>
-
-        <section className="chat__thread" aria-label="Project conversation" ref={threadRef} onScroll={onScroll}>
-          {!messages ? (
-            <div className="chat__thread__placeholder">
-              <Skeleton height={12} width="30%" />
-              <Skeleton height={64} width="70%" />
-              <Skeleton height={64} width="55%" />
-            </div>
-          ) : messages.length === 0 ? (
-            <div className="chat__thread__empty">
-              <EmptyState
-                icon={<ProjectsIcon size={20} />}
-                title="Start the project"
-                text={
-                  primary
-                    ? `Describe what you want to build or accomplish. ${primaryName} checks the team, proposes specialists if any are missing, and assigns tasks once you approve.`
-                    : 'Create the Team Lead first: it reads your prompt, assembles the team and assigns tasks.'
-                }
-              />
-            </div>
-          ) : (
-            messages.flatMap(renderMessage)
-          )}
-          <div ref={endRef} />
-        </section>
-
-        <div className="chat__composer">
-          {syncError && messages && (
-            <p className="notice notice--warn" role="status">
-              Updates paused: {syncError} Retrying…
-            </p>
-          )}
-          {!primary && agents ? (
-            <p className="notice notice--info">
-              Project chat needs a Team Lead to plan the work.{' '}
-              <Link to="/agents" className="link">
-                Set one up in onboarding
-              </Link>
-              .
-            </p>
-          ) : null}
-          <div className="chat__composer__input">
-            <textarea
-              ref={composerRef}
-              className="textarea"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void send()
-                }
-              }}
-              placeholder={primary ? `Tell ${primaryName} what to do…` : 'Create the Team Lead first'}
-              rows={1}
-              maxLength={MESSAGE_MAX}
-              disabled={!primary || sending}
-              aria-label="Message"
-            />
-            <div className="chat__composer__actions">
-              <button type="button" className="btn btn--primary" onClick={() => void send()} disabled={!canSend || !draft.trim()}>
-                {(sending || planning !== null) && <span className="spinner" aria-hidden="true" />}
-                {sending ? 'Sending…' : planning !== null ? 'Planning…' : 'Send'}
-              </button>
-            </div>
-          </div>
-          {sendError ? (
-            <p className="field__err" role="alert">
-              {sendError}
-            </p>
-          ) : (
-            <p className="chat__composer__hint">{composerHint}</p>
-          )}
         </div>
-      </div>
 
-      <AddAgentsDialog
-        open={addOpen}
-        candidates={candidates}
-        projectId={id}
-        onClose={() => setAddOpen(false)}
-        onAdd={(ids) => saveTeam({ add: ids })}
-      />
+        <AddAgentsDialog
+          open={addOpen}
+          candidates={candidates}
+          projectId={id}
+          onClose={() => setAddOpen(false)}
+          onAdd={(ids) => saveTeam({ add: ids })}
+        />
 
-      <ConfirmDialog
-        open={removeTarget !== null}
-        title={`Remove ${removeTarget ? names.of(removeTarget) : 'agent'} from the team?`}
-        subtitle="The agent stays in your library; only this project's team changes."
-        confirmLabel="Remove from team"
-        loading={removing}
-        onCancel={closeRemove}
-        onConfirm={() => void removeMember()}
-      >
-        <p className="prose">
-          {removeAgent?.projectId === id
-            ? `${removeAgent.name} was created for this project. It stays in the library, tagged with the project, and you can add it back later.`
-            : 'You can add the agent back at any time.'}
-        </p>
-        {removeError && (
-          <p className="field__err" role="alert">
-            {removeError}
+        <ConfirmDialog
+          open={removeTarget !== null}
+          title={`Remove ${removeTarget ? names.of(removeTarget) : 'agent'} from the team?`}
+          subtitle="The agent stays in your library; only this project's team changes."
+          confirmLabel="Remove from team"
+          loading={removing}
+          onCancel={closeRemove}
+          onConfirm={() => void removeMember()}
+        >
+          <p className="prose">
+            {removeAgent?.projectId === id
+              ? `${removeAgent.name} was created for this project. It stays in the library, tagged with the project, and you can add it back later.`
+              : 'You can add the agent back at any time.'}
           </p>
-        )}
-      </ConfirmDialog>
-    </main>
+          {removeError && (
+            <p className="field__err" role="alert">
+              {removeError}
+            </p>
+          )}
+        </ConfirmDialog>
+      </main>
+    </MentionProvider>
   )
 }

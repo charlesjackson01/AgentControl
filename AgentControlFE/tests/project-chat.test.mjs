@@ -10,6 +10,7 @@ import {
   createBlock,
   describeProgress,
   initialSelection,
+  isDirectMessage,
   isFailedResult,
   isTaskBlocked,
   isTaskResult,
@@ -37,25 +38,29 @@ import {
 } from '../src/lib/project-chat.ts'
 
 // Contract (src/lib/types.ts): message kinds are 'message' | 'team-update' |
-// 'task-assignment'. POST team-plan returns {plan, replyTo?} and writes
-// nothing; POST team-plan/apply takes {plan, replyTo?, add?, create?, tasks?}
-// and writes Primary's reply, the team update and the tasks (all with replyTo);
-// a task's result is the assignee's 'message' with taskId and taskStatus.
+// 'task-assignment' | 'progress'. POST team-plan returns {plan, replyTo?} and
+// writes nothing; POST team-plan/apply takes {plan, replyTo?, add?, create?,
+// tasks?} and writes Primary's reply, the team update and the tasks (all with
+// replyTo); a task's result is the assignee's 'message' with taskId and
+// taskStatus. Task statuses: queued, running, done, failed, cancelled. A user
+// message whose `mentions` tag team members and not Primary goes to them as
+// tasks (D-O11), not to Primary's plan.
 
 const msg = (id, createdAt, overrides = {}) => ({ id, projectId: 'p1', author: 'user', text: id, kind: 'message', createdAt, ...overrides })
 const T = (n) => `2026-10-12T10:00:0${n}.000Z`
 
 describe('thread order and freshness', () => {
-  it('reads oldest first; within one timestamp reply → team update → tasks → results', () => {
+  it('reads oldest first; within one timestamp reply → team update → tasks → results → progress', () => {
     const list = [
       msg('task-b', T(2), { kind: 'task-assignment' }),
+      msg('progress', T(2), { kind: 'progress', author: 'lead' }),
       msg('result', T(2), { author: 'a1', taskId: 'task-a', taskStatus: 'done' }),
       msg('update', T(2), { kind: 'team-update', author: 'lead' }),
       msg('prompt', T(0)),
       msg('task-a', T(2), { kind: 'task-assignment' }),
       msg('reply', T(2), { author: 'lead', replyTo: 'prompt' }),
     ]
-    assert.deepEqual(sortMessages(list).map((m) => m.id), ['prompt', 'reply', 'update', 'task-b', 'task-a', 'result'])
+    assert.deepEqual(sortMessages(list).map((m) => m.id), ['prompt', 'reply', 'update', 'task-b', 'task-a', 'result', 'progress'])
     // The input is not mutated.
     assert.equal(list[0].id, 'task-b')
   })
@@ -107,6 +112,27 @@ describe('prompts and where pending plans show', () => {
     }
     // An answered older prompt does not hide the newer unanswered one.
     assert.equal(latestUnansweredPrompt([prompt1, msg('r', T(1), { author: 'lead', replyTo: 'm1' }), prompt2]), prompt2)
+  })
+
+  it('does not count a message sent straight to tagged team members as a prompt for Primary (D-O11)', () => {
+    const prompt = msg('m1', T(0))
+    const direct = msg('m2', T(1), { mentions: ['ana', 'ben'] })
+    const askLead = msg('m3', T(2), { mentions: ['ana', 'lead'] })
+    assert.equal(isDirectMessage(direct, 'lead'), true)
+    assert.equal(isDirectMessage(askLead, 'lead'), false)
+    assert.equal(isDirectMessage(prompt, 'lead'), false)
+    assert.equal(isDirectMessage(msg('m4', T(0), { mentions: [] }), 'lead'), false)
+    // Only user messages: an agent's tags are hand-off requests, not direct messages.
+    assert.equal(isDirectMessage(msg('r', T(1), { author: 'ana', mentions: ['ben'] }), 'lead'), false)
+    // With no Team Lead every tag is a member.
+    assert.equal(isDirectMessage(direct, undefined), true)
+
+    assert.equal(latestPrompt([prompt, direct], 'lead'), prompt)
+    assert.equal(latestUnansweredPrompt([prompt, direct], 'lead'), prompt)
+    assert.equal(latestPrompt([direct], 'lead'), null)
+    assert.equal(latestUnansweredPrompt([direct], 'lead'), null)
+    // Tagging Primary (alone or with members) is a prompt as before.
+    assert.equal(latestUnansweredPrompt([prompt, direct, askLead], 'lead'), askLead)
   })
 
   it('anchors a plan after the last message that belongs to its prompt', () => {
@@ -178,14 +204,20 @@ describe('polling, progress and resync', () => {
       msg('r1', T(2), { author: 'a1', taskId: 't1', taskStatus: 'done' }),
     ]
     const progress = taskProgress(tasks)
-    assert.deepEqual(progress, { queued: 1, running: 1, done: 1, failed: 0, total: 3 })
+    assert.deepEqual(progress, { queued: 1, running: 1, done: 1, failed: 0, cancelled: 0, total: 3 })
     assert.equal(describeProgress(progress), '3 tasks · 1 running · 1 queued · 1 done')
     assert.equal(describeProgress(taskProgress([task('failed')])), '1 task · 1 failed')
+    assert.equal(describeProgress(taskProgress([task('failed'), task('cancelled')])), '2 tasks · 1 failed · 1 cancelled')
     assert.equal(describeProgress(taskProgress([])), '')
   })
 
+  it('does not poll for cancelled tasks', () => {
+    assert.equal(needsPolling([task('cancelled'), task('done')], false), false)
+  })
+
   it('labels every task status', () => {
-    assert.deepEqual(Object.keys(TASK_STATUS_LABELS), ['queued', 'running', 'done', 'failed'])
+    assert.deepEqual(Object.keys(TASK_STATUS_LABELS), ['queued', 'running', 'done', 'failed', 'cancelled'])
+    assert.equal(TASK_STATUS_LABELS.cancelled, 'Cancelled')
     for (const label of Object.values(TASK_STATUS_LABELS)) assert.ok(label)
   })
 })

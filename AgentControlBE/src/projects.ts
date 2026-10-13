@@ -16,8 +16,15 @@
  * per-project runner executes the tasks one at a time through executeRun and
  * posts each output back as a 'message' from the assignee (taskId, runId,
  * taskStatus).
+ *
+ * Every message written here carries `mentions` (D-O11): the agents its text
+ * tags as @Name, resolved by src/mentions.ts against Primary, the team, then
+ * the library. Text the BE writes names agents as @Name. A user message that
+ * tags team members (and not Primary) is the user's own delegation: it
+ * queues one task per tagged member with no plan (postProjectMessage).
  */
 import { fail, uid } from './http.js'
+import { resolveMentions, tag, type MentionCandidate } from './mentions.js'
 import { estimateTokens } from './prompt.js'
 import { executeRun } from './runs.js'
 import type {
@@ -52,6 +59,9 @@ const TASK_MAX = 2_000
 
 /** A prompt sent without a chat message: the same cap as a chat message. */
 const PROMPT_MAX = 20_000
+/** POST /api/projects/:id/messages: text cap, and ids one `mentions` list may hold. */
+const MESSAGE_MAX = 20_000
+const MENTION_PICKS_MAX = 100
 /** Entries one apply selection list may hold. */
 const SELECTION_MAX = 100
 
@@ -160,6 +170,32 @@ function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
+/** How the BE names an agent in chat text (D-O11): "@Ana (Writer)", or "@Ana" without a role. */
+const tagWithRole = (a: Agent): string => (a.role ? `${tag(a.name)} (${a.role})` : tag(a.name))
+
+/**
+ * Who a project message can tag (D-O11), in preference order for names
+ * that collide: Primary, then the team (in team order), then the rest of
+ * the library.
+ */
+function mentionCandidates(agents: readonly Agent[], teamIds: readonly string[]): MentionCandidate[] {
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  const ordered = new Map<string, Agent>()
+  const lead = agents.find((a) => a.isPrimary)
+  if (lead) ordered.set(lead.id, lead)
+  for (const id of teamIds) {
+    const agent = byId.get(id)
+    if (agent && !ordered.has(id)) ordered.set(id, agent)
+  }
+  for (const agent of agents) if (!ordered.has(agent.id)) ordered.set(agent.id, agent)
+  return [...ordered.values()].map((a) => ({ id: a.id, name: a.name }))
+}
+
+/** The agents a message the BE writes tags, against the store and the project's team as they are. */
+function tagsIn(store: WorkspaceStore, project: Project, text: string): string[] {
+  return resolveMentions(text, mentionCandidates(store.agents, project.teamAgentIds)).ids
+}
+
 // ---------------------------------------------------------------------------
 // Planner prompt
 
@@ -175,10 +211,11 @@ const plannerRules = (SEES: string): string => `The user's prompt is at the end 
 
 Rules:
 - Answer with ONE JSON object and nothing else: no prose, no markdown.
-- "reply": what you tell the user, in a few plain sentences.
+- "reply": what you tell the user, in a few plain sentences. Name agents as @Name, for example "@Ana drafts the post".
 - "add": library agents to bring onto the team, by "agentId" from "Library agents". At most ${MAX_ADD}. Never yourself or current team members.
 - "create": new specialists, only when no library agent fits. At most ${MAX_CREATE}. Each needs a new, unique "name" (at most ${NAME_MAX} characters), a short "role", "instructions" written to that agent, "skillIds" from "Library skills" (may be empty) and a "reason".
 - "tasks": at most ${MAX_TASKS}. "agent" is a team member's id, an "agentId" from your "add", the "name" of one of your "create" entries, or your own id. Make each task stand on its own: the assignee sees only ${SEES}. Tasks run one at a time and never see each other's results, so no task may depend on another task's output.
+- Agents tag each other as @Name in their results: tagging a teammate asks to hand work on to them, and tagging you is a question for you.
 - Use only ids from the lists you were given. Never invent ids.
 - The user reviews your plan first: nobody joins, is created or starts a task until they approve it.
 
@@ -186,7 +223,7 @@ Shape:
 {"reply":"...","add":[{"agentId":"...","reason":"..."}],"create":[{"name":"...","role":"...","instructions":"...","skillIds":["..."],"reason":"..."}],"tasks":[{"agent":"...","task":"..."}]}
 
 Example:
-{"reply":"Ana can draft the post. No one owns our writing style, so I suggest a Copy Editor to write a short style guide.","add":[],"create":[{"name":"Copy Editor","role":"Editor","instructions":"You write and enforce the team's writing style: clear, plain, consistent terms.","skillIds":["technical-writing"],"reason":"The team has no editor."}],"tasks":[{"agent":"agt_1a2b3c4d","task":"Draft a 500-word launch post for the new release, for developers who use the API."},{"agent":"Copy Editor","task":"Write a one-page style guide for launch posts: tone, length, and terms to avoid."}]}`
+{"reply":"@Ana can draft the post. No one owns our writing style, so I suggest a @Copy Editor to write a short style guide.","add":[],"create":[{"name":"Copy Editor","role":"Editor","instructions":"You write and enforce the team's writing style: clear, plain, consistent terms.","skillIds":["technical-writing"],"reason":"The team has no editor."}],"tasks":[{"agent":"agt_1a2b3c4d","task":"Draft a 500-word launch post for the new release, for developers who use the API."},{"agent":"Copy Editor","task":"Write a one-page style guide for launch posts: tone, length, and terms to avoid."}]}`
 
 function plannerSystem(lead: Agent, promptInChat: boolean): string {
   const own = clipText(lead.instructions.trim(), LEAD_INSTRUCTIONS_MAX)
@@ -455,8 +492,8 @@ export function validateTeamPlan(
     }
     const agent = findAgent(store.agents, ref)
     if (!agent) warn(`Skipped adding ${quote(ref)}: there is no such agent in the library.`)
-    else if (isLead(agent)) warn(`Skipped adding ${agent.name}: they already lead the team.`)
-    else if (onTeam.has(agent.id)) warn(`Skipped adding ${agent.name}: already on the team.`)
+    else if (isLead(agent)) warn(`Skipped adding ${tag(agent.name)}: they already lead the team.`)
+    else if (onTeam.has(agent.id)) warn(`Skipped adding ${tag(agent.name)}: already on the team.`)
     else if (add.some((a) => a.agentId === agent.id)) continue
     else if (add.length >= MAX_ADD) addExtra += 1
     else add.push({ agentId: agent.id, reason: clipText(str(isRecord(entry) ? entry.reason : '').trim(), REASON_MAX) })
@@ -550,7 +587,7 @@ export function validateTeamPlan(
       const known = ref ? findAgent(store.agents, ref) : undefined
       warn(
         ref
-          ? `Skipped the task ${quote(text)}: ${known ? known.name : quote(ref)} is not on the team, in this plan, or the team lead.`
+          ? `Skipped the task ${quote(text)}: ${known ? tag(known.name) : quote(ref)} is not on the team, in this plan, or the team lead.`
           : `Skipped the task ${quote(text)}: it named no agent.`,
       )
       continue
@@ -749,23 +786,34 @@ export function applyTeamPlan(store: WorkspaceStore, runner: TaskRunner, project
 
   const teamChanged = joined.length > 0 || created.length > 0
   const lines: string[] = []
-  if (joined.length > 0) lines.push(`Added ${joined.map((a) => a.name).join(', ')} to the team.`)
-  if (created.length > 0) {
-    lines.push(`Created ${created.map((a) => (a.role ? `${a.name} (${a.role})` : a.name)).join(', ')} for this project.`)
-  }
+  if (joined.length > 0) lines.push(`Added ${joined.map(tagWithRole).join(', ')}.`)
+  if (created.length > 0) lines.push(`Created ${created.map(tagWithRole).join(', ')} for this project.`)
   if (!teamChanged) lines.push('No team changes.')
   lines.push(...plan.warnings)
   if (tasks.length > 0) lines.push(`Assigned ${count(tasks.length, 'task', 'tasks')}.`)
 
+  // D-O11: tags resolve against the library and the team as this apply leaves them.
+  const candidates = mentionCandidates([...created, ...store.agents], teamAgentIds)
+  const mentions = (text: string): string[] => resolveMentions(text, candidates).ids
   const clock = messageClock(store, projectId)
   const thread = replyTo ? { replyTo } : {}
   const messages: ProjectMessage[] = []
   if (plan.reply) {
-    messages.push({ id: uid('msg'), projectId, author: lead.id, text: plan.reply, kind: 'message', createdAt: clock(), ...thread })
+    messages.push({
+      id: uid('msg'),
+      projectId,
+      author: lead.id,
+      text: plan.reply,
+      kind: 'message',
+      createdAt: clock(),
+      ...thread,
+      mentions: mentions(plan.reply),
+    })
   }
   // The team update says who joined, and why anything the user accepted was dropped.
   if (teamChanged || plan.warnings.length > 0) {
-    messages.push({ id: uid('msg'), projectId, author: lead.id, text: lines.join(' '), kind: 'team-update', createdAt: clock(), ...thread })
+    const text = lines.join(' ')
+    messages.push({ id: uid('msg'), projectId, author: lead.id, text, kind: 'team-update', createdAt: clock(), ...thread, mentions: mentions(text) })
   }
   for (const t of tasks) {
     messages.push({
@@ -778,6 +826,7 @@ export function applyTeamPlan(store: WorkspaceStore, runner: TaskRunner, project
       ...thread,
       assigneeId: t.assigneeId,
       taskStatus: 'queued',
+      mentions: mentions(t.task),
     })
   }
   if (messages.length === 0) return { project, messages }
@@ -815,6 +864,81 @@ export function retryTask(store: WorkspaceStore, runner: TaskRunner, projectId: 
   }
   runner.kick(projectId)
   return { project, messages: [queued] }
+}
+
+const MENTIONS_USAGE = `"mentions" must be a list of at most ${MENTION_PICKS_MAX} agent ids: Primary or members of this project's team.`
+
+/**
+ * The agents a user message tags (D-O11): the ids the user picked with @ in
+ * the composer, each Primary or a team member (else 400), kept only where
+ * the text really tags them as @Name, in order of first tag.
+ */
+function userMentions(store: WorkspaceStore, project: Project, text: string, raw: unknown): string[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw) || raw.length > MENTION_PICKS_MAX) fail(400, MENTIONS_USAGE)
+  const leadId = store.agents.find((a) => a.isPrimary)?.id
+  const picked = new Set<string>()
+  for (const id of raw) {
+    if (typeof id !== 'string' || (id !== leadId && !project.teamAgentIds.includes(id))) {
+      fail(400, `"mentions" lists ${String(JSON.stringify(id)).slice(0, 100)}, which is not Primary or a member of this project's team.`)
+    }
+    picked.add(id)
+  }
+  // Only the picks can match, Primary first and then in team order.
+  const candidates = mentionCandidates(store.agents, project.teamAgentIds).filter((c) => picked.has(c.id))
+  return resolveMentions(text, candidates).ids
+}
+
+/**
+ * POST /api/projects/:id/messages (body: ProjectMessageInput). Appends a
+ * 'message' and returns it; its `mentions` are the user's picks that the
+ * text tags, or, for an agent's message, the tags parsed from the text.
+ * A user message that tags team members and not Primary is the user's own
+ * delegation (D-O11, no plan to confirm): the same save also queues one
+ * task-assignment per tagged member (author 'user', the message as the task,
+ * replyTo the message, mentions [assignee]) and the runner starts. Tagging
+ * Primary, with or without members, or no one queues nothing: the client
+ * asks Primary for a plan as before.
+ */
+export function postProjectMessage(store: WorkspaceStore, runner: TaskRunner, projectId: string, body: unknown): ProjectMessage {
+  const project = projectOrFail(store, projectId)
+  const raw: Record<string, unknown> = isRecord(body) ? body : {}
+  const author = typeof raw.author === 'string' ? raw.author.trim() : ''
+  if (!author) fail(400, 'Set the author: "user" or an agent id.')
+  if (author !== 'user' && !store.agents.some((a) => a.id === author)) {
+    fail(400, `No agent with id "${author}".`)
+  }
+  const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+  if (!text) fail(400, 'Message text cannot be empty.')
+  if (text.length > MESSAGE_MAX) fail(400, 'Message text must be 20,000 characters or fewer.')
+  const mentions = author === 'user' ? userMentions(store, project, text, raw.mentions) : tagsIn(store, project, text)
+
+  const clock = messageClock(store, projectId)
+  const message: ProjectMessage = { id: uid('msg'), projectId, author, text, kind: 'message', createdAt: clock(), mentions }
+  const leadId = store.agents.find((a) => a.isPrimary)?.id
+  const delegated = author === 'user' && !(leadId !== undefined && mentions.includes(leadId))
+  const tasks: ProjectMessage[] = (delegated ? mentions.filter((id) => project.teamAgentIds.includes(id)) : []).map(
+    (assigneeId) => ({
+      id: uid('msg'),
+      projectId,
+      author: 'user',
+      text,
+      kind: 'task-assignment',
+      createdAt: clock(),
+      replyTo: message.id,
+      assigneeId,
+      taskStatus: 'queued',
+      mentions: [assigneeId],
+    }),
+  )
+  const previous = store.projectMessages
+  store.projectMessages = [...store.projectMessages, message, ...tasks]
+  if (!store.save()) {
+    store.projectMessages = previous
+    fail(500, 'The message could not be saved. Please retry.')
+  }
+  if (tasks.length > 0) runner.kick(projectId)
+  return message
 }
 
 // ---------------------------------------------------------------------------
@@ -859,9 +983,32 @@ function nextQueuedTask(store: WorkspaceStore, projectId: string): ProjectMessag
   return next
 }
 
-/** What the assignee is asked: the project, the user's prompt (replyTo), the task, the team. */
+/**
+ * The tags an assignee can use (D-O11): the lead, for questions, and its
+ * teammates, for hand-offs, each as the exact @Name with a role.
+ */
+function taskTags(lead: Agent | undefined, assignee: Agent, teammates: readonly Agent[]): string {
+  const asksLead = lead !== undefined && lead.id !== assignee.id
+  const tags = [
+    ...(asksLead ? [`- ${tag(lead.name)} (team lead)`] : []),
+    ...teammates.filter((a) => a.id !== lead?.id).map((a) => `- ${tagWithRole(a)}`),
+  ]
+  if (tags.length === 0) return ''
+  const how = asksLead
+    ? `Address teammates and the team lead as @Name. Tag a teammate to hand your work on to them; tag ${tag(lead.name)} with a question you need answered.`
+    : 'Address teammates as @Name. Tag a teammate to hand your work on to them.'
+  return `${how} Tags you can use:\n${tags.join('\n')}`
+}
+
+/**
+ * What the assignee is asked: the project, the user's prompt (replyTo), the
+ * task, the team and the tags it can use. A task the user assigned by tagging
+ * the assignee (author 'user') is the user's message itself, so it is not
+ * quoted twice.
+ */
 function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMessage, assignee: Agent): string {
-  const prompt = task.replyTo ? findMessage(store, project.id, task.replyTo) : undefined
+  const fromUser = task.author === 'user'
+  const prompt = task.replyTo && !fromUser ? findMessage(store, project.id, task.replyTo) : undefined
   const lead = store.agents.find((a) => a.id === task.author) ?? store.agents.find((a) => a.isPrimary)
   const teammates = teamMembers(store, project)
     .filter((a) => a.id !== assignee.id)
@@ -870,12 +1017,15 @@ function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMe
   return [
     `Project: ${project.name}${desc ? `\n${desc}` : ''}`,
     prompt ? `The user asked:\n${clipText(prompt.text.trim(), TASK_PROMPT_MAX)}` : '',
-    lead && lead.id === assignee.id
-      ? `As the team lead, you took this task:\n${task.text}`
-      : `${lead?.name ?? 'The team lead'} assigned you this task:\n${task.text}`,
+    fromUser
+      ? `The user assigned you this task:\n${task.text}`
+      : lead && lead.id === assignee.id
+        ? `As the team lead, you took this task:\n${task.text}`
+        : `${lead?.name ?? 'The team lead'} assigned you this task:\n${task.text}`,
     teammates.length > 0
       ? `Your teammates:\n${teammates.map((a) => `- ${a.name}${a.role ? ` (${a.role})` : ''}`).join('\n')}`
       : '',
+    taskTags(lead, assignee, teammates),
     'Reply with your result for the team.',
   ]
     .filter(Boolean)
@@ -899,18 +1049,21 @@ export function failInterruptedTasks(store: WorkspaceStore, busy: (projectId: st
   const now = new Date().toISOString()
   const failedIds = new Set(stale.map((m) => m.id))
   const clocks = new Map<string, () => string>()
+  const text = 'Could not finish: interrupted by a restart. Retry the task to run it again.'
   const results: ProjectMessage[] = stale.map((m) => {
     const clock = clocks.get(m.projectId) ?? messageClock(store, m.projectId)
     clocks.set(m.projectId, clock)
+    const project = store.projects.find((p) => p.id === m.projectId)
     return {
       id: uid('msg'),
       projectId: m.projectId,
       author: m.assigneeId ?? m.author,
-      text: 'Could not finish: interrupted by a restart. Retry the task to run it again.',
+      text,
       kind: 'message',
       createdAt: clock(),
       taskId: m.id,
       taskStatus: 'failed',
+      mentions: project ? tagsIn(store, project, text) : [],
     }
   })
   store.projectMessages = [
@@ -964,23 +1117,28 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
     // The project (and its chat) may have been deleted while the run was in
     // flight: then its run goes too, like the project's other runs.
     const current = findMessage(store, projectId, taskId)
-    if (!current || !store.projects.some((p) => p.id === projectId)) {
-      if (runId && !store.projects.some((p) => p.id === projectId)) {
+    const live = store.projects.find((p) => p.id === projectId)
+    if (!current || !live) {
+      if (runId && !live) {
         store.runs = store.runs.filter((r) => r.id !== runId)
         store.save()
       }
       return
     }
+    const resultText = clipText(text, RESULT_TEXT_MAX)
     const result: ProjectMessage = {
       id: uid('msg'),
       projectId,
       author: task.assigneeId ?? task.author,
-      text: clipText(text, RESULT_TEXT_MAX),
+      text: resultText,
       kind: 'message',
       createdAt: messageClock(store, projectId)(),
       taskId,
       taskStatus: ok ? 'done' : 'failed',
       ...(runId ? { runId } : {}),
+      // D-O11: who the result tags (a teammate for a hand-off, the lead with a
+      // question). Tags in <think> reasoning are not addressed to anyone.
+      mentions: tagsIn(store, live, resultText.replace(/<think>[\s\S]*?<\/think>/gi, '')),
     }
     store.projectMessages = [
       ...store.projectMessages.map((m) =>

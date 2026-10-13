@@ -14,6 +14,12 @@ export interface ToolContext {
   agentId: string
   /** Id the run will be saved under (notes record it). */
   runId: string
+  /**
+   * D-O10: the project of a project task run; unset for an agent's own chat.
+   * Tools that read runs see only runs with this same projectId (undefined
+   * matching undefined), the rule executeRun's history uses.
+   */
+  projectId?: string
   /** This run's user message; `"@input"` content refs resolve to it. */
   input: string
   /** Registry tool names offered in this run; every other name is refused. */

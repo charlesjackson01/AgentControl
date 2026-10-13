@@ -151,6 +151,8 @@ export async function executeRun(
     store,
     agentId: agent.id,
     runId,
+    // D-O10: tools that read runs stay in this run's scope (this project, or the agent's own chat).
+    ...(projectId !== undefined ? { projectId } : {}),
     input,
     allowed: new Set(toolDeclarations.map((t) => t.name)),
     now: () => new Date(),

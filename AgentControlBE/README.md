@@ -71,7 +71,12 @@ shape of the store.
   runs are kept apart: they never show in or count against the agent's chat (50
   kept per agent per project), and clearing the chat leaves them.
 - Projects: `GET/POST /api/projects`, `PATCH/DELETE /api/projects/:id`,
-  `GET/POST /api/projects/:id/messages`. `POST /api/projects/:id/team-plan`
+  `GET/POST /api/projects/:id/messages`. `POST` takes `{ author, text, mentions? }`;
+  every message carries `mentions`, the agent ids its text tags as `@Name`
+  (D-O11): a user's picks (Primary or team members, else 400) that the text
+  tags, or the tags parsed from an agent's text. A user message that tags team
+  members and not Primary also queues one task per tagged member and runs them.
+  `POST /api/projects/:id/team-plan`
   `{ messageId } | { prompt }` asks the Team Lead for a plan and returns
   `{ plan, replyTo? }` without writing anything; `POST /api/projects/:id/team-plan/apply`
   `{ plan, replyTo?, add?, create?, tasks? }` validates the plan again and commits

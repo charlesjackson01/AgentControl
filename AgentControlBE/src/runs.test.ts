@@ -216,3 +216,74 @@ describe('executeRun', () => {
     }
   })
 })
+
+describe('read_run_log scope (D-O10)', () => {
+  type ToolRequest = { messages?: { role: string; content: string }[]; tools?: unknown }
+
+  /**
+   * Upstream for tool runs: a call that offers tools asks for read_run_log on
+   * `agentId`; the follow-up answers with the tool result it was sent. Calls
+   * without tools echo, like mockEcho.
+   */
+  function mockReadLog(agentId: string): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: { body?: string }) => {
+        const req = JSON.parse(init?.body ?? '{}') as ToolRequest
+        const last = req.messages?.[req.messages.length - 1]
+        const message =
+          last?.role === 'tool'
+            ? { role: 'assistant', content: `seen:${last.content}` }
+            : req.tools
+              ? {
+                  role: 'assistant',
+                  content: '',
+                  tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'read_run_log', arguments: JSON.stringify({ agentId, limit: 10 }) } }],
+                }
+              : { role: 'assistant', content: `out:${last?.content ?? ''}` }
+        return { ok: true, status: 200, json: async () => ({ choices: [{ index: 0, message }] }) }
+      }),
+    )
+  }
+
+  it('a project task run reads only its project, and a chat run only chats', async () => {
+    mockEcho()
+    const writer = await makeAgent('Writer')
+    await runAgent(store, writer, 'chat secret')
+    await runAgent(store, writer, 'plan for A', { projectId: 'proj_a' })
+    await runAgent(store, writer, 'plan for B', { projectId: 'proj_b' })
+
+    const skill = await app.inject({
+      method: 'POST',
+      url: '/api/skills',
+      payload: { name: 'Run log', content: 'Read run logs when asked.', tools: [{ name: 'read_run_log', description: 'Built-in read_run_log' }] },
+      headers: { 'content-type': 'application/json' },
+    })
+    expect(skill.statusCode).toBe(201)
+    const reader = await makeAgent('Reader')
+    reader.skillIds = [(skill.json() as { id: string }).id]
+
+    mockReadLog(writer.id)
+    const seen = async (projectId?: string): Promise<string> => {
+      const run = await runAgent(store, reader, 'what did Writer do?', projectId ? { projectId } : {})
+      expect(run.toolCalls?.[0]).toMatchObject({ name: 'read_run_log', ok: true })
+      return run.output
+    }
+    const inA = await seen('proj_a')
+    expect(inA).toContain('plan for A')
+    expect(inA).not.toContain('plan for B')
+    expect(inA).not.toContain('chat secret')
+
+    const inB = await seen('proj_b')
+    expect(inB).toContain('plan for B')
+    expect(inB).not.toContain('plan for A')
+    expect(inB).not.toContain('chat secret')
+
+    const inChat = await seen()
+    expect(inChat).toContain('chat secret')
+    expect(inChat).not.toContain('plan for')
+
+    // A project with no runs of Writer reads nothing at all.
+    expect(await seen('proj_c')).toBe('seen:[]')
+  })
+})

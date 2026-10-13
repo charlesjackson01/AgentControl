@@ -430,8 +430,8 @@ describe('POST /api/projects/:id/team-plan', () => {
     const warnings = plan.warnings.join('\n')
     for (const pattern of [
       /"agt_ghost": there is no such agent/,
-      /Skipped adding Lead: they already lead the team/,
-      /Skipped adding Ana: already on the team/,
+      /Skipped adding @Lead: they already lead the team/,
+      /Skipped adding @Ana: already on the team/,
       /Skipped creating "ana": an agent with that name already exists/,
       new RegExp(`Skipped creating "${ben.id.toUpperCase()}": it is an existing agent's id`),
       /Dropped unknown skill "made-up" from "Researcher"/,
@@ -772,9 +772,9 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     expect(update).toMatchObject({ kind: 'team-update', author: lead.id, replyTo: prompt.id })
     // Tasks for agents the user did not accept are dropped, and the update says why.
     expect(update?.text).toBe(
-      'Created Copy Editor (Editor) for this project. ' +
+      'Created @Copy Editor (Editor) for this project. ' +
         'Skipped the task "Pick keywords": "SEO Expert" is not on the team, in this plan, or the team lead. ' +
-        'Skipped the task "Review the post": Ben is not on the team, in this plan, or the team lead. ' +
+        'Skipped the task "Review the post": @Ben is not on the team, in this plan, or the team lead. ' +
         'Assigned 2 tasks.',
     )
     expect(assignments.map((m) => [m.kind, m.assigneeId, m.text, m.taskStatus, m.author, m.replyTo])).toEqual([
@@ -822,7 +822,7 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     const writer = store.agents.find((a) => a.name === 'Writer') as Agent
     expect(body.project.teamAgentIds).toEqual([ben.id, writer.id])
     expect(body.messages.map((m) => m.kind)).toEqual(['message', 'team-update', 'task-assignment', 'task-assignment', 'task-assignment'])
-    expect(body.messages[1]?.text).toBe('Added Ben to the team. Created Writer (Writer) for this project. Assigned 3 tasks.')
+    expect(body.messages[1]?.text).toBe('Added @Ben (Reviewer). Created @Writer (Writer) for this project. Assigned 3 tasks.')
     expect(body.messages.slice(2).map((m) => m.assigneeId)).toEqual([writer.id, ben.id, lead.id])
     await whenProjectIdle(store, p.id)
     const results = (await thread(p.id)).filter((m) => m.taskId)
@@ -892,10 +892,10 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     expect(reply).toMatchObject({ kind: 'message', author: lead.id, text: 'Forged reply.', replyTo: prompt.id })
     expect(update).toMatchObject({ kind: 'team-update', author: lead.id, replyTo: prompt.id })
     for (const pattern of [
-      /^Added Ben to the team\. Created Mole \(Spy\), Extra 0 \(x\)/,
+      /^Added @Ben\. Created @Mole \(Spy\), @Extra 0 \(x\)/,
       /"agt_ghost": there is no such agent/,
-      /Skipped adding Lead: they already lead the team/,
-      /Skipped adding Ana: already on the team/,
+      /Skipped adding @Lead: they already lead the team/,
+      /Skipped adding @Ana: already on the team/,
       /Dropped unknown skill "made-up" from "Mole"/,
       /Kept the first 5 new specialists; dropped 55 more\./,
       /Skipped the task "Haunt": "agt_ghost" is not on the team/,
@@ -943,7 +943,7 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     // No reply: no message from Primary. The update notes only what the user accepted and lost.
     expect(body.messages.map((m) => m.kind)).toEqual(['team-update', 'task-assignment'])
     expect(body.messages[0]?.text).toBe(
-      'Created Valid (Checker) for this project. Skipped a new specialist with no name. ' +
+      'Created @Valid (Checker) for this project. Skipped a new specialist with no name. ' +
         'Skipped the task "Never": "Unticked" is not on the team, in this plan, or the team lead. ' +
         'Assigned 1 task.',
     )
@@ -1006,7 +1006,7 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     expect(body.project.teamAgentIds).toEqual([ben.id])
     expect(body.messages.map((m) => m.kind)).toEqual(['message', 'team-update'])
     expect(body.messages[1]?.text).toBe(
-      'Added Ben to the team. Skipped the task "Analyze": analyst is not on the team, in this plan, or the team lead.',
+      'Added @Ben. Skipped the task "Analyze": @analyst is not on the team, in this plan, or the team lead.',
     )
     await whenProjectIdle(store, p.id)
 
@@ -1502,5 +1502,322 @@ describe('planner rules', () => {
     // The example's tasks are independent: no task edits or reviews another's draft.
     const example = system.slice(system.indexOf('Example:'))
     expect(example).not.toMatch(/\b(edit|review|check)\b[^"]*\b(draft|post)\b/i)
+  })
+})
+
+describe('@mentions (D-O11)', () => {
+  /** POST a message with `mentions` picked in the composer. */
+  const post = (projectId: string, body: Record<string, unknown>) => inject('POST', `/api/projects/${projectId}/messages`, body)
+
+  it("keeps the user's picks that the text tags, in text order, and 400s on anyone outside Primary and the team", async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const ben = await makeAgent('Ben', { role: 'Reviewer' })
+    const p = await makeProject('Tags', [ana.id])
+    const requests = mockTeam({ reply: 'unused' })
+
+    const both = await post(p.id, { author: 'user', text: '@lead and @ANA, what next?', mentions: [ana.id, lead.id, ana.id] })
+    expect(both.statusCode).toBe(201)
+    expect(both.json()).toMatchObject({ kind: 'message', author: 'user', mentions: [lead.id, ana.id] })
+    // A pick the text does not tag as @Name is dropped; so is one that runs into a longer word.
+    const untagged = await post(p.id, { author: 'user', text: 'Ana and @Anabel, hello', mentions: [ana.id] })
+    expect(untagged.json()).toMatchObject({ mentions: [] })
+    // Without picks, a user message tags no one, whatever its text says.
+    expect((await post(p.id, { author: 'user', text: '@Ana hello' })).json()).toMatchObject({ mentions: [] })
+    expect((await post(p.id, { author: 'user', text: 'plain', mentions: [] })).json()).toMatchObject({ mentions: [] })
+
+    const before = memory()
+    for (const mentions of [[ben.id], ['agt_nope'], [ana.id, ben.id], 'ana', { 0: ana.id }, [5], [null], Array.from({ length: 101 }, () => ana.id)]) {
+      const res = await post(p.id, { author: 'user', text: '@Ana @Ben hi', mentions })
+      expect(res.statusCode, JSON.stringify(mentions)).toBe(400)
+      expect(res.json().message).toContain('"mentions"')
+    }
+    expect((await post(p.id, { author: 'user', text: '@Ben hi', mentions: [ben.id] })).json().message).toContain(
+      'is not Primary or a member of this project\'s team',
+    )
+    expect(memory()).toBe(before)
+    await whenProjectIdle(store, p.id)
+    expect(requests).toHaveLength(0)
+  })
+
+  it('queues a task for each tagged team member when the user does not tag Primary, then runs them', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const ben = await makeAgent('Ben', { role: 'Reviewer' })
+    const p = await makeProject('Direct', [ana.id, ben.id], 'Product launch.')
+    const requests = mockTeam({ reply: 'unused' }, (req) =>
+      systemOf(req) === 'I am Ana.'
+        ? '<think>Should @Ana ask @Ben?</think>@Ben the draft is ready for review. @Lead should we add a FAQ? Mail me at ana@Ben.com'
+        : 'Reviewed. Thanks @ana!',
+    )
+
+    const text = '@Ana @Ben please draft and then review the launch post'
+    const res = await post(p.id, { author: 'user', text, mentions: [ben.id, ana.id] })
+    expect(res.statusCode).toBe(201)
+    // The response is the message; its tasks appear in the thread.
+    const message = res.json() as ProjectMessage
+    expect(message).toMatchObject({ kind: 'message', author: 'user', text, mentions: [ana.id, ben.id] })
+    expect('taskStatus' in message).toBe(false)
+
+    await whenProjectIdle(store, p.id)
+    const msgs = await thread(p.id)
+    expect(msgs.map((m) => m.kind)).toEqual(['message', 'task-assignment', 'task-assignment', 'message', 'message'])
+    const tasks = msgs.filter((m) => m.kind === 'task-assignment')
+    expect(tasks.map((t) => [t.author, t.assigneeId, t.text, t.replyTo, t.taskStatus, t.mentions])).toEqual([
+      ['user', ana.id, text, message.id, 'done', [ana.id]],
+      ['user', ben.id, text, message.id, 'done', [ben.id]],
+    ])
+    // Results tag whom their text tags: a hand-off, a question for the lead; emails and <think> reasoning are not tags.
+    const results = msgs.filter((m) => m.taskId)
+    expect(results.map((m) => [m.author, m.taskId, m.taskStatus, m.mentions])).toEqual([
+      [ana.id, tasks[0]?.id, 'done', [ben.id, lead.id]],
+      [ben.id, tasks[1]?.id, 'done', [ana.id]],
+    ])
+    // No plan: Primary was never asked.
+    expect(requests.filter(isPlanner)).toHaveLength(0)
+
+    // The task is the user's message, quoted once, from the user, with the tags it can use.
+    const anaInput = lastUser(requests.find((r) => systemOf(r) === 'I am Ana.') ?? {})
+    expect(anaInput).toBe(
+      'Project: Direct\nProduct launch.\n\n' +
+        `The user assigned you this task:\n${text}\n\n` +
+        'Your teammates:\n- Ben (Reviewer)\n\n' +
+        'Address teammates and the team lead as @Name. Tag a teammate to hand your work on to them; ' +
+        'tag @Lead with a question you need answered. Tags you can use:\n- @Lead (team lead)\n- @Ben (Reviewer)\n\n' +
+        'Reply with your result for the team.',
+    )
+  })
+
+  it('queues nothing when the user tags Primary (with or without members) or no one', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const p = await makeProject('To Primary', [ana.id])
+    const requests = mockTeam({ reply: 'unused' })
+    for (const [text, mentions] of [
+      ['@Lead and @Ana, plan this', [lead.id, ana.id]],
+      ['@Lead plan this', [lead.id]],
+      ['plan this', []],
+      ['Ana, plan this', [ana.id]],
+    ] as const) {
+      expect((await post(p.id, { author: 'user', text, mentions })).statusCode).toBe(201)
+    }
+    await whenProjectIdle(store, p.id)
+    expect((await thread(p.id)).map((m) => m.kind)).toEqual(['message', 'message', 'message', 'message'])
+    expect(requests).toHaveLength(0)
+  })
+
+  it('writes the message and its tasks in one save, and rolls both back when it fails', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Atomic', [ana.id])
+    const requests = mockTeam({ reply: 'unused' })
+    const save = store.save
+    const before = memory()
+    store.save = () => false
+    try {
+      const res = await post(p.id, { author: 'user', text: '@Ana go', mentions: [ana.id] })
+      expect(res.statusCode).toBe(500)
+      expect(memory()).toBe(before)
+    } finally {
+      store.save = save
+    }
+    await whenProjectIdle(store, p.id)
+    expect(requests).toHaveLength(0)
+
+    // On disk, the message and its task arrive together (before any run starts).
+    let written: ProjectMessage[] = []
+    store.save = () => {
+      if (written.length === 0) written = JSON.parse(JSON.stringify(store.projectMessages)) as ProjectMessage[]
+      return save()
+    }
+    try {
+      expect((await post(p.id, { author: 'user', text: '@Ana go', mentions: [ana.id] })).statusCode).toBe(201)
+      await whenProjectIdle(store, p.id)
+    } finally {
+      store.save = save
+    }
+    expect(written.map((m) => [m.kind, m.taskStatus])).toEqual([
+      ['message', undefined],
+      ['task-assignment', 'queued'],
+    ])
+  })
+
+  it('parses tags in agent messages and in everything the BE writes, preferring Primary, then the team', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const ben = await makeAgent('Ben', { role: 'Reviewer' })
+    // Same names, other agents: Primary and the team win the collision.
+    const otherLead = await makeAgent('LEAD')
+    const otherAna = await makeAgent('ana')
+    const p = await makeProject('Parsed', [ana.id])
+
+    // An agent's message is parsed against Primary, the team and the library; its picks are ignored.
+    const agentSays = await post(p.id, { author: ana.id, text: '@lead see @Ben and @Nobody; mail x@Ben.com (@Ana)', mentions: ['agt_any'] })
+    expect(agentSays.statusCode).toBe(201)
+    expect(agentSays.json()).toMatchObject({ author: ana.id, mentions: [lead.id, ben.id, ana.id] })
+    expect([otherLead.id, otherAna.id]).not.toContain(lead.id)
+
+    // Apply: Primary's reply, the team update and each assignment carry their tags.
+    mockTeam({
+      reply: '@Ana drafts; a new @Copy Editor edits. @Nobody waits.',
+      create: [{ name: 'Copy Editor', role: 'Editor', instructions: 'You edit copy.', reason: 'No editor.' }],
+      add: [{ agentId: ben.id, reason: 'Reviews.' }],
+      tasks: [
+        { agent: ana.id, task: 'Draft the post, then tag @Copy Editor.' },
+        { agent: 'Copy Editor', task: 'Edit the post.' },
+      ],
+    })
+    const { body } = await planAndApply(p.id, 'Write the post')
+    const editor = store.agents.find((a) => a.name === 'Copy Editor') as Agent
+    const [reply, update, t1, t2] = body.messages
+    expect(reply).toMatchObject({ kind: 'message', mentions: [ana.id, editor.id] })
+    expect(update).toMatchObject({
+      kind: 'team-update',
+      text: 'Added @Ben (Reviewer). Created @Copy Editor (Editor) for this project. Assigned 2 tasks.',
+      mentions: [ben.id, editor.id],
+    })
+    expect([t1?.mentions, t2?.mentions]).toEqual([[editor.id], []])
+
+    await whenProjectIdle(store, p.id)
+    // Results (here "I am …: done") tag no one.
+    for (const r of store.projectMessages.filter((m) => m.taskId)) expect(r.mentions).toEqual([])
+    // Everything written to the thread has its mentions, and they survive a reload.
+    const reloaded = createStore(join(dir, 'store.json'))
+    for (const m of reloaded.projectMessages.filter((x) => x.projectId === p.id)) expect(Array.isArray(m.mentions), m.text).toBe(true)
+    expect(reloaded.projectMessages.find((m) => m.id === update?.id)?.mentions).toEqual([ben.id, editor.id])
+  })
+
+  it('tags the restart sweep results too', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Swept', [ana.id])
+    store.projectMessages = [
+      ...store.projectMessages,
+      { id: 'msg_queued', projectId: p.id, author: lead.id, text: 'Do it', kind: 'task-assignment', createdAt: '2026-01-01T00:00:01.000Z', assigneeId: ana.id, taskStatus: 'queued' },
+    ]
+    expect(store.save()).toBe(true)
+    const reloaded = createStore(join(dir, 'store.json'))
+    const restarted = buildApp(reloaded)
+    try {
+      const result = reloaded.projectMessages.find((m) => m.taskId === 'msg_queued')
+      expect(result).toMatchObject({ taskStatus: 'failed', mentions: [] })
+    } finally {
+      await restarted.close()
+    }
+  })
+
+  it('tells assignees which tags they can use, and Primary how agents tag', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const ben = await makeAgent('Ben', { role: 'Reviewer' })
+    const p = await makeProject('Launch', [ana.id, ben.id], 'Product launch.')
+    const requests = mockTeam({
+      reply: 'Ana drafts; I wrap up.',
+      tasks: [
+        { agent: ana.id, task: 'Draft the announcement' },
+        { agent: lead.id, task: 'Wrap up' },
+      ],
+    })
+    await planAndApply(p.id, 'Announce v2')
+    await whenProjectIdle(store, p.id)
+
+    // A task from the lead: today's text plus the tagging lines, nothing else.
+    expect(lastUser(requests.find((r) => systemOf(r) === 'I am Ana.') ?? {})).toBe(
+      'Project: Launch\nProduct launch.\n\n' +
+        'The user asked:\nAnnounce v2\n\n' +
+        'Lead assigned you this task:\nDraft the announcement\n\n' +
+        'Your teammates:\n- Ben (Reviewer)\n\n' +
+        'Address teammates and the team lead as @Name. Tag a teammate to hand your work on to them; ' +
+        'tag @Lead with a question you need answered. Tags you can use:\n- @Lead (team lead)\n- @Ben (Reviewer)\n\n' +
+        'Reply with your result for the team.',
+    )
+    // The lead on its own task tags only teammates.
+    expect(store.runs.find((r) => r.agentId === lead.id)?.input).toBe(
+      'Project: Launch\nProduct launch.\n\n' +
+        'The user asked:\nAnnounce v2\n\n' +
+        'As the team lead, you took this task:\nWrap up\n\n' +
+        'Your teammates:\n- Ana (Writer)\n- Ben (Reviewer)\n\n' +
+        'Address teammates as @Name. Tag a teammate to hand your work on to them. Tags you can use:\n- @Ana (Writer)\n- @Ben (Reviewer)\n\n' +
+        'Reply with your result for the team.',
+    )
+
+    const system = systemOf(requests.find(isPlanner) ?? {})
+    expect(system).toContain('- "reply": what you tell the user, in a few plain sentences. Name agents as @Name, for example "@Ana drafts the post".\n')
+    expect(system).toContain(
+      '- Agents tag each other as @Name in their results: tagging a teammate asks to hand work on to them, and tagging you is a question for you.\n',
+    )
+    expect(system).toContain('{"reply":"@Ana can draft the post. No one owns our writing style, so I suggest a @Copy Editor to write')
+  })
+})
+
+describe('orchestration store fields', () => {
+  it('keeps the new project and message fields across a reload, type-checked, with lists capped', async () => {
+    const lead = await makeLead()
+    const p = await makeProject('Fields')
+    const other = await makeProject('Other')
+    store.projects = store.projects.map((x) => (x.id === p.id ? { ...x, paused: true } : x.id === other.id ? ({ ...x, paused: 'yes' } as unknown as Project) : x))
+    const good = {
+      id: 'msg_good',
+      projectId: p.id,
+      author: lead.id,
+      text: 't2 for @Lead',
+      kind: 'task-assignment',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      assigneeId: lead.id,
+      taskStatus: 'cancelled',
+      mentions: [lead.id],
+      label: 't2',
+      inputs: ['msg_a', 'msg_b'],
+      round: 2,
+      verdict: 'ask',
+      used: [{ taskId: 'msg_a', chars: 6_200, sentChars: 1_800 }],
+    }
+    const bad = {
+      id: 'msg_bad',
+      projectId: p.id,
+      author: lead.id,
+      text: 'malformed fields',
+      kind: 'progress',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      taskStatus: 'paused',
+      mentions: [lead.id, 5, lead.id, ...Array.from({ length: 30 }, (_, i) => `agt_${i}`)],
+      label: 7,
+      inputs: ['msg_a', 'msg_a', 'msg_b', 'msg_c', 'msg_d'],
+      round: 1.5,
+      verdict: 'continue',
+      used: [{ taskId: 'msg_a', chars: -1, sentChars: 2 }, { taskId: 'msg_b', chars: 10, sentChars: 4 }, 'x', null],
+    }
+    const worse = { ...bad, id: 'msg_worse', kind: 'nonsense', mentions: 'agt_x', inputs: {}, round: 0, used: {} }
+    store.projectMessages = [...store.projectMessages, good, bad, worse] as unknown as ProjectMessage[]
+    expect(store.save()).toBe(true)
+
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.projects.find((x) => x.id === p.id)?.paused).toBe(true)
+    expect('paused' in (reloaded.projects.find((x) => x.id === other.id) ?? {})).toBe(false)
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_good')).toEqual(good)
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_bad')).toEqual({
+      id: 'msg_bad',
+      projectId: p.id,
+      author: lead.id,
+      text: 'malformed fields',
+      kind: 'progress',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      mentions: [lead.id, ...Array.from({ length: 19 }, (_, i) => `agt_${i}`)],
+      inputs: ['msg_a', 'msg_b', 'msg_c'],
+      used: [{ taskId: 'msg_b', chars: 10, sentChars: 4 }],
+    })
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_worse')).toEqual({
+      id: 'msg_worse',
+      projectId: p.id,
+      author: lead.id,
+      text: 'malformed fields',
+      kind: 'message',
+      createdAt: '2026-01-01T00:00:02.000Z',
+    })
+    // Loading again changes nothing.
+    expect(reloaded.save()).toBe(true)
+    const again = createStore(join(dir, 'store.json'))
+    expect(again.projectMessages).toEqual(reloaded.projectMessages)
+    expect(again.projects).toEqual(reloaded.projects)
   })
 })

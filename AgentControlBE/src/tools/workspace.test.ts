@@ -870,3 +870,53 @@ describe('fuzz: both tools against hostile arguments', () => {
     }
   })
 })
+
+describe('run scope (D-O10)', () => {
+  /** A run of `agentId` in `projectId` (undefined: the agent's own chat), with recognisable text. */
+  function scopedRun(agentId: string, minutesAgo: number, projectId: string | undefined, status: AgentRun['status'] = 'succeeded'): AgentRun {
+    const run = makeRun(agentId, minutesAgo, status)
+    const label = projectId ?? 'chat'
+    return { ...run, id: `run_${agentId}_${label}_${minutesAgo}`, input: `${label} input`, ...(projectId ? { projectId } : {}) }
+  }
+
+  beforeEach(() => {
+    store.runs.push(
+      scopedRun('agent_lead', 1, undefined),
+      scopedRun('agent_lead', 2, 'proj_a'),
+      scopedRun('agent_lead', 3, 'proj_b'),
+      scopedRun('agent_res', 4, 'proj_a'),
+      scopedRun('agent_res', 5, undefined),
+      scopedRun('agent_res', 6, 'proj_b'),
+    )
+  })
+
+  const readLog = (ctx: ToolContext, args: Record<string, unknown> = {}): string[] =>
+    (call('read_run_log', args, ctx) as unknown as { input: string }[]).map((r) => r.input)
+
+  it('read_run_log shows only runs of the same project, or only chat runs from a chat', () => {
+    // A project task run reads its own project's runs, for itself and for a teammate.
+    expect(readLog(makeCtx({ projectId: 'proj_a' }))).toEqual(['proj_a input'])
+    expect(readLog(makeCtx({ projectId: 'proj_a' }), { agentId: 'Researcher' })).toEqual(['proj_a input'])
+    expect(readLog(makeCtx({ projectId: 'proj_b' }), { agentId: 'agent_res' })).toEqual(['proj_b input'])
+    // An agent's own chat never reads project runs, and a project never reads chat runs.
+    expect(readLog(makeCtx())).toEqual(['chat input'])
+    expect(readLog(makeCtx(), { agentId: 'Researcher' })).toEqual(['chat input'])
+    // A project with no runs reads nothing, not another project's.
+    expect(readLog(makeCtx({ projectId: 'proj_c' }), { agentId: 'Researcher' })).toEqual([])
+  })
+
+  it("workspace_overview counts recent failures in the run's scope only", () => {
+    store.runs.push(
+      scopedRun('agent_lead', 7, 'proj_a', 'failed'),
+      scopedRun('agent_lead', 8, 'proj_a', 'failed'),
+      scopedRun('agent_lead', 9, 'proj_b', 'failed'),
+      scopedRun('agent_lead', 10, undefined, 'failed'),
+    )
+    const failures = (ctx: ToolContext): number | undefined =>
+      (call('workspace_overview', {}, ctx).agents as { name: string; recentFailures: number }[]).find((r) => r.name === 'Team Lead')
+        ?.recentFailures
+    expect(failures(makeCtx({ projectId: 'proj_a' }))).toBe(2)
+    expect(failures(makeCtx({ projectId: 'proj_b' }))).toBe(1)
+    expect(failures(makeCtx())).toBe(1)
+  })
+})

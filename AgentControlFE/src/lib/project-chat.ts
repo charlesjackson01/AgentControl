@@ -26,14 +26,15 @@ export function isFailedResult(m: ProjectMessage): boolean {
   return isTaskResult(m) && m.taskStatus === 'failed'
 }
 
-/** Within one timestamp: Primary's reply, the team update, the tasks, then task results. */
+/** Within one timestamp: Primary's reply, the team update, the tasks, task results, then progress lines. */
 function rank(m: ProjectMessage): number {
   if (m.kind === 'team-update') return 1
   if (m.kind === 'task-assignment') return 2
+  if (m.kind === 'progress') return 4
   return isTaskResult(m) ? 3 : 0
 }
 
-/** Oldest first; ties keep reply → team-update → task → result, then the given order. */
+/** Oldest first; ties keep reply → team-update → task → result → progress, then the given order. */
 export function sortMessages(messages: readonly ProjectMessage[]): ProjectMessage[] {
   return [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || rank(a) - rank(b))
 }
@@ -64,24 +65,39 @@ export function newerProject(held: Project | undefined, incoming: Project): Proj
 
 /* -- Prompts and where plans show ------------------------------------------ */
 
-/** A prompt the user typed (the only message POST team-plan answers). */
+/** A message the user typed (a prompt for Primary, or a direct message to tagged members). */
 export function isUserPrompt(m: ProjectMessage): boolean {
   return m.kind === 'message' && m.author === 'user'
 }
 
-/** The newest user prompt, or null when the user has not written yet. */
-export function latestPrompt(messages: readonly ProjectMessage[]): ProjectMessage | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) if (isUserPrompt(messages[i])) return messages[i]
+/**
+ * A user message sent straight to team members (D-O11): it tags members and
+ * not Primary, so the BE queued it as their tasks and Primary does not plan it.
+ */
+export function isDirectMessage(m: ProjectMessage, primaryId: string | undefined): boolean {
+  const tags = m.mentions ?? []
+  return isUserPrompt(m) && tags.length > 0 && (primaryId === undefined || !tags.includes(primaryId))
+}
+
+/**
+ * The newest user prompt for Primary (direct messages to members are not
+ * prompts), or null when there is none yet.
+ */
+export function latestPrompt(messages: readonly ProjectMessage[], primaryId?: string): ProjectMessage | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i]
+    if (isUserPrompt(m) && !isDirectMessage(m, primaryId)) return m
+  }
   return null
 }
 
 /**
- * The newest user prompt while no applied plan answers it (Primary was never
- * asked, the request failed, the plan was cancelled, or the page reloaded
- * before Apply: plans are not stored); null otherwise.
+ * The newest user prompt for Primary while no applied plan answers it
+ * (Primary was never asked, the request failed, the plan was cancelled, or
+ * the page reloaded before Apply: plans are not stored); null otherwise.
  */
-export function latestUnansweredPrompt(messages: readonly ProjectMessage[]): ProjectMessage | null {
-  const latest = latestPrompt(messages)
+export function latestUnansweredPrompt(messages: readonly ProjectMessage[], primaryId?: string): ProjectMessage | null {
+  const latest = latestPrompt(messages, primaryId)
   if (!latest) return null
   return messages.some((m) => m.replyTo === latest.id) ? null : latest
 }
@@ -167,13 +183,14 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   running: 'Running',
   done: 'Done',
   failed: 'Failed',
+  cancelled: 'Cancelled',
 }
 
 export type TaskProgress = Record<TaskStatus, number> & { total: number }
 
 /** Task counts across the project's assignments. */
 export function taskProgress(messages: readonly ProjectMessage[]): TaskProgress {
-  const counts = { queued: 0, running: 0, done: 0, failed: 0, total: 0 }
+  const counts = { queued: 0, running: 0, done: 0, failed: 0, cancelled: 0, total: 0 }
   for (const m of messages) {
     if (m.kind !== 'task-assignment') continue
     counts.total += 1
@@ -182,11 +199,11 @@ export function taskProgress(messages: readonly ProjectMessage[]): TaskProgress 
   return counts
 }
 
-/** "3 tasks · 1 running · 1 queued · 1 done"; empty when there are none. */
+/** "3 tasks · 1 running · 1 queued · 1 done" (then failed, cancelled); empty when there are none. */
 export function describeProgress(progress: TaskProgress): string {
   if (progress.total === 0) return ''
   const parts = [`${progress.total} ${progress.total === 1 ? 'task' : 'tasks'}`]
-  for (const status of ['running', 'queued', 'done', 'failed'] as const) {
+  for (const status of ['running', 'queued', 'done', 'failed', 'cancelled'] as const) {
     if (progress[status] > 0) parts.push(`${progress[status]} ${TASK_STATUS_LABELS[status].toLowerCase()}`)
   }
   return parts.join(' · ')

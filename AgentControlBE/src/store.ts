@@ -11,6 +11,7 @@ import {
   seedSkills,
   vendoredSeedSkills,
 } from './db/seed.js'
+import { MENTIONS_MAX } from './mentions.js'
 import { createVault } from './vault.js'
 import type {
   Agent,
@@ -249,16 +250,50 @@ function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
       teamAgentIds: isStringArray(p.teamAgentIds) ? [...p.teamAgentIds] : [],
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : updatedAt,
       updatedAt,
+      ...(typeof p.paused === 'boolean' ? { paused: p.paused } : {}),
     })
   }
   return out
 }
 
-const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-update', 'task-assignment']
-const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'failed']
+const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-update', 'task-assignment', 'progress']
+const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'failed', 'cancelled']
+const VERDICTS: readonly NonNullable<ProjectMessage['verdict']>[] = ['done', 'ask']
+/** D-O2: a task receives at most this many inputs (and records as many in `used`). */
+const TASK_INPUTS_MAX = 3
+/** Raw list entries looked at per stored list field. */
+const STORED_LIST_SCAN = 200
+
+/** A stored list of ids: its distinct strings, at most `max`; undefined when it is not a list. */
+function idList(raw: unknown, max: number): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: string[] = []
+  for (const v of raw.slice(0, STORED_LIST_SCAN)) {
+    if (out.length >= max) break
+    if (typeof v === 'string' && !out.includes(v)) out.push(v)
+  }
+  return out
+}
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0
+
+/** A result's `used` list: well-formed entries only, at most TASK_INPUTS_MAX. */
+function usedList(raw: unknown): ProjectMessage['used'] {
+  if (!Array.isArray(raw)) return undefined
+  const out: NonNullable<ProjectMessage['used']> = []
+  for (const v of raw.slice(0, STORED_LIST_SCAN)) {
+    if (out.length >= TASK_INPUTS_MAX) break
+    if (!v || typeof v !== 'object') continue
+    const u = v as Record<string, unknown>
+    if (typeof u.taskId !== 'string' || !isCount(u.chars) || !isCount(u.sentChars)) continue
+    out.push({ taskId: u.taskId, chars: u.chars, sentChars: u.sentChars })
+  }
+  return out
+}
 
 /**
- * Keep well-formed project messages and the task fields the contract has.
+ * Keep well-formed project messages and the task fields the contract has
+ * (the orchestration fields type-checked, their lists capped).
  * Any other kind loads as a 'message', which covers the pre-handoff kinds a
  * development build wrote: a 'team-plan' (Primary's reply; its stored plan
  * and planStatus are dropped) and a 'task-result' (it keeps taskId, runId
@@ -293,6 +328,9 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
         : typeof legacy.planId === 'string'
           ? planPrompt.get(legacy.planId)
           : undefined
+    const mentions = idList(m.mentions, MENTIONS_MAX)
+    const inputs = idList(m.inputs, TASK_INPUTS_MAX)
+    const used = usedList(m.used)
     out.push({
       id: m.id,
       projectId: m.projectId,
@@ -306,6 +344,13 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
       ...(TASK_STATUSES.includes(m.taskStatus as TaskStatus) ? { taskStatus: m.taskStatus } : {}),
       ...(typeof m.taskId === 'string' ? { taskId: m.taskId } : {}),
       ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
+      // Orchestration fields (D-O11 mentions; Parts 3-5 write the rest).
+      ...(mentions !== undefined ? { mentions } : {}),
+      ...(typeof m.label === 'string' ? { label: m.label } : {}),
+      ...(inputs !== undefined ? { inputs } : {}),
+      ...(typeof m.round === 'number' && Number.isInteger(m.round) && m.round >= 1 ? { round: m.round } : {}),
+      ...(VERDICTS.includes(m.verdict as NonNullable<ProjectMessage['verdict']>) ? { verdict: m.verdict } : {}),
+      ...(used !== undefined ? { used } : {}),
     })
   }
   return out

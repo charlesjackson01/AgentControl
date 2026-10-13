@@ -3,6 +3,10 @@
 Status: APPROVED FOR IMPLEMENTATION (2026-10-12). Skills work merged to
 master (PR #5). D-P1, D-P2, D-P3 confirmed as recommended — see below.
 
+Progress (2026-10-13): Part 0 on master (PR #6). Part 1 routes in PR #7.
+Part 1 chat page, Part 2 and Part 3 on `feat/projects-chat` (stacked on PR #7
+and PR #8); see "Implementation notes" at the end.
+
 ## Goal
 
 Projects becomes a real feature instead of a hardcoded frontend stub. A
@@ -132,3 +136,34 @@ interface Project {
 3. Part 1: project chat endpoints + FE chat page.
 4. Part 2: team-plan assembler + confirm card + apply.
 5. Part 3: polish, empty states, screenshots, HANDOFF.md update.
+
+## Implementation notes (feat/projects-chat)
+
+What was built, where it differs in detail from the plan above:
+
+- `POST /api/projects/:id/team-plan` takes `{ messageId }` (a user message
+  in the project chat, whose text is the prompt) or `{ prompt }`, and returns
+  `{ plan, replyTo? }`. It writes nothing, for every kind of plan. Primary is
+  called on its own endpoint and model with no tools and temperature 0.2; the
+  answer is parsed leniently and validated strictly (unknown or duplicate
+  agents, names that collide with existing agents, unknown skills and
+  oversized lists are dropped with plain-language warnings; injected fields
+  are ignored). Invalid output is a 502, no Primary a 409.
+- `POST /api/projects/:id/team-plan/apply` takes the confirmed plan back with
+  an optional selection (`add` ids, `create`/`tasks` indexes), validates it
+  again as untrusted input, then records Primary's reply (a `message`), a
+  `team-update`, and one `task-assignment` per task. Cancel is client-side.
+  Every plan, including one that only assigns tasks, waits for Apply (D-P1).
+- Created specialists are library agents with `projectId` on Primary's
+  endpoint and model (D-P2); deleting the project untags them.
+- Tasks run one at a time per project through the same run path as agent
+  chat; each result is a `message` from the assignee with `taskId`, `runId`
+  and `taskStatus`. Failed tasks can be retried
+  (`POST /api/projects/:id/tasks/:messageId/retry`); tasks interrupted by a
+  restart are marked failed on startup. Project task runs only see earlier
+  runs of the same project as history and never appear in the agent's own
+  chat; runs are kept 50 per agent per scope.
+- Frontend: `/projects/:id` with the team strip ("Ask Primary to build a
+  team" while the team is empty), the plan confirm card, task rows with
+  status and Retry, and polling while tasks run. Screenshots in
+  `docs/projects-screenshots/`.

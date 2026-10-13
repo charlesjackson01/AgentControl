@@ -44,7 +44,7 @@ host; requests then go cross-origin and the BE's CORS applies.
 | `npm run serve` | `build` + `preview` bound to `100.110.232.85:4173` (a machine-specific Tailscale address; edit for your host) |
 | `npm run typecheck` | `tsc -b --noEmit` |
 | `npm run lint` | Oxlint |
-| `npm test` | Hermetic parser parity, SKILL.md export round trip, tool selection, skill and note search, and prompt-size message tests (Node 22.6+) |
+| `npm test` | Hermetic parser parity, SKILL.md export round trip, tool selection, skill and note search, prompt-size message, and project chat (thread order, plan selection, polling) tests (Node 22.6+) |
 
 ## Skills and notes
 
@@ -74,6 +74,28 @@ summaries.
 covers titles, tags, authors, and visible snippets; open a note for its full
 body. Deletion requires confirmation and permanently removes the shared note.
 Agent-written note content is displayed as text, without rendering HTML.
+
+## Projects
+
+**Projects** lists projects from `GET /api/projects`; a tile opens the project
+chat at `/projects/:id`, and New Project opens the new project's chat.
+
+The chat is the project's own thread. The header shows the folder AgentControl
+created; the team strip shows the Team Lead (always available) and the members,
+with a **project** tag on specialists the Team Lead created for this project.
+Members can be removed (with a confirmation) or added from the library.
+
+Sending a prompt posts it, then asks the Team Lead for a team plan
+(`POST /api/projects/:id/team-plan`). Its reply comes with a confirm card: library
+agents to add, specialists to create (instructions collapsed) and tasks, each
+ticked by default. Team changes wait for **Apply** (a tasks-only plan starts at
+once); a task whose agent is unticked is skipped. Assigned tasks show as
+*Primary → Agent* rows with a status, results arrive as the agent's replies, and
+a failed task has **Retry**. If planning fails, the error comes with **Retry**
+for the same prompt. While a plan or task is in flight the page refreshes every
+1.5 s (backing off on errors) and stops when idle. Runs made for project tasks
+stay out of the agent's own chat; the Agents page tags those specialists with
+their project.
 
 ## Backend
 

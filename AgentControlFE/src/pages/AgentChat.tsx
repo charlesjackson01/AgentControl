@@ -1,36 +1,13 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
+import { Bubble, TypingBubble } from '../components/ChatBubble'
 import { StatusPill } from '../components/StatusPill'
 import { SettingsDrawer } from '../components/SettingsDrawer'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
+import { friendlyError as friendly, turnTime } from '../lib/chat-format'
 import type { AgentRun } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
-
-/**
- * One chat bubble. The speaker header renders only when a name is provided —
- * 1:1 agent chats pass nothing; multi-agent project chats will pass agent
- * names later.
- */
-function Bubble({
-  kind,
-  speaker,
-  label,
-  children,
-}: {
-  kind: 'user' | 'assistant' | 'error'
-  speaker?: string
-  label?: string
-  children: ReactNode
-}) {
-  const kindClass = kind === 'error' ? 'chat__bubble--assistant chat__bubble--error' : `chat__bubble--${kind}`
-  return (
-    <div className={`chat__bubble ${kindClass}`} aria-label={label}>
-      {speaker && <div className="bubble__header">{speaker}</div>}
-      {children}
-    </div>
-  )
-}
 
 /**
  * Collapsed run-audit affordance under a persisted assistant turn. Renders only
@@ -104,25 +81,6 @@ type Pending = {
   error?: string
 }
 
-function turnTime(iso: string): string {
-  const date = new Date(iso)
-  const today = new Date()
-  const sameDay =
-    date.getFullYear() === today.getFullYear() &&
-    date.getMonth() === today.getMonth() &&
-    date.getDate() === today.getDate()
-  const time = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-  if (sameDay) return time
-  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
-}
-
-function friendly(err: unknown, fallback: string): string {
-  const msg = err instanceof Error ? err.message : fallback
-  return msg === 'Failed to fetch' || msg === 'fetch failed'
-    ? 'Could not reach the API server. Is the backend running?'
-    : msg
-}
-
 export default function AgentChat() {
   const { id = '' } = useParams()
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -160,7 +118,8 @@ export default function AgentChat() {
   const reloadRuns = useCallback(() => setRunTick((n) => n + 1), [])
 
   // GET /api/agents/:id/runs is newest-first; the chat reads oldest-first.
-  const sortedRuns = [...(runsList ?? [])].sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+  // Runs made for a project task belong to that project's chat, not this one.
+  const sortedRuns = (runsList ?? []).filter((r) => !r.projectId).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
 
   // The optimistic turn disappears once the refetched transcript contains it;
   // derived during render so no clearing effect is needed.
@@ -280,15 +239,7 @@ export default function AgentChat() {
                   <Bubble kind="user">
                     <div className="bubble__body">{pendingActive.input}</div>
                   </Bubble>
-                  {pendingActive.status === 'typing' && (
-                    <Bubble kind="assistant" label="Agent is typing">
-                      <span className="typing" aria-hidden="true">
-                        <span className="typing__dot" />
-                        <span className="typing__dot" />
-                        <span className="typing__dot" />
-                      </span>
-                    </Bubble>
-                  )}
+                  {pendingActive.status === 'typing' && <TypingBubble label="Agent is typing" />}
                   {pendingActive.status === 'done' && pendingActive.run && (
                     <>
                       {pendingActive.run.error ? (

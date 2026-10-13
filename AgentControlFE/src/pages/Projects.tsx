@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import PageShell from '../components/PageShell'
 import Dialog from '../components/Dialog'
 import ConfirmDialog from '../components/ConfirmDialog'
@@ -126,6 +127,7 @@ function CreateProjectDialog({
 }
 
 export default function Projects() {
+  const navigate = useNavigate()
   const projects = useAsync(api.listProjects, [])
   const agents = useAsync(api.listAgents, [])
   const [query, setQuery] = useState('')
@@ -234,7 +236,9 @@ export default function Projects() {
       ) : (
         <div className="grid">
           {visible.map((p) => (
-            <div className="tile" key={p.id}>
+            <div className="tile tile--link" key={p.id}>
+              {/* Stretched link: the whole tile opens the project chat; Delete sits above it. */}
+              <Link to={`/projects/${p.id}`} className="tile__link" aria-label={`Open ${p.name}`} />
               <div className="tile__top">
                 <span className="tile__icon">
                   <ProjectsIcon size={16} />
@@ -260,7 +264,7 @@ export default function Projects() {
                 <span>·</span>
                 <button
                   type="button"
-                  className="btn btn--ghost"
+                  className="btn btn--ghost tile__action"
                   onClick={() => {
                     setError(null)
                     setTarget(p)
@@ -280,7 +284,7 @@ export default function Projects() {
         open={mode === 'create'}
         agents={agents.data ?? []}
         onClose={close}
-        onCreated={() => projects.reload()}
+        onCreated={(project) => navigate(`/projects/${project.id}`)}
       />
 
       <ConfirmDialog

@@ -2367,6 +2367,464 @@ ul {
   color: var(--c-text-3);
 }
 
+/* ==========================================================================
+   Project chat — header, team strip, plan confirm card, task rows
+   ========================================================================== */
+
+/* Projects list: the whole tile opens the project chat (stretched link);
+   the Delete button sits above the link. */
+.tile__link {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+}
+
+.tile__link:focus-visible {
+  outline-offset: 0;
+  border-radius: inherit;
+}
+
+.tile__action {
+  position: relative;
+  z-index: 1;
+}
+
+/* Agents list: project-scoped specialist tag (D-P2) */
+.tile__project {
+  margin: 0 0 3px;
+}
+
+.pill--project {
+  border-color: var(--c-accent-ring);
+  background: transparent;
+  color: var(--c-accent);
+}
+
+.pill--done {
+  border-color: transparent;
+  background: var(--c-success-soft);
+  color: var(--c-success);
+}
+
+.project__folder {
+  margin: 1px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-text-3);
+}
+
+.project__header__skel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* Team strip under the header: the lead, members, add */
+.teamstrip {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  max-height: 112px;
+  overflow-y: auto;
+  padding: 9px 20px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface-2);
+}
+
+.teamstrip__label {
+  margin-right: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--c-text-3);
+}
+
+.teamstrip__hint {
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.teamstrip__add {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.teamchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 5px 0 11px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--c-text);
+}
+
+.teamchip--lead {
+  padding-right: 5px;
+  border-color: transparent;
+  background: var(--c-accent-soft);
+}
+
+.teamchip--missing {
+  padding-right: 11px;
+  color: var(--c-text-2);
+  border-style: dashed;
+}
+
+.teamchip__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+a.teamchip__name:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.teamchip__role {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--c-text-3);
+}
+
+.teamchip__remove {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--r-full);
+  color: var(--c-text-3);
+  transition:
+    background var(--t-fast) var(--ease-out),
+    color var(--t-fast) var(--ease-out);
+}
+
+.teamchip__remove:hover {
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+}
+
+/* Thread: compact system line (team-update) */
+.chat__system {
+  align-self: center;
+  max-width: min(90%, 620px);
+  padding: 4px 12px;
+  border-radius: var(--r-full);
+  background: var(--c-bg-sunk);
+  font-size: 11.5px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--c-text-2);
+  overflow-wrap: anywhere;
+}
+
+/* A prompt Primary has not answered yet */
+.chat__nudge {
+  display: flex;
+  align-self: flex-start;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.chat__nudge .chat__retry {
+  margin-top: 0;
+}
+
+.chat__retry--accent {
+  color: var(--c-accent);
+}
+
+.chat__retry:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Thread: one task assignment ("Primary → Agent") with its status */
+.task {
+  display: flex;
+  align-self: flex-start;
+  flex-direction: column;
+  gap: 5px;
+  width: fit-content;
+  min-width: min(100%, 280px);
+  max-width: min(78%, 620px);
+  padding: 9px 14px 11px;
+  border-radius: var(--r-lg);
+  border: 1px dashed var(--c-border-strong);
+  background: var(--c-surface-2);
+  animation: fade-in var(--t-base) var(--ease-out) both;
+}
+
+.task--failed {
+  border-color: var(--c-danger-border);
+}
+
+.task__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.task__route {
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-text-2);
+  overflow-wrap: anywhere;
+}
+
+.task__head .status {
+  margin-left: auto;
+}
+
+.task__body {
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Task status pills: running in the accent with a pulse, done as success */
+.status--active {
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+  border-color: transparent;
+}
+
+.status--done {
+  color: var(--c-success);
+  background: var(--c-success-soft);
+  border-color: transparent;
+}
+
+.dot--pulse {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Plan confirm card (D-P1): Primary's proposed team changes and tasks */
+.plan {
+  display: flex;
+  align-self: flex-start;
+  flex-direction: column;
+  gap: 12px;
+  width: min(100%, 620px);
+  padding: 13px 14px 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--c-border);
+  border-bottom-left-radius: var(--r-xs);
+  background: var(--c-surface);
+  box-shadow: var(--sh-sm);
+  animation: fade-in var(--t-base) var(--ease-out) both;
+}
+
+.plan--settled {
+  gap: 8px;
+  box-shadow: none;
+  background: var(--c-surface-2);
+}
+
+.plan__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 9px;
+}
+
+.plan__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plan__progress {
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.plan__section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.plan__section__title {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--c-text-3);
+}
+
+.plan__item {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Read-only item once the plan is applied or cancelled */
+.plan__row {
+  display: flex;
+  padding: 6px 11px;
+}
+
+.plan__role {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--c-text-3);
+}
+
+.plan__skills {
+  font-size: 11.5px;
+  color: var(--c-text-3);
+}
+
+.plan__task {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.plan__blocked {
+  font-size: 11.5px;
+  font-weight: 550;
+  color: var(--c-text-3);
+}
+
+.skillrow--blocked {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.skillrow--blocked input[type='checkbox'] {
+  cursor: not-allowed;
+}
+
+/* Instructions of a proposed specialist, collapsed under its row */
+.plan__instructions {
+  max-width: none;
+  margin: 0 0 4px 38px;
+}
+
+.plan__review {
+  max-width: none;
+}
+
+.plan__review__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.plan__warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--c-text-3);
+}
+
+.plan__warnings--loose {
+  align-self: flex-start;
+  max-width: min(78%, 620px);
+}
+
+.plan__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 11px;
+  border-top: 1px solid var(--c-border);
+}
+
+.plan__hint {
+  flex: 1 1 200px;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.plan__err {
+  flex: 1 1 100%;
+  order: -1;
+}
+
+@media (max-width: 640px) {
+  .teamstrip {
+    flex-wrap: nowrap;
+    max-height: none;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 8px 14px;
+    scrollbar-width: none;
+  }
+
+  .teamstrip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .teamchip,
+  .teamstrip__add {
+    flex-shrink: 0;
+  }
+
+  .teamchip__role {
+    display: none;
+  }
+
+  .teamstrip__hint {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  .task {
+    max-width: 88%;
+  }
+
+  .plan__instructions {
+    margin-left: 0;
+  }
+
+  .plan__foot .btn {
+    flex: 1;
+  }
+}
+
 /* Typing indicator */
 .typing {
   display: flex;

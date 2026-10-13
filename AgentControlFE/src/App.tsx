@@ -3,6 +3,7 @@ import AppShell from './components/AppShell'
 import AgentFormPage from './pages/AgentFormPage'
 import AgentChat from './pages/AgentChat'
 import Agents from './pages/Agents'
+import ProjectChat from './pages/ProjectChat'
 import Projects from './pages/Projects'
 import Settings from './pages/Settings'
 import SkillLibrary from './pages/SkillLibrary'
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="agents/:id" element={<AgentChat />} />
         <Route path="agents/:id/edit" element={<AgentFormPage />} />
         <Route path="projects" element={<Projects />} />
+        <Route path="projects/:id" element={<ProjectChat />} />
         <Route path="skills" element={<SkillLibrary />} />
         <Route path="notes" element={<Notes />} />
         <Route path="settings" element={<Settings />} />

@@ -1,17 +1,18 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
-import { buildPlannerRequest, parsePlanJson, whenProjectIdle } from './projects.js'
-import type { Agent, Endpoint, Project, ProjectMessage, TeamPlanResponse } from './shared/types.js'
+import { buildPlannerRequest, parsePlanJson, validateTeamPlan, whenProjectIdle } from './projects.js'
+import type { Agent, Endpoint, Project, ProjectMessage, ProjectUpdate, TeamPlanResult } from './shared/types.js'
 import { createStore, type WorkspaceStore } from './store.js'
 
 /**
  * Project team plans and task runs through fastify.inject() with a stubbed
  * fetch (no sockets, no network). The stub answers Primary's planning call
- * with a scripted plan and every other call (a task run) by agent.
+ * with a scripted plan and every other call (a task run) by agent. team-plan
+ * only returns a plan; team-plan/apply commits what the user confirmed.
  */
 
 let dir = ''
@@ -114,6 +115,36 @@ async function askPlan(projectId: string, text: string) {
   return { prompt, res }
 }
 
+/** POST team-plan/apply: the plan (and replyTo) as team-plan returned them, plus a selection. */
+function apply(projectId: string, result: TeamPlanResult, selection: Record<string, unknown> = {}) {
+  return inject('POST', `/api/projects/${projectId}/team-plan/apply`, { ...result, ...selection })
+}
+
+/** Ask Primary about a new prompt, then apply its plan (all of it unless `selection` says otherwise). */
+async function planAndApply(projectId: string, text: string, selection: Record<string, unknown> = {}) {
+  const { prompt, res } = await askPlan(projectId, text)
+  expect(res.statusCode).toBe(200)
+  const result = res.json() as TeamPlanResult
+  const applied = await apply(projectId, result, selection)
+  expect(applied.statusCode).toBe(200)
+  return { prompt, result, body: applied.json() as ProjectUpdate }
+}
+
+/** The store as written to disk, and as held in memory. */
+const storeFile = (): string => readFileSync(join(dir, 'store.json'), 'utf8')
+const memory = (): string => JSON.stringify([store.projectMessages, store.agents, store.projects, store.runs])
+
+/** Count store.save() calls from here on (the real save still runs). */
+function countSaves(): { count: () => number; restore: () => void } {
+  const save = store.save
+  let n = 0
+  store.save = () => {
+    n += 1
+    return save()
+  }
+  return { count: () => n, restore: () => (store.save = save) }
+}
+
 async function thread(projectId: string): Promise<ProjectMessage[]> {
   const res = await inject('GET', `/api/projects/${projectId}/messages`)
   expect(res.statusCode).toBe(200)
@@ -169,8 +200,12 @@ describe('POST /api/projects/:id/team-plan', () => {
     for (let i = 0; i < 14; i++) await say(p.id, `note ${i}`, i % 2 === 0 ? 'user' : ana.id)
     const requests = mockTeam({ reply: 'Nothing to do.' })
 
-    const { res } = await askPlan(p.id, 'Write a launch post')
-    expect(res.statusCode).toBe(201)
+    const { prompt, res } = await askPlan(p.id, 'Write a launch post')
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({
+      plan: { reply: 'Nothing to do.', add: [], create: [], tasks: [], warnings: [] },
+      replyTo: prompt.id,
+    })
     const req = requests.find(isPlanner)
     expect(req).toBeDefined()
     expect(req?.model).toBe('llama-3-70b')
@@ -184,17 +219,18 @@ describe('POST /api/projects/:id/team-plan', () => {
     expect(system).toContain(`${'L'.repeat(1_400)}`)
     expect(system).not.toContain('L'.repeat(1_500))
     expect(system).toContain('"tasks":[{"agent":"...","task":"..."}]')
+    expect(system).toContain('The user reviews your plan first')
 
     const user = lastUser(req ?? {})
     expect(user).toContain('Project: Blog\nDescription: Our engineering blog.')
-    expect(user).toContain(`- id: ${ana.id} | name: Ana | role: Writer | skills: summarization`)
+    expect(user).toContain(`Team (1):\n- id: ${ana.id} | name: Ana | role: Writer | skills: summarization`)
     expect(user).toContain(`- id: ${ben.id} | name: Ben | role: Reviewer`)
     // Primary is never offered as a library agent to add.
     expect(user).not.toContain(`- id: ${lead.id}`)
     expect(user).toContain('- summarization')
-    // The last 12 earlier messages, oldest first, labelled by author name.
+    // The last 12 earlier messages, oldest first, labelled by author name; the rest are counted.
+    expect(user).toContain('Recent project chat (oldest first):\n(2 earlier messages not shown)\n- User: note 2\n')
     expect(user).not.toContain('note 1\n')
-    expect(user).toContain('- User: note 2\n')
     expect(user).toContain('- Ana: note 13')
     expect(user.indexOf('note 2')).toBeLessThan(user.indexOf('note 13'))
     expect(user.endsWith("The user's prompt:\nWrite a launch post")).toBe(true)
@@ -208,19 +244,20 @@ describe('POST /api/projects/:id/team-plan', () => {
     const prompt = await say(p.id, 'Go')
     const project = store.projects.find((x) => x.id === p.id) as Project
     const leadAgent = store.agents.find((a) => a.id === lead.id) as Agent
-    const message = store.projectMessages.find((m) => m.id === prompt.id) as ProjectMessage
+    const asked = { text: prompt.text, messageId: prompt.id }
     const chatLines = (content: string) => content.split('\n').filter((l) => l.startsWith('- User: ')).length
     const tokens = (r: ReturnType<typeof buildPlannerRequest>) =>
       Math.ceil(r.messages.reduce((n, m) => n + m.content.length, 0) / 4)
 
-    const full = buildPlannerRequest(store, project, leadAgent, message, 1_000_000)
+    const full = buildPlannerRequest(store, project, leadAgent, asked, 1_000_000)
     expect(chatLines(full.messages[1]?.content ?? '')).toBe(12)
     // Leaves about 150 tokens too few: a few chat lines go, the rosters stay.
     const window = Math.floor(1.5 * (tokens(full) - 150))
-    const fitted = buildPlannerRequest(store, project, leadAgent, message, window)
+    const fitted = buildPlannerRequest(store, project, leadAgent, asked, window)
     const user = fitted.messages[1]?.content ?? ''
     expect(chatLines(user)).toBeGreaterThan(0)
     expect(chatLines(user)).toBeLessThan(12)
+    expect(user).toContain(`(${12 - chatLines(user)} earlier messages not shown)`)
     expect(user).toContain(`- id: ${ana.id} | name: Ana`)
     expect(user).toContain('- summarization')
     expect(tokens(fitted) + Math.min(2048, Math.floor(window / 3))).toBeLessThanOrEqual(window)
@@ -243,6 +280,84 @@ describe('POST /api/projects/:id/team-plan', () => {
     expect(res.json().message).toContain("Prompt too large for Lead's context window")
     expect(requests).toHaveLength(0)
     expect(store.projectMessages).toHaveLength(before + 1) // only the user message
+    // A prompt sent as text is held to the same window.
+    const direct = await inject('POST', `/api/projects/${p.id}/team-plan`, { prompt: 'z'.repeat(5_000) })
+    expect(direct.statusCode).toBe(413)
+    expect(requests).toHaveLength(0)
+  })
+
+  it('says how many entries it leaves out, never "None.", and keeps team ids longest', async () => {
+    const lead = await makeLead()
+    const team: Agent[] = []
+    for (let i = 0; i < 3; i++) team.push(await makeAgent(`Member ${i}`, { role: 'Builder', description: 'd'.repeat(300) }))
+    for (let i = 0; i < 6; i++) await makeAgent(`Spare ${i}`, { description: 's'.repeat(300) })
+    const p = await makeProject('Fit', team.map((a) => a.id))
+    for (let i = 0; i < 5; i++) await say(p.id, `chat ${i} `.padEnd(300, 'c'))
+    const project = store.projects.find((x) => x.id === p.id) as Project
+    const leadAgent = store.agents.find((a) => a.id === lead.id) as Agent
+    const skills = store.skills.length
+    expect(skills).toBeGreaterThan(0)
+    expect(skills).toBeLessThanOrEqual(40)
+
+    type Section = { entries: string[]; lines: string[]; text: string }
+    const parse = (user: string): Record<'team' | 'library' | 'skills' | 'chat', Section> => {
+      const [, team, library, skillsText, chat] = user.split('\n\n')
+      const section = (text = ''): Section => {
+        const lines = text.split('\n').slice(1)
+        return { entries: lines.filter((l) => l.startsWith('- ')), lines, text }
+      }
+      return { team: section(team), library: section(library), skills: section(skillsText), chat: section(chat) }
+    }
+    const fullUser = buildPlannerRequest(store, project, leadAgent, { text: 'Ship it' }, 1_000_000).messages[1]?.content ?? ''
+    expect(fullUser).not.toContain('not shown')
+    expect(fullUser).toContain('Team (3):')
+    expect(fullUser).toContain('Library agents that could join (6):')
+    expect(fullUser).toContain(`Library skills for new specialists (${skills}; id: name — description):`)
+    // A prompt sent as text sees the latest chat (here all of it).
+    expect(parse(fullUser).chat.entries).toHaveLength(5)
+    const fullTokens = Math.ceil(fullUser.length / 4)
+
+    const seen = { libraryPartial: false, teamCompact: false, teamDropped: false }
+    let reached413 = false
+    // From a window where everything fits down to the 413, in steps fine enough to see each phase.
+    for (let window = 3 * (fullTokens + 1_000); window > 0; window -= Math.max(5, Math.floor(window / 200))) {
+      let user: string
+      try {
+        user = buildPlannerRequest(store, project, leadAgent, { text: 'Ship it' }, window).messages[1]?.content ?? ''
+      } catch (err) {
+        expect((err as { statusCode?: number }).statusCode).toBe(413)
+        reached413 = true
+        break
+      }
+      const s = parse(user)
+      for (const [section, total, unit] of [
+        [s.library, 6, 'more'],
+        [s.skills, skills, 'more'],
+        [s.team, 3, 'more'],
+      ] as const) {
+        expect(section.text).not.toContain('None.')
+        expect(section.text).not.toContain('No one yet.')
+        if (section.entries.length < total) expect(section.lines).toContain(`(${total - section.entries.length} ${unit} not shown)`)
+      }
+      const hiddenChat = 5 - s.chat.entries.length
+      expect(s.chat.text).not.toContain('No earlier messages.')
+      if (hiddenChat > 0) {
+        expect(s.chat.lines[0]).toBe(`(${hiddenChat} earlier ${hiddenChat === 1 ? 'message' : 'messages'} not shown)`)
+      }
+      const fullTeam = s.team.entries.filter((l) => l.includes('| role: Builder'))
+      // Chat, skills and library go before any team detail does.
+      if (s.chat.entries.length + s.skills.entries.length + s.library.entries.length > 0) expect(fullTeam).toHaveLength(3)
+      if (s.library.entries.length > 0 && s.library.entries.length < 6) seen.libraryPartial = true
+      if (fullTeam.length < 3) {
+        // Team lines shrink to id and name together, before any member is left out.
+        expect(fullTeam).toHaveLength(0)
+        for (const line of s.team.entries) expect(line).toMatch(/^- id: agt_\w+ \| name: Member \d$/)
+        if (s.team.entries.length === 3) seen.teamCompact = true
+        else seen.teamDropped = true
+      }
+    }
+    expect(reached413).toBe(true)
+    expect(seen).toEqual({ libraryPartial: true, teamCompact: true, teamDropped: true })
   })
 
   it('validates strictly: drops bad entries with warnings and ignores injected fields', async () => {
@@ -259,6 +374,8 @@ describe('POST /api/projects/:id/team-plan', () => {
           add: [{ agentId: 'agt_ghost', reason: '?' }, { agentId: lead.id }, { agentId: ana.id }, 'ben', { agentId: ben.id, extra: 1 }],
           create: [
             { name: 'ana', role: 'x', instructions: 'y' },
+            // A name that is an existing agent's id (any case) is taken too.
+            { name: ben.id.toUpperCase(), role: 'x', instructions: 'y' },
             {
               name: 'Researcher',
               role: 'Research',
@@ -288,13 +405,13 @@ describe('POST /api/projects/:id/team-plan', () => {
     )
 
     const { prompt, res } = await askPlan(p.id, 'Research and write')
-    expect(res.statusCode).toBe(201)
-    const body = res.json() as TeamPlanResponse
-    expect(body.messages).toHaveLength(1)
-    const msg = body.messages[0] as ProjectMessage
-    expect(msg).toMatchObject({ projectId: p.id, author: lead.id, kind: 'team-plan', replyTo: prompt.id, planStatus: 'pending', text: 'Here is the plan.' })
-    const plan = msg.plan!
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as TeamPlanResult
+    expect(Object.keys(body).sort()).toEqual(['plan', 'replyTo'])
+    expect(body.replyTo).toBe(prompt.id)
+    const plan = body.plan
     expect(Object.keys(plan).sort()).toEqual(['add', 'create', 'reply', 'tasks', 'warnings'])
+    expect(plan.reply).toBe('Here is the plan.')
     expect(plan.add).toEqual([{ agentId: ben.id, reason: '' }])
     expect(plan.create).toEqual([
       {
@@ -316,6 +433,7 @@ describe('POST /api/projects/:id/team-plan', () => {
       /Skipped adding Lead: they already lead the team/,
       /Skipped adding Ana: already on the team/,
       /Skipped creating "ana": an agent with that name already exists/,
+      new RegExp(`Skipped creating "${ben.id.toUpperCase()}": it is an existing agent's id`),
       /Dropped unknown skill "made-up" from "Researcher"/,
       /new specialist with no name/,
       /60 characters or fewer/,
@@ -327,8 +445,13 @@ describe('POST /api/projects/:id/team-plan', () => {
       expect(warnings).toMatch(pattern)
     }
 
+    // Validating the validated plan again (what apply does) changes nothing.
+    const project = store.projects.find((x) => x.id === p.id) as Project
+    const leadAgent = store.agents.find((a) => a.id === lead.id) as Agent
+    expect(validateTeamPlan({ ...plan }, store, project, leadAgent)).toEqual({ ...plan, warnings: [] })
+
     // Applying never lets the model's fields through: fresh id, Primary's endpoint/model.
-    const applied = await inject('POST', `/api/projects/${p.id}/plans/${msg.id}/apply`, { tasks: [] })
+    const applied = await apply(p.id, body, { tasks: [] })
     expect(applied.statusCode).toBe(200)
     const researcher = store.agents.find((a) => a.name === 'Researcher') as Agent
     expect(researcher.id).not.toBe('agt_evil')
@@ -355,12 +478,12 @@ describe('POST /api/projects/:id/team-plan', () => {
       tasks: Array.from({ length: 12 }, (_, i) => ({ agent: lead.id, task: `Task ${i}` })),
     })
     const { res } = await askPlan(p.id, 'Everything')
-    expect(res.statusCode).toBe(201)
-    const plan = (res.json() as TeamPlanResponse).messages[0]?.plan
-    expect(plan?.add.map((a) => a.agentId)).toEqual(pool.slice(0, 10).map((a) => a.id))
-    expect(plan?.create.map((c) => c.name)).toEqual(['New 0', 'New 1', 'New 2', 'New 3', 'New 4'])
-    expect(plan?.tasks).toHaveLength(10)
-    expect(plan?.warnings).toEqual([
+    expect(res.statusCode).toBe(200)
+    const plan = (res.json() as TeamPlanResult).plan
+    expect(plan.add.map((a) => a.agentId)).toEqual(pool.slice(0, 10).map((a) => a.id))
+    expect(plan.create.map((c) => c.name)).toEqual(['New 0', 'New 1', 'New 2', 'New 3', 'New 4'])
+    expect(plan.tasks).toHaveLength(10)
+    expect(plan.warnings).toEqual([
       'Kept the first 10 agents to add; dropped 2 more.',
       'Kept the first 5 new specialists; dropped 2 more.',
       'Kept the first 10 tasks; dropped 2 more.',
@@ -371,75 +494,167 @@ describe('POST /api/projects/:id/team-plan', () => {
     await makeLead()
     const p = await makeProject('Broken')
     const prompt = await say(p.id, 'Plan please')
-    const snapshot = () => JSON.stringify([store.projectMessages, store.agents, store.projects])
-    const before = snapshot()
+    const before = memory()
+    const file = storeFile()
 
     for (const answer of ['I would rather not.', '{"reply": "cut off', '{"unrelated": true}', '["reply"]']) {
       mockTeam(answer)
       const res = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
       expect(res.statusCode).toBe(502)
       expect(res.json().message).toMatch(/answer was not a valid team plan.*Nothing was changed/)
-      expect(snapshot()).toBe(before)
+      expect(memory()).toBe(before)
     }
 
     mockUpstream(() => ({ status: 500 }))
     const failed = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
     expect(failed.statusCode).toBe(502)
     expect(failed.json().message).toMatch(/Lead could not answer: Upstream responded 500.*Nothing was changed/)
-    expect(snapshot()).toBe(before)
+    expect(memory()).toBe(before)
+    expect(storeFile()).toBe(file)
   })
 
-  it('404s, 400s and 409s on bad requests', async () => {
+  it('404s, 400s and 409s on bad requests, and answers the same message as often as asked', async () => {
     const p = await makeProject('Rules')
     const prompt = await say(p.id, 'Hello')
     mockTeam({ reply: 'Hi.' })
+    const plan = (body: unknown) => inject('POST', `/api/projects/${p.id}/team-plan`, body)
     // No agents at all: there is no Primary yet.
-    const noLead = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
+    const noLead = await plan({ messageId: prompt.id })
     expect(noLead.statusCode).toBe(409)
     expect(noLead.json().message).toContain('Create the Team Lead first')
+    expect((await plan({ prompt: 'Hello' })).statusCode).toBe(409)
 
     const lead = await makeLead()
     expect((await inject('POST', '/api/projects/proj_nope/team-plan', { messageId: prompt.id })).statusCode).toBe(404)
-    expect((await inject('POST', `/api/projects/${p.id}/team-plan`, {})).statusCode).toBe(400)
-    expect((await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: 'msg_nope' })).statusCode).toBe(400)
+    for (const bad of [{}, [], { messageId: 42 }, { prompt: 7 }, { prompt: '   ' }, { prompt: 'x'.repeat(20_001) }, { messageId: 'msg_nope' }]) {
+      expect((await plan(bad)).statusCode).toBe(400)
+    }
     const fromAgent = await say(p.id, 'I am an agent', lead.id)
-    expect((await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: fromAgent.id })).statusCode).toBe(400)
+    expect((await plan({ messageId: fromAgent.id })).statusCode).toBe(400)
     const other = await makeProject('Other')
     expect((await inject('POST', `/api/projects/${other.id}/team-plan`, { messageId: prompt.id })).statusCode).toBe(400)
 
-    // A reply-only plan applies at once; asking again for the same message is a 409.
-    const first = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-    expect(first.statusCode).toBe(201)
-    const body = first.json() as TeamPlanResponse
-    expect(body.project.id).toBe(p.id)
-    expect(body.messages.map((m) => [m.kind, m.planStatus, m.text])).toEqual([['team-plan', 'applied', 'Hi.']])
-    const again = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-    expect(again.statusCode).toBe(409)
+    // Nothing is stored, so asking again is just another plan.
+    for (let i = 0; i < 2; i++) {
+      const res = await plan({ messageId: prompt.id })
+      expect(res.statusCode).toBe(200)
+      expect(res.json()).toEqual({ plan: { reply: 'Hi.', add: [], create: [], tasks: [], warnings: [] }, replyTo: prompt.id })
+    }
+    expect((await thread(p.id)).map((m) => m.text)).toEqual(['Hello', 'I am an agent'])
   })
 
-  it('409s a second request while Primary is still answering the same message', async () => {
-    await makeLead()
+  it('writes nothing, not even for a tasks-only plan; nothing runs before apply', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Read only', [ana.id])
+    const prompt = await say(p.id, 'Draft it')
+    const saves = countSaves()
+    try {
+      for (const answer of [
+        { reply: 'Ana drafts.', tasks: [{ agent: ana.id, task: 'Draft' }] },
+        { reply: 'Just a reply.' },
+        {
+          reply: 'A helper too.',
+          create: [{ name: 'Helper', role: 'r', instructions: 'I help.', reason: 'x' }],
+          tasks: [
+            { agent: 'Helper', task: 'Help' },
+            { agent: lead.id, task: 'Lead' },
+          ],
+        },
+      ]) {
+        const requests = mockTeam(answer)
+        const file = storeFile()
+        const before = memory()
+        for (const body of [{ messageId: prompt.id }, { prompt: 'Draft it' }]) {
+          const res = await inject('POST', `/api/projects/${p.id}/team-plan`, body)
+          expect(res.statusCode).toBe(200)
+          expect((res.json() as TeamPlanResult).plan.reply).toBe(answer.reply)
+        }
+        await whenProjectIdle(store, p.id)
+        expect(storeFile()).toBe(file)
+        expect(memory()).toBe(before)
+        expect(requests.filter((r) => !isPlanner(r))).toHaveLength(0)
+      }
+      expect(saves.count()).toBe(0)
+    } finally {
+      saves.restore()
+    }
+    expect(store.agents.some((a) => a.name === 'Helper')).toBe(false)
+    expect(store.runs).toHaveLength(0)
+  })
+
+  it('serves concurrent requests for the same message side by side', async () => {
+    const lead = await makeLead()
     const p = await makeProject('Busy')
     const prompt = await say(p.id, 'Plan')
     const hold = gate()
-    const started = gate()
+    const allStarted = gate()
+    let started = 0
     mockUpstream(async () => {
-      started.open()
+      started += 1
+      if (started === 3) allStarted.open()
       await hold.wait
-      return '{"reply":"done"}'
+      return JSON.stringify({ reply: 'done', tasks: [{ agent: lead.id, task: 'Wrap up' }] })
     })
-    const firstCall = inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-    await started.wait
-    const second = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-    expect(second.statusCode).toBe(409)
-    expect(second.json().message).toContain('already answering')
+    const before = memory()
+    const calls = [
+      inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id }),
+      inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id }),
+      inject('POST', `/api/projects/${p.id}/team-plan`, { prompt: 'Plan' }),
+    ]
+    await allStarted.wait
     hold.open()
-    expect((await firstCall).statusCode).toBe(201)
+    const results = await Promise.all(calls)
+    expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200])
+    const plans = results.map((r) => (r.json() as TeamPlanResult).plan)
+    expect(plans[0]).toEqual({ reply: 'done', add: [], create: [], tasks: [{ agent: lead.id, task: 'Wrap up' }], warnings: [] })
+    expect(plans[1]).toEqual(plans[0])
+    expect(plans[2]).toEqual(plans[0])
+    expect(memory()).toBe(before)
+  })
+
+  it('answers a prompt sent without a chat message, and its tasks run without one', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const p = await makeProject('Direct', [ana.id], 'A docs site.')
+    await say(p.id, 'earlier note')
+    const requests = mockTeam({ reply: 'Ana writes.', tasks: [{ agent: ana.id, task: 'Write the intro' }] })
+
+    const res = await inject('POST', `/api/projects/${p.id}/team-plan`, { prompt: '  Write the docs  ' })
+    expect(res.statusCode).toBe(200)
+    const result = res.json() as TeamPlanResult
+    expect('replyTo' in result).toBe(false)
+    expect(result.plan.tasks).toEqual([{ agent: ana.id, task: 'Write the intro' }])
+    const user = lastUser(requests.find(isPlanner) ?? {})
+    expect(user).toContain('Recent project chat (oldest first):\n- User: earlier note')
+    expect(user.endsWith("The user's prompt:\nWrite the docs")).toBe(true)
+    expect(await thread(p.id)).toHaveLength(1)
+
+    // With both, the chat message is the prompt.
+    const m = await say(p.id, 'From the chat')
+    const both = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: m.id, prompt: 'ignored' })
+    expect(both.statusCode).toBe(200)
+    expect((both.json() as TeamPlanResult).replyTo).toBe(m.id)
+    expect(lastUser(requests.filter(isPlanner)[1] ?? {}).endsWith("The user's prompt:\nFrom the chat")).toBe(true)
+
+    // Applied without replyTo: nothing carries one, and the task input has no user prompt.
+    const applied = await apply(p.id, result)
+    expect(applied.statusCode).toBe(200)
+    const body = applied.json() as ProjectUpdate
+    expect(body.messages.map((x) => [x.kind, x.author, x.text])).toEqual([
+      ['message', lead.id, 'Ana writes.'],
+      ['task-assignment', lead.id, 'Write the intro'],
+    ])
+    expect(body.messages.every((x) => !('replyTo' in x))).toBe(true)
+    await whenProjectIdle(store, p.id)
+    const taskInput = lastUser(requests.find((r) => systemOf(r) === 'I am Ana.') ?? {})
+    expect(taskInput).toContain('Lead assigned you this task:\nWrite the intro')
+    expect(taskInput).not.toContain('The user asked')
   })
 })
 
-describe('applying and cancelling plans', () => {
-  it('applies a tasks-only plan at once and runs its tasks', async () => {
+describe('POST /api/projects/:id/team-plan/apply', () => {
+  it('applies a tasks-only plan only when the user confirms it, then runs its tasks', async () => {
     const lead = await makeLead()
     const ana = await makeAgent('Ana', { role: 'Writer' })
     const ben = await makeAgent('Ben', { role: 'Reviewer' })
@@ -454,29 +669,51 @@ describe('applying and cancelling plans', () => {
 
     const started = Date.now()
     const { prompt, res } = await askPlan(p.id, 'Announce v2')
-    expect(res.statusCode).toBe(201)
-    const body = res.json() as TeamPlanResponse
-    const [plan, t1, t2] = body.messages
-    expect(plan).toMatchObject({ kind: 'team-plan', planStatus: 'applied', replyTo: prompt.id })
-    expect(t1).toMatchObject({ kind: 'task-assignment', author: lead.id, assigneeId: ana.id, taskStatus: 'queued', planId: plan?.id, text: 'Draft the announcement' })
-    expect(t2).toMatchObject({ assigneeId: ben.id, taskStatus: 'queued', text: 'Review the announcement' })
-    // No team change, so no team-update.
-    expect(body.messages.some((m) => m.kind === 'team-update')).toBe(false)
+    expect(res.statusCode).toBe(200)
+    const result = res.json() as TeamPlanResult
+    expect(result.plan.tasks).toEqual([
+      { agent: ana.id, task: 'Draft the announcement' },
+      { agent: ben.id, task: 'Review the announcement' },
+    ])
+    // A plan with only tasks waits for the user like any other.
+    await whenProjectIdle(store, p.id)
+    expect((await thread(p.id)).map((m) => m.id)).toEqual([prompt.id])
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(0)
+
+    const applied = await apply(p.id, result)
+    expect(applied.statusCode).toBe(200)
+    const body = applied.json() as ProjectUpdate
+    expect(body.project.id).toBe(p.id)
+    expect(body.project.teamAgentIds).toEqual([ana.id, ben.id])
+    const [reply, t1, t2] = body.messages
+    expect(body.messages).toHaveLength(3)
+    expect(reply).toMatchObject({ kind: 'message', author: lead.id, text: 'Ana drafts, Ben reviews.', replyTo: prompt.id })
+    expect(t1).toMatchObject({
+      kind: 'task-assignment',
+      author: lead.id,
+      assigneeId: ana.id,
+      taskStatus: 'queued',
+      replyTo: prompt.id,
+      text: 'Draft the announcement',
+    })
+    expect(t2).toMatchObject({ kind: 'task-assignment', assigneeId: ben.id, taskStatus: 'queued', replyTo: prompt.id, text: 'Review the announcement' })
 
     await whenProjectIdle(store, p.id)
     expect(Date.now() - started).toBeLessThan(1_000)
     const msgs = await thread(p.id)
-    expect(msgs.map((m) => m.kind)).toEqual(['message', 'team-plan', 'task-assignment', 'task-assignment', 'task-result', 'task-result'])
+    // No team change, so no team-update; each result is a message from the assignee.
+    expect(msgs.map((m) => m.kind)).toEqual(['message', 'message', 'task-assignment', 'task-assignment', 'message', 'message'])
     expect(msgs.filter((m) => m.kind === 'task-assignment').map((m) => m.taskStatus)).toEqual(['done', 'done'])
-    const results = msgs.filter((m) => m.kind === 'task-result')
-    expect(results.map((m) => [m.author, m.text, m.taskId, m.planId, m.taskStatus])).toEqual([
-      [ana.id, 'I am Ana.: done', t1?.id, plan?.id, 'done'],
-      [ben.id, 'I am Ben.: done', t2?.id, plan?.id, 'done'],
+    const results = msgs.filter((m) => m.taskId)
+    expect(results.map((m) => [m.kind, m.author, m.text, m.taskId, m.taskStatus])).toEqual([
+      ['message', ana.id, 'I am Ana.: done', t1?.id, 'done'],
+      ['message', ben.id, 'I am Ben.: done', t2?.id, 'done'],
     ])
-    const run = store.runs.find((r) => r.id === results[0]?.runId)
-    expect(run).toMatchObject({ agentId: ana.id, projectId: p.id, status: 'succeeded' })
+    for (const r of results) {
+      expect(store.runs.find((run) => run.id === r.runId)).toMatchObject({ agentId: r.author, projectId: p.id, status: 'succeeded' })
+    }
 
-    // The task input: project, the user's prompt, the assignment, teammates.
+    // The task input: project, the user's prompt (from replyTo), the assignment, teammates.
     const taskInput = lastUser(requests.find((r) => systemOf(r) === 'I am Ana.') ?? {})
     expect(taskInput).toContain('Project: Launch\nProduct launch.')
     expect(taskInput).toContain('The user asked:\nAnnounce v2')
@@ -505,17 +742,16 @@ describe('applying and cancelling plans', () => {
         { agent: ben.id, task: 'Review the post' },
       ],
     })
-    const { res } = await askPlan(p.id, 'Write the blog post')
-    expect(res.statusCode).toBe(201)
-    const planMsg = (res.json() as TeamPlanResponse).messages[0] as ProjectMessage
-    expect(planMsg.planStatus).toBe('pending')
-    // Pending: nothing created, no team change, no tasks yet.
+    const { prompt, res } = await askPlan(p.id, 'Write the blog post')
+    expect(res.statusCode).toBe(200)
+    const result = res.json() as TeamPlanResult
+    // Only a plan: nothing created, no team change, no tasks.
     expect(store.agents.some((a) => a.name === 'Copy Editor')).toBe(false)
-    expect(store.projectMessages.some((m) => m.kind === 'task-assignment')).toBe(false)
+    expect(store.projectMessages.some((m) => m.kind !== 'message' || m.author !== 'user')).toBe(false)
 
-    const applied = await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, { add: [], create: [0], tasks: [0, 1, 2, 3] })
+    const applied = await apply(p.id, result, { add: [], create: [0], tasks: [0, 1, 2, 3] })
     expect(applied.statusCode).toBe(200)
-    const body = applied.json() as TeamPlanResponse
+    const body = applied.json() as ProjectUpdate
     const editor = store.agents.find((a) => a.name === 'Copy Editor') as Agent
     expect(editor).toMatchObject({
       projectId: p.id,
@@ -531,14 +767,19 @@ describe('applying and cancelling plans', () => {
     expect(body.project.teamAgentIds).toEqual([ana.id, editor.id])
     expect(store.projects.find((x) => x.id === p.id)?.teamAgentIds).toEqual([ana.id, editor.id])
 
-    const [plan, update, ...assignments] = body.messages
-    expect(plan).toMatchObject({ id: planMsg.id, planStatus: 'applied' })
-    expect(plan?.updatedAt).toBeTruthy()
-    expect(update).toMatchObject({ kind: 'team-update', author: lead.id, planId: planMsg.id })
-    expect(update?.text).toBe('Created Copy Editor (Editor) for this project. Skipped 2 tasks whose agent is not on the team. Assigned 2 tasks.')
-    expect(assignments.map((m) => [m.kind, m.assigneeId, m.text, m.taskStatus, m.author, m.planId])).toEqual([
-      ['task-assignment', ana.id, 'Draft the post', 'queued', lead.id, planMsg.id],
-      ['task-assignment', editor.id, 'Edit the draft', 'queued', lead.id, planMsg.id],
+    const [reply, update, ...assignments] = body.messages
+    expect(reply).toMatchObject({ kind: 'message', author: lead.id, text: 'Ana writes; I suggest Ben and two specialists.', replyTo: prompt.id })
+    expect(update).toMatchObject({ kind: 'team-update', author: lead.id, replyTo: prompt.id })
+    // Tasks for agents the user did not accept are dropped, and the update says why.
+    expect(update?.text).toBe(
+      'Created Copy Editor (Editor) for this project. ' +
+        'Skipped the task "Pick keywords": "SEO Expert" is not on the team, in this plan, or the team lead. ' +
+        'Skipped the task "Review the post": Ben is not on the team, in this plan, or the team lead. ' +
+        'Assigned 2 tasks.',
+    )
+    expect(assignments.map((m) => [m.kind, m.assigneeId, m.text, m.taskStatus, m.author, m.replyTo])).toEqual([
+      ['task-assignment', ana.id, 'Draft the post', 'queued', lead.id, prompt.id],
+      ['task-assignment', editor.id, 'Edit the draft', 'queued', lead.id, prompt.id],
     ])
 
     await whenProjectIdle(store, p.id)
@@ -546,20 +787,20 @@ describe('applying and cancelling plans', () => {
     const msgs = await thread(p.id)
     expect(msgs.map((m) => m.kind)).toEqual([
       'message',
-      'team-plan',
+      'message',
       'team-update',
       'task-assignment',
       'task-assignment',
-      'task-result',
-      'task-result',
+      'message',
+      'message',
     ])
-    expect(msgs.filter((m) => m.kind === 'task-result').map((m) => [m.author, m.text])).toEqual([
+    expect(msgs.filter((m) => m.taskId).map((m) => [m.author, m.text])).toEqual([
       [ana.id, 'I am Ana.: done'],
       [editor.id, 'You edit copy.\n\nSkills:\n\n## technical-writing\n' + store.skills.find((s) => s.id === 'technical-writing')?.content + ': done'],
     ])
 
-    // Apply twice: 409.
-    const twice = await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, {})
+    // Applying the same plan again: its specialist exists now.
+    const twice = await apply(p.id, result, { add: [], create: [0], tasks: [0, 1, 2, 3] })
     expect(twice.statusCode).toBe(409)
   })
 
@@ -577,51 +818,142 @@ describe('applying and cancelling plans', () => {
         { agent: lead.id, task: 'Wrap up' },
       ],
     })
-    const { res } = await askPlan(p.id, 'Make a newsletter')
-    const planMsg = (res.json() as TeamPlanResponse).messages[0] as ProjectMessage
-    const applied = await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`)
-    expect(applied.statusCode).toBe(200)
-    const body = applied.json() as TeamPlanResponse
+    const { body } = await planAndApply(p.id, 'Make a newsletter')
     const writer = store.agents.find((a) => a.name === 'Writer') as Agent
     expect(body.project.teamAgentIds).toEqual([ben.id, writer.id])
+    expect(body.messages.map((m) => m.kind)).toEqual(['message', 'team-update', 'task-assignment', 'task-assignment', 'task-assignment'])
     expect(body.messages[1]?.text).toBe('Added Ben to the team. Created Writer (Writer) for this project. Assigned 3 tasks.')
     expect(body.messages.slice(2).map((m) => m.assigneeId)).toEqual([writer.id, ben.id, lead.id])
     await whenProjectIdle(store, p.id)
-    const results = (await thread(p.id)).filter((m) => m.kind === 'task-result')
+    const results = (await thread(p.id)).filter((m) => m.taskId)
     expect(results.map((m) => m.author)).toEqual([writer.id, ben.id, lead.id])
     // The lead running its own task is told so.
     const leadRun = store.runs.find((r) => r.agentId === lead.id)
     expect(leadRun?.input).toContain('As the team lead, you took this task:\nWrap up')
   })
 
-  it('cancels a pending plan; cancel and apply then 409, and the message can be asked again', async () => {
-    await makeLead()
+  it('validates a tampered plan again like model output, against the store as it is now', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
     const ben = await makeAgent('Ben')
-    const p = await makeProject('Cancel')
-    mockTeam({ reply: 'Add Ben?', add: [{ agentId: ben.id, reason: 'r' }] })
-    const { prompt, res } = await askPlan(p.id, 'Help')
-    const planMsg = (res.json() as TeamPlanResponse).messages[0] as ProjectMessage
+    const p = await makeProject('Tampered', [ana.id])
+    const prompt = await say(p.id, 'Do things')
+    mockTeam({ reply: 'unused' })
+    const tampered = {
+      reply: 'Forged reply.',
+      warnings: ['ignored'],
+      projectId: 'proj_evil',
+      teamAgentIds: ['agt_evil'],
+      add: [{ agentId: 'agt_ghost' }, { agentId: lead.id }, { agentId: ana.id }, { agentId: ben.id, isPrimary: true, projectId: 'proj_evil' }],
+      create: [
+        {
+          name: 'Mole',
+          role: 'Spy',
+          instructions: 'I am Mole.',
+          skillIds: ['made-up', 'summarization'],
+          reason: 'r',
+          id: 'agt_evil',
+          projectId: 'proj_evil',
+          endpointId: 'ep_openrouter',
+          modelId: 'evil-model',
+          isPrimary: true,
+          temperature: 2,
+          runCount: 99,
+        },
+        ...Array.from({ length: 59 }, (_, i) => ({ name: `Extra ${i}`, role: 'x', instructions: `I am Extra ${i}.`, reason: 'r' })),
+      ],
+      tasks: [
+        { agent: 'agt_ghost', task: 'Haunt' },
+        { agent: lead.id, task: 'Lead it', kind: 'team-update', author: 'user', taskStatus: 'done', assigneeId: 'agt_ghost', id: 'msg_evil' },
+        ...Array.from({ length: 60 }, (_, i) => ({ agent: ana.id, task: `Task ${i}` })),
+      ],
+    }
+    const res = await inject('POST', `/api/projects/${p.id}/team-plan/apply`, { plan: tampered, replyTo: prompt.id })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ProjectUpdate
 
-    const cancelled = await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/cancel`)
-    expect(cancelled.statusCode).toBe(200)
-    const body = cancelled.json() as TeamPlanResponse
-    expect(body.messages).toHaveLength(1)
-    expect(body.messages[0]).toMatchObject({ id: planMsg.id, planStatus: 'cancelled' })
-    expect(body.messages[0]?.updatedAt).toBeTruthy()
-    expect(body.project.teamAgentIds).toEqual([])
+    const created = store.agents.filter((a) => a.projectId === p.id)
+    expect(created.map((a) => a.name)).toEqual(['Mole', 'Extra 0', 'Extra 1', 'Extra 2', 'Extra 3'])
+    const mole = created.find((a) => a.name === 'Mole') as Agent
+    expect(mole.id).not.toBe('agt_evil')
+    expect(mole).toMatchObject({
+      endpointId: 'ep_local_llama',
+      modelId: 'llama-3-70b',
+      temperature: 0.4,
+      isPrimary: false,
+      skillIds: ['summarization'],
+      runCount: 0,
+    })
+    expect(store.agents.filter((a) => a.isPrimary).map((a) => a.id)).toEqual([lead.id])
+    expect(store.agents.some((a) => a.projectId === 'proj_evil')).toBe(false)
+    expect(body.project.teamAgentIds).toEqual([ana.id, ben.id, ...created.map((a) => a.id)])
 
-    expect((await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/cancel`)).statusCode).toBe(409)
-    expect((await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, {})).statusCode).toBe(409)
-    expect((await inject('POST', `/api/projects/${p.id}/plans/msg_nope/cancel`)).statusCode).toBe(404)
-    expect((await inject('POST', `/api/projects/${p.id}/plans/${prompt.id}/apply`, {})).statusCode).toBe(404)
-    expect((await inject('POST', `/api/projects/proj_nope/plans/${planMsg.id}/apply`, {})).statusCode).toBe(404)
-
-    const again = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-    expect(again.statusCode).toBe(201)
+    const [reply, update, ...assignments] = body.messages
+    expect(reply).toMatchObject({ kind: 'message', author: lead.id, text: 'Forged reply.', replyTo: prompt.id })
+    expect(update).toMatchObject({ kind: 'team-update', author: lead.id, replyTo: prompt.id })
+    for (const pattern of [
+      /^Added Ben to the team\. Created Mole \(Spy\), Extra 0 \(x\)/,
+      /"agt_ghost": there is no such agent/,
+      /Skipped adding Lead: they already lead the team/,
+      /Skipped adding Ana: already on the team/,
+      /Dropped unknown skill "made-up" from "Mole"/,
+      /Kept the first 5 new specialists; dropped 55 more\./,
+      /Skipped the task "Haunt": "agt_ghost" is not on the team/,
+      /Kept the first 10 tasks; dropped \d+ more\./,
+      /Assigned 10 tasks\.$/,
+    ]) {
+      expect(update?.text).toMatch(pattern)
+    }
+    expect(update?.text).not.toContain('ignored')
+    expect(assignments).toHaveLength(10)
+    expect(assignments[0]).toMatchObject({ kind: 'task-assignment', author: lead.id, assigneeId: lead.id, text: 'Lead it', taskStatus: 'queued' })
+    expect(assignments[0]?.id).not.toBe('msg_evil')
+    expect(assignments.slice(1).map((m) => [m.kind, m.assigneeId, m.text])).toEqual(
+      Array.from({ length: 9 }, (_, i) => ['task-assignment', ana.id, `Task ${i}`]),
+    )
+    for (const m of body.messages) expect(m).toMatchObject({ projectId: p.id, replyTo: prompt.id })
+    await whenProjectIdle(store, p.id)
+    expect(store.projectMessages.filter((m) => m.taskId && m.taskStatus === 'done')).toHaveLength(10)
   })
 
-  it('400s on a bad selection and 409s when a created name was taken meanwhile', async () => {
+  it('reads the selection against the plan as sent, even where validation drops entries', async () => {
     await makeLead()
+    const p = await makeProject('Indexes')
+    mockTeam({ reply: 'unused' })
+    const plan = {
+      reply: '',
+      add: [],
+      create: [
+        { name: '', instructions: 'nameless' },
+        { name: 'Valid', role: 'Checker', instructions: 'I am Valid.' },
+        { name: 'Unticked', role: 'x', instructions: 'I am Unticked.' },
+      ],
+      tasks: [
+        { agent: 'Nobody', task: 'Lost' },
+        { agent: 'Valid', task: 'Check it' },
+        { agent: 'Unticked', task: 'Never' },
+      ],
+      warnings: [],
+    }
+    const res = await inject('POST', `/api/projects/${p.id}/team-plan/apply`, { plan, create: [0, 1], tasks: [1, 2] })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ProjectUpdate
+    const valid = store.agents.find((a) => a.name === 'Valid') as Agent
+    expect(store.agents.some((a) => a.name === 'Unticked')).toBe(false)
+    // No reply: no message from Primary. The update notes only what the user accepted and lost.
+    expect(body.messages.map((m) => m.kind)).toEqual(['team-update', 'task-assignment'])
+    expect(body.messages[0]?.text).toBe(
+      'Created Valid (Checker) for this project. Skipped a new specialist with no name. ' +
+        'Skipped the task "Never": "Unticked" is not on the team, in this plan, or the team lead. ' +
+        'Assigned 1 task.',
+    )
+    expect(body.messages[1]).toMatchObject({ assigneeId: valid.id, text: 'Check it' })
+    expect(body.messages.every((m) => !('replyTo' in m))).toBe(true)
+    await whenProjectIdle(store, p.id)
+  })
+
+  it('400s on a bad body or selection, and 409s on a taken name or no Team Lead', async () => {
+    const lead = await makeLead()
     const ben = await makeAgent('Ben')
     const p = await makeProject('Selection')
     mockTeam({
@@ -630,24 +962,59 @@ describe('applying and cancelling plans', () => {
       create: [{ name: 'Analyst', role: 'Data', instructions: 'Analyze.', reason: 'r' }],
       tasks: [{ agent: 'Analyst', task: 'Analyze' }],
     })
-    const { res } = await askPlan(p.id, 'Analyze sales')
-    const planMsg = (res.json() as TeamPlanResponse).messages[0] as ProjectMessage
-    const apply = (body: unknown) => inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, body)
-    expect((await apply({ create: [1] })).statusCode).toBe(400)
-    expect((await apply({ tasks: ['0'] })).statusCode).toBe(400)
-    expect((await apply({ add: ['agt_other'] })).statusCode).toBe(400)
-    expect((await apply({ add: 'all' })).statusCode).toBe(400)
+    const { prompt, res } = await askPlan(p.id, 'Analyze sales')
+    const result = res.json() as TeamPlanResult
+    const before = memory()
+    for (const selection of [
+      { create: [1] },
+      { create: [-1] },
+      { create: [0.5] },
+      { tasks: ['0'] },
+      { tasks: Array.from({ length: 101 }, () => 0) },
+      { add: ['agt_other'] },
+      { add: [''] },
+      { add: 'all' },
+      { replyTo: 'msg_nope' },
+      { replyTo: 5 },
+    ]) {
+      expect((await apply(p.id, result, selection)).statusCode).toBe(400)
+    }
+    expect(memory()).toBe(before)
+    const fromAgent = await say(p.id, 'Agent talk', lead.id)
+    expect((await apply(p.id, result, { replyTo: fromAgent.id })).statusCode).toBe(400)
+    const applyRoute = `/api/projects/${p.id}/team-plan/apply`
+    for (const body of [{}, { plan: [] }, { plan: 'all' }, { plan: null }, []]) {
+      expect((await inject('POST', applyRoute, body)).statusCode).toBe(400)
+    }
+    expect((await inject('POST', '/api/projects/proj_nope/team-plan/apply', result)).statusCode).toBe(404)
+    // The old plan routes are gone.
+    expect((await inject('POST', `/api/projects/${p.id}/plans/${prompt.id}/apply`, {})).statusCode).toBe(404)
+    expect((await inject('POST', `/api/projects/${p.id}/plans/${prompt.id}/cancel`)).statusCode).toBe(404)
 
+    // A name taken meanwhile (by name or by id): 409, nothing written; unticking it applies the rest.
     await makeAgent('analyst')
-    const taken = await apply({})
+    const beforeTaken = memory()
+    const taken = await apply(p.id, result)
     expect(taken.statusCode).toBe(409)
-    expect(taken.json().message).toContain('An agent named "Analyst" exists now')
-    // Nothing was written; unticking it applies the rest.
-    expect(store.projectMessages.find((m) => m.id === planMsg.id)?.planStatus).toBe('pending')
-    const rest = await apply({ create: [] })
+    expect(taken.json().message).toContain('An agent named or with the id "Analyst" exists now')
+    const forged = { ...result, plan: { ...result.plan, create: [{ name: ben.id.toUpperCase(), role: 'x', instructions: 'y', skillIds: [], reason: '' }] } }
+    expect((await apply(p.id, forged)).statusCode).toBe(409)
+    expect(memory()).toBe(beforeTaken)
+    const rest = await apply(p.id, result, { create: [] })
     expect(rest.statusCode).toBe(200)
-    expect((rest.json() as TeamPlanResponse).project.teamAgentIds).toEqual([ben.id])
+    const body = rest.json() as ProjectUpdate
+    expect(body.project.teamAgentIds).toEqual([ben.id])
+    expect(body.messages.map((m) => m.kind)).toEqual(['message', 'team-update'])
+    expect(body.messages[1]?.text).toBe(
+      'Added Ben to the team. Skipped the task "Analyze": analyst is not on the team, in this plan, or the team lead.',
+    )
     await whenProjectIdle(store, p.id)
+
+    // Without a Team Lead there is no one to author the plan's messages.
+    store.agents = store.agents.map((a) => ({ ...a, isPrimary: false }))
+    const noLead = await apply(p.id, { plan: { reply: 'Hi.', add: [], create: [], tasks: [], warnings: [] } })
+    expect(noLead.statusCode).toBe(409)
+    expect(noLead.json().message).toContain('Create the Team Lead first')
   })
 })
 
@@ -692,8 +1059,8 @@ describe('project task runner', () => {
     )
 
     const started = Date.now()
-    expect((await askPlan(p1.id, 'go')).res.statusCode).toBe(201)
-    expect((await askPlan(p2.id, 'go')).res.statusCode).toBe(201)
+    await planAndApply(p1.id, 'go')
+    await planAndApply(p2.id, 'go')
     await Promise.all([whenProjectIdle(store, p1.id), whenProjectIdle(store, p2.id)])
     expect(Date.now() - started).toBeLessThan(1_000)
 
@@ -703,7 +1070,7 @@ describe('project task runner', () => {
     expect(order.filter((o) => o.startsWith('Alpha'))).toEqual(['Alpha:one', 'Alpha:two', 'Alpha:three'])
     expect(order.filter((o) => o.startsWith('Beta'))).toEqual(['Beta:one', 'Beta:two', 'Beta:three'])
     for (const p of [p1, p2]) {
-      const results = (await thread(p.id)).filter((m) => m.kind === 'task-result')
+      const results = (await thread(p.id)).filter((m) => m.taskId)
       expect(results.map((m) => m.text)).toEqual(['one done', 'two done', 'three done'])
     }
   })
@@ -736,8 +1103,8 @@ describe('project task runner', () => {
         return `${who} ok`
       },
     )
-    const { res } = await askPlan(p.id, 'Do the three things')
-    const [, taskA, taskB, taskC] = (res.json() as TeamPlanResponse).messages
+    const { body } = await planAndApply(p.id, 'Do the three things')
+    const [, taskA, taskB, taskC] = body.messages
 
     // Cat is deleted while Ben's task is still running.
     await benStarted.wait
@@ -751,12 +1118,15 @@ describe('project task runner', () => {
 
     let msgs = await thread(p.id)
     const status = (id?: string) => msgs.find((m) => m.id === id)?.taskStatus
-    const resultFor = (id?: string) => msgs.filter((m) => m.kind === 'task-result' && m.taskId === id)
+    const resultFor = (id?: string) => msgs.filter((m) => m.taskId === id)
     expect([status(taskA?.id), status(taskB?.id), status(taskC?.id)]).toEqual(['failed', 'done', 'failed'])
     expect(resultFor(taskA?.id)[0]?.text).toMatch(/^Could not finish: Upstream responded 500/)
-    // Each result records the outcome of its own attempt.
-    expect([resultFor(taskA?.id)[0]?.taskStatus, resultFor(taskB?.id)[0]?.taskStatus, resultFor(taskC?.id)[0]?.taskStatus])
-      .toEqual(['failed', 'done', 'failed'])
+    // Each result is a message that records the outcome of its own attempt.
+    expect([resultFor(taskA?.id)[0], resultFor(taskB?.id)[0], resultFor(taskC?.id)[0]].map((m) => [m?.kind, m?.taskStatus])).toEqual([
+      ['message', 'failed'],
+      ['message', 'done'],
+      ['message', 'failed'],
+    ])
     const failedRun = store.runs.find((r) => r.id === resultFor(taskA?.id)[0]?.runId)
     expect(failedRun).toMatchObject({ status: 'failed', projectId: p.id })
     expect(resultFor(taskB?.id)[0]?.text).toBe('I am Ben. ok')
@@ -770,21 +1140,63 @@ describe('project task runner', () => {
     expect((await inject('POST', `/api/projects/${p.id}/tasks/${taskB?.id}/retry`)).statusCode).toBe(409)
     expect((await inject('POST', `/api/projects/${p.id}/tasks/${taskC?.id}/retry`)).statusCode).toBe(409)
     expect((await inject('POST', `/api/projects/${p.id}/tasks/msg_nope/retry`)).statusCode).toBe(404)
+    expect((await inject('POST', `/api/projects/${p.id}/tasks/${resultFor(taskA?.id)[0]?.id}/retry`)).statusCode).toBe(404)
     expect((await inject('POST', `/api/projects/proj_nope/tasks/${taskA?.id}/retry`)).statusCode).toBe(404)
 
     anaBroken = false
     const retried = await inject('POST', `/api/projects/${p.id}/tasks/${taskA?.id}/retry`)
     expect(retried.statusCode).toBe(200)
-    const body = retried.json() as TeamPlanResponse
-    expect(body.messages).toHaveLength(1)
-    expect(body.messages[0]).toMatchObject({ id: taskA?.id, taskStatus: 'queued' })
+    const update = retried.json() as ProjectUpdate
+    expect(update.project.id).toBe(p.id)
+    expect(update.messages).toHaveLength(1)
+    expect(update.messages[0]).toMatchObject({ id: taskA?.id, taskStatus: 'queued' })
     await whenProjectIdle(store, p.id)
     msgs = await thread(p.id)
     expect(status(taskA?.id)).toBe('done')
-    expect(resultFor(taskA?.id).map((m) => m.text)).toEqual([expect.stringMatching(/^Could not finish/), 'I am Ana. ok'])
+    expect(resultFor(taskA?.id).map((m) => [m.text, m.taskStatus])).toEqual([
+      [expect.stringMatching(/^Could not finish/), 'failed'],
+      ['I am Ana. ok', 'done'],
+    ])
   })
 
-  it('stops a deleted project\'s queue cleanly and keeps its specialists untagged in the library', async () => {
+  it('posts the output and runId when the run could not be saved, and persists both with the result', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Flaky disk', [ana.id])
+    const save = store.save
+    let failNextSave = false
+    store.save = () => {
+      if (!failNextSave) return save()
+      failNextSave = false
+      return false
+    }
+    try {
+      // The next save after the upstream answer is the run's own.
+      mockTeam({ reply: 'Go.', tasks: [{ agent: ana.id, task: 'Write' }] }, (req) => {
+        failNextSave = true
+        return `${systemOf(req)}: written`
+      })
+      await planAndApply(p.id, 'Write it')
+      await whenProjectIdle(store, p.id)
+    } finally {
+      store.save = save
+    }
+    const task = store.projectMessages.find((m) => m.kind === 'task-assignment') as ProjectMessage
+    const result = store.projectMessages.find((m) => m.taskId === task.id) as ProjectMessage
+    expect(task.taskStatus).toBe('done')
+    expect(result).toMatchObject({ kind: 'message', author: ana.id, text: 'I am Ana.: written', taskStatus: 'done' })
+    expect(result.runId).toBeTruthy()
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.runs.find((r) => r.id === result.runId)).toMatchObject({
+      agentId: ana.id,
+      status: 'succeeded',
+      output: 'I am Ana.: written',
+      projectId: p.id,
+    })
+    expect(reloaded.projectMessages.find((m) => m.id === result.id)).toEqual(result)
+  })
+
+  it("stops a deleted project's queue cleanly and keeps its specialists untagged in the library", async () => {
     await makeLead()
     const ana = await makeAgent('Ana')
     const p = await makeProject('Doomed', [ana.id])
@@ -809,9 +1221,7 @@ describe('project task runner', () => {
         return 'ok'
       },
     )
-    const { res } = await askPlan(p.id, 'Work')
-    const planMsg = (res.json() as TeamPlanResponse).messages[0] as ProjectMessage
-    expect((await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, {})).statusCode).toBe(200)
+    await planAndApply(p.id, 'Work')
     const helper = store.agents.find((a) => a.name === 'Helper') as Agent
     expect(helper.projectId).toBe(p.id)
 
@@ -844,7 +1254,7 @@ describe('project task runner', () => {
     const ana = await makeAgent('Ana')
     const p = await makeProject('Restart', [ana.id])
     const prompt = await say(p.id, 'Before the crash')
-    const base = { projectId: p.id, author: lead.id, kind: 'task-assignment' as const, assigneeId: ana.id, planId: 'msg_plan' }
+    const base = { projectId: p.id, author: lead.id, kind: 'task-assignment' as const, assigneeId: ana.id, replyTo: prompt.id }
     store.projectMessages = [
       ...store.projectMessages,
       { ...base, id: 'msg_queued', text: 'queued one', createdAt: '2026-01-01T00:00:01.000Z', taskStatus: 'queued' },
@@ -862,21 +1272,18 @@ describe('project task runner', () => {
         'failed',
         'done',
       ])
-      const results = reloaded.projectMessages.filter((m) => m.kind === 'task-result')
-      expect(results.map((m) => [m.taskId, m.author, m.planId])).toEqual([
-        ['msg_queued', ana.id, 'msg_plan'],
-        ['msg_running', ana.id, 'msg_plan'],
+      const results = reloaded.projectMessages.filter((m) => m.taskId)
+      expect(results.map((m) => [m.kind, m.taskId, m.author, m.taskStatus])).toEqual([
+        ['message', 'msg_queued', ana.id, 'failed'],
+        ['message', 'msg_running', ana.id, 'failed'],
       ])
-      for (const r of results) {
-        expect(r.text).toContain('interrupted by a restart')
-        expect(r.taskStatus).toBe('failed')
-      }
+      for (const r of results) expect(r.text).toContain('interrupted by a restart')
       // Persisted, and the user message is untouched.
       const again = createStore(join(dir, 'store.json'))
       expect(again.projectMessages.find((m) => m.id === 'msg_running')?.taskStatus).toBe('failed')
       expect(again.projectMessages.find((m) => m.id === prompt.id)?.kind).toBe('message')
 
-      mockTeam({ reply: 'unused' })
+      const requests = mockTeam({ reply: 'unused' })
       const retried = await restarted.inject({
         method: 'POST',
         url: `/api/projects/${p.id}/tasks/msg_running/retry`,
@@ -885,12 +1292,14 @@ describe('project task runner', () => {
       expect(retried.statusCode).toBe(200)
       await whenProjectIdle(reloaded, p.id)
       expect(reloaded.projectMessages.find((m) => m.id === 'msg_running')?.taskStatus).toBe('done')
+      // The retried task still reads the user's prompt through replyTo.
+      expect(lastUser(requests[0] ?? {})).toContain('The user asked:\nBefore the crash')
     } finally {
       await restarted.close()
     }
   })
 
-  it('rolls back plan, apply, retry and project delete when the store cannot save', async () => {
+  it('never saves while planning, and rolls back apply, retry and project delete when the store cannot save', async () => {
     const lead = await makeLead()
     const ana = await makeAgent('Ana')
     const p = await makeProject('Fragile', [ana.id])
@@ -900,38 +1309,31 @@ describe('project task runner', () => {
       tasks: [{ agent: 'Tester', task: 'Test it' }],
     })
     const save = store.save
-    const snapshot = () => JSON.stringify([store.projectMessages, store.agents, store.projects])
     try {
       const prompt = await say(p.id, 'Test the app')
-      const before = snapshot()
+      const before = memory()
       store.save = () => false
       const planned = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-      expect(planned.statusCode).toBe(500)
-      expect(snapshot()).toBe(before)
+      expect(planned.statusCode).toBe(200)
+      expect(memory()).toBe(before)
 
-      store.save = save
-      const ok = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
-      const planMsg = (ok.json() as TeamPlanResponse).messages[0] as ProjectMessage
-      const pending = snapshot()
-      store.save = () => false
-      const applied = await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, {})
+      const result = planned.json() as TeamPlanResult
+      const applied = await apply(p.id, result)
       expect(applied.statusCode).toBe(500)
-      expect(snapshot()).toBe(pending)
-      expect((await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/cancel`)).statusCode).toBe(500)
-      expect(snapshot()).toBe(pending)
+      expect(memory()).toBe(before)
 
       store.save = save
-      expect((await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, {})).statusCode).toBe(200)
+      expect((await apply(p.id, result)).statusCode).toBe(200)
       await whenProjectIdle(store, p.id)
       const tester = store.agents.find((a) => a.name === 'Tester') as Agent
       const task = store.projectMessages.find((m) => m.kind === 'task-assignment') as ProjectMessage
       store.projectMessages = store.projectMessages.map((m) => (m.id === task.id ? { ...m, taskStatus: 'failed' } : m))
-      const failed = snapshot()
+      const failed = memory()
       store.save = () => false
       expect((await inject('POST', `/api/projects/${p.id}/tasks/${task.id}/retry`)).statusCode).toBe(500)
-      expect(snapshot()).toBe(failed)
+      expect(memory()).toBe(failed)
       expect((await inject('DELETE', `/api/projects/${p.id}`)).statusCode).toBe(500)
-      expect(snapshot()).toBe(failed)
+      expect(memory()).toBe(failed)
       expect(tester.projectId).toBe(p.id)
       expect(lead.isPrimary).toBe(true)
     } finally {
@@ -939,22 +1341,74 @@ describe('project task runner', () => {
     }
   })
 
-  it('keeps plan and task fields across a store reload', async () => {
+  it('keeps task fields across a store reload', async () => {
     const lead = await makeLead()
     const ben = await makeAgent('Ben')
     const p = await makeProject('Durable')
     mockTeam({ reply: 'Add Ben.', add: [{ agentId: ben.id, reason: 'Reviews.' }], tasks: [{ agent: lead.id, task: 'Plan it' }] })
-    const { prompt, res } = await askPlan(p.id, 'Persist me')
-    const planMsg = (res.json() as TeamPlanResponse).messages[0] as ProjectMessage
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projectMessages.find((m) => m.id === planMsg.id)).toEqual(planMsg)
-    expect(planMsg).toMatchObject({ replyTo: prompt.id, planStatus: 'pending' })
-
-    expect((await inject('POST', `/api/projects/${p.id}/plans/${planMsg.id}/apply`, {})).statusCode).toBe(200)
+    const { prompt, body } = await planAndApply(p.id, 'Persist me')
     await whenProjectIdle(store, p.id)
     const after = createStore(join(dir, 'store.json'))
     const persisted = after.projectMessages.filter((m) => m.projectId === p.id)
     expect(persisted).toEqual(store.projectMessages.filter((m) => m.projectId === p.id))
-    expect(persisted.find((m) => m.kind === 'task-result')).toMatchObject({ author: lead.id, planId: planMsg.id })
+    const assignment = body.messages.find((m) => m.kind === 'task-assignment')
+    expect(persisted.find((m) => m.id === assignment?.id)).toMatchObject({ replyTo: prompt.id, assigneeId: lead.id, taskStatus: 'done' })
+    const result = persisted.find((m) => m.taskId === assignment?.id)
+    expect(result).toMatchObject({ kind: 'message', author: lead.id, taskStatus: 'done' })
+    expect(after.runs.some((r) => r.id === result?.runId)).toBe(true)
+  })
+
+  it('loads messages of the pre-handoff kinds as plain messages', async () => {
+    const lead = await makeLead()
+    const p = await makeProject('Legacy')
+    const prompt = await say(p.id, 'Old prompt')
+    const legacy = [
+      {
+        id: 'msg_plan',
+        projectId: p.id,
+        author: lead.id,
+        text: 'Old plan reply',
+        kind: 'team-plan',
+        createdAt: '2026-01-01T00:00:01.000Z',
+        replyTo: prompt.id,
+        plan: { reply: 'Old plan reply', add: [], create: [], tasks: [], warnings: [] },
+        planStatus: 'pending',
+      },
+      {
+        id: 'msg_result',
+        projectId: p.id,
+        author: lead.id,
+        text: 'Old result',
+        kind: 'task-result',
+        createdAt: '2026-01-01T00:00:02.000Z',
+        taskId: 'msg_task',
+        runId: 'run_old',
+        taskStatus: 'done',
+        planId: 'msg_plan',
+      },
+    ]
+    store.projectMessages = [...store.projectMessages, ...(legacy as unknown as ProjectMessage[])]
+    expect(store.save()).toBe(true)
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_plan')).toEqual({
+      id: 'msg_plan',
+      projectId: p.id,
+      author: lead.id,
+      text: 'Old plan reply',
+      kind: 'message',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      replyTo: prompt.id,
+    })
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_result')).toEqual({
+      id: 'msg_result',
+      projectId: p.id,
+      author: lead.id,
+      text: 'Old result',
+      kind: 'message',
+      createdAt: '2026-01-01T00:00:02.000Z',
+      taskId: 'msg_task',
+      runId: 'run_old',
+      taskStatus: 'done',
+    })
   })
 })

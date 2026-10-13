@@ -1,7 +1,8 @@
 /**
  * One agent run: prompt planning, the bounded tool loop, the context budget
  * and the stored audit record. POST /api/agents/:id/runs is a thin wrapper
- * around runAgent; project tasks (src/projects.ts) call it with a projectId.
+ * around runAgent; project tasks (src/projects.ts) call executeRun with a
+ * projectId.
  */
 import { fail, uid } from './http.js'
 import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
@@ -18,6 +19,15 @@ export interface RunOptions {
   projectId?: string
 }
 
+/** Runs kept per agent and scope (its own chat, or one project). */
+export const RUNS_PER_SCOPE = 50
+
+export interface RunOutcome {
+  run: AgentRun
+  /** False when store.save() failed: the run is in memory but not on disk yet. */
+  persisted: boolean
+}
+
 /**
  * Run `agent` on `input` (already trimmed) and store the run. Throws fail()
  * errors: 400 no endpoint, 413 prompt too large, 500 when a successful run
@@ -29,6 +39,25 @@ export async function runAgent(
   input: string,
   opts: RunOptions = {},
 ): Promise<AgentRun> {
+  const { run, persisted } = await executeRun(store, agent, input, opts)
+  // Never report a successful run as stored when the write actually failed.
+  if (!persisted && run.status === 'succeeded') {
+    fail(500, 'Run completed but its result could not be persisted.')
+  }
+  return run
+}
+
+/**
+ * runAgent for internal callers: the same run and the same 400/413 errors,
+ * but a failed save is reported in `persisted` instead of thrown. The run
+ * stays in the store, so the caller's next successful save persists it.
+ */
+export async function executeRun(
+  store: WorkspaceStore,
+  agent: Agent,
+  input: string,
+  opts: RunOptions = {},
+): Promise<RunOutcome> {
   if (!input) fail(400, 'Provide an "input" string to run the agent.')
   const projectId = opts.projectId
 
@@ -275,20 +304,17 @@ export async function runAgent(
     ...(projectId !== undefined ? { projectId } : {}),
   }
 
-  // Prepend, then trim this agent's history to the newest 50.
+  // Prepend, then trim this agent's runs in this scope (its own chat, or this
+  // project) to the newest RUNS_PER_SCOPE, so project work never pushes the
+  // agent's chat transcript out, nor one project another's.
   store.runs = [run, ...store.runs]
-  const mine = store.runs.filter((r) => r.agentId === agent.id)
-  if (mine.length > 50) {
-    const drop = new Set(mine.slice(50).map((r) => r.id))
+  const scoped = store.runs.filter((r) => r.agentId === agent.id && r.projectId === projectId)
+  if (scoped.length > RUNS_PER_SCOPE) {
+    const drop = new Set(scoped.slice(RUNS_PER_SCOPE).map((r) => r.id))
     store.runs = store.runs.filter((r) => !drop.has(r.id))
   }
   agent.lastRunAt = run.startedAt
   agent.runCount += 1
   agent.status = run.status === 'succeeded' ? 'idle' : 'error'
-  const persisted = store.save()
-  // Never report a successful run as stored when the write actually failed.
-  if (!persisted && run.status === 'succeeded') {
-    fail(500, 'Run completed but its result could not be persisted.')
-  }
-  return run
+  return { run, persisted: store.save() }
 }

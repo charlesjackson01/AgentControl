@@ -17,13 +17,11 @@ import type {
   AgentRun,
   Endpoint,
   Note,
-  PlanStatus,
   Project,
   ProjectMessage,
   ProjectMessageKind,
   Skill,
   TaskStatus,
-  TeamPlan,
   WorkspaceSettings,
 } from './shared/types.js'
 
@@ -256,36 +254,16 @@ function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
   return out
 }
 
-const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-plan', 'team-update', 'task-assignment', 'task-result']
-const PLAN_STATUSES: readonly PlanStatus[] = ['pending', 'applied', 'cancelled']
+const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-update', 'task-assignment']
 const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'failed']
 
-const str = (v: unknown): string => (typeof v === 'string' ? v : '')
-const records = (v: unknown): Record<string, unknown>[] =>
-  Array.isArray(v) ? v.filter((x): x is Record<string, unknown> => Boolean(x) && typeof x === 'object') : []
-
-/** A stored plan was validated when written; only coerce its shape on load. */
-function normalizeTeamPlan(raw: unknown): TeamPlan | undefined {
-  if (!raw || typeof raw !== 'object') return undefined
-  const p = raw as Record<string, unknown>
-  return {
-    reply: str(p.reply),
-    add: records(p.add).map((a) => ({ agentId: str(a.agentId), reason: str(a.reason) })).filter((a) => a.agentId),
-    create: records(p.create)
-      .map((c) => ({
-        name: str(c.name),
-        role: str(c.role),
-        instructions: str(c.instructions),
-        skillIds: isStringArray(c.skillIds) ? [...c.skillIds] : [],
-        reason: str(c.reason),
-      }))
-      .filter((c) => c.name),
-    tasks: records(p.tasks).map((t) => ({ agent: str(t.agent), task: str(t.task) })).filter((t) => t.agent && t.task),
-    warnings: isStringArray(p.warnings) ? [...p.warnings] : [],
-  }
-}
-
-/** Keep well-formed project messages and the plan/task fields their kind uses. */
+/**
+ * Keep well-formed project messages and the task fields the contract has.
+ * Any other kind loads as a 'message', which covers the pre-handoff kinds a
+ * development build wrote: a 'team-plan' (Primary's reply; its stored plan
+ * and planStatus are dropped) and a 'task-result' (it keeps taskId, runId
+ * and taskStatus, as a task's result message does now).
+ */
 function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
   if (!Array.isArray(raw)) return []
   const out: ProjectMessage[] = []
@@ -295,7 +273,6 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
     if (typeof m.id !== 'string' || typeof m.projectId !== 'string') continue
     if (typeof m.text !== 'string') continue
     const kind = MESSAGE_KINDS.includes(m.kind as ProjectMessageKind) ? (m.kind as ProjectMessageKind) : 'message'
-    const plan = normalizeTeamPlan(m.plan)
     out.push({
       id: m.id,
       projectId: m.projectId,
@@ -305,9 +282,6 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
       createdAt: typeof m.createdAt === 'string' ? m.createdAt : new Date(0).toISOString(),
       ...(typeof m.updatedAt === 'string' ? { updatedAt: m.updatedAt } : {}),
       ...(typeof m.replyTo === 'string' ? { replyTo: m.replyTo } : {}),
-      ...(plan ? { plan } : {}),
-      ...(PLAN_STATUSES.includes(m.planStatus as PlanStatus) ? { planStatus: m.planStatus } : {}),
-      ...(typeof m.planId === 'string' ? { planId: m.planId } : {}),
       ...(typeof m.assigneeId === 'string' ? { assigneeId: m.assigneeId } : {}),
       ...(TASK_STATUSES.includes(m.taskStatus as TaskStatus) ? { taskStatus: m.taskStatus } : {}),
       ...(typeof m.taskId === 'string' ? { taskId: m.taskId } : {}),

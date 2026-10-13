@@ -1,36 +1,41 @@
 /**
  * Project team plans and task runs (docs/PROJECTS_HANDOFF.md, Part 2).
  *
- * A user message in the project chat goes to Primary (the Team Lead) with a
- * fixed assembler prompt. Primary answers with JSON: a reply, library agents
- * to add, project specialists to create, and tasks. That answer is untrusted
- * model output: it is parsed leniently, then validated strictly into a
- * TeamPlan, and only the plan's own fields ever reach the store (ids are
- * resolved against the library or minted here, never taken from the model).
+ * POST /api/projects/:id/team-plan sends the user's prompt to Primary (the
+ * Team Lead) with a fixed assembler prompt. Primary answers with JSON: a
+ * reply, library agents to add, project specialists to create, and tasks.
+ * That answer is untrusted model output: it is parsed leniently, validated
+ * strictly into a TeamPlan and returned. Nothing is written (D-P1).
  *
- * D-P1: team changes wait for the user (planStatus 'pending' until apply or
- * cancel); a plan with only tasks applies at once. Applied tasks become
- * 'task-assignment' messages that a per-project runner executes one at a time
- * through runAgent, posting each output back as a 'task-result'.
+ * POST /api/projects/:id/team-plan/apply commits the plan the user
+ * confirmed. The plan comes back from the client, so it is validated again
+ * exactly like model output, against the store as it is now, and only the
+ * plan's own fields ever reach the store (ids are resolved against the
+ * library or minted here, never taken from the plan). Applying records
+ * Primary's reply, a 'team-update' and one 'task-assignment' per task; a
+ * per-project runner executes the tasks one at a time through executeRun and
+ * posts each output back as a 'message' from the assignee (taskId, runId,
+ * taskStatus).
  */
 import { fail, uid } from './http.js'
 import { estimateTokens } from './prompt.js'
-import { runAgent } from './runs.js'
+import { executeRun } from './runs.js'
 import type {
   Agent,
   Project,
   ProjectMessage,
+  ProjectUpdate,
   TeamPlan,
   TeamPlanAdd,
   TeamPlanCreate,
-  TeamPlanResponse,
+  TeamPlanResult,
   TeamPlanTask,
 } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { clipText } from './tools/limits.js'
 import { chatCompletion, type ChatMessage } from './upstream.js'
 
-/** Plan limits: what one Primary answer may propose. */
+/** Plan limits: what one plan may propose. */
 const MAX_ADD = 10
 const MAX_CREATE = 5
 const MAX_TASKS = 10
@@ -44,6 +49,11 @@ const REASON_MAX = 300
 const REPLY_MAX = 2_000
 const INSTRUCTIONS_MAX = 4_000
 const TASK_MAX = 2_000
+
+/** A prompt sent without a chat message: the same cap as a chat message. */
+const PROMPT_MAX = 20_000
+/** Entries one apply selection list may hold. */
+const SELECTION_MAX = 100
 
 /** Planner prompt sizes. */
 const LEAD_INSTRUCTIONS_MAX = 1_500
@@ -78,6 +88,7 @@ const norm = (s: string): string => s.trim().toLowerCase()
 const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim()
 const quote = (s: string): string => `"${clipText(oneLine(s), 60)}"`
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+const isRecord = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v)
 
 function projectOrFail(store: WorkspaceStore, id: string): Project {
   const project = store.projects.find((p) => p.id === id)
@@ -89,6 +100,15 @@ function findMessage(store: WorkspaceStore, projectId: string, id: string): Proj
   return store.projectMessages.find((m) => m.id === id && m.projectId === projectId)
 }
 
+/** A message the user wrote in this project's chat (what a plan answers). */
+function userMessageOrFail(store: WorkspaceStore, projectId: string, id: string): ProjectMessage {
+  const message = findMessage(store, projectId, id)
+  if (!message || message.kind !== 'message' || message.author !== 'user') {
+    fail(400, `No user message with id "${id.slice(0, 100)}" in this project.`)
+  }
+  return message
+}
+
 /** A project's messages in GET order (oldest first). */
 function projectThread(store: WorkspaceStore, projectId: string): ProjectMessage[] {
   return store.projectMessages
@@ -98,7 +118,7 @@ function projectThread(store: WorkspaceStore, projectId: string): ProjectMessage
 
 /**
  * createdAt for new messages: now, but always after the project's latest
- * message, so a batch (plan, team update, assignments) keeps its order in GET.
+ * message, so a batch (reply, team update, assignments) keeps its order in GET.
  */
 function messageClock(store: WorkspaceStore, projectId: string): () => string {
   let last = Date.now() - 1
@@ -119,6 +139,14 @@ function findAgent(pool: readonly Agent[], ref: string): Agent | undefined {
   return pool.find((a) => a.id === ref) ?? pool.find((a) => norm(a.name) === norm(ref))
 }
 
+/** Why a new specialist cannot take `name`: an agent already has it as its name or id. */
+function nameClash(store: WorkspaceStore, name: string): string | undefined {
+  const n = norm(name)
+  if (store.agents.some((a) => norm(a.name) === n)) return 'an agent with that name already exists'
+  if (store.agents.some((a) => norm(a.id) === n)) return "it is an existing agent's id"
+  return undefined
+}
+
 function teamMembers(store: WorkspaceStore, project: Project): Agent[] {
   const out: Agent[] = []
   for (const id of project.teamAgentIds) {
@@ -128,37 +156,8 @@ function teamMembers(store: WorkspaceStore, project: Project): Agent[] {
   return out
 }
 
-function assignmentMessages(
-  projectId: string,
-  planId: string,
-  authorId: string,
-  tasks: { assigneeId: string; task: string }[],
-  clock: () => string,
-): ProjectMessage[] {
-  return tasks.map((t) => ({
-    id: uid('msg'),
-    projectId,
-    author: authorId,
-    text: t.task,
-    kind: 'task-assignment',
-    createdAt: clock(),
-    planId,
-    assigneeId: t.assigneeId,
-    taskStatus: 'queued',
-  }))
-}
-
 function count(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`
-}
-
-/** Fallback chat text for a plan whose reply is empty. */
-function planSummary(plan: TeamPlan): string {
-  const parts: string[] = []
-  if (plan.add.length > 0) parts.push(count(plan.add.length, 'agent to add', 'agents to add'))
-  if (plan.create.length > 0) parts.push(count(plan.create.length, 'specialist to create', 'specialists to create'))
-  if (plan.tasks.length > 0) parts.push(count(plan.tasks.length, 'task', 'tasks'))
-  return parts.length > 0 ? `Proposed ${parts.join(', ')}.` : 'No changes or tasks proposed.'
 }
 
 // ---------------------------------------------------------------------------
@@ -177,7 +176,7 @@ Rules:
 - "create": new specialists, only when no library agent fits. At most ${MAX_CREATE}. Each needs a new, unique "name" (at most ${NAME_MAX} characters), a short "role", "instructions" written to that agent, "skillIds" from "Library skills" (may be empty) and a "reason".
 - "tasks": at most ${MAX_TASKS}. "agent" is a team member's id, an "agentId" from your "add", the "name" of one of your "create" entries, or your own id. Make each task stand on its own: the assignee sees only the task, the project and the user's prompt.
 - Use only ids from the lists you were given. Never invent ids.
-- The user approves team changes ("add", "create") before work starts; tasks for current team members start at once.
+- The user reviews your plan first: nobody joins, is created or starts a task until they approve it.
 
 Shape:
 {"reply":"...","add":[{"agentId":"...","reason":"..."}],"create":[{"name":"...","role":"...","instructions":"...","skillIds":["..."],"reason":"..."}],"tasks":[{"agent":"...","task":"..."}]}
@@ -210,24 +209,44 @@ function agentLine(store: WorkspaceStore, agent: Agent): string {
   )
 }
 
+/** A team member when the full lines do not fit: still enough to assign tasks. */
+function compactAgentLine(agent: Agent): string {
+  return `- id: ${agent.id} | name: ${clipText(oneLine(agent.name), NAME_MAX)}`
+}
+
 function chatLine(store: WorkspaceStore, m: ProjectMessage): string {
   const name = (id: string): string => store.agents.find((a) => a.id === id)?.name ?? 'A removed agent'
   const author = m.author === 'user' ? 'User' : name(m.author)
   const label =
-    m.kind === 'team-plan'
-      ? ' (plan)'
-      : m.kind === 'team-update'
-        ? ' (team update)'
-        : m.kind === 'task-assignment'
-          ? ` (task for ${m.assigneeId ? name(m.assigneeId) : 'someone'})`
-          : m.kind === 'task-result'
-            ? ' (task result)'
-            : ''
+    m.kind === 'team-update'
+      ? ' (team update)'
+      : m.kind === 'task-assignment'
+        ? ` (task for ${m.assigneeId ? name(m.assigneeId) : 'someone'})`
+        : m.taskId
+          ? m.taskStatus === 'failed'
+            ? ' (task failed)'
+            : ' (task result)'
+          : ''
   return `- ${author}${label}: ${clipText(oneLine(m.text), CHAT_MESSAGE_MAX)}`
 }
 
-function section(title: string, lines: string[], empty: string): string {
-  return `${title}:\n${lines.length > 0 ? lines.join('\n') : empty}`
+/**
+ * A roster or chat section. `total` is how many entries exist; when fewer
+ * lines are shown, the section says how many were left out (never "none").
+ */
+function section(title: string, lines: readonly string[], total: number, empty: string, hiddenFirst = false): string {
+  if (total === 0) return `${title}:\n${empty}`
+  const hidden = total - lines.length
+  if (hidden <= 0) return `${title}:\n${lines.join('\n')}`
+  const note = hiddenFirst ? `(${count(hidden, 'earlier message', 'earlier messages')} not shown)` : `(${hidden} more not shown)`
+  return `${title}:\n${(hiddenFirst ? [note, ...lines] : [...lines, note]).join('\n')}`
+}
+
+/** What Primary is asked: the user's text, and the chat message it came from (if any). */
+export interface PlannerPrompt {
+  text: string
+  /** The chat shown to Primary is what came before this message; without it, the latest messages. */
+  messageId?: string
 }
 
 export interface PlannerRequest {
@@ -236,23 +255,26 @@ export interface PlannerRequest {
 }
 
 /**
- * The planning request for `prompt` (a user message in this project), fitted
- * to `contextWindow`: chat, then skills, then library agents, then the team
- * are trimmed until prompt + reply reserve fit. 413 when even the fixed part
- * (assembler prompt, project, user prompt) does not.
+ * The planning request for `prompt`, fitted to `contextWindow`: chat, then
+ * skills, then library agents are trimmed first; then team lines shrink to
+ * id and name, and only then are team members left out. Every trimmed
+ * section says how many entries it does not show. 413 when even the fixed
+ * part (assembler prompt, project, user prompt) does not fit.
  */
 export function buildPlannerRequest(
   store: WorkspaceStore,
   project: Project,
   lead: Agent,
-  prompt: ProjectMessage,
+  prompt: PlannerPrompt,
   contextWindow: number,
 ): PlannerRequest {
   const system = plannerSystem(lead)
   const team = teamMembers(store, project)
   const teamIds = new Set(team.map((a) => a.id))
 
-  const teamLines = team.slice(0, ROSTER_TEAM_MAX).map((a) => agentLine(store, a))
+  const shownTeam = team.slice(0, ROSTER_TEAM_MAX)
+  let teamLines = shownTeam.map((a) => agentLine(store, a))
+  let teamCompact = false
   // This project's own specialists first, then the rest of the library.
   const candidates = store.agents
     .filter((a) => !a.isPrimary && a.id !== lead.id && !teamIds.has(a.id))
@@ -264,8 +286,8 @@ export function buildPlannerRequest(
     return `- ${label}${about ? ` — ${about}` : ''}`
   })
   const thread = projectThread(store, project.id)
-  const at = thread.findIndex((m) => m.id === prompt.id)
-  const earlier = at === -1 ? thread.filter((m) => m.id !== prompt.id) : thread.slice(0, at)
+  const at = prompt.messageId ? thread.findIndex((m) => m.id === prompt.messageId) : -1
+  const earlier = at === -1 ? thread : thread.slice(0, at)
   const chatLines = earlier.slice(-CHAT_MESSAGES_MAX).map((m) => chatLine(store, m))
 
   const header = [
@@ -275,22 +297,30 @@ export function buildPlannerRequest(
   const render = (): string =>
     [
       header,
-      section(`Team (${team.length})`, teamLines, 'No one yet.'),
-      section('Library agents that could join', libraryLines, 'None.'),
-      section('Library skills for new specialists (id: name — description)', skillLines, 'None.'),
-      section('Recent project chat (oldest first)', chatLines, 'No earlier messages.'),
+      section(`Team (${team.length})`, teamLines, team.length, 'No one yet.'),
+      section(`Library agents that could join (${candidates.length})`, libraryLines, candidates.length, 'None.'),
+      section(
+        `Library skills for new specialists (${store.skills.length}; id: name — description)`,
+        skillLines,
+        store.skills.length,
+        'None.',
+      ),
+      section('Recent project chat (oldest first)', chatLines, earlier.length, 'No earlier messages.', true),
       `The user's prompt:\n${prompt.text}`,
     ].join('\n\n')
 
   const reserve = Math.min(PLAN_REPLY_RESERVE_MAX, Math.floor(contextWindow / 3))
   let user = render()
   let estimated = estimateTokens(system.length + user.length)
-  // Bounded by the number of roster and chat lines (at most 132).
+  // Bounded by the number of roster and chat lines, plus one compaction step (at most 133).
   while (estimated + reserve > contextWindow) {
     if (chatLines.length > 0) chatLines.shift()
     else if (skillLines.length > 0) skillLines.pop()
     else if (libraryLines.length > 0) libraryLines.pop()
-    else if (teamLines.length > 0) teamLines.pop()
+    else if (!teamCompact && teamLines.length > 0) {
+      teamCompact = true
+      teamLines = shownTeam.map(compactAgentLine)
+    } else if (teamLines.length > 0) teamLines.pop()
     else break
     user = render()
     estimated = estimateTokens(system.length + user.length)
@@ -320,7 +350,7 @@ const PLAN_KEYS = ['reply', 'add', 'create', 'tasks'] as const
 function asObject(text: string): Record<string, unknown> | null {
   try {
     const value: unknown = JSON.parse(text)
-    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+    return isRecord(value) ? value : null
   } catch {
     return null
   }
@@ -350,7 +380,7 @@ export function parsePlanJson(text: string): Record<string, unknown> | null {
 }
 
 /** A list field of the raw plan; a non-list is ignored with a warning. */
-function rawList(raw: Record<string, unknown>, key: string, warn: (w: string) => void): unknown[] {
+function rawList(raw: Record<string, unknown>, key: string, warn: (w: string) => void = () => {}): unknown[] {
   const value = raw[key]
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) {
@@ -365,10 +395,18 @@ function firstString(...values: unknown[]): string {
   return ''
 }
 
+/** The agent a raw "add" entry names: the entry itself, or its agentId, id or name. */
+function addRef(entry: unknown): string {
+  if (typeof entry === 'string') return entry.trim()
+  return isRecord(entry) ? firstString(entry.agentId, entry.id, entry.name) : ''
+}
+
 /**
- * Validate Primary's parsed answer against the store: every agent and skill
- * reference must resolve, limits hold, and nothing outside the TeamPlan
- * fields survives. Each dropped entry becomes a plain-language warning.
+ * Validate a raw plan (Primary's parsed answer, or a plan a client sends
+ * back to apply) against the store: every agent and skill reference must
+ * resolve, limits hold, and nothing outside the TeamPlan fields survives.
+ * Each dropped entry becomes a plain-language warning. Validating a
+ * validated plan against the same store returns it unchanged.
  */
 export function validateTeamPlan(
   raw: Record<string, unknown>,
@@ -394,8 +432,7 @@ export function validateTeamPlan(
   const addEntries = rawList(raw, 'add', warn)
   let addExtra = Math.max(0, addEntries.length - RAW_ENTRIES_MAX)
   for (const entry of addEntries.slice(0, RAW_ENTRIES_MAX)) {
-    const e = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {}
-    const ref = typeof entry === 'string' ? entry.trim() : firstString(e.agentId, e.id, e.name)
+    const ref = addRef(entry)
     if (!ref) {
       warn('Skipped an agent to add that had no id.')
       continue
@@ -406,20 +443,19 @@ export function validateTeamPlan(
     else if (onTeam.has(agent.id)) warn(`Skipped adding ${agent.name}: already on the team.`)
     else if (add.some((a) => a.agentId === agent.id)) continue
     else if (add.length >= MAX_ADD) addExtra += 1
-    else add.push({ agentId: agent.id, reason: clipText(str(e.reason).trim(), REASON_MAX) })
+    else add.push({ agentId: agent.id, reason: clipText(str(isRecord(entry) ? entry.reason : '').trim(), REASON_MAX) })
   }
   overflow(MAX_ADD, addExtra, 'agents to add')
 
-  // create: new names only; skills resolved by id or name.
+  // create: names no agent has as its name or id; skills resolved by id or name.
   const create: TeamPlanCreate[] = []
   const createEntries = rawList(raw, 'create', warn)
   let createExtra = Math.max(0, createEntries.length - RAW_ENTRIES_MAX)
-  for (const entry of createEntries.slice(0, RAW_ENTRIES_MAX)) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+  for (const e of createEntries.slice(0, RAW_ENTRIES_MAX)) {
+    if (!isRecord(e)) {
       warn('Skipped a new specialist that was not described as an object.')
       continue
     }
-    const e = entry as Record<string, unknown>
     const name = oneLine(str(e.name))
     const instructions = str(e.instructions).trim()
     if (!name) {
@@ -430,8 +466,9 @@ export function validateTeamPlan(
       warn(`Skipped new specialist ${quote(name)}: names must be ${NAME_MAX} characters or fewer.`)
       continue
     }
-    if (store.agents.some((a) => norm(a.name) === norm(name))) {
-      warn(`Skipped creating ${quote(name)}: an agent with that name already exists.`)
+    const clash = nameClash(store, name)
+    if (clash) {
+      warn(`Skipped creating ${quote(name)}: ${clash}.`)
       continue
     }
     if (create.some((c) => norm(c.name) === norm(name))) {
@@ -448,7 +485,7 @@ export function validateTeamPlan(
     }
     const skillIds: string[] = []
     if (e.skillIds !== undefined && !Array.isArray(e.skillIds)) warn(`Ignored the skills of ${quote(name)}: not a list.`)
-    const skillRefs = Array.isArray(e.skillIds) ? e.skillIds : []
+    const skillRefs: unknown[] = Array.isArray(e.skillIds) ? e.skillIds : []
     let skillExtra = Math.max(0, skillRefs.length - RAW_ENTRIES_MAX)
     for (const skillRef of skillRefs.slice(0, RAW_ENTRIES_MAX)) {
       const ref = typeof skillRef === 'string' ? skillRef.trim() : ''
@@ -473,10 +510,11 @@ export function validateTeamPlan(
   // tasks: to the lead, a team member, an agent in `add`, or a `create` name.
   const team = teamMembers(store, project)
   const added = add.map((a) => store.agents.find((x) => x.id === a.agentId)).filter((a): a is Agent => Boolean(a))
+  const assignable = [lead, ...team, ...added]
   const resolveAssignee = (ref: string): string | undefined => {
-    const byId = [lead, ...team, ...added].find((a) => a.id === ref)
+    const byId = assignable.find((a) => a.id === ref)
     if (byId) return byId.id
-    const byName = [lead, ...team, ...added].find((a) => norm(a.name) === norm(ref))
+    const byName = assignable.find((a) => norm(a.name) === norm(ref))
     if (byName) return byName.id
     return create.find((c) => norm(c.name) === norm(ref))?.name
   }
@@ -484,7 +522,7 @@ export function validateTeamPlan(
   const taskEntries = rawList(raw, 'tasks', warn)
   let taskExtra = Math.max(0, taskEntries.length - RAW_ENTRIES_MAX)
   for (const entry of taskEntries.slice(0, RAW_ENTRIES_MAX)) {
-    const e = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {}
+    const e = isRecord(entry) ? entry : {}
     const text = str(e.task).trim()
     const ref = firstString(e.agent, e.agentId)
     if (!text) {
@@ -493,9 +531,10 @@ export function validateTeamPlan(
     }
     const assignee = ref ? resolveAssignee(ref) : undefined
     if (!assignee) {
+      const known = ref ? findAgent(store.agents, ref) : undefined
       warn(
         ref
-          ? `Skipped the task ${quote(text)}: ${quote(ref)} is not on the team, in this plan, or the team lead.`
+          ? `Skipped the task ${quote(text)}: ${known ? known.name : quote(ref)} is not on the team, in this plan, or the team lead.`
           : `Skipped the task ${quote(text)}: it named no agent.`,
       )
       continue
@@ -508,210 +547,160 @@ export function validateTeamPlan(
   }
   overflow(MAX_TASKS, taskExtra, 'tasks')
 
-  const kept = warnings.length > MAX_WARNINGS ? [...warnings.slice(0, MAX_WARNINGS - 1), `…and ${warnings.length - MAX_WARNINGS + 1} more.`] : warnings
+  const kept =
+    warnings.length > MAX_WARNINGS
+      ? [...warnings.slice(0, MAX_WARNINGS - 1), `…and ${warnings.length - MAX_WARNINGS + 1} more.`]
+      : warnings
   return { reply, add, create, tasks, warnings: kept }
 }
 
 // ---------------------------------------------------------------------------
 // Routes (app.ts registers them; these hold the logic)
 
-/** Plans being computed: "<projectId>/<messageId>" per store. */
-const planning = new WeakMap<WorkspaceStore, Set<string>>()
+const TEAM_PLAN_USAGE = 'Send {"messageId": "<id>"} (a user message in this chat) or {"prompt": "<text>"}.'
 
 /**
- * POST /api/projects/:id/team-plan. Asks Primary, validates the answer and
- * records the 'team-plan' message. A plan with no team changes applies at
- * once (its tasks queue); otherwise it waits for apply or cancel. Nothing is
- * written when Primary's call fails or its answer is not a plan (502).
+ * POST /api/projects/:id/team-plan. Asks Primary about the user's prompt
+ * (a chat message by id, or a prompt sent as text) and returns the
+ * validated plan. Never writes: concurrent requests are harmless, and a
+ * failed call or an answer that is not a plan is a 502 with nothing changed.
  */
-export async function requestTeamPlan(
-  store: WorkspaceStore,
-  runner: TaskRunner,
-  projectId: string,
-  body: unknown,
-): Promise<TeamPlanResponse> {
+export async function requestTeamPlan(store: WorkspaceStore, projectId: string, body: unknown): Promise<TeamPlanResult> {
   projectOrFail(store, projectId)
-  const raw = (body ?? {}) as Record<string, unknown>
-  const messageId = typeof raw.messageId === 'string' ? raw.messageId.trim() : ''
-  if (!messageId) fail(400, 'Send {"messageId": "<id>"}: the user message Primary should answer.')
-  const prompt = findMessage(store, projectId, messageId)
-  if (!prompt || prompt.kind !== 'message' || prompt.author !== 'user') {
-    fail(400, `No user message with id "${messageId.slice(0, 100)}" in this project.`)
+  if (!isRecord(body)) fail(400, TEAM_PLAN_USAGE)
+  if (body.messageId !== undefined && typeof body.messageId !== 'string') fail(400, '"messageId" must be a string.')
+  if (body.prompt !== undefined && typeof body.prompt !== 'string') fail(400, '"prompt" must be a string.')
+  const messageId = str(body.messageId).trim()
+  let prompt: PlannerPrompt
+  if (messageId) {
+    // The message's text is the prompt; a "prompt" sent alongside is ignored.
+    prompt = { text: userMessageOrFail(store, projectId, messageId).text, messageId }
+  } else {
+    const text = str(body.prompt).trim()
+    if (!text) fail(400, TEAM_PLAN_USAGE)
+    if (text.length > PROMPT_MAX) fail(400, `"prompt" must be ${PROMPT_MAX.toLocaleString('en-US')} characters or fewer.`)
+    prompt = { text }
   }
   const lead = store.agents.find((a) => a.isPrimary)
   if (!lead) fail(409, 'Create the Team Lead first: Primary plans the team and its tasks.')
-  const existing = store.projectMessages.find(
-    (m) =>
-      m.projectId === projectId &&
-      m.kind === 'team-plan' &&
-      m.replyTo === messageId &&
-      (m.planStatus === 'pending' || m.planStatus === 'applied'),
-  )
-  if (existing) {
-    fail(
-      409,
-      existing.planStatus === 'pending'
-        ? 'Primary already proposed a plan for this message. Apply or cancel it first.'
-        : 'Primary already answered this message and its plan was applied.',
-    )
-  }
-  const key = `${projectId}/${messageId}`
-  const inFlight = planning.get(store) ?? new Set<string>()
-  planning.set(store, inFlight)
-  if (inFlight.has(key)) fail(409, 'Primary is already answering this message.')
-
   const endpoint = store.endpoints.find((e) => e.id === lead.endpointId)
   if (!endpoint) fail(400, `Agent "${lead.name}" has no valid endpoint. Pick one in its settings.`)
   const request = buildPlannerRequest(store, projectOrFail(store, projectId), lead, prompt, endpoint.contextWindow)
 
-  inFlight.add(key)
-  let content: string
-  let finishReason: string | undefined
-  try {
-    const result = await chatCompletion(
-      endpoint.baseUrl,
-      store.endpointKeys[endpoint.id],
-      lead.modelId,
-      request.messages,
-      endpoint.timeoutMs ?? 30_000,
-      request.maxTokens,
-      undefined,
-      PLANNER_TEMPERATURE,
-    )
-    if (!result.ok) fail(502, `${lead.name} could not answer: ${result.error ?? 'request failed'}. Nothing was changed.`)
-    content = result.content
-    finishReason = result.finishReason
-  } finally {
-    inFlight.delete(key)
-  }
+  const result = await chatCompletion(
+    endpoint.baseUrl,
+    store.endpointKeys[endpoint.id],
+    lead.modelId,
+    request.messages,
+    endpoint.timeoutMs ?? 30_000,
+    request.maxTokens,
+    undefined,
+    PLANNER_TEMPERATURE,
+  )
+  if (!result.ok) fail(502, `${lead.name} could not answer: ${result.error ?? 'request failed'}. Nothing was changed.`)
 
-  // The store may have changed during the call: re-check before writing.
+  // The store may have changed during the call: validate against it as it is now.
   const project = projectOrFail(store, projectId)
-  if (!findMessage(store, projectId, messageId)) fail(400, 'The message was removed while Primary was answering.')
-  const parsed = parsePlanJson(content)
+  const parsed = parsePlanJson(result.content)
   if (!parsed || !PLAN_KEYS.some((k) => k in parsed)) {
-    const excerpt = clipText(oneLine(content), 160)
+    const excerpt = clipText(oneLine(result.content), 160)
     fail(
       502,
-      finishReason === 'length'
+      result.finishReason === 'length'
         ? `${lead.name}'s answer was cut off before the plan was complete. Nothing was changed; try a shorter request.`
         : `${lead.name}'s answer was not a valid team plan (one JSON object with reply, add, create and tasks). ` +
             `Nothing was changed; try again.${excerpt ? ` It began: "${excerpt}"` : ''}`,
     )
   }
   const plan = validateTeamPlan(parsed, store, project, lead)
-
-  // D-P1 gates team changes only: a tasks-only plan applies right away.
-  const immediate = plan.add.length === 0 && plan.create.length === 0
-  const clock = messageClock(store, projectId)
-  const planMessage: ProjectMessage = {
-    id: uid('msg'),
-    projectId,
-    author: lead.id,
-    text: plan.reply || planSummary(plan),
-    kind: 'team-plan',
-    createdAt: clock(),
-    replyTo: messageId,
-    plan,
-    planStatus: immediate ? 'applied' : 'pending',
-  }
-  const assignments = immediate
-    ? assignmentMessages(
-        projectId,
-        planMessage.id,
-        lead.id,
-        plan.tasks.map((t) => ({ assigneeId: t.agent, task: t.task })),
-        clock,
-      )
-    : []
-  const previous = store.projectMessages
-  store.projectMessages = [...previous, planMessage, ...assignments]
-  if (!store.save()) {
-    store.projectMessages = previous
-    fail(500, 'The plan could not be saved. Please retry.')
-  }
-  if (assignments.length > 0) runner.kick(projectId)
-  return { project, messages: [planMessage, ...assignments] }
+  return messageId ? { plan, replyTo: messageId } : { plan }
 }
 
-function planOrFail(store: WorkspaceStore, projectId: string, messageId: string): ProjectMessage & { plan: TeamPlan } {
-  const message = findMessage(store, projectId, messageId)
-  if (!message || message.kind !== 'team-plan' || !message.plan) {
-    fail(404, `No team plan with id "${messageId.slice(0, 100)}" in this project.`)
-  }
-  return message as ProjectMessage & { plan: TeamPlan }
+interface ApplyInput {
+  /** The plan as sent, still raw: only what the user accepted of it. */
+  accepted: Record<string, unknown>
+  replyTo?: string
 }
 
-function assertPending(message: ProjectMessage): void {
-  if (message.planStatus !== 'pending') {
-    fail(409, `This plan is ${message.planStatus ?? 'not pending'}; only a pending plan can be applied or cancelled.`)
-  }
-}
+const APPLY_USAGE =
+  'Send {"plan": <the plan from POST /api/projects/:id/team-plan>, "replyTo"?: "<message id>", ' +
+  '"add"?: ["<agent id>"], "create"?: [0], "tasks"?: [0, 1]}.'
 
-/** Indexes (or ids) the apply body accepts; an omitted list accepts all. */
-function parseSelection(body: unknown, plan: TeamPlan): { add: Set<string>; create: Set<number>; tasks: Set<number> } {
-  if (body !== undefined && (body === null || typeof body !== 'object' || Array.isArray(body))) {
-    fail(400, 'Send a JSON object, e.g. {"add": ["agt_…"], "create": [0], "tasks": [0, 1]}.')
+/**
+ * The apply body: the message the plan answers, and the part of the plan the
+ * user accepted. Agent ids and indexes refer to the plan as sent (the plan
+ * the user confirmed), so they are checked against it, not against what
+ * validation keeps of it; anything else is a 400. An omitted list accepts
+ * the whole list, exactly as sent.
+ */
+function parseApply(store: WorkspaceStore, projectId: string, body: unknown): ApplyInput {
+  if (!isRecord(body) || !isRecord(body.plan)) fail(400, APPLY_USAGE)
+  const plan = body.plan
+  let replyTo: string | undefined
+  if (body.replyTo !== undefined) {
+    if (typeof body.replyTo !== 'string') fail(400, '"replyTo" must be the id of a user message in this chat.')
+    replyTo = userMessageOrFail(store, projectId, body.replyTo).id
   }
-  const raw = (body ?? {}) as Record<string, unknown>
-  const indexes = (key: 'create' | 'tasks', length: number): Set<number> => {
-    const value = raw[key]
-    if (value === undefined) return new Set(Array.from({ length }, (_, i) => i))
-    if (!Array.isArray(value) || value.length > 100) fail(400, `"${key}" must be a list of indexes into the plan.`)
+  const indexed = (key: 'create' | 'tasks'): unknown => {
+    const value = body[key]
+    if (value === undefined) return plan[key]
+    if (!Array.isArray(value) || value.length > SELECTION_MAX) fail(400, `"${key}" must be a list of indexes into plan.${key}.`)
+    const entries = rawList(plan, key)
     for (const i of value) {
-      if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= length) {
-        fail(400, `"${key}" lists ${JSON.stringify(i)}, which is not an index into this plan's ${key}.`)
+      if (typeof i !== 'number' || !Number.isInteger(i) || i < 0 || i >= entries.length) {
+        fail(400, `"${key}" lists ${String(JSON.stringify(i)).slice(0, 100)}, which is not an index into plan.${key}.`)
       }
     }
-    return new Set(value as number[])
+    const picked = new Set(value as number[])
+    return entries.filter((_, i) => picked.has(i))
   }
-  let add: Set<string>
-  if (raw.add === undefined) add = new Set(plan.add.map((a) => a.agentId))
-  else {
-    if (!Array.isArray(raw.add) || raw.add.length > 100) fail(400, '"add" must be a list of agent ids from the plan.')
-    for (const id of raw.add) {
-      if (typeof id !== 'string' || !plan.add.some((a) => a.agentId === id)) {
-        fail(400, `"add" lists ${JSON.stringify(id).slice(0, 100)}, which this plan does not propose.`)
+  let add: unknown = plan.add
+  if (body.add !== undefined) {
+    if (!Array.isArray(body.add) || body.add.length > SELECTION_MAX) fail(400, '"add" must be a list of agent ids from plan.add.')
+    const entries = rawList(plan, 'add')
+    const proposed = new Set(entries.slice(0, RAW_ENTRIES_MAX).map(addRef))
+    for (const id of body.add) {
+      if (typeof id !== 'string' || !id || !proposed.has(id)) {
+        fail(400, `"add" lists ${String(JSON.stringify(id)).slice(0, 100)}, which plan.add does not propose.`)
       }
     }
-    add = new Set(raw.add as string[])
+    const picked = new Set(body.add as string[])
+    add = entries.filter((e) => picked.has(addRef(e)))
   }
-  return { add, create: indexes('create', plan.create.length), tasks: indexes('tasks', plan.tasks.length) }
+  return {
+    accepted: { reply: plan.reply, add, create: indexed('create'), tasks: indexed('tasks') },
+    ...(replyTo ? { replyTo } : {}),
+  }
 }
 
 /**
- * POST /api/projects/:id/plans/:messageId/apply. Creates the accepted
- * specialists (library agents tagged with the project, on Primary's
- * endpoint/model/temperature), adds accepted and created agents to the team,
- * records a 'team-update' and one 'task-assignment' per accepted task, and
- * starts the task runner. Tasks whose agent did not join are dropped.
+ * POST /api/projects/:id/team-plan/apply. What the user accepted of the plan
+ * is validated again like model output against the current store (bad
+ * entries dropped and noted in the team update; a task whose agent was not
+ * accepted is one of them). Then: Primary's reply becomes a 'message' from
+ * Primary; the specialists are created (library agents tagged with the
+ * project, on Primary's endpoint/model/temperature); added and created
+ * agents join the team ('team-update'); each task becomes a
+ * 'task-assignment'; all of them carry replyTo; the task runner starts.
+ * 409 when an accepted specialist's name is taken.
  */
-export function applyTeamPlan(
-  store: WorkspaceStore,
-  runner: TaskRunner,
-  projectId: string,
-  messageId: string,
-  body: unknown,
-): TeamPlanResponse {
+export function applyTeamPlan(store: WorkspaceStore, runner: TaskRunner, projectId: string, body: unknown): ProjectUpdate {
   const project = projectOrFail(store, projectId)
-  const message = planOrFail(store, projectId, messageId)
-  assertPending(message)
-  const plan = message.plan
-  const selection = parseSelection(body, plan)
+  const { accepted, replyTo } = parseApply(store, projectId, body)
   const lead = store.agents.find((a) => a.isPrimary)
   if (!lead) fail(409, 'Create the Team Lead first: new specialists use its endpoint and model.')
 
-  // Accepted creations must still have unique names; check before any write.
-  const accepted = plan.create.filter((_, i) => selection.create.has(i))
-  for (const c of accepted) {
-    if (store.agents.some((a) => norm(a.name) === norm(c.name))) {
-      fail(409, `An agent named "${c.name}" exists now. Untick it, or cancel and ask Primary again.`)
+  // A specialist the user accepted whose name is taken now: refuse, write nothing.
+  for (const e of rawList(accepted, 'create').slice(0, RAW_ENTRIES_MAX)) {
+    const name = isRecord(e) ? oneLine(str(e.name)) : ''
+    if (name && nameClash(store, name)) {
+      fail(409, `An agent named or with the id "${clipText(name, NAME_MAX)}" exists now. Untick it, or ask Primary again.`)
     }
   }
+  const plan = validateTeamPlan(accepted, store, project, lead)
 
   const now = new Date().toISOString()
-  const notes: string[] = []
-  const created: Agent[] = accepted.map((c) => ({
+  const created: Agent[] = plan.create.map((c) => ({
     id: uid('agt'),
     name: c.name,
     description: c.reason || `Specialist for ${project.name}.`,
@@ -721,104 +710,79 @@ export function applyTeamPlan(
     isPrimary: false,
     role: c.role,
     ...(lead.temperature !== undefined ? { temperature: lead.temperature } : {}),
-    skillIds: c.skillIds.filter((id) => store.skills.some((s) => s.id === id)),
+    skillIds: [...c.skillIds],
     status: 'idle',
     createdAt: now,
     lastRunAt: null,
     runCount: 0,
     projectId: project.id,
   }))
-
-  const joined: Agent[] = []
-  for (const a of plan.add) {
-    if (!selection.add.has(a.agentId)) continue
-    const agent = store.agents.find((x) => x.id === a.agentId)
-    if (!agent) notes.push(`Skipped an agent that is no longer in the library.`)
-    else if (!project.teamAgentIds.includes(agent.id)) joined.push(agent)
-  }
+  const joined = plan.add
+    .map((a) => store.agents.find((x) => x.id === a.agentId))
+    .filter((a): a is Agent => Boolean(a))
   const teamAgentIds = [...project.teamAgentIds, ...joined.map((a) => a.id), ...created.map((a) => a.id)]
 
-  // Tasks go to the lead, the plan's author, or someone on the new team.
-  const assigneeFor = (ref: string): string | undefined => {
-    const i = accepted.findIndex((c) => norm(c.name) === norm(ref))
-    if (i !== -1) return created[i]?.id
-    if (ref === lead.id || ref === message.author) return store.agents.some((a) => a.id === ref) ? ref : undefined
-    return teamAgentIds.includes(ref) && store.agents.some((a) => a.id === ref) ? ref : undefined
-  }
+  // A validated task names the lead, a team member, an added agent (by id) or
+  // a created one (by name, now mapped to its new id).
   const tasks: { assigneeId: string; task: string }[] = []
-  let dropped = 0
-  plan.tasks.forEach((t, i) => {
-    if (!selection.tasks.has(i)) return
-    const assigneeId = assigneeFor(t.agent)
-    if (assigneeId) tasks.push({ assigneeId, task: t.task })
-    else dropped += 1
-  })
+  for (const t of plan.tasks) {
+    const i = plan.create.findIndex((c) => norm(c.name) === norm(t.agent))
+    const assigneeId = i === -1 ? t.agent : created[i]?.id
+    if (assigneeId && (assigneeId === lead.id || teamAgentIds.includes(assigneeId))) tasks.push({ assigneeId, task: t.task })
+  }
 
+  const teamChanged = joined.length > 0 || created.length > 0
   const lines: string[] = []
   if (joined.length > 0) lines.push(`Added ${joined.map((a) => a.name).join(', ')} to the team.`)
   if (created.length > 0) {
     lines.push(`Created ${created.map((a) => (a.role ? `${a.name} (${a.role})` : a.name)).join(', ')} for this project.`)
   }
-  if (lines.length === 0) lines.push('No team changes.')
-  lines.push(...notes)
-  if (dropped > 0) lines.push(`Skipped ${count(dropped, 'task', 'tasks')} whose agent is not on the team.`)
+  if (!teamChanged) lines.push('No team changes.')
+  lines.push(...plan.warnings)
   if (tasks.length > 0) lines.push(`Assigned ${count(tasks.length, 'task', 'tasks')}.`)
 
   const clock = messageClock(store, projectId)
-  const appliedPlan: ProjectMessage = { ...message, planStatus: 'applied', updatedAt: now }
-  const update: ProjectMessage = {
-    id: uid('msg'),
-    projectId,
-    author: lead.id,
-    text: lines.join(' '),
-    kind: 'team-update',
-    createdAt: clock(),
-    planId: message.id,
+  const thread = replyTo ? { replyTo } : {}
+  const messages: ProjectMessage[] = []
+  if (plan.reply) {
+    messages.push({ id: uid('msg'), projectId, author: lead.id, text: plan.reply, kind: 'message', createdAt: clock(), ...thread })
   }
-  const assignments = assignmentMessages(projectId, message.id, lead.id, tasks, clock)
-  const teamChanged = joined.length > 0 || created.length > 0
-  const nextProject: Project = teamChanged ? { ...project, teamAgentIds, updatedAt: now } : project
+  // The team update says who joined, and why anything the user accepted was dropped.
+  if (teamChanged || plan.warnings.length > 0) {
+    messages.push({ id: uid('msg'), projectId, author: lead.id, text: lines.join(' '), kind: 'team-update', createdAt: clock(), ...thread })
+  }
+  for (const t of tasks) {
+    messages.push({
+      id: uid('msg'),
+      projectId,
+      author: lead.id,
+      text: t.task,
+      kind: 'task-assignment',
+      createdAt: clock(),
+      ...thread,
+      assigneeId: t.assigneeId,
+      taskStatus: 'queued',
+    })
+  }
+  if (messages.length === 0) return { project, messages }
 
+  const nextProject: Project = teamChanged ? { ...project, teamAgentIds, updatedAt: now } : project
   const previous = { agents: store.agents, projects: store.projects, messages: store.projectMessages }
   store.agents = [...created, ...store.agents]
   store.projects = store.projects.map((p) => (p.id === projectId ? nextProject : p))
-  store.projectMessages = [
-    ...store.projectMessages.map((m) => (m.id === message.id ? appliedPlan : m)),
-    update,
-    ...assignments,
-  ]
+  store.projectMessages = [...store.projectMessages, ...messages]
   if (!store.save()) {
     store.agents = previous.agents
     store.projects = previous.projects
     store.projectMessages = previous.messages
     fail(500, 'The plan could not be applied in storage. Please retry.')
   }
-  if (assignments.length > 0) runner.kick(projectId)
-  return { project: nextProject, messages: [appliedPlan, update, ...assignments] }
-}
-
-/** POST /api/projects/:id/plans/:messageId/cancel. */
-export function cancelTeamPlan(store: WorkspaceStore, projectId: string, messageId: string): TeamPlanResponse {
-  const project = projectOrFail(store, projectId)
-  const message = planOrFail(store, projectId, messageId)
-  assertPending(message)
-  const cancelled: ProjectMessage = { ...message, planStatus: 'cancelled', updatedAt: new Date().toISOString() }
-  const previous = store.projectMessages
-  replaceMessage(store, cancelled)
-  if (!store.save()) {
-    store.projectMessages = previous
-    fail(500, 'The plan could not be cancelled in storage. Please retry.')
-  }
-  return { project, messages: [cancelled] }
+  if (tasks.length > 0) runner.kick(projectId)
+  return { project: nextProject, messages }
 }
 
 /** POST /api/projects/:id/tasks/:messageId/retry: re-queue a failed task. */
-export function retryTask(
-  store: WorkspaceStore,
-  runner: TaskRunner,
-  projectId: string,
-  messageId: string,
-): TeamPlanResponse {
+export function retryTask(store: WorkspaceStore, runner: TaskRunner, projectId: string, messageId: string): ProjectUpdate {
   const project = projectOrFail(store, projectId)
   const task = findMessage(store, projectId, messageId)
   if (!task || task.kind !== 'task-assignment') fail(404, `No task with id "${messageId.slice(0, 100)}" in this project.`)
@@ -879,10 +843,9 @@ function nextQueuedTask(store: WorkspaceStore, projectId: string): ProjectMessag
   return next
 }
 
-/** What the assignee is asked: the project, the user's prompt, the task, the team. */
+/** What the assignee is asked: the project, the user's prompt (replyTo), the task, the team. */
 function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMessage, assignee: Agent): string {
-  const plan = task.planId ? findMessage(store, project.id, task.planId) : undefined
-  const prompt = plan?.replyTo ? findMessage(store, project.id, plan.replyTo) : undefined
+  const prompt = task.replyTo ? findMessage(store, project.id, task.replyTo) : undefined
   const lead = store.agents.find((a) => a.id === task.author) ?? store.agents.find((a) => a.isPrimary)
   const teammates = teamMembers(store, project)
     .filter((a) => a.id !== assignee.id)
@@ -904,8 +867,8 @@ function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMe
 }
 
 /**
- * Fail every queued or running task (with a 'task-result' saying why) so the
- * user can retry it. Used at startup: tasks a previous process left behind
+ * Fail every queued or running task (with a result message saying why) so
+ * the user can retry it. Used at startup: tasks a previous process left behind
  * never finish on their own. Projects `busy` reports are skipped.
  */
 export function failInterruptedTasks(store: WorkspaceStore, busy: (projectId: string) => boolean = () => false): number {
@@ -928,11 +891,10 @@ export function failInterruptedTasks(store: WorkspaceStore, busy: (projectId: st
       projectId: m.projectId,
       author: m.assigneeId ?? m.author,
       text: 'Could not finish: interrupted by a restart. Retry the task to run it again.',
-      kind: 'task-result',
+      kind: 'message',
       createdAt: clock(),
       taskId: m.id,
       taskStatus: 'failed',
-      ...(m.planId ? { planId: m.planId } : {}),
     }
   })
   store.projectMessages = [
@@ -970,7 +932,9 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       text = 'Could not finish: the assigned agent is no longer in the library.'
     } else {
       try {
-        const run = await runAgent(store, assignee, buildTaskInput(store, project, task, assignee), { projectId })
+        // A failed save of the run is not a task failure: the run is in the
+        // store, and the save below persists it with the result message.
+        const { run } = await executeRun(store, assignee, buildTaskInput(store, project, task, assignee), { projectId })
         runId = run.id
         ok = run.status === 'succeeded'
         text = ok
@@ -989,12 +953,11 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       projectId,
       author: task.assigneeId ?? task.author,
       text: clipText(text, RESULT_TEXT_MAX),
-      kind: 'task-result',
+      kind: 'message',
       createdAt: messageClock(store, projectId)(),
       taskId,
       taskStatus: ok ? 'done' : 'failed',
       ...(runId ? { runId } : {}),
-      ...(task.planId ? { planId: task.planId } : {}),
     }
     store.projectMessages = [
       ...store.projectMessages.map((m) =>

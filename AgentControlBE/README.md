@@ -23,6 +23,7 @@ npm run typecheck
 | `CORS_ORIGINS` | *(reflect request origin)* | Comma-separated allowlist to pin CORS. |
 | `AGENTCONTROL_AUTH_TOKEN` | *(unset)* | When set, every `/api/*` call requires `Authorization: Bearer <token>` (401 otherwise). `/health` stays open. |
 | `AGENTCONTROL_DATA_DIR` | `<cwd>/data` | Directory holding `store.json` and the vault. |
+| `AGENTCONTROL_PROJECTS_DIR` | `<data dir>/projects` | Root for project folders (created on project create, kept on delete). |
 | `AGENTCONTROL_SECRET` | *(unset)* | Master key for the vault (`sha256(secret)`). When unset, a random key is kept DPAPI-wrapped in `vault.key`. |
 
 Per-endpoint upstream timeout is configurable on the endpoint itself

@@ -262,10 +262,21 @@ const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'fail
  * Any other kind loads as a 'message', which covers the pre-handoff kinds a
  * development build wrote: a 'team-plan' (Primary's reply; its stored plan
  * and planStatus are dropped) and a 'task-result' (it keeps taskId, runId
- * and taskStatus, as a task's result message does now).
+ * and taskStatus, as a task's result message does now). Messages that named
+ * their plan by planId reply to that plan's prompt instead, and a plan that
+ * was never applied no longer counts as an answer, so its prompt can be
+ * asked again.
  */
 function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
   if (!Array.isArray(raw)) return []
+  type Legacy = Partial<ProjectMessage> & { planId?: unknown; planStatus?: unknown }
+  const planPrompt = new Map<string, string>()
+  for (const item of raw) {
+    const m = item as Legacy | null
+    if (m && m.kind === ('team-plan' as string) && typeof m.id === 'string' && typeof m.replyTo === 'string') {
+      planPrompt.set(m.id, m.replyTo)
+    }
+  }
   const out: ProjectMessage[] = []
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue
@@ -273,6 +284,15 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
     if (typeof m.id !== 'string' || typeof m.projectId !== 'string') continue
     if (typeof m.text !== 'string') continue
     const kind = MESSAGE_KINDS.includes(m.kind as ProjectMessageKind) ? (m.kind as ProjectMessageKind) : 'message'
+    const legacy = m as Legacy
+    const unapplied = legacy.kind === ('team-plan' as string) && legacy.planStatus !== undefined && legacy.planStatus !== 'applied'
+    const replyTo = unapplied
+      ? undefined
+      : typeof m.replyTo === 'string'
+        ? m.replyTo
+        : typeof legacy.planId === 'string'
+          ? planPrompt.get(legacy.planId)
+          : undefined
     out.push({
       id: m.id,
       projectId: m.projectId,
@@ -281,7 +301,7 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
       kind,
       createdAt: typeof m.createdAt === 'string' ? m.createdAt : new Date(0).toISOString(),
       ...(typeof m.updatedAt === 'string' ? { updatedAt: m.updatedAt } : {}),
-      ...(typeof m.replyTo === 'string' ? { replyTo: m.replyTo } : {}),
+      ...(replyTo !== undefined ? { replyTo } : {}),
       ...(typeof m.assigneeId === 'string' ? { assigneeId: m.assigneeId } : {}),
       ...(TASK_STATUSES.includes(m.taskStatus as TaskStatus) ? { taskStatus: m.taskStatus } : {}),
       ...(typeof m.taskId === 'string' ? { taskId: m.taskId } : {}),

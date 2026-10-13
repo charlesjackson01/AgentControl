@@ -364,15 +364,20 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // The record and its chat go; the folder stays on disk (removal is an
     // explicit user action, a later milestone). Its specialists stay in the
     // library, untagged; its task queue starts nothing more.
+    // Its task runs go too: no route lists them once the project is gone, and
+    // agents could otherwise still read them through read_run_log.
     const previousProjects = store.projects
     const previousMessages = store.projectMessages
+    const previousRuns = store.runs
     const tagged = store.agents.filter((a) => a.projectId === id)
     store.projects = store.projects.filter((p) => p.id !== id)
     store.projectMessages = store.projectMessages.filter((m) => m.projectId !== id)
+    store.runs = store.runs.filter((r) => r.projectId !== id)
     for (const agent of tagged) delete agent.projectId
     if (!store.save()) {
       store.projects = previousProjects
       store.projectMessages = previousMessages
+      store.runs = previousRuns
       for (const agent of tagged) agent.projectId = id
       fail(500, 'The project could not be deleted from storage. Please retry.')
     }

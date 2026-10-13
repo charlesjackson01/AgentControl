@@ -302,7 +302,15 @@ export type TaskSource =
 export function taskSource(plan: TeamPlan, task: TeamPlanTask, ctx: PlanContext): TaskSource {
   if (task.agent === ctx.primaryId || ctx.teamAgentIds.includes(task.agent)) return { kind: 'agent', agentId: task.agent }
   if (plan.add.some((a) => a.agentId === task.agent)) return { kind: 'add', agentId: task.agent }
+  // By name, in the order the BE resolves it on apply: the lead and the team,
+  // then agents the plan adds, then a specialist the plan creates.
   const name = norm(task.agent)
+  const member = ctx.agents.find(
+    (a) => (a.id === ctx.primaryId || ctx.teamAgentIds.includes(a.id)) && norm(a.name) === name,
+  )
+  if (member) return { kind: 'agent', agentId: member.id }
+  const added = ctx.agents.find((a) => plan.add.some((x) => x.agentId === a.id) && norm(a.name) === name)
+  if (added) return { kind: 'add', agentId: added.id }
   const index = plan.create.findIndex((c) => norm(c.name) === name)
   if (index >= 0) return { kind: 'create', index }
   return { kind: 'unknown' }

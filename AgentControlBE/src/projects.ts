@@ -163,7 +163,11 @@ function count(n: number, one: string, many: string): string {
 // ---------------------------------------------------------------------------
 // Planner prompt
 
-const PLANNER_RULES = `The user's prompt is at the end of the next message. Check the team, then decide who does what:
+/** What an assignee sees besides its task: the prompt only when it is a stored chat message. */
+const SEES_WITH_PROMPT = "the task, the project and the user's prompt"
+const SEES_WITHOUT_PROMPT = 'the task and the project, so include whatever it needs from the prompt'
+
+const plannerRules = (SEES: string): string => `The user's prompt is at the end of the next message. Check the team, then decide who does what:
 - Team members fit the work: assign them tasks.
 - No team yet: create project specialists (or add library agents that fit) and assign them tasks.
 - The team lacks a specialty the work needs: recommend adding a library agent or creating a specialist, and say why.
@@ -174,7 +178,7 @@ Rules:
 - "reply": what you tell the user, in a few plain sentences.
 - "add": library agents to bring onto the team, by "agentId" from "Library agents". At most ${MAX_ADD}. Never yourself or current team members.
 - "create": new specialists, only when no library agent fits. At most ${MAX_CREATE}. Each needs a new, unique "name" (at most ${NAME_MAX} characters), a short "role", "instructions" written to that agent, "skillIds" from "Library skills" (may be empty) and a "reason".
-- "tasks": at most ${MAX_TASKS}. "agent" is a team member's id, an "agentId" from your "add", the "name" of one of your "create" entries, or your own id. Make each task stand on its own: the assignee sees only the task, the project and the user's prompt.
+- "tasks": at most ${MAX_TASKS}. "agent" is a team member's id, an "agentId" from your "add", the "name" of one of your "create" entries, or your own id. Make each task stand on its own: the assignee sees only ${SEES}.
 - Use only ids from the lists you were given. Never invent ids.
 - The user reviews your plan first: nobody joins, is created or starts a task until they approve it.
 
@@ -184,12 +188,13 @@ Shape:
 Example:
 {"reply":"Ana can draft the post. No one edits copy, so I suggest a Copy Editor.","add":[],"create":[{"name":"Copy Editor","role":"Editor","instructions":"You edit drafts for clarity, tone and correctness. Return the edited text.","skillIds":["technical-writing"],"reason":"The team has no editor."}],"tasks":[{"agent":"agt_1a2b3c4d","task":"Draft a 500-word launch post for the new release."},{"agent":"Copy Editor","task":"Edit the launch post draft for clarity and tone."}]}`
 
-function plannerSystem(lead: Agent): string {
+function plannerSystem(lead: Agent, promptInChat: boolean): string {
   const own = clipText(lead.instructions.trim(), LEAD_INSTRUCTIONS_MAX)
   return [
     `You are ${lead.name}, the team lead of this project in AgentControl. Your agent id is ${lead.id}.`,
     own ? `Your own instructions:\n${own}` : '',
-    PLANNER_RULES,
+    // Tasks quote the prompt only when it is a chat message the plan replies to.
+    plannerRules(promptInChat ? SEES_WITH_PROMPT : SEES_WITHOUT_PROMPT),
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -268,7 +273,7 @@ export function buildPlannerRequest(
   prompt: PlannerPrompt,
   contextWindow: number,
 ): PlannerRequest {
-  const system = plannerSystem(lead)
+  const system = plannerSystem(lead, prompt.messageId !== undefined)
   const team = teamMembers(store, project)
   const teamIds = new Set(team.map((a) => a.id))
 
@@ -287,7 +292,18 @@ export function buildPlannerRequest(
   })
   const thread = projectThread(store, project.id)
   const at = prompt.messageId ? thread.findIndex((m) => m.id === prompt.messageId) : -1
-  const earlier = at === -1 ? thread : thread.slice(0, at)
+  // Everything before the prompt, plus what already answers it (a re-ask after
+  // an applied plan): Primary's reply, the team update, tasks and their results.
+  const answeredTasks = new Set(
+    at === -1 ? [] : thread.filter((m) => m.replyTo === prompt.messageId && m.kind === 'task-assignment').map((m) => m.id),
+  )
+  const earlier =
+    at === -1
+      ? thread
+      : [
+          ...thread.slice(0, at),
+          ...thread.slice(at + 1).filter((m) => m.replyTo === prompt.messageId || (m.taskId !== undefined && answeredTasks.has(m.taskId))),
+        ]
   const chatLines = earlier.slice(-CHAT_MESSAGES_MAX).map((m) => chatLine(store, m))
 
   const header = [
@@ -945,9 +961,16 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       }
     }
 
-    // The project (and its chat) may have been deleted while the run was in flight.
+    // The project (and its chat) may have been deleted while the run was in
+    // flight: then its run goes too, like the project's other runs.
     const current = findMessage(store, projectId, taskId)
-    if (!current || !store.projects.some((p) => p.id === projectId)) return
+    if (!current || !store.projects.some((p) => p.id === projectId)) {
+      if (runId && !store.projects.some((p) => p.id === projectId)) {
+        store.runs = store.runs.filter((r) => r.id !== runId)
+        store.save()
+      }
+      return
+    }
     const result: ProjectMessage = {
       id: uid('msg'),
       projectId,

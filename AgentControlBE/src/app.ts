@@ -4,27 +4,17 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
-import {
-  chatCompletion,
-  fetchModels,
-  type ChatMessage,
-  type ChatResult,
-  type ToolDeclaration,
-} from './upstream.js'
-import {
-  executeToolCall,
-  listToolInfo,
-  resolveToolDeclarations,
-  type ToolContext,
-  type ToolOutcome,
-} from './tools.js'
+import { fetchModels } from './upstream.js'
+import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
+import { fail, uid } from './http.js'
+import { runAgent } from './runs.js'
+import { applyTeamPlan, cancelTeamPlan, createTaskRunner, requestTeamPlan, retryTask } from './projects.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
   type AgentInput,
-  type AgentRun,
   type Endpoint,
   type EndpointInput,
   type EndpointKind,
@@ -36,16 +26,6 @@ import {
   type SkillInput,
   type SkillTool,
 } from './shared/types.js'
-
-function fail(status: number, message: string): never {
-  const err = new Error(message) as Error & { statusCode: number }
-  err.statusCode = status
-  throw err
-}
-
-function uid(prefix: string): string {
-  return `${prefix}_${crypto.randomUUID().slice(0, 8)}`
-}
 
 function trimBase(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
@@ -275,6 +255,14 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     })
   }
 
+  // Project task queues. Tasks a previous process left queued or running are
+  // failed first (so they can be retried); closing the app waits for the
+  // task runs in flight and starts no new ones.
+  const tasks = createTaskRunner(store, (err) => app.log.error(err))
+  app.addHook('onClose', async () => {
+    await tasks.close()
+  })
+
   app.get('/health', async () => ({ status: 'ok' }))
   app.get('/api/skills', async () => store.skills)
   app.get('/api/tools', async () => listToolInfo())
@@ -374,16 +362,21 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
     // The record and its chat go; the folder stays on disk (removal is an
-    // explicit user action, a later milestone).
+    // explicit user action, a later milestone). Its specialists stay in the
+    // library, untagged; its task queue starts nothing more.
     const previousProjects = store.projects
     const previousMessages = store.projectMessages
+    const tagged = store.agents.filter((a) => a.projectId === id)
     store.projects = store.projects.filter((p) => p.id !== id)
     store.projectMessages = store.projectMessages.filter((m) => m.projectId !== id)
+    for (const agent of tagged) delete agent.projectId
     if (!store.save()) {
       store.projects = previousProjects
       store.projectMessages = previousMessages
+      for (const agent of tagged) agent.projectId = id
       fail(500, 'The project could not be deleted from storage. Please retry.')
     }
+    tasks.stop(id)
     return reply.status(204).send()
   })
 
@@ -422,6 +415,28 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     return reply.status(201).send(message)
   })
+
+  // Primary answers a user message with a team plan (D-P1: team changes wait
+  // for apply/cancel; a tasks-only plan applies at once and its tasks run).
+  app.post('/api/projects/:id/team-plan', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    return reply.status(201).send(await requestTeamPlan(store, tasks, id, request.body))
+  })
+
+  app.post('/api/projects/:id/plans/:messageId/apply', async (request) => {
+    const { id, messageId } = request.params as { id: string; messageId: string }
+    return applyTeamPlan(store, tasks, id, messageId, request.body)
+  })
+
+  app.post('/api/projects/:id/plans/:messageId/cancel', async (request) => {
+    const { id, messageId } = request.params as { id: string; messageId: string }
+    return cancelTeamPlan(store, id, messageId)
+  })
+
+  app.post('/api/projects/:id/tasks/:messageId/retry', async (request) => {
+    const { id, messageId } = request.params as { id: string; messageId: string }
+    return retryTask(store, tasks, id, messageId)
+  })
   app.get('/api/settings', async () => store.settings)
 
   app.get('/api/agents', async () => store.agents)
@@ -441,262 +456,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const body = (request.body ?? {}) as { input?: unknown }
     const input = typeof body.input === 'string' ? body.input.trim() : ''
     if (!input) fail(400, 'Provide an "input" string to run the agent.')
-
-    // Every agent has an endpoint; no hosted fallback exists.
-    const endpoint = store.endpoints.find((e) => e.id === agent.endpointId)
-    if (!endpoint) fail(400, `Agent "${agent.name}" has no valid endpoint. Pick one in its settings.`)
-    const baseUrl = endpoint.baseUrl
-    const apiKey = store.endpointKeys[endpoint.id]
-    const timeoutMs = endpoint.timeoutMs ?? 30_000
-
-    // System prompt = instructions + the full CONTENT of attached skills, or,
-    // when that leaves too little of the window, summaries of the largest
-    // skills plus get_skill to read them (see planPrompt). Offered tools are
-    // the registry tools the skills declare; only these may execute.
-    // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
-    const injectedSkills = attachedSkills(store.skills, agent.skillIds)
-    const plan = planPrompt({
-      instructions: agent.instructions,
-      skills: injectedSkills,
-      input,
-      contextWindow: endpoint.contextWindow,
-    })
-    const system = plan.system
-    const toolDeclarations: ToolDeclaration[] = plan.toolDeclarations
-    const summarized = new Set(plan.summarizedSkillIds)
-    // get_skill the planner added (no attached skill declares it) reads only
-    // this agent's skills, not every skill in the workspace.
-    const plannerGetSkill =
-      summarized.size > 0 && !injectedSkills.some((s) => (s.tools ?? []).some((t) => t.name === 'get_skill'))
-    const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
-    const toolSchemaChars = sendTools ? JSON.stringify(sendTools).length : 0
-
-    // Prior turns: the most recent successful runs become user/assistant pairs
-    // (oldest first). Placeholder seed runs with empty text are skipped.
-    const history = store.runs
-      .filter(
-        (r) =>
-          r.agentId === agent.id &&
-          r.status === 'succeeded' &&
-          r.input.trim() !== '' &&
-          r.output.trim() !== '',
-      )
-      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-      .slice(0, 10)
-      .reverse()
-
-    // Context budget: a crude chars/4 estimate (no tokenizer dep) checked against
-    // the endpoint's context window. Reserve room for the response, then drop the
-    // oldest history turns until the prompt fits. The system prompt + this input
-    // can't be trimmed, so if they alone overflow, reject with 413. Tool results
-    // count toward the estimate and the whole check re-runs each loop iteration.
-    // Tool-call turns (assistant content + call arguments) and tool results
-    // count too, as do the tool schemas on calls that send them.
-    const contextWindow = endpoint.contextWindow
-    let loopChars = 0
-    const estimate = (turns: AgentRun[], withSchemas: boolean): number => {
-      let chars = system.length + input.length + loopChars + (withSchemas ? toolSchemaChars : 0)
-      for (const t of turns) chars += t.input.length + t.output.length
-      return Math.ceil(chars / 4)
-    }
-
-    // Tool loop: bounded by MAX_TOOL_ITERATIONS tool-enabled calls, then one
-    // final tools-off call. Unknown tools / bad JSON come back as tool messages
-    // so the model can recover; they never 500 the run.
-    // Per-run caps keep one looping model from flooding the store or the
-    // event loop; over-cap calls are still answered (every tool_call_id must be).
-    const MAX_TOOL_ITERATIONS = 4
-    const MAX_CALLS_PER_TURN = 8
-    const MAX_CALLS_PER_RUN = 16
-    const TOOL_RESULT_MAX_CHARS = 4_000
-    const MIN_TOOL_RESULT_CHARS = 300
-    const AUDIT_ARGUMENT_MAX_CHARS = 1_000
-    const DIRECT_ANSWER_INSTRUCTION =
-      'Tool use is no longer available. Answer the user directly in plain text now.'
-
-    const loopMessages: ChatMessage[] = []
-    const toolAudit: NonNullable<AgentRun['toolCalls']> = []
-    let totalLatency = 0
-    let steps = 0
-    let exhausted = false
-    let contextExhausted = false
-    let forceFinal = false
-    let callsThisRun = 0
-    let result: ChatResult | undefined
-
-    const runId = uid('run')
-    const toolCtx: ToolContext = {
-      store,
-      agentId: agent.id,
-      runId,
-      input,
-      allowed: new Set(toolDeclarations.map((t) => t.name)),
-      now: () => new Date(),
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-      writes: { count: 0 },
-      ...(plannerGetSkill ? { skillScope: new Set(injectedSkills.map((s) => s.id)) } : {}),
-    }
-
-    const startedAt = new Date().toISOString()
-    for (let iteration = 0; ; iteration++) {
-      const finalCall = iteration >= MAX_TOOL_ITERATIONS || forceFinal
-      const withSchemas = !finalCall && sendTools !== undefined
-      const systemText =
-        finalCall && system ? `${system}\n\n${DIRECT_ANSWER_INSTRUCTION}` : system
-
-      let turns = history
-      let estimated = estimate(turns, withSchemas)
-      while (estimated + RESPONSE_RESERVE > contextWindow && turns.length > 0) {
-        turns = turns.slice(1)
-        estimated = estimate(turns, withSchemas)
-      }
-      const baseEstimated = estimate([], withSchemas)
-      if (baseEstimated + RESPONSE_RESERVE > contextWindow) {
-        if (toolAudit.length === 0) {
-          fail(
-            413,
-            `Prompt too large for this endpoint's context window: about ${baseEstimated} tokens of prompt ` +
-              `plus ${RESPONSE_RESERVE} reserved for the reply exceed the ${contextWindow}-token window. ` +
-              "Detach skills, shorten the instructions or the message, or raise the endpoint's context window in Settings.",
-          )
-        }
-        // Tools already ran (and may have written notes): never drop the run.
-        // Retry as the tools-off final call; if even that overflows, record a failure.
-        if (!finalCall) {
-          forceFinal = true
-          continue
-        }
-        contextExhausted = true
-        break
-      }
-      const maxTokens = Math.min(RESPONSE_RESERVE, contextWindow - estimated)
-
-      const messages: ChatMessage[] = []
-      if (systemText) messages.push({ role: 'system', content: systemText })
-      for (const turn of turns) {
-        messages.push({ role: 'user', content: turn.input })
-        messages.push({ role: 'assistant', content: turn.output })
-      }
-      messages.push({ role: 'user', content: input })
-      messages.push(...loopMessages)
-
-      result = await chatCompletion(
-        baseUrl,
-        apiKey,
-        agent.modelId,
-        messages,
-        timeoutMs,
-        maxTokens,
-        finalCall ? undefined : sendTools,
-        agent.temperature,
-      )
-      steps += 1
-      totalLatency += result.latencyMs
-
-      if (!result.ok) break
-      if (result.toolCalls && result.toolCalls.length > 0) {
-        if (finalCall) {
-          exhausted = true
-          break
-        }
-        loopMessages.push({ role: 'assistant', content: result.content, toolCalls: result.toolCalls })
-        loopChars += result.content.length
-        for (const call of result.toolCalls) loopChars += call.name.length + call.arguments.length
-        let callsThisTurn = 0
-        for (const call of result.toolCalls) {
-          callsThisTurn += 1
-          // What the context window still holds for this result. Paging tools
-          // size their page to it; anything larger is clipped below.
-          const remainingChars = (contextWindow - RESPONSE_RESERVE - estimate([], true)) * 4
-          const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
-          toolCtx.resultMaxChars = limit
-          let outcome: ToolOutcome
-          if (callsThisTurn > MAX_CALLS_PER_TURN || callsThisRun >= MAX_CALLS_PER_RUN) {
-            outcome = {
-              ok: false,
-              content: `Too many tool calls: at most ${MAX_CALLS_PER_TURN} per turn and ${MAX_CALLS_PER_RUN} per run. Answer with what you have.`,
-            }
-          } else {
-            callsThisRun += 1
-            outcome = await executeToolCall(call, toolCtx)
-          }
-          // Clip to what the context window still holds; when almost nothing is
-          // left, say so and make the next call the tools-off final call.
-          let content = outcome.content
-          let ok = outcome.ok
-          if (content.length > limit) {
-            if (limit < MIN_TOOL_RESULT_CHARS) {
-              content = 'Context budget exhausted; answer with what you have.'
-              ok = false
-              forceFinal = true
-            } else {
-              const marker = '…[truncated]'
-              content = `${content.slice(0, Math.max(0, limit - marker.length))}${marker}`
-            }
-          }
-          loopChars += content.length
-          loopMessages.push({ role: 'tool', content, toolCallId: call.id })
-          toolAudit.push({
-            name: call.name,
-            arguments:
-              call.arguments.length > AUDIT_ARGUMENT_MAX_CHARS
-                ? `${call.arguments.slice(0, AUDIT_ARGUMENT_MAX_CHARS)}…[truncated]`
-                : call.arguments,
-            resultChars: content.length,
-            ok,
-          })
-        }
-        continue
-      }
-      break
-    }
-
-    const upstream = result as ChatResult
-    const failed = exhausted || contextExhausted || !upstream.ok
-    const run: AgentRun = {
-      id: runId,
-      agentId: agent.id,
-      startedAt,
-      status: failed ? 'failed' : 'succeeded',
-      durationMs: totalLatency,
-      steps,
-      input,
-      output: failed ? '' : upstream.content,
-      error: failed
-        ? exhausted
-          ? `Tool-call loop exhausted after ${MAX_TOOL_ITERATIONS} iterations; the model kept requesting tools.`
-          : contextExhausted
-            ? "Context exhausted by tool results: the conversation no longer fits this endpoint's context window."
-            : (upstream.error ?? 'Request failed')
-        : null,
-      // Audit: exactly what went upstream. Failed runs record it too —
-      // injection happens before the upstream call.
-      systemPrompt: system,
-      skillSnapshot: injectedSkills.map((s) => ({
-        id: s.id,
-        name: s.name,
-        contentChars: s.content.length,
-        mode: summarized.has(s.id) ? ('summary' as const) : ('full' as const),
-      })),
-      ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
-    }
-
-    // Prepend, then trim this agent's history to the newest 50.
-    store.runs = [run, ...store.runs]
-    const mine = store.runs.filter((r) => r.agentId === agent.id)
-    if (mine.length > 50) {
-      const drop = new Set(mine.slice(50).map((r) => r.id))
-      store.runs = store.runs.filter((r) => !drop.has(r.id))
-    }
-    agent.lastRunAt = run.startedAt
-    agent.runCount += 1
-    agent.status = run.status === 'succeeded' ? 'idle' : 'error'
-    const persisted = store.save()
-    // Never report a successful run as stored when the write actually failed.
-    if (!persisted && run.status === 'succeeded') {
-      fail(500, 'Run completed but its result could not be persisted.')
-    }
-    return run
+    return runAgent(store, agent, input)
   })
 
   // Prompt budget preview for an agent draft: the same planPrompt a run uses
@@ -814,6 +574,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
+    // It leaves every project team too, so a team PATCH never trips on a stale id.
+    store.projects = store.projects.map((p) =>
+      p.teamAgentIds.includes(id) ? { ...p, teamAgentIds: p.teamAgentIds.filter((x) => x !== id) } : p,
+    )
     store.save()
     void reply.status(204)
     return null

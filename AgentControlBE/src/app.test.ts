@@ -1890,6 +1890,26 @@ describe('projects CRUD', () => {
     })
     rmSync(oldDir, { recursive: true, force: true })
   })
+
+  it('drops deleted agents from teams and clears tags of deleted projects on load', () => {
+    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-dangling-'))
+    const path = join(d, 'store.json')
+    const s = createStore(path)
+    s.agents.push({
+      id: 'agt_spec', name: 'Spec', role: 'Specialist', description: '', instructions: '', modelId: 'llama-3-8b',
+      endpointId: 'ep_local_llama', isPrimary: false, skillIds: [], status: 'idle', createdAt: '', lastRunAt: null,
+      runCount: 0, projectId: 'proj_gone',
+    })
+    s.projects.push({
+      id: 'proj_live', name: 'Live', desc: '', folder: join(d, 'live'), teamAgentIds: ['agt_spec', 'agt_deleted'],
+      createdAt: '', updatedAt: '',
+    })
+    expect(s.save()).toBe(true)
+    const loaded = createStore(path)
+    expect(loaded.projects.find((x) => x.id === 'proj_live')?.teamAgentIds).toEqual(['agt_spec'])
+    expect(loaded.agents.find((a) => a.id === 'agt_spec')?.projectId).toBeUndefined()
+    rmSync(d, { recursive: true, force: true })
+  })
 })
 
 describe('project chat', () => {

@@ -178,7 +178,7 @@ Rules:
 - "reply": what you tell the user, in a few plain sentences.
 - "add": library agents to bring onto the team, by "agentId" from "Library agents". At most ${MAX_ADD}. Never yourself or current team members.
 - "create": new specialists, only when no library agent fits. At most ${MAX_CREATE}. Each needs a new, unique "name" (at most ${NAME_MAX} characters), a short "role", "instructions" written to that agent, "skillIds" from "Library skills" (may be empty) and a "reason".
-- "tasks": at most ${MAX_TASKS}. "agent" is a team member's id, an "agentId" from your "add", the "name" of one of your "create" entries, or your own id. Make each task stand on its own: the assignee sees only ${SEES}.
+- "tasks": at most ${MAX_TASKS}. "agent" is a team member's id, an "agentId" from your "add", the "name" of one of your "create" entries, or your own id. Make each task stand on its own: the assignee sees only ${SEES}. Tasks run one at a time and never see each other's results, so no task may depend on another task's output.
 - Use only ids from the lists you were given. Never invent ids.
 - The user reviews your plan first: nobody joins, is created or starts a task until they approve it.
 
@@ -186,7 +186,7 @@ Shape:
 {"reply":"...","add":[{"agentId":"...","reason":"..."}],"create":[{"name":"...","role":"...","instructions":"...","skillIds":["..."],"reason":"..."}],"tasks":[{"agent":"...","task":"..."}]}
 
 Example:
-{"reply":"Ana can draft the post. No one edits copy, so I suggest a Copy Editor.","add":[],"create":[{"name":"Copy Editor","role":"Editor","instructions":"You edit drafts for clarity, tone and correctness. Return the edited text.","skillIds":["technical-writing"],"reason":"The team has no editor."}],"tasks":[{"agent":"agt_1a2b3c4d","task":"Draft a 500-word launch post for the new release."},{"agent":"Copy Editor","task":"Edit the launch post draft for clarity and tone."}]}`
+{"reply":"Ana can draft the post. No one owns our writing style, so I suggest a Copy Editor to write a short style guide.","add":[],"create":[{"name":"Copy Editor","role":"Editor","instructions":"You write and enforce the team's writing style: clear, plain, consistent terms.","skillIds":["technical-writing"],"reason":"The team has no editor."}],"tasks":[{"agent":"agt_1a2b3c4d","task":"Draft a 500-word launch post for the new release, for developers who use the API."},{"agent":"Copy Editor","task":"Write a one-page style guide for launch posts: tone, length, and terms to avoid."}]}`
 
 function plannerSystem(lead: Agent, promptInChat: boolean): string {
   const own = clipText(lead.instructions.trim(), LEAD_INSTRUCTIONS_MAX)

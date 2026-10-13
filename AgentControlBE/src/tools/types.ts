@@ -12,6 +12,12 @@ export interface ToolContext {
   store: WorkspaceStore
   /** Agent whose run triggered the call (default target for agent lookups). */
   agentId: string
+  /**
+   * D-O10: set when the run belongs to a project task. read_run_log then
+   * keeps only runs of the same project (the same rule executeRun's history
+   * filter uses), so a run cannot read other projects' runs.
+   */
+  projectId?: string
   /** Id the run will be saved under (notes record it). */
   runId: string
   /** This run's user message; `"@input"` content refs resolve to it. */

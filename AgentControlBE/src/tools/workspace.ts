@@ -358,6 +358,8 @@ export const workspaceTools: ToolEntry[] = [
       const limit = Math.min(Math.max(Math.floor(requested), 1), 10)
       return ctx.store.runs
         .filter((r) => r.agentId === agentId)
+        // D-O10: a project-task run reads only its own project's runs.
+        .filter((r) => ctx.projectId === undefined || r.projectId === ctx.projectId)
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
         .slice(0, limit)
         .map((r) => ({

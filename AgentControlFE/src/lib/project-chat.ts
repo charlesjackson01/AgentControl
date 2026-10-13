@@ -167,13 +167,14 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   running: 'Running',
   done: 'Done',
   failed: 'Failed',
+  cancelled: 'Cancelled',
 }
 
 export type TaskProgress = Record<TaskStatus, number> & { total: number }
 
 /** Task counts across the project's assignments. */
 export function taskProgress(messages: readonly ProjectMessage[]): TaskProgress {
-  const counts = { queued: 0, running: 0, done: 0, failed: 0, total: 0 }
+  const counts: TaskProgress = { queued: 0, running: 0, done: 0, failed: 0, cancelled: 0, total: 0 }
   for (const m of messages) {
     if (m.kind !== 'task-assignment') continue
     counts.total += 1
@@ -186,7 +187,7 @@ export function taskProgress(messages: readonly ProjectMessage[]): TaskProgress 
 export function describeProgress(progress: TaskProgress): string {
   if (progress.total === 0) return ''
   const parts = [`${progress.total} ${progress.total === 1 ? 'task' : 'tasks'}`]
-  for (const status of ['running', 'queued', 'done', 'failed'] as const) {
+  for (const status of ['running', 'queued', 'done', 'failed', 'cancelled'] as const) {
     if (progress[status] > 0) parts.push(`${progress[status]} ${TASK_STATUS_LABELS[status].toLowerCase()}`)
   }
   return parts.join(' · ')
@@ -366,4 +367,106 @@ export function applyBody(plan: TeamPlan, selection: PlanSelection, ctx: PlanCon
 /** How many entries an apply body accepts (Apply is disabled at zero when the plan has items). */
 export function selectedCount(body: ApplyBody): number {
   return body.add.length + body.create.length + body.tasks.length
+}
+
+/* -- D-O11 mentions -------------------------------------------------------- */
+
+/**
+ * Composer picker candidates: Primary and the team, filtered by the text the
+ * user typed after '@' (case-insensitive substring on the name).
+ */
+export function mentionCandidates(
+  primary: Agent | undefined,
+  teamAgentIds: readonly string[],
+  agents: readonly Agent[],
+  query: string,
+): Agent[] {
+  const team = new Set(teamAgentIds)
+  const pool: Agent[] = []
+  if (primary) pool.push(primary)
+  for (const a of agents) if (team.has(a.id) && a.id !== primary?.id) pool.push(a)
+  const q = query.trim().toLowerCase()
+  if (!q) return pool
+  return pool.filter((a) => a.name.toLowerCase().includes(q))
+}
+
+/**
+ * The '@' query for the picker from the current draft and caret: the word
+ * the caret sits in, when it starts with '@'. Null when no picker should show.
+ */
+export function mentionQuery(draft: string, caret: number): { start: number; query: string } | null {
+  const before = draft.slice(0, caret)
+  const at = before.lastIndexOf('@')
+  if (at === -1) return null
+  const gap = before.slice(at + 1)
+  // The gap must still be a word in progress: no whitespace or punctuation.
+  if (/[\s@]/.test(gap)) return null
+  return { start: at, query: gap }
+}
+
+/**
+ * Text split into plain parts and @Name chips for one message: chips come
+ * from the BE's `mentions` (agent ids) matched against the text by name.
+ * A name is matched case-insensitively, longest first, at word boundaries;
+ * unmatched mention ids are ignored (the agent may have been renamed).
+ */
+export type TextPart = { kind: 'text'; text: string } | { kind: 'mention'; id: string; name: string }
+
+export function mentionParts(text: string, mentions: readonly string[] | undefined, nameOf: (id: string) => string | undefined): TextPart[] {
+  if (!mentions || mentions.length === 0) return [{ kind: 'text', text }]
+  const names: { id: string; name: string }[] = []
+  for (const id of mentions) {
+    const name = nameOf(id)
+    if (name) names.push({ id, name })
+  }
+  if (names.length === 0) return [{ kind: 'text', text }]
+  names.sort((a, b) => b.name.length - a.name.length)
+
+  const parts: TextPart[] = []
+  const pushText = (t: string) => {
+    if (!t) return
+    const last = parts[parts.length - 1]
+    if (last && last.kind === 'text') last.text += t
+    else parts.push({ kind: 'text', text: t })
+  }
+
+  const lower = text.toLowerCase()
+  let i = 0
+  while (i < text.length) {
+    // Earliest match wins; names are sorted longest-first so a tie at the
+    // same position picks the longer name.
+    let hit: { at: number; id: string; end: number } | null = null
+    for (const m of names) {
+      const needle = `@${m.name.toLowerCase()}`
+      let at = lower.indexOf(needle, i)
+      while (at !== -1) {
+        const end = at + needle.length
+        const next = text[end]
+        // A name ends at a word boundary; the '@' must start a word too.
+        const prev = text[at - 1]
+        const boundaryOk = (end >= text.length || !/[\p{L}\p{N}_]/u.test(next ?? '')) && (at === 0 || !/[\p{L}\p{N}_]/u.test(prev ?? ''))
+        if (boundaryOk) {
+          if (!hit || at < hit.at) hit = { at, id: m.id, end }
+          break
+        }
+        at = lower.indexOf(needle, at + 1)
+      }
+    }
+    if (!hit) {
+      pushText(text.slice(i))
+      break
+    }
+    pushText(text.slice(i, hit.at))
+    parts.push({ kind: 'mention', id: hit.id, name: text.slice(hit.at + 1, hit.end) })
+    i = hit.end
+  }
+  return parts
+}
+
+/** The send button's label: who the picked @tags address (D-O11). */
+export function sendLabel(picked: readonly string[], primaryId: string | undefined, nameOf: (id: string) => string | undefined): string {
+  const team = picked.filter((id) => id !== primaryId)
+  if (team.length > 0) return `Send to ${team.map((id) => `@${nameOf(id) ?? '?'}`).join(', ')}`
+  if (picked.length > 0) return `Ask @${(primaryId && nameOf(primaryId)) ?? 'Primary'}`
+  return 'Send'
 }

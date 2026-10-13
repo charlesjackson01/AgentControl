@@ -16,6 +16,9 @@ import {
   latestPrompt,
   latestUnansweredPrompt,
   memberIds,
+  mentionCandidates,
+  mentionParts,
+  mentionQuery,
   mergeMessages,
   needsPolling,
   newerProject,
@@ -25,6 +28,7 @@ import {
   pollDelay,
   resyncAfter,
   selectedCount,
+  sendLabel,
   STICK_PX,
   sortMessages,
   stickAfterScroll,
@@ -178,14 +182,14 @@ describe('polling, progress and resync', () => {
       msg('r1', T(2), { author: 'a1', taskId: 't1', taskStatus: 'done' }),
     ]
     const progress = taskProgress(tasks)
-    assert.deepEqual(progress, { queued: 1, running: 1, done: 1, failed: 0, total: 3 })
+    assert.deepEqual(progress, { queued: 1, running: 1, done: 1, failed: 0, cancelled: 0, total: 3 })
     assert.equal(describeProgress(progress), '3 tasks · 1 running · 1 queued · 1 done')
     assert.equal(describeProgress(taskProgress([task('failed')])), '1 task · 1 failed')
     assert.equal(describeProgress(taskProgress([])), '')
   })
 
   it('labels every task status', () => {
-    assert.deepEqual(Object.keys(TASK_STATUS_LABELS), ['queued', 'running', 'done', 'failed'])
+    assert.deepEqual(Object.keys(TASK_STATUS_LABELS), ['queued', 'running', 'done', 'failed', 'cancelled'])
     for (const label of Object.values(TASK_STATUS_LABELS)) assert.ok(label)
   })
 })
@@ -362,5 +366,76 @@ describe('plan confirm card and the apply body (D-P1)', () => {
     assert.deepEqual(selection.tasks, [0, 1, 2, 3, 4])
     assert.deepEqual(next.tasks, [1, 2, 3, 4])
     assert.equal(next.add, selection.add)
+  })
+})
+
+describe('D-O11 mentions', () => {
+  const agents = [
+    { id: 'lead', name: 'Atlas', isPrimary: true },
+    { id: 'a1', name: 'Ana', isPrimary: false },
+    { id: 'a2', name: 'Copy Editor', isPrimary: false },
+    { id: 'gone', name: 'Removed', isPrimary: false },
+  ]
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  const nameOf = (id) => byId.get(id)?.name
+
+  it('finds the @ word the caret sits in', () => {
+    assert.deepEqual(mentionQuery('ask @an', 7), { start: 4, query: 'an' })
+    assert.deepEqual(mentionQuery('@', 1), { start: 0, query: '' })
+    // the caret is past the word, or the gap has a space: no picker
+    assert.equal(mentionQuery('ask @ana now', 12), null)
+    assert.equal(mentionQuery('mail me at 5', 11), null)
+  })
+
+  it('offers Primary then the team, filtered by the query', () => {
+    const pool = mentionCandidates(agents[0], ['a1', 'a2', 'gone'], agents, '')
+    assert.deepEqual(pool.map((a) => a.id), ['lead', 'a1', 'a2', 'gone'])
+    assert.deepEqual(mentionCandidates(agents[0], ['a1', 'a2'], agents, 'co').map((a) => a.id), ['a2'])
+    assert.deepEqual(mentionCandidates(agents[0], ['a1'], agents, 'zz'), [])
+    // no Primary: team only
+    assert.deepEqual(mentionCandidates(undefined, ['a1'], agents, '').map((a) => a.id), ['a1'])
+  })
+
+  it('splits text into plain parts and @Name chips', () => {
+    const parts = mentionParts('send it to @Ana then @Copy Editor please', ['a1', 'a2'], nameOf)
+    assert.deepEqual(parts, [
+      { kind: 'text', text: 'send it to ' },
+      { kind: 'mention', id: 'a1', name: 'Ana' },
+      { kind: 'text', text: ' then ' },
+      { kind: 'mention', id: 'a2', name: 'Copy Editor' },
+      { kind: 'text', text: ' please' },
+    ])
+  })
+
+  it('matches names case-insensitively at word boundaries, longest first', () => {
+    assert.deepEqual(mentionParts('@ANA finished', ['a1'], nameOf), [
+      { kind: 'mention', id: 'a1', name: 'ANA' },
+      { kind: 'text', text: ' finished' },
+    ])
+    // a name inside a longer word is not a mention
+    assert.deepEqual(mentionParts('the banana split', ['a1'], nameOf), [{ kind: 'text', text: 'the banana split' }])
+    // the longer name wins where both could match
+    const two = mentionParts('@Ana Smith rocks', ['a1'], (id) => (id === 'a1' ? 'Ana Smith' : nameOf(id)))
+    assert.deepEqual(two[0], { kind: 'mention', id: 'a1', name: 'Ana Smith' })
+  })
+
+  it('leaves text alone when there is nothing to chip', () => {
+    assert.deepEqual(mentionParts('plain text', undefined, nameOf), [{ kind: 'text', text: 'plain text' }])
+    // an unknown id (renamed agent) is ignored
+    assert.deepEqual(mentionParts('hi @Ana', ['a1', 'ghost'], nameOf), [
+      { kind: 'text', text: 'hi ' },
+      { kind: 'mention', id: 'a1', name: 'Ana' },
+    ])
+  })
+
+  it('labels the send button with who the tags address', () => {
+    assert.equal(sendLabel([], 'lead', nameOf), 'Send')
+    assert.equal(sendLabel(['lead'], 'lead', nameOf), 'Ask @Atlas')
+    assert.equal(sendLabel(['a1'], 'lead', nameOf), 'Send to @Ana')
+    assert.equal(sendLabel(['a1', 'a2'], 'lead', nameOf), 'Send to @Ana, @Copy Editor')
+    // picked ids that no longer name an agent still label
+    assert.equal(sendLabel(['gone2'], 'lead', nameOf), 'Send to @?')
+    // no Primary set
+    assert.equal(sendLabel(['lead'], undefined, nameOf), 'Send to @Atlas')
   })
 })

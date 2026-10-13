@@ -247,6 +247,7 @@ function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
           ? p.folder
           : join(projectsRoot, slugifyProjectName(p.name)),
       teamAgentIds: isStringArray(p.teamAgentIds) ? [...p.teamAgentIds] : [],
+      ...(p.paused === true ? { paused: true } : {}),
       createdAt: typeof p.createdAt === 'string' ? p.createdAt : updatedAt,
       updatedAt,
     })
@@ -254,8 +255,8 @@ function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
   return out
 }
 
-const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-update', 'task-assignment']
-const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'failed']
+const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-update', 'task-assignment', 'progress']
+const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'failed', 'cancelled']
 
 /**
  * Keep well-formed project messages and the task fields the contract has.
@@ -306,6 +307,19 @@ function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
       ...(TASK_STATUSES.includes(m.taskStatus as TaskStatus) ? { taskStatus: m.taskStatus } : {}),
       ...(typeof m.taskId === 'string' ? { taskId: m.taskId } : {}),
       ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
+      ...(isStringArray(m.mentions) ? { mentions: [...m.mentions] } : {}),
+      ...(typeof m.label === 'string' ? { label: m.label } : {}),
+      ...(isStringArray(m.inputs) ? { inputs: [...m.inputs] } : {}),
+      ...(typeof m.round === 'number' && Number.isFinite(m.round) ? { round: m.round } : {}),
+      ...(m.verdict === 'done' || m.verdict === 'ask' ? { verdict: m.verdict } : {}),
+      ...(Array.isArray(m.used)
+        ? {
+            used: (m.used as unknown[])
+              .filter((u): u is Record<string, unknown> => Boolean(u) && typeof u === 'object')
+              .filter((u) => typeof u.taskId === 'string' && typeof u.chars === 'number' && typeof u.sentChars === 'number')
+              .map((u) => ({ taskId: u.taskId as string, chars: u.chars as number, sentChars: u.sentChars as number })),
+          }
+        : {}),
     })
   }
   return out

@@ -303,11 +303,14 @@ export type ProjectMessage = {
   plan?: TeamPlan
   /** team-plan: 'pending' until applied or cancelled. */
   planStatus?: PlanStatus
-  /** task-assignment and task-result: the team-plan message they came from. */
+  /** team-update, task-assignment and task-result: the team-plan message they came from. */
   planId?: string
   /** task-assignment: who does the task. */
   assigneeId?: string
-  /** task-assignment: queued → running → done | failed. */
+  /**
+   * task-assignment: queued → running → done | failed (the task now).
+   * task-result: 'done' or 'failed', the outcome of the attempt it reports.
+   */
   taskStatus?: TaskStatus
   /** task-result: the task-assignment message it answers. */
   taskId?: string
@@ -368,7 +371,7 @@ export type TeamPlanResponse = {
  * Body for POST /api/projects/:id/plans/:messageId/apply. Each list selects
  * what to accept (indexes into plan.create / plan.tasks, agent ids from
  * plan.add); an omitted list accepts everything. Tasks for an agent whose
- * creation was not accepted are dropped.
+ * addition or creation was not accepted are dropped.
  */
 export type TeamPlanApply = {
   add?: string[]

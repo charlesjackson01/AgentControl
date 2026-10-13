@@ -1237,10 +1237,11 @@ describe('project task runner', () => {
     anaHold.open()
     await whenProjectIdle(store, p.id)
 
-    // Ana's run finished and was recorded; nothing was posted and Helper never ran.
+    // Ana's run finished but went with the project; nothing was posted and Helper never ran.
     expect(seen.filter((s) => s !== '' && !s.includes(PLANNER_MARK))).toEqual(['I am Ana.'])
     expect(store.projectMessages.some((m) => m.projectId === p.id)).toBe(false)
-    expect(store.runs.find((r) => r.agentId === ana.id)?.projectId).toBe(p.id)
+    expect(store.runs.some((r) => r.projectId === p.id)).toBe(false)
+    expect(createStore(join(dir, 'store.json')).runs.some((r) => r.projectId === p.id)).toBe(false)
     const got = await inject('GET', `/api/agents/${helper.id}`)
     expect(got.statusCode).toBe(200)
     expect((got.json() as Agent).projectId).toBeUndefined()
@@ -1358,7 +1359,7 @@ describe('project task runner', () => {
     expect(after.runs.some((r) => r.id === result?.runId)).toBe(true)
   })
 
-  it('loads messages of the pre-handoff kinds as plain messages', async () => {
+  it('loads messages of the pre-handoff kinds as plain messages, keeping what they answered', async () => {
     const lead = await makeLead()
     const p = await makeProject('Legacy')
     const prompt = await say(p.id, 'Old prompt')
@@ -1375,6 +1376,27 @@ describe('project task runner', () => {
         planStatus: 'pending',
       },
       {
+        id: 'msg_applied',
+        projectId: p.id,
+        author: lead.id,
+        text: 'Applied plan reply',
+        kind: 'team-plan',
+        createdAt: '2026-01-01T00:00:01.500Z',
+        replyTo: prompt.id,
+        planStatus: 'applied',
+      },
+      {
+        id: 'msg_task',
+        projectId: p.id,
+        author: lead.id,
+        text: 'Draft the post',
+        kind: 'task-assignment',
+        createdAt: '2026-01-01T00:00:01.600Z',
+        assigneeId: lead.id,
+        taskStatus: 'done',
+        planId: 'msg_applied',
+      },
+      {
         id: 'msg_result',
         projectId: p.id,
         author: lead.id,
@@ -1384,12 +1406,13 @@ describe('project task runner', () => {
         taskId: 'msg_task',
         runId: 'run_old',
         taskStatus: 'done',
-        planId: 'msg_plan',
+        planId: 'msg_applied',
       },
     ]
     store.projectMessages = [...store.projectMessages, ...(legacy as unknown as ProjectMessage[])]
     expect(store.save()).toBe(true)
     const reloaded = createStore(join(dir, 'store.json'))
+    // A plan never applied no longer answers its prompt, so it can be asked again.
     expect(reloaded.projectMessages.find((m) => m.id === 'msg_plan')).toEqual({
       id: 'msg_plan',
       projectId: p.id,
@@ -1397,6 +1420,11 @@ describe('project task runner', () => {
       text: 'Old plan reply',
       kind: 'message',
       createdAt: '2026-01-01T00:00:01.000Z',
+    })
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_applied')?.replyTo).toBe(prompt.id)
+    // An assignment that named its plan by planId replies to that plan's prompt.
+    expect(reloaded.projectMessages.find((m) => m.id === 'msg_task')).toMatchObject({
+      kind: 'task-assignment',
       replyTo: prompt.id,
     })
     expect(reloaded.projectMessages.find((m) => m.id === 'msg_result')).toEqual({
@@ -1409,6 +1437,56 @@ describe('project task runner', () => {
       taskId: 'msg_task',
       runId: 'run_old',
       taskStatus: 'done',
+      replyTo: prompt.id,
     })
+  })
+})
+
+describe('second review follow-ups', () => {
+  it('deletes a project\'s task runs with the project, so no agent can read them back', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Secret', [ana.id], 'Confidential: acquisition of Acme')
+    mockTeam({ reply: 'Ana drafts.', tasks: [{ agent: ana.id, task: 'Draft the memo' }] })
+    await planAndApply(p.id, 'Write the memo')
+    await whenProjectIdle(store, p.id)
+    expect(store.runs.filter((r) => r.projectId === p.id)).toHaveLength(1)
+
+    expect((await inject('DELETE', `/api/projects/${p.id}`)).statusCode).toBe(204)
+    expect(store.runs.some((r) => r.projectId === p.id)).toBe(false)
+    expect(storeFile()).not.toContain('acquisition of Acme')
+  })
+
+  it('tells Primary whether the assignee will see the prompt', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Wording', [ana.id])
+    const requests = mockTeam({ reply: 'ok' })
+    await askPlan(p.id, 'Write the post')
+    expect(systemOf(requests.at(-1) ?? {})).toContain("the assignee sees only the task, the project and the user's prompt.")
+    const res = await inject('POST', `/api/projects/${p.id}/team-plan`, { prompt: 'Write the post' })
+    expect(res.statusCode).toBe(200)
+    const system = systemOf(requests.at(-1) ?? {})
+    expect(system).toContain('the assignee sees only the task and the project, so include whatever it needs from the prompt.')
+    expect(system).not.toContain("the user's prompt.\n")
+  })
+
+  it('shows Primary what was already done when the same prompt is asked again', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Again', [ana.id])
+    const requests = mockTeam({ reply: 'Ana drafts the outline.', tasks: [{ agent: ana.id, task: 'Draft the outline' }] })
+    const { prompt } = await planAndApply(p.id, 'Plan the launch')
+    await whenProjectIdle(store, p.id)
+
+    const res = await inject('POST', `/api/projects/${p.id}/team-plan`, { messageId: prompt.id })
+    expect(res.statusCode).toBe(200)
+    const planner = requests.filter(isPlanner).at(-1) ?? {}
+    const user = lastUser(planner)
+    const chat = user.slice(user.indexOf('Recent project chat'), user.indexOf("The user's prompt:"))
+    expect(chat).toContain('Ana drafts the outline.')
+    expect(chat).toContain('Draft the outline')
+    expect(chat).toContain('I am Ana.: done')
+    expect(lead.id).toBeTruthy()
   })
 })

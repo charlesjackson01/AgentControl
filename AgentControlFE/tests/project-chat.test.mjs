@@ -276,6 +276,23 @@ describe('plan confirm card and the apply body (D-P1)', () => {
     assert.deepEqual(taskSource(plan, plan.tasks[0], { ...ctx, teamAgentIds: ['lib-1'] }), { kind: 'agent', agentId: 'lib-1' })
   })
 
+  it('resolves a task by name the way the BE does, before a planned specialist of that name', () => {
+    // The plan creates "QA Tester", but an agent of that name joined the team meanwhile:
+    // the BE gives the task to the member, so the card must not block it.
+    const named = {
+      reply: '', add: [], warnings: [],
+      create: [{ name: 'QA Tester', role: 'QA', instructions: 'Test.', skillIds: [], reason: '' }],
+      tasks: [{ agent: 'qa tester', task: 'Test it' }],
+    }
+    const now = { ...ctx, teamAgentIds: ['member-1', 'qa-1'], agents: [...ctx.agents, { id: 'qa-1', name: 'QA Tester' }] }
+    assert.deepEqual(taskSource(named, named.tasks[0], now), { kind: 'agent', agentId: 'qa-1' })
+    assert.equal(createBlock(named.create[0], now), 'An agent named "QA Tester" exists now.')
+    assert.equal(taskBlock(named, initialSelection(named), 0, now), null)
+    // Library agents the plan adds are found by name too.
+    const byName = { ...plan, tasks: [{ agent: 'docs writer', task: 'Write docs' }] }
+    assert.deepEqual(taskSource(byName, byName.tasks[0], ctx), { kind: 'add', agentId: 'lib-1' })
+  })
+
   it('drops tasks whose agent the user did not accept, in plan order without duplicates', () => {
     let selection = initialSelection(plan)
     selection = toggleCreate(selection, 1) // no Tester

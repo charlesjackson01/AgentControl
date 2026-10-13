@@ -141,6 +141,14 @@ interface Project {
 
 What was built, where it differs in detail from the plan above:
 
+- Projects root (from Part 0): `AGENTCONTROL_PROJECTS_DIR`, default
+  `<AGENTCONTROL_DATA_DIR>/projects`, not `AC_PROJECTS_DIR` /
+  `~/.agentcontrol/projects`; it matches the app's other `AGENTCONTROL_*`
+  settings and keeps project folders next to the store. Deleting a project
+  also removes its task runs (the folder stays).
+- When the plan was asked with a bare `{ prompt }` (no chat message), tasks
+  cannot quote it, and Primary is told so; the app always sends `messageId`.
+
 - `POST /api/projects/:id/team-plan` takes `{ messageId }` (a user message
   in the project chat, whose text is the prompt) or `{ prompt }`, and returns
   `{ plan, replyTo? }`. It writes nothing, for every kind of plan. Primary is

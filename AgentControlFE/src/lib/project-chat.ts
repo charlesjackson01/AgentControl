@@ -1,44 +1,44 @@
-import type {
-  Agent,
-  PlanStatus,
-  Project,
-  ProjectMessage,
-  ProjectMessageKind,
-  TaskStatus,
-  TeamPlan,
-  TeamPlanApply,
-  TeamPlanTask,
-} from './types'
+import type { Agent, Project, ProjectMessage, TaskStatus, TeamPlan, TeamPlanAdd, TeamPlanApply, TeamPlanCreate, TeamPlanTask } from './types'
 
 /* ==========================================================================
    Project chat helpers (pure, no React; covered by tests/project-chat.test.mjs).
-   The page owns fetching; these decide ordering, freshness, the plan confirm
-   card's selection (D-P1) and when to poll.
+   The page owns fetching; these decide ordering, freshness, where a pending
+   plan shows, the plan confirm card's selection (D-P1) and when to poll.
+
+   A team plan lives only in the page until the user applies it: POST
+   team-plan writes nothing, POST team-plan/apply writes Primary's reply, the
+   team update and the task assignments (each with replyTo = the prompt).
    ========================================================================== */
 
-/** Poll cadence while a plan request or a task is in flight. */
+/** Poll cadence while a task is queued/running or a refresh failed. */
 export const POLL_MS = 1500
 
 /** Longest wait between polls after repeated failures. */
 export const POLL_MAX_MS = 12_000
 
-/** Within one timestamp, a plan reads before the team change and tasks it caused. */
-const KIND_ORDER: Record<ProjectMessageKind, number> = {
-  message: 0,
-  'team-plan': 1,
-  'team-update': 2,
-  'task-assignment': 3,
-  'task-result': 4,
+/** A task's result: an agent's message that answers a task-assignment. */
+export function isTaskResult(m: ProjectMessage): boolean {
+  return m.kind === 'message' && m.author !== 'user' && Boolean(m.taskId)
 }
 
-/** Oldest first; ties keep the plan → team-update → task order, then the given order. */
+/** A result that reports a failed attempt (it records its own outcome). */
+export function isFailedResult(m: ProjectMessage): boolean {
+  return isTaskResult(m) && m.taskStatus === 'failed'
+}
+
+/** Within one timestamp: Primary's reply, the team update, the tasks, then task results. */
+function rank(m: ProjectMessage): number {
+  if (m.kind === 'team-update') return 1
+  if (m.kind === 'task-assignment') return 2
+  return isTaskResult(m) ? 3 : 0
+}
+
+/** Oldest first; ties keep reply → team-update → task → result, then the given order. */
 export function sortMessages(messages: readonly ProjectMessage[]): ProjectMessage[] {
-  return [...messages].sort(
-    (a, b) => a.createdAt.localeCompare(b.createdAt) || (KIND_ORDER[a.kind] ?? 0) - (KIND_ORDER[b.kind] ?? 0),
-  )
+  return [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || rank(a) - rank(b))
 }
 
-/** Version of a record: the BE sets updatedAt whenever it changes a plan, a task or a project. */
+/** Version of a record: the BE sets updatedAt whenever it changes a task or a project. */
 function stamp(record: { createdAt: string; updatedAt?: string }): string {
   return record.updatedAt ?? record.createdAt
 }
@@ -62,51 +62,87 @@ export function newerProject(held: Project | undefined, incoming: Project): Proj
   return held && held.id === incoming.id && held.updatedAt > incoming.updatedAt ? held : incoming
 }
 
-/** A prompt the user typed (the only kind POST team-plan accepts). */
+/* -- Prompts and where plans show ------------------------------------------ */
+
+/** A prompt the user typed (the only message POST team-plan answers). */
 export function isUserPrompt(m: ProjectMessage): boolean {
   return m.kind === 'message' && m.author === 'user'
 }
 
+/** The newest user prompt, or null when the user has not written yet. */
+export function latestPrompt(messages: readonly ProjectMessage[]): ProjectMessage | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) if (isUserPrompt(messages[i])) return messages[i]
+  return null
+}
+
 /**
- * The newest user prompt when no plan answers it yet (e.g. the plan request
- * failed, or the page reloaded mid-request); null otherwise.
+ * The newest user prompt while no applied plan answers it (Primary was never
+ * asked, the request failed, the plan was cancelled, or the page reloaded
+ * before Apply: plans are not stored); null otherwise.
  */
 export function latestUnansweredPrompt(messages: readonly ProjectMessage[]): ProjectMessage | null {
-  let latest: ProjectMessage | null = null
-  for (const m of messages) if (isUserPrompt(m)) latest = m
+  const latest = latestPrompt(messages)
   if (!latest) return null
-  const id = latest.id
-  return messages.some((m) => m.kind === 'team-plan' && m.replyTo === id) ? null : latest
+  return messages.some((m) => m.replyTo === latest.id) ? null : latest
 }
 
 /**
- * Results to show as failures. A result records its own outcome
- * (taskStatus); for results saved before it did, the latest result of each
- * task that is failed right now (a retried task's older result reads as history).
+ * Where each prompt's pending plan (or planning indicator, or error) shows:
+ * after the last message that belongs to the prompt — the prompt itself, what
+ * an earlier apply wrote for it (replyTo), and its tasks' results. Keyed by
+ * that anchor message id, prompts in the given order; a prompt no longer in
+ * the thread is left out.
  */
-export function failedResultIds(messages: readonly ProjectMessage[]): Set<string> {
-  const ids = new Set<string>()
-  const failed = new Set<string>()
-  for (const m of messages) if (m.kind === 'task-assignment' && m.taskStatus === 'failed') failed.add(m.id)
-  const latest = new Map<string, ProjectMessage>()
+export function planAnchors(messages: readonly ProjectMessage[], promptIds: readonly string[]): Map<string, string[]> {
+  const wanted = new Set(promptIds)
+  const last = new Map<string, string>()
+  const taskPrompt = new Map<string, string>()
   for (const m of messages) {
-    if (m.kind !== 'task-result') continue
-    if (m.taskStatus) {
-      if (m.taskStatus === 'failed') ids.add(m.id)
-      continue
-    }
-    if (!m.taskId || !failed.has(m.taskId)) continue
-    const held = latest.get(m.taskId)
-    if (!held || m.createdAt >= held.createdAt) latest.set(m.taskId, m)
+    let owner: string | undefined
+    if (wanted.has(m.id)) owner = m.id
+    else if (m.replyTo && wanted.has(m.replyTo)) owner = m.replyTo
+    else if (m.taskId) owner = taskPrompt.get(m.taskId)
+    if (m.kind === 'task-assignment' && m.replyTo && wanted.has(m.replyTo)) taskPrompt.set(m.id, m.replyTo)
+    // Replies count only after their prompt (a prompt missing from the thread anchors nothing).
+    if (owner && (owner === m.id || last.has(owner))) last.set(owner, m.id)
   }
-  for (const m of latest.values()) ids.add(m.id)
-  return ids
+  const anchors = new Map<string, string[]>()
+  for (const promptId of wanted) {
+    const anchor = last.get(promptId)
+    if (anchor) anchors.set(anchor, [...(anchors.get(anchor) ?? []), promptId])
+  }
+  return anchors
 }
 
-/** Poll while Primary is planning or any task is queued or running. */
-export function needsPolling(messages: readonly ProjectMessage[], planInFlight: boolean): boolean {
+/** Within this many pixels of the end, the thread counts as at the bottom. */
+export const STICK_PX = 120
+
+/**
+ * Whether the thread keeps following new messages after a scroll event. Near
+ * the bottom it sticks; it lets go only when the reader scrolls up. A smooth
+ * scroll on its way down passes through positions far from the bottom, and
+ * those must not let go (a prompt sent right after the page loads would then
+ * scroll out of view).
+ */
+export function stickAfterScroll(
+  stuck: boolean,
+  el: { scrollTop: number; scrollHeight: number; clientHeight: number },
+  lastTop: number,
+): boolean {
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX) return true
+  return el.scrollTop < lastTop ? false : stuck
+}
+
+/* -- Polling and progress ---------------------------------------------------- */
+
+/**
+ * Poll while any task is queued or running, and while the last refresh failed
+ * (with backoff) so "Updates paused" recovers on its own. Planning is a single
+ * request/response and needs no polling.
+ */
+export function needsPolling(messages: readonly ProjectMessage[], syncFailed: boolean): boolean {
   return (
-    planInFlight ||
+    syncFailed ||
     messages.some((m) => m.kind === 'task-assignment' && (m.taskStatus === 'queued' || m.taskStatus === 'running'))
   )
 }
@@ -116,6 +152,16 @@ export function pollDelay(failures: number): number {
   return Math.min(POLL_MS * 2 ** Math.min(Math.max(failures, 0), 4), POLL_MAX_MS)
 }
 
+/**
+ * After a failed send, plan, apply or retry: refetch when the server says the
+ * page is out of date — 404 (the project or record is gone; a deleted project
+ * then shows "Project not found") or 409 (state changed, e.g. no Team Lead, a
+ * name taken, a task no longer failed).
+ */
+export function resyncAfter(status: number | undefined): boolean {
+  return status === 404 || status === 409
+}
+
 export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   queued: 'Queued',
   running: 'Running',
@@ -123,25 +169,21 @@ export const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
   failed: 'Failed',
 }
 
-export const PLAN_STATUS_LABELS: Record<PlanStatus, string> = {
-  pending: 'Awaiting your approval',
-  applied: 'Applied',
-  cancelled: 'Cancelled',
-}
+export type TaskProgress = Record<TaskStatus, number> & { total: number }
 
-/** Task counts for one plan's assignments, for the applied card's summary line. */
-export function planProgress(messages: readonly ProjectMessage[], planId: string): Record<TaskStatus, number> & { total: number } {
+/** Task counts across the project's assignments. */
+export function taskProgress(messages: readonly ProjectMessage[]): TaskProgress {
   const counts = { queued: 0, running: 0, done: 0, failed: 0, total: 0 }
   for (const m of messages) {
-    if (m.kind !== 'task-assignment' || m.planId !== planId) continue
+    if (m.kind !== 'task-assignment') continue
     counts.total += 1
     if (m.taskStatus && m.taskStatus in counts) counts[m.taskStatus] += 1
   }
   return counts
 }
 
-/** "3 tasks · 1 done · 1 running"; empty when the plan assigned nothing. */
-export function describeProgress(progress: Record<TaskStatus, number> & { total: number }): string {
+/** "3 tasks · 1 running · 1 queued · 1 done"; empty when there are none. */
+export function describeProgress(progress: TaskProgress): string {
   if (progress.total === 0) return ''
   const parts = [`${progress.total} ${progress.total === 1 ? 'task' : 'tasks'}`]
   for (const status of ['running', 'queued', 'done', 'failed'] as const) {
@@ -163,6 +205,21 @@ export function addCandidates(agents: readonly Agent[], teamAgentIds: readonly s
   return agents.filter((a) => !a.isPrimary && !team.has(a.id))
 }
 
+/**
+ * The team after an edit, built on the server's current team and library (the
+ * page fetches both first): deduplicated, the removed id gone, new ids
+ * appended, and ids of agents no longer in the library dropped (PATCH rejects
+ * unknown ids).
+ */
+export function nextTeam(
+  current: readonly string[],
+  change: { add?: readonly string[]; remove?: string },
+  libraryIds: readonly string[],
+): string[] {
+  const known = new Set(libraryIds)
+  return [...new Set([...current, ...(change.add ?? [])])].filter((id) => id !== change.remove && known.has(id))
+}
+
 /* -- Plan confirm card (D-P1) ---------------------------------------------- */
 
 /** What the user accepts: agent ids from plan.add, indexes into plan.create and plan.tasks. */
@@ -172,7 +229,21 @@ export type PlanSelection = {
   tasks: number[]
 }
 
-/** True when the plan proposes anything to confirm or show (team changes or tasks). */
+/**
+ * What the card checks a plan against, as fresh as the page has it (it
+ * refetches when a plan arrives): the team, Primary, and the library. The BE
+ * validates the submitted plan again on apply; this keeps the count and the
+ * body to what it will accept.
+ */
+export type PlanContext = {
+  teamAgentIds: readonly string[]
+  primaryId: string | undefined
+  agents: readonly Pick<Agent, 'id' | 'name'>[]
+}
+
+const norm = (s: string): string => s.trim().toLowerCase()
+
+/** True when the plan proposes anything to confirm (team changes or tasks). */
 export function planHasItems(plan: TeamPlan): boolean {
   return plan.add.length > 0 || plan.create.length > 0 || plan.tasks.length > 0
 }
@@ -202,52 +273,89 @@ export function toggleTask(selection: PlanSelection, index: number): PlanSelecti
   return { ...selection, tasks: toggle(selection.tasks, index) }
 }
 
-/**
- * Who a plan task is for: a library agent the plan adds, a specialist the
- * plan creates (matched by name, ignoring case and surrounding spaces), or an
- * agent that is already available (team member, Primary, or an id the BE
- * resolves).
- */
-export type TaskSource = { kind: 'add'; agentId: string } | { kind: 'create'; index: number } | { kind: 'agent'; agentId: string }
+/** Why a proposed addition cannot apply now, or null. */
+export function addBlock(entry: TeamPlanAdd, ctx: PlanContext): string | null {
+  if (!ctx.agents.some((a) => a.id === entry.agentId)) return 'No longer in the library.'
+  if (entry.agentId === ctx.primaryId) return 'Already leads the team.'
+  if (ctx.teamAgentIds.includes(entry.agentId)) return 'Already on the team.'
+  return null
+}
 
-export function taskSource(plan: TeamPlan, task: TeamPlanTask, availableIds: readonly string[] = []): TaskSource {
-  if (availableIds.includes(task.agent)) return { kind: 'agent', agentId: task.agent }
+/** Why a proposed specialist cannot be created now (its name was taken since), or null. */
+export function createBlock(entry: TeamPlanCreate, ctx: PlanContext): string | null {
+  const name = norm(entry.name)
+  return ctx.agents.some((a) => norm(a.name) === name) ? `An agent named "${entry.name.trim()}" exists now.` : null
+}
+
+/**
+ * Who a plan task is for: an agent already available (Primary or a team
+ * member), a library agent the plan adds, a specialist the plan creates
+ * (matched by name, ignoring case and surrounding spaces), or nobody the
+ * plan or team knows.
+ */
+export type TaskSource =
+  | { kind: 'agent'; agentId: string }
+  | { kind: 'add'; agentId: string }
+  | { kind: 'create'; index: number }
+  | { kind: 'unknown' }
+
+export function taskSource(plan: TeamPlan, task: TeamPlanTask, ctx: PlanContext): TaskSource {
+  if (task.agent === ctx.primaryId || ctx.teamAgentIds.includes(task.agent)) return { kind: 'agent', agentId: task.agent }
   if (plan.add.some((a) => a.agentId === task.agent)) return { kind: 'add', agentId: task.agent }
-  const name = task.agent.trim().toLowerCase()
-  const index = plan.create.findIndex((c) => c.name.trim().toLowerCase() === name)
+  const name = norm(task.agent)
+  const index = plan.create.findIndex((c) => norm(c.name) === name)
   if (index >= 0) return { kind: 'create', index }
-  return { kind: 'agent', agentId: task.agent }
+  return { kind: 'unknown' }
 }
 
 /**
- * A task cannot run when its assignee depends on a team change the user
- * unticked (the BE drops such tasks on apply). `availableIds` are agents that
- * need no change: the current team and Primary.
+ * Why a task would be dropped on apply, or null when it can run: its agent
+ * must be Primary, on the team, an accepted addition that still exists, or an
+ * accepted specialist whose name is still free.
  */
-export function isTaskBlocked(plan: TeamPlan, selection: PlanSelection, index: number, availableIds: readonly string[] = []): boolean {
+export function taskBlock(plan: TeamPlan, selection: PlanSelection, index: number, ctx: PlanContext): string | null {
   const task = plan.tasks[index]
-  if (!task) return true
-  const source = taskSource(plan, task, availableIds)
-  if (source.kind === 'add') return !selection.add.includes(source.agentId)
-  if (source.kind === 'create') return !selection.create.includes(source.index)
-  return false
+  if (!task) return 'Not part of this plan.'
+  const source = taskSource(plan, task, ctx)
+  const gone = 'Skipped: its agent is no longer in the library.'
+  const notJoining = 'Skipped: its agent is not joining the team.'
+  if (source.kind === 'agent') return ctx.agents.some((a) => a.id === source.agentId) ? null : gone
+  if (source.kind === 'add') {
+    const entry = plan.add.find((a) => a.agentId === source.agentId)
+    if (!entry || addBlock(entry, ctx)) return gone
+    return selection.add.includes(source.agentId) ? null : notJoining
+  }
+  if (source.kind === 'create') {
+    if (createBlock(plan.create[source.index], ctx)) return 'Skipped: its new specialist cannot be created.'
+    return selection.create.includes(source.index) ? null : notJoining
+  }
+  return 'Skipped: its agent is not on the team or in this plan.'
 }
+
+export function isTaskBlocked(plan: TeamPlan, selection: PlanSelection, index: number, ctx: PlanContext): boolean {
+  return taskBlock(plan, selection, index, ctx) !== null
+}
+
+/** An apply body with every list explicit (an omitted list would accept everything). */
+export type ApplyBody = TeamPlanApply & { add: string[]; create: number[]; tasks: number[] }
 
 /**
- * Body for POST /plans/:messageId/apply. Every list is explicit (an omitted
- * list would accept everything), in plan order, without duplicates or
- * out-of-range entries, and without tasks the selection blocks.
+ * Body for POST /api/projects/:id/team-plan/apply: the plan as Primary sent
+ * it, the prompt it answers, and the accepted entries in plan order, without
+ * duplicates, out-of-range entries, or anything blocked (the BE would drop or
+ * refuse it, so it is neither sent nor counted).
  */
-export function applyBody(plan: TeamPlan, selection: PlanSelection, availableIds: readonly string[] = []): Required<TeamPlanApply> {
-  const add = [...new Set(plan.add.map((a) => a.agentId))].filter((id) => selection.add.includes(id))
-  const create = plan.create.map((_, i) => i).filter((i) => selection.create.includes(i))
-  const tasks = plan.tasks
-    .map((_, i) => i)
-    .filter((i) => selection.tasks.includes(i) && !isTaskBlocked(plan, selection, i, availableIds))
-  return { add, create, tasks }
+export function applyBody(plan: TeamPlan, selection: PlanSelection, ctx: PlanContext, replyTo?: string): ApplyBody {
+  const add: string[] = []
+  for (const a of plan.add) {
+    if (!add.includes(a.agentId) && selection.add.includes(a.agentId) && !addBlock(a, ctx)) add.push(a.agentId)
+  }
+  const create = plan.create.map((_, i) => i).filter((i) => selection.create.includes(i) && !createBlock(plan.create[i], ctx))
+  const tasks = plan.tasks.map((_, i) => i).filter((i) => selection.tasks.includes(i) && !taskBlock(plan, selection, i, ctx))
+  return { plan, ...(replyTo ? { replyTo } : {}), add, create, tasks }
 }
 
-/** How many entries an apply body accepts (Apply is disabled at zero). */
-export function selectedCount(body: Required<TeamPlanApply>): number {
+/** How many entries an apply body accepts (Apply is disabled at zero when the plan has items). */
+export function selectedCount(body: ApplyBody): number {
   return body.add.length + body.create.length + body.tasks.length
 }

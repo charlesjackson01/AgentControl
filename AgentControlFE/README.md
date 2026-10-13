@@ -44,7 +44,7 @@ host; requests then go cross-origin and the BE's CORS applies.
 | `npm run serve` | `build` + `preview` bound to `100.110.232.85:4173` (a machine-specific Tailscale address; edit for your host) |
 | `npm run typecheck` | `tsc -b --noEmit` |
 | `npm run lint` | Oxlint |
-| `npm test` | Hermetic parser parity, SKILL.md export round trip, tool selection, skill and note search, prompt-size message, and project chat (thread order, plan selection, polling) tests (Node 22.6+) |
+| `npm test` | Hermetic parser parity, SKILL.md export round trip, tool selection, skill and note search, prompt-size message, and project chat (thread order, plan placement and selection, blocked rows, polling, resync) tests (Node 22.6+) |
 
 ## Skills and notes
 
@@ -86,16 +86,32 @@ with a **project** tag on specialists the Team Lead created for this project.
 Members can be removed (with a confirmation) or added from the library.
 
 Sending a prompt posts it, then asks the Team Lead for a team plan
-(`POST /api/projects/:id/team-plan`). Its reply comes with a confirm card: library
-agents to add, specialists to create (instructions collapsed) and tasks, each
-ticked by default. Team changes wait for **Apply** (a tasks-only plan starts at
-once); a task whose agent is unticked is skipped. Assigned tasks show as
-*Primary → Agent* rows with a status, results arrive as the agent's replies, and
-a failed task has **Retry**. If planning fails, the error comes with **Retry**
-for the same prompt. While a plan or task is in flight the page refreshes every
-1.5 s (backing off on errors) and stops when idle. Runs made for project tasks
-stay out of the agent's own chat; the Agents page tags those specialists with
-their project.
+(`POST /api/projects/:id/team-plan`, which writes nothing). The plan shows under
+the prompt as a confirm card: the Team Lead's reply, library agents to add,
+specialists to create (instructions collapsed) and tasks, each ticked by
+default, plus any warnings. Every plan waits for **Apply** (D-P1), tasks-only
+ones included; Apply sends the plan back with the selection
+(`POST /api/projects/:id/team-plan/apply`) and records the reply, the team
+change and the tasks. **Cancel** just drops the card. A row the server would
+drop is shown as skipped and left out of the count: a task whose agent is
+unticked, gone, or not on the team, an addition whose agent was deleted or
+already joined, a specialist whose name was taken meanwhile. A reply with
+nothing to change offers **Keep reply** or **Dismiss**.
+
+Plans live only in the page: after a reload (or Cancel) the latest prompt shows
+**Ask** *Team Lead* to plan it again. **Ask** *Team Lead* **to build a team**
+is prominent while the team is empty (it plans the latest prompt, or asks for
+one); with a team, **Ask** *Team Lead* re-plans the latest prompt. If planning
+fails, the error comes with **Retry** for the same prompt.
+
+Assigned tasks show as *Team Lead → Agent* rows with a status; results arrive
+as the agent's replies (a failed attempt in red), and a failed task has
+**Retry**. While a task is queued or running, or after a refresh failed, the
+page refreshes every 1.5 s (backing off on errors) and stops when idle. Team
+edits start from the server's current team and library. If the project is
+deleted while its chat is open, the next action shows "Project not found". The
+Agents page tags project specialists with their project; their task runs stay
+out of the agent's own chat.
 
 ## Backend
 

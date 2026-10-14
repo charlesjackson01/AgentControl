@@ -726,3 +726,10 @@ Re-verified at `2e98015` on this machine (Python 3.14.7):
 
 **Recommendation: accept N2.** The frontend, route, and N2 record checks hold; the flagged blocker was this box's
 Python version. Formal acceptance remains Opus's per the process; this note records the independent verification.
+
+## Owner acceptance — 2026-10-13
+
+The owner accepted N2 on the strength of the independent verification above. The Opus sign-off gate is void:
+the owner's Opus subscription was cancelled on 2026-10-13. From here on, acceptance is the owner's alone
+(or a Hermes review when the owner delegates it). N2 is closed; the CR series (classic retirement, D21)
+is unblocked and starts next.

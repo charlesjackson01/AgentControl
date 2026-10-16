@@ -10,6 +10,7 @@ import {
   createBlock,
   descendants,
   describeProgress,
+  formatUsedMeta,
   initialSelection,
   isFailedResult,
   isTaskBlocked,
@@ -25,8 +26,15 @@ import {
   needsPolling,
   newerProject,
   nextTeam,
+  parsePlanTaskRef,
   planAnchors,
+  planAssigneeHosted,
+  planCallBudget,
+  planCallFooter,
   planHasItems,
+  planTaskChip,
+  planTaskChipLabel,
+  planTaskLabel,
   pollDelay,
   resyncAfter,
   selectedCount,
@@ -38,6 +46,7 @@ import {
   taskProgress,
   taskSource,
   taskState,
+  taskStateReason,
   toggleAdd,
   toggleCreate,
   toggleTask,
@@ -173,7 +182,16 @@ describe('polling, progress and resync', () => {
     assert.equal(taskState(t2, [t1, t2]).kind, 'ready')
     assert.equal(taskState(tWait, [t1q, tWait]).kind, 'waiting')
     assert.match(taskState(tWait, [t1q, tWait]).reason ?? '', /Waiting for t1/)
+    assert.equal(taskStateReason(taskState(tWait, [t1q, tWait])), 'Waiting for t1')
     assert.equal(taskState(t2, [t1, t2], true).kind, 'paused')
+    assert.equal(taskStateReason(taskState(t2, [t1, t2], true)), 'Paused')
+    const hold = taskState(
+      msg('th', T(2), { kind: 'task-assignment', taskStatus: 'queued', label: 't2', inputs: ['msg_t1'] }),
+      [msg('msg_t1', T(1), { kind: 'task-assignment', taskStatus: 'failed', label: 't1' })],
+    )
+    assert.equal(hold.kind, 'onHold')
+    assert.match(taskStateReason(hold) ?? '', /On hold: needs t1/)
+    assert.equal(taskStateReason(taskState(msg('tr', T(0), { kind: 'task-assignment', taskStatus: 'running' }), [])), undefined)
     assert.equal(taskState(msg('tr', T(0), { kind: 'task-assignment', taskStatus: 'running' }), []).kind, 'running')
   })
 
@@ -418,6 +436,113 @@ describe('plan confirm card and the apply body (D-P1)', () => {
     assert.deepEqual(selection.tasks, [0, 1, 2, 3, 4])
     assert.deepEqual(next.tasks, [1, 2, 3, 4])
     assert.equal(next.add, selection.add)
+  })
+
+  it('greys out dependents when a tN input is unticked (Skipped: needs t1)', () => {
+    const handoff = {
+      reply: 'Ana drafts; Copy Editor edits.',
+      add: [],
+      create: [{ name: 'Copy Editor', role: 'Editor', instructions: 'Edit.', skillIds: [], reason: '' }],
+      tasks: [
+        { agent: 'member-1', task: 'Draft the post' },
+        { agent: 'Copy Editor', task: 'Edit the draft', inputs: ['t1'] },
+        { agent: 'lead', task: 'Publish', inputs: ['T2'] },
+      ],
+      warnings: [],
+    }
+    let selection = initialSelection(handoff)
+    assert.equal(taskBlock(handoff, selection, 1, ctx), null)
+    assert.equal(taskBlock(handoff, selection, 2, ctx), null)
+    selection = toggleTask(selection, 0) // untick t1
+    assert.equal(taskBlock(handoff, selection, 1, ctx), 'Skipped: needs t1')
+    // t3 needs t2; t2 is still selected but blocked by t1 → chain drops
+    assert.equal(taskBlock(handoff, selection, 2, ctx), 'Skipped: needs t2')
+    const body = applyBody(handoff, selection, ctx)
+    assert.deepEqual(body.tasks, [])
+    // Re-tick t1: dependents apply again
+    selection = toggleTask(selection, 0)
+    assert.equal(taskBlock(handoff, selection, 1, ctx), null)
+    assert.deepEqual(applyBody(handoff, selection, ctx).tasks, [0, 1, 2])
+  })
+})
+
+describe('orchestration Part 4 hand-off UI helpers', () => {
+  const ctx = {
+    teamAgentIds: ['ana', 'hosted'],
+    primaryId: 'lead',
+    agents: [
+      { id: 'lead', name: 'Atlas', endpointId: 'ep-local' },
+      { id: 'ana', name: 'Ana', endpointId: 'ep-local' },
+      { id: 'hosted', name: 'Remote Writer', endpointId: 'ep-or' },
+    ],
+    hostedEndpointIds: ['ep-or'],
+  }
+  const plan = {
+    reply: '',
+    add: [],
+    create: [{ name: 'Copy Editor', role: 'Editor', instructions: 'Edit.', skillIds: [], reason: '' }],
+    tasks: [
+      { agent: 'ana', task: 'Draft the post' },
+      { agent: 'Copy Editor', task: 'Edit the draft', inputs: ['t1'] },
+      { agent: 'hosted', task: 'Polish remotely', inputs: ['t2'] },
+    ],
+    warnings: [],
+  }
+
+  it('parses tN refs and labels tasks t1…tn', () => {
+    assert.equal(parsePlanTaskRef('t1'), 1)
+    assert.equal(parsePlanTaskRef('T2'), 2)
+    assert.equal(parsePlanTaskRef(3), 3)
+    assert.equal(parsePlanTaskRef('r1'), undefined)
+    assert.equal(planTaskLabel(0), 't1')
+    assert.equal(planTaskLabel(4), 't5')
+  })
+
+  it('estimates model calls as tasks × 5 for the plan footer', () => {
+    assert.equal(planCallBudget(0), 0)
+    assert.equal(planCallBudget(3), 15)
+    assert.equal(planCallBudget(1), 5)
+    assert.equal(planCallFooter(3), '3 tasks · one at a time · up to 15 model calls')
+    assert.equal(planCallFooter(1), '1 task · one at a time · up to 5 model calls')
+  })
+
+  it('builds hand-off chip labels with @tags and uses', () => {
+    assert.equal(planTaskChipLabel(plan, 0, ctx), 't1 @Ana: Draft the post')
+    assert.equal(planTaskChipLabel(plan, 1, ctx), 't2 @Copy Editor: Edit the draft · uses @Ana (t1)')
+    const chip = planTaskChip(plan, 1, ctx)
+    assert.equal(chip.label, 't2')
+    assert.equal(chip.assignee, 'Copy Editor')
+    assert.deepEqual(chip.uses, [{ label: 't1', name: 'Ana', agentId: 'ana' }])
+    assert.equal(chip.hosted, false)
+    // Create entries inherit Primary's endpoint; lead is local → not hosted
+    assert.equal(planAssigneeHosted(plan, plan.tasks[1], ctx), false)
+    // Library agent on OpenRouter
+    assert.equal(planAssigneeHosted(plan, plan.tasks[2], ctx), true)
+    assert.match(planTaskChipLabel(plan, 2, ctx), /uses @Copy Editor \(t2\)/)
+  })
+
+  it('formats Used meta from result used[] and task labels', () => {
+    const assignments = [
+      msg('msg_t1', T(1), {
+        kind: 'task-assignment',
+        taskStatus: 'done',
+        label: 't1',
+        assigneeId: 'ana',
+      }),
+    ]
+    const lines = formatUsedMeta(
+      [{ taskId: 'msg_t1', chars: 6200, sentChars: 1800 }],
+      assignments,
+      (id) => (id === 'ana' ? 'Ana' : undefined),
+    )
+    assert.deepEqual(lines, ["Used @Ana's t1 (cut to 1,800 of 6,200 characters)"])
+    assert.deepEqual(formatUsedMeta(undefined, assignments, () => 'Ana'), [])
+    assert.deepEqual(formatUsedMeta([], assignments, () => 'Ana'), [])
+    // Missing assignment: fall back to a short id, no @Name
+    assert.deepEqual(
+      formatUsedMeta([{ taskId: 'msg_gone', chars: 10, sentChars: 10 }], [], () => undefined),
+      ['Used msg_gone (cut to 10 of 10 characters)'],
+    )
   })
 })
 

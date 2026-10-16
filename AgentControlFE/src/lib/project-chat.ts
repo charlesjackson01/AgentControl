@@ -186,6 +186,27 @@ export function taskState(task: ProjectMessage, messages: readonly ProjectMessag
   return { kind: 'waiting', reason: `Waiting for ${names}` }
 }
 
+/**
+ * Reason line for TaskAssignment when the derived state is waiting, on hold,
+ * or paused (Part 4). Other kinds have no reason chip.
+ */
+export function taskStateReason(state: TaskState): string | undefined {
+  if (state.kind === 'waiting' || state.kind === 'onHold' || state.kind === 'paused') return state.reason
+  return undefined
+}
+
+/** Model-call estimate for the plan-card footer: tasks × 5 (Part 4). */
+export function planCallBudget(taskCount: number): number {
+  return Math.max(0, Math.floor(taskCount)) * 5
+}
+
+/** Plan-card footer: "3 tasks · one at a time · up to 15 model calls". */
+export function planCallFooter(taskCount: number): string {
+  const n = Math.max(0, Math.floor(taskCount))
+  const tasks = `${n} ${n === 1 ? 'task' : 'tasks'}`
+  return `${tasks} · one at a time · up to ${planCallBudget(n)} model calls`
+}
+
 /** True when a queued task can start now (all inputs done, project not paused). */
 export function isReadyTask(task: ProjectMessage, messages: readonly ProjectMessage[], paused = false): boolean {
   return taskState(task, messages, paused).kind === 'ready' && task.taskStatus === 'queued'
@@ -333,12 +354,15 @@ export type PlanSelection = {
  * What the card checks a plan against, as fresh as the page has it (it
  * refetches when a plan arrives): the team, Primary, and the library. The BE
  * validates the submitted plan again on apply; this keeps the count and the
- * body to what it will accept.
+ * body to what it will accept. `hostedEndpointIds` marks OpenRouter endpoints
+ * so a hand-off chip can note "goes to a hosted endpoint" (D-O9).
  */
 export type PlanContext = {
   teamAgentIds: readonly string[]
   primaryId: string | undefined
-  agents: readonly Pick<Agent, 'id' | 'name'>[]
+  agents: readonly Pick<Agent, 'id' | 'name' | 'endpointId'>[]
+  /** Endpoint ids with kind 'openrouter' (D-O9). Absent = none hosted. */
+  hostedEndpointIds?: readonly string[]
 }
 
 const norm = (s: string): string => s.trim().toLowerCase()
@@ -416,12 +440,28 @@ export function taskSource(plan: TeamPlan, task: TeamPlanTask, ctx: PlanContext)
   return { kind: 'unknown' }
 }
 
+/** Parse a plan input ref "t1"/"T1"/1 into a 1-based task index, or undefined. */
+export function parsePlanTaskRef(ref: unknown): number | undefined {
+  if (typeof ref === 'number' && Number.isInteger(ref) && ref >= 1) return ref
+  if (typeof ref !== 'string') return undefined
+  const trimmed = ref.trim()
+  const asNum = /^[0-9]+$/.test(trimmed) ? Number(trimmed) : NaN
+  if (Number.isInteger(asNum) && asNum >= 1) return asNum
+  const m = /^t(\d+)$/i.exec(trimmed)
+  if (m) return Number(m[1])
+  return undefined
+}
+
+/** Plan-card label for a task index: "t1", "t2", … */
+export function planTaskLabel(index: number): string {
+  return `t${index + 1}`
+}
+
 /**
- * Why a task would be dropped on apply, or null when it can run: its agent
- * must be Primary, on the team, an accepted addition that still exists, or an
- * accepted specialist whose name is still free.
+ * Why a task's agent alone would block apply, ignoring hand-off inputs.
+ * Null when the assignee is available under the current selection.
  */
-export function taskBlock(plan: TeamPlan, selection: PlanSelection, index: number, ctx: PlanContext): string | null {
+function agentTaskBlock(plan: TeamPlan, selection: PlanSelection, index: number, ctx: PlanContext): string | null {
   const task = plan.tasks[index]
   if (!task) return 'Not part of this plan.'
   const source = taskSource(plan, task, ctx)
@@ -440,8 +480,179 @@ export function taskBlock(plan: TeamPlan, selection: PlanSelection, index: numbe
   return 'Skipped: its agent is not on the team or in this plan.'
 }
 
+/**
+ * Whether apply would keep this task index: ticked, assignee available, and
+ * every tN input also kept (same iterative drop the BE uses on apply).
+ */
+function taskWouldApply(
+  plan: TeamPlan,
+  selection: PlanSelection,
+  index: number,
+  ctx: PlanContext,
+  visiting: Set<number> = new Set(),
+): boolean {
+  if (index < 0 || index >= plan.tasks.length) return false
+  if (!selection.tasks.includes(index)) return false
+  if (agentTaskBlock(plan, selection, index, ctx)) return false
+  if (visiting.has(index)) return false
+  visiting.add(index)
+  for (const inp of plan.tasks[index].inputs ?? []) {
+    const n = parsePlanTaskRef(inp)
+    if (n === undefined) continue
+    if (!taskWouldApply(plan, selection, n - 1, ctx, visiting)) {
+      visiting.delete(index)
+      return false
+    }
+  }
+  visiting.delete(index)
+  return true
+}
+
+/**
+ * Why a task would be dropped on apply, or null when it can run: its agent
+ * must be Primary, on the team, an accepted addition that still exists, or an
+ * accepted specialist whose name is still free; and every tN input must still
+ * be accepted (unticking t1 greys dependents with "Skipped: needs t1").
+ */
+export function taskBlock(plan: TeamPlan, selection: PlanSelection, index: number, ctx: PlanContext): string | null {
+  const task = plan.tasks[index]
+  if (!task) return 'Not part of this plan.'
+  const agentReason = agentTaskBlock(plan, selection, index, ctx)
+  if (agentReason) return agentReason
+
+  const missing: string[] = []
+  for (const inp of task.inputs ?? []) {
+    const n = parsePlanTaskRef(inp)
+    if (n === undefined) continue
+    if (!taskWouldApply(plan, selection, n - 1, ctx)) missing.push(planTaskLabel(n - 1))
+  }
+  if (missing.length > 0) return `Skipped: needs ${[...new Set(missing)].join(', ')}`
+  return null
+}
+
 export function isTaskBlocked(plan: TeamPlan, selection: PlanSelection, index: number, ctx: PlanContext): boolean {
   return taskBlock(plan, selection, index, ctx) !== null
+}
+
+/** Display name for a plan task's assignee (library id, add, or create entry). */
+export function planAssigneeName(plan: TeamPlan, task: TeamPlanTask, ctx: PlanContext): string {
+  const source = taskSource(plan, task, ctx)
+  if (source.kind === 'create') return plan.create[source.index]?.name?.trim() || task.agent
+  if (source.kind === 'unknown') return task.agent
+  return ctx.agents.find((a) => a.id === source.agentId)?.name ?? task.agent
+}
+
+/** Agent id for a plan assignee when known (create entries have no id yet). */
+export function planAssigneeId(plan: TeamPlan, task: TeamPlanTask, ctx: PlanContext): string | undefined {
+  const source = taskSource(plan, task, ctx)
+  if (source.kind === 'agent' || source.kind === 'add') return source.agentId
+  return undefined
+}
+
+/**
+ * True when the assignee runs on an OpenRouter endpoint (D-O9). New specialists
+ * use Primary's endpoint, matching apply.
+ */
+export function planAssigneeHosted(plan: TeamPlan, task: TeamPlanTask, ctx: PlanContext): boolean {
+  const hosted = new Set(ctx.hostedEndpointIds ?? [])
+  if (hosted.size === 0) return false
+  const source = taskSource(plan, task, ctx)
+  if (source.kind === 'create') {
+    const lead = ctx.primaryId ? ctx.agents.find((a) => a.id === ctx.primaryId) : undefined
+    return Boolean(lead?.endpointId && hosted.has(lead.endpointId))
+  }
+  if (source.kind === 'agent' || source.kind === 'add') {
+    const agent = ctx.agents.find((a) => a.id === source.agentId)
+    return Boolean(agent?.endpointId && hosted.has(agent.endpointId))
+  }
+  return false
+}
+
+/** One hand-off input shown on a plan chip: uses @Ana (t1). */
+export type PlanTaskUse = {
+  label: string
+  name: string
+  agentId?: string
+}
+
+/**
+ * Structured plan-card chip for task index i: label, @assignee, task text,
+ * uses list, and whether work goes to a hosted endpoint (Part 4 / D-O9).
+ */
+export type PlanTaskChip = {
+  label: string
+  assignee: string
+  assigneeId?: string
+  task: string
+  uses: PlanTaskUse[]
+  hosted: boolean
+}
+
+/** Build the hand-off chip for one plan task (tN @Name: … · uses @Other (tM)). */
+export function planTaskChip(plan: TeamPlan, index: number, ctx: PlanContext): PlanTaskChip | null {
+  const task = plan.tasks[index]
+  if (!task) return null
+  const uses: PlanTaskUse[] = []
+  for (const inp of task.inputs ?? []) {
+    const n = parsePlanTaskRef(inp)
+    if (n === undefined || n < 1 || n > plan.tasks.length) continue
+    const src = plan.tasks[n - 1]
+    uses.push({
+      label: planTaskLabel(n - 1),
+      name: planAssigneeName(plan, src, ctx),
+      agentId: planAssigneeId(plan, src, ctx),
+    })
+  }
+  return {
+    label: planTaskLabel(index),
+    assignee: planAssigneeName(plan, task, ctx),
+    assigneeId: planAssigneeId(plan, task, ctx),
+    task: task.task,
+    uses,
+    hosted: planAssigneeHosted(plan, task, ctx),
+  }
+}
+
+/**
+ * Single-line chip label, e.g. "t2 @Copy Editor: Edit · uses @Ana (t1)".
+ * Optional hosted note is left to the card (D-O9).
+ */
+export function planTaskChipLabel(plan: TeamPlan, index: number, ctx: PlanContext): string {
+  const chip = planTaskChip(plan, index, ctx)
+  if (!chip) return ''
+  let line = `${chip.label} @${chip.assignee}: ${chip.task}`
+  if (chip.uses.length > 0) {
+    line += ` · uses ${chip.uses.map((u) => `@${u.name} (${u.label})`).join(', ')}`
+  }
+  return line
+}
+
+/** Result `used` entry from fitTaskInput (chars = full, sentChars = clipped). */
+export type UsedInput = { taskId: string; chars: number; sentChars: number }
+
+function formatChars(n: number): string {
+  return Math.max(0, Math.floor(n)).toLocaleString('en-US')
+}
+
+/**
+ * Meta lines under a task result: "Used @Ana's t1 (cut to 1,800 of 6,200 characters)".
+ * `names` resolves an assignee id to a display name; unknown ids fall back to the label only.
+ */
+export function formatUsedMeta(
+  used: readonly UsedInput[] | undefined,
+  messages: readonly ProjectMessage[],
+  names: (id: string | undefined) => string | undefined,
+): string[] {
+  if (!used || used.length === 0) return []
+  const lines: string[] = []
+  for (const entry of used) {
+    const src = assignmentById(messages, entry.taskId)
+    const label = src?.label ?? entry.taskId.slice(0, 8)
+    const who = src?.assigneeId ? names(src.assigneeId) : undefined
+    const target = who ? `@${who}'s ${label}` : label
+    lines.push(`Used ${target} (cut to ${formatChars(entry.sentChars)} of ${formatChars(entry.chars)} characters)`)
+  }
+  return lines
 }
 
 /** An apply body with every list explicit (an omitted list would accept everything). */

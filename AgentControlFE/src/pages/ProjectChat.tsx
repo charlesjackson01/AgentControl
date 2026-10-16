@@ -14,6 +14,7 @@ import {
   applyBody,
   createBlock,
   descendants,
+  formatUsedMeta,
   initialSelection,
   isFailedResult,
   isTaskResult,
@@ -29,7 +30,9 @@ import {
   newerProject,
   nextTeam,
   planAnchors,
+  planCallFooter,
   planHasItems,
+  planTaskChip,
   pollDelay,
   resyncAfter,
   selectedCount,
@@ -38,7 +41,8 @@ import {
   stickAfterScroll,
   taskBlock,
   taskProgress,
-  taskSource,
+  taskState,
+  taskStateReason,
   toggleAdd,
   toggleCreate,
   toggleTask,
@@ -48,7 +52,7 @@ import {
   type PlanSelection,
   type TextPart,
 } from '../lib/project-chat'
-import type { Agent, Project, ProjectMessage, ProjectUpdate, TaskStatus, TeamPlan } from '../lib/types'
+import type { Agent, Endpoint, Project, ProjectMessage, ProjectUpdate, TaskStatus, TeamPlan } from '../lib/types'
 
 /* ==========================================================================
    Project chat (/projects/:id): the project's own thread (D-P3). The user
@@ -179,13 +183,6 @@ function PlanCard({
     }
   }
 
-  // A validated plan names agents by id, or new specialists by name.
-  const assigneeLabel = (agent: string) => {
-    const source = taskSource(plan, { agent, task: '' }, ctx)
-    if (source.kind === 'create') return `${plan.create[source.index].name} (new)`
-    return names.of(source.kind === 'unknown' ? agent : source.agentId)
-  }
-
   const blockedNote = (reason: string | null) => reason && <span className="plan__blocked">{reason}</span>
 
   return (
@@ -271,8 +268,12 @@ function PlanCard({
           {plan.tasks.map((t, i) => {
             const blocked = taskBlock(plan, selection, i, ctx)
             const on = !blocked && selection.tasks.includes(i)
+            const chip = planTaskChip(plan, i, ctx)
             return (
-              <label className={`skillrow${on ? ' skillrow--on' : ''}${blocked ? ' skillrow--blocked' : ''}`} key={i}>
+              <label
+                className={`skillrow${on ? ' skillrow--on' : ''}${blocked ? ' skillrow--blocked' : ''}`}
+                key={i}
+              >
                 <input
                   type="checkbox"
                   checked={on}
@@ -280,13 +281,38 @@ function PlanCard({
                   onChange={() => setSelection((s) => toggleTask(s, i))}
                 />
                 <span className="skillrow__text">
-                  <span className="skillrow__name">{assigneeLabel(t.agent)}</span>
-                  <span className="skillrow__desc plan__task">{t.task}</span>
+                  {chip && (
+                    <span className="plan__chip">
+                      <span className="plan__chip__label">{chip.label}</span>{' '}
+                      <span className="mention-chip" title={chip.assigneeId ? names.of(chip.assigneeId) : chip.assignee}>
+                        @{chip.assignee}
+                      </span>
+                      <span className="plan__chip__task">: {chip.task}</span>
+                      {chip.uses.length > 0 && (
+                        <span className="plan__chip__uses">
+                          {' '}
+                          · uses{' '}
+                          {chip.uses.map((u, ui) => (
+                            <span key={`${u.label}-${ui}`}>
+                              {ui > 0 ? ', ' : null}
+                              <span className="mention-chip" title={u.agentId ? names.of(u.agentId) : u.name}>
+                                @{u.name}
+                              </span>
+                              {` (${u.label})`}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                      {chip.hosted && <span className="plan__chip__hosted"> goes to a hosted endpoint</span>}
+                    </span>
+                  )}
+                  {!chip && <span className="skillrow__desc plan__task">{t.task}</span>}
                   {blockedNote(blocked)}
                 </span>
               </label>
             )
           })}
+          <p className="plan__estimate">{planCallFooter(plan.tasks.length)}</p>
         </div>
       )}
 
@@ -331,6 +357,7 @@ function PlanCard({
 
 function TaskAssignment({
   message,
+  messages,
   names,
   paused,
   onRetry,
@@ -338,6 +365,7 @@ function TaskAssignment({
   onStop,
 }: {
   message: ProjectMessage
+  messages: readonly ProjectMessage[]
   names: Names
   paused: boolean
   onRetry: () => Promise<void>
@@ -347,7 +375,9 @@ function TaskAssignment({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const status = message.taskStatus ?? 'queued'
-  const showPaused = status === 'queued' && paused
+  const state = taskState(message, messages, paused)
+  const reason = taskStateReason(state)
+  const showPaused = state.kind === 'paused'
 
   const retry = async () => {
     if (busy) return
@@ -363,16 +393,20 @@ function TaskAssignment({
   }
 
   return (
-    <div className={`task task--${status}${showPaused ? ' task--paused' : ''}`}>
+    <div className={`task task--${status}${showPaused ? ' task--paused' : ''}${state.kind === 'onHold' || state.kind === 'waiting' ? ' task--held' : ''}`}>
       <div className="task__head">
         <span className="task__route">
+          {message.label ? <span className="task__label">{message.label} </span> : null}
           {message.assigneeId === message.author
             ? `${names.of(message.author)} took this task`
             : `${names.of(message.author)} → ${names.of(message.assigneeId)}`}
         </span>
         <TaskPill status={status} />
         {showPaused && <span className="status status--paused">Paused</span>}
+        {state.kind === 'waiting' && <span className="status status--waiting">Waiting</span>}
+        {state.kind === 'onHold' && <span className="status status--hold">On hold</span>}
       </div>
+      {reason && <p className="task__reason">{reason}</p>}
       <div className="task__body">
         <MentionText text={message.text} mentions={message.mentions} names={names} />
       </div>
@@ -553,6 +587,7 @@ function ProjectChatPage({ id }: { id: string }) {
   const [project, setProject] = useState<Project | undefined>(undefined)
   const [messages, setMessages] = useState<ProjectMessage[] | undefined>(undefined)
   const [agents, setAgents] = useState<Agent[] | undefined>(undefined)
+  const [endpoints, setEndpoints] = useState<Endpoint[] | undefined>(undefined)
   const [skillNames, setSkillNames] = useState<Map<string, string>>(new Map())
   const [loadError, setLoadError] = useState<Error | undefined>(undefined)
   const [syncError, setSyncError] = useState<string | null>(null)
@@ -602,16 +637,22 @@ function ProjectChatPage({ id }: { id: string }) {
     }
   }, [])
 
-  /** Refetch project, messages and agents together; settles once the refetch is applied or dropped. */
+  /** Refetch project, messages, agents and endpoints; settles once the refetch is applied or dropped. */
   const refresh = useCallback((): Promise<void> => {
     const mine = ++ticket.current
-    return Promise.all([api.getProject(id), api.listProjectMessages(id), api.listAgents()]).then(
-      ([p, list, roster]) => {
+    return Promise.all([
+      api.getProject(id),
+      api.listProjectMessages(id),
+      api.listAgents(),
+      api.listEndpoints().catch(() => [] as Endpoint[]),
+    ]).then(
+      ([p, list, roster, eps]) => {
         if (!alive.current || mine < applied.current) return
         applied.current = mine
         setProject(p)
         setMessages(sortMessages(list))
         setAgents(roster)
+        setEndpoints(eps)
         setLoadError(undefined)
         setSyncError(null)
         failures.current = 0
@@ -702,10 +743,15 @@ function ProjectChatPage({ id }: { id: string }) {
 
   const members = useMemo(() => memberIds(project?.teamAgentIds ?? [], primary?.id), [project, primary])
   const candidates = useMemo(() => addCandidates(agents ?? [], project?.teamAgentIds ?? []), [agents, project])
-  const planCtx = useMemo<PlanContext>(
-    () => ({ teamAgentIds: project?.teamAgentIds ?? [], primaryId: primary?.id, agents: agents ?? [] }),
-    [project, primary, agents],
-  )
+  const planCtx = useMemo<PlanContext>(() => {
+    const hostedEndpointIds = (endpoints ?? []).filter((e) => e.kind === 'openrouter').map((e) => e.id)
+    return {
+      teamAgentIds: project?.teamAgentIds ?? [],
+      primaryId: primary?.id,
+      agents: agents ?? [],
+      ...(hostedEndpointIds.length > 0 ? { hostedEndpointIds } : {}),
+    }
+  }, [project, primary, agents, endpoints])
   const latest = useMemo(() => latestPrompt(messages ?? []), [messages])
   const unanswered = useMemo(() => latestUnansweredPrompt(messages ?? []), [messages])
   const progress = useMemo(() => taskProgress(messages ?? []), [messages])
@@ -1014,6 +1060,7 @@ function ProjectChatPage({ id }: { id: string }) {
       body = (
         <TaskAssignment
           message={m}
+          messages={messages ?? []}
           names={names}
           paused={project?.paused === true}
           onRetry={() => retryTask(m.id)}
@@ -1039,12 +1086,18 @@ function ProjectChatPage({ id }: { id: string }) {
       // Primary's applied reply, a task result, or any other agent message.
       const result = isTaskResult(m)
       const failed = isFailedResult(m)
+      const usedLines = result ? formatUsedMeta(m.used, messages ?? [], (aid) => names.of(aid)) : []
       body = (
         <Bubble kind={failed ? 'error' : 'assistant'} speaker={names.of(m.author)}>
           <div className="bubble__body">
             <MentionText text={m.text} mentions={m.mentions} names={names} />
           </div>
           {result && <div className="bubble__meta">{failed ? 'Task failed' : 'Task result'}</div>}
+          {usedLines.map((line, i) => (
+            <div className="bubble__used" key={i}>
+              {line}
+            </div>
+          ))}
         </Bubble>
       )
     }

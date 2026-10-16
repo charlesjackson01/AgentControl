@@ -135,10 +135,66 @@ export function stickAfterScroll(
 
 /* -- Polling and progress ---------------------------------------------------- */
 
+/** Derived UI state for one task-assignment (Part 3). Waiting/on-hold are never stored. */
+export type TaskState =
+  | { kind: 'ready'; reason?: string }
+  | { kind: 'running' }
+  | { kind: 'done' }
+  | { kind: 'failed' }
+  | { kind: 'cancelled' }
+  | { kind: 'waiting'; reason: string }
+  | { kind: 'onHold'; reason: string }
+  | { kind: 'paused'; reason: string }
+
+function assignmentById(messages: readonly ProjectMessage[], id: string): ProjectMessage | undefined {
+  return messages.find((m) => m.id === id && m.kind === 'task-assignment')
+}
+
 /**
- * Poll while a task is running, or while a queued task can start (project not
+ * Ready / waiting / on hold / paused for a queued task, or the stored status
+ * once it has left the queue. Reasons name the blocking label when known.
+ */
+export function taskState(task: ProjectMessage, messages: readonly ProjectMessage[], paused = false): TaskState {
+  if (task.kind !== 'task-assignment') return { kind: 'ready' }
+  const status = task.taskStatus
+  if (status === 'running') return { kind: 'running' }
+  if (status === 'done') return { kind: 'done' }
+  if (status === 'failed') return { kind: 'failed' }
+  if (status === 'cancelled') return { kind: 'cancelled' }
+  if (status !== 'queued') return { kind: 'ready' }
+
+  if (paused) return { kind: 'paused', reason: 'Paused' }
+
+  const inputs = task.inputs ?? []
+  if (inputs.length === 0) return { kind: 'ready' }
+
+  const blockers: { label: string; status: TaskStatus | undefined }[] = []
+  for (const id of inputs) {
+    const src = assignmentById(messages, id)
+    if (!src || src.taskStatus !== 'done') {
+      blockers.push({ label: src?.label ?? id.slice(0, 8), status: src?.taskStatus })
+    }
+  }
+  if (blockers.length === 0) return { kind: 'ready' }
+
+  const failed = blockers.filter((b) => b.status === 'failed' || b.status === 'cancelled')
+  if (failed.length > 0) {
+    const names = failed.map((b) => b.label).join(', ')
+    return { kind: 'onHold', reason: `On hold: needs ${names}` }
+  }
+  const names = blockers.map((b) => b.label).join(', ')
+  return { kind: 'waiting', reason: `Waiting for ${names}` }
+}
+
+/** True when a queued task can start now (all inputs done, project not paused). */
+export function isReadyTask(task: ProjectMessage, messages: readonly ProjectMessage[], paused = false): boolean {
+  return taskState(task, messages, paused).kind === 'ready' && task.taskStatus === 'queued'
+}
+
+/**
+ * Poll while a task is running, or while a ready task is queued (project not
  * paused), and while the last refresh failed (with backoff) so "Updates paused"
- * recovers on its own. Planning is a single request/response and needs no polling.
+ * recovers on its own. Held/waiting tasks alone must not poll forever (Part 3).
  */
 export function needsPolling(
   messages: readonly ProjectMessage[],
@@ -148,7 +204,9 @@ export function needsPolling(
   if (syncFailed) return true
   if (messages.some((m) => m.kind === 'task-assignment' && m.taskStatus === 'running')) return true
   if (paused) return false
-  return messages.some((m) => m.kind === 'task-assignment' && m.taskStatus === 'queued')
+  return messages.some(
+    (m) => m.kind === 'task-assignment' && m.taskStatus === 'queued' && isReadyTask(m, messages, false),
+  )
 }
 
 /**

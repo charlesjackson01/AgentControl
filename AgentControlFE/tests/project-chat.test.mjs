@@ -21,6 +21,7 @@ import {
   mentionParts,
   mentionQuery,
   mergeMessages,
+  isReadyTask,
   needsPolling,
   newerProject,
   nextTeam,
@@ -36,6 +37,7 @@ import {
   taskBlock,
   taskProgress,
   taskSource,
+  taskState,
   toggleAdd,
   toggleCreate,
   toggleTask,
@@ -137,7 +139,7 @@ describe('prompts and where pending plans show', () => {
 describe('polling, progress and resync', () => {
   const task = (taskStatus) => msg(`t-${taskStatus}`, T(1), { kind: 'task-assignment', taskStatus })
 
-  it('polls while a task is queued or running', () => {
+  it('polls while a ready task is queued or a task is running', () => {
     assert.equal(needsPolling([], false), false)
     assert.equal(needsPolling([task('done'), task('failed'), msg('m', T(0))], false), false)
     assert.equal(needsPolling([task('done'), task('queued')], false), true)
@@ -150,6 +152,29 @@ describe('polling, progress and resync', () => {
     assert.equal(needsPolling([task('queued')], false, true), false)
     assert.equal(needsPolling([task('running'), task('queued')], false, true), true)
     assert.equal(needsPolling([task('queued')], true, true), true)
+  })
+
+  it('does not poll forever when only held or waiting tasks remain', () => {
+    const t1 = msg('t1', T(1), { kind: 'task-assignment', taskStatus: 'failed', label: 't1' })
+    const t2 = msg('t2', T(2), { kind: 'task-assignment', taskStatus: 'queued', label: 't2', inputs: ['t1'] })
+    const t3 = msg('t3', T(3), { kind: 'task-assignment', taskStatus: 'queued', label: 't3', inputs: ['missing'] })
+    assert.equal(needsPolling([t1, t2], false), false)
+    assert.equal(needsPolling([t3], false), false)
+    assert.equal(taskState(t2, [t1, t2]).kind, 'onHold')
+    assert.equal(taskState(t3, [t3]).kind, 'waiting')
+    assert.equal(isReadyTask(t2, [t1, t2]), false)
+  })
+
+  it('taskState: ready when inputs are done; waiting/onHold/paused otherwise', () => {
+    const t1 = msg('t1', T(1), { kind: 'task-assignment', taskStatus: 'done', label: 't1' })
+    const t2 = msg('t2', T(2), { kind: 'task-assignment', taskStatus: 'queued', label: 't2', inputs: ['t1'] })
+    const tWait = msg('tw', T(3), { kind: 'task-assignment', taskStatus: 'queued', label: 't3', inputs: ['t1'] })
+    const t1q = msg('t1q', T(1), { kind: 'task-assignment', taskStatus: 'queued', label: 't1' })
+    assert.equal(taskState(t2, [t1, t2]).kind, 'ready')
+    assert.equal(taskState(tWait, [t1q, tWait]).kind, 'waiting')
+    assert.match(taskState(tWait, [t1q, tWait]).reason ?? '', /Waiting for t1/)
+    assert.equal(taskState(t2, [t1, t2], true).kind, 'paused')
+    assert.equal(taskState(msg('tr', T(0), { kind: 'task-assignment', taskStatus: 'running' }), []).kind, 'running')
   })
 
   it('lists transitive dependents for cancel confirm', () => {

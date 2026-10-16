@@ -3474,3 +3474,6 @@ a.teamchip__name:hover {
 .formsection--advanced[open] > summary .formsection__title::before { content: '▾ '; }
 .formsection--advanced[open] > summary { margin-bottom: 14px; }
 .chat__header__avatar { display: inline-flex; padding: 0; border: 0; background: none; border-radius: var(--r-full); cursor: pointer; }
+/* Hints nested under a title (not a direct child of the gapped section) need no negative pull-up. */
+.formsection__bar .formsection__hint,
+.formsection--advanced > summary .formsection__hint { margin-top: 2px; }

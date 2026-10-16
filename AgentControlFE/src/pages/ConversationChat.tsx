@@ -11,6 +11,7 @@ import { mergeMessages, olderCursor } from '../lib/conversations'
 import type { ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
+import { EMPTY_REPLY_ERROR, isEmptyReply, runReplyView } from '../lib/run-reply'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
@@ -139,9 +140,10 @@ export default function ConversationChat() {
       setMessages((prev) => mergeMessages(prev ?? [], result.messages))
       if (result.conversation) upsert(result.conversation)
       // A failed run may have stored no assistant message; surface its error inline.
-      const answered = result.messages.some((m) => m.role === 'assistant')
-      if (result.run.status === 'failed' && !answered) {
-        setPending({ text, ts: new Date().toISOString(), status: 'error', error: result.run.error || 'The run failed.' })
+      const answered = result.messages.some((m) => m.role === 'assistant' && !isEmptyReply(m.content))
+      if (!answered) {
+        const view = runReplyView({ status: result.run.status, output: '', error: result.run.error })
+        setPending({ text, ts: new Date().toISOString(), status: 'error', error: view.text })
         setRunError(null)
       } else {
         setPending(null)
@@ -240,9 +242,13 @@ export default function ConversationChat() {
                       <Bubble kind="user">
                         <div className="bubble__body">{m.content}</div>
                       </Bubble>
+                    ) : isEmptyReply(m.content) ? (
+                      <Bubble kind="error">
+                        <div className="bubble__body">{EMPTY_REPLY_ERROR}</div>
+                      </Bubble>
                     ) : (
                       <Bubble kind="assistant">
-                        <div className="bubble__body">{m.content || '(no output)'}</div>
+                        <div className="bubble__body">{m.content}</div>
                       </Bubble>
                     )}
                   </div>

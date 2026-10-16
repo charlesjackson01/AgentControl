@@ -1,3 +1,4 @@
+import { taskResultView } from '../lib/run-reply'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Bubble, TypingBubble } from '../components/ChatBubble'
@@ -1280,12 +1281,13 @@ function ProjectChatPage({ id }: { id: string }) {
     } else {
       // Primary's applied reply, a task result, or any other agent message.
       const result = isTaskResult(m)
-      const failed = isFailedResult(m)
+      const shown = result ? taskResultView(m.text, isFailedResult(m)) : { failed: false, text: m.text }
+      const failed = shown.failed
       const usedLines = result ? formatUsedMeta(m.used, messages ?? [], (aid) => names.of(aid)) : []
       body = (
         <Bubble kind={failed ? 'error' : 'assistant'} speaker={names.of(m.author)}>
           <div className="bubble__body">
-            <MentionText text={m.text} mentions={m.mentions} names={names} />
+            <MentionText text={shown.text} mentions={m.mentions} names={names} />
           </div>
           {result && <div className="bubble__meta">{failed ? 'Task failed' : 'Task result'}</div>}
           {usedLines.map((line, i) => (

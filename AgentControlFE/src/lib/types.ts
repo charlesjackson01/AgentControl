@@ -87,6 +87,8 @@ export type Endpoint = {
   createdAt: string
   /** Optional HTTP(S) proxy for every upstream call, e.g. http://localhost:1055. */
   proxyUrl?: string
+  /** Sends chat_template_kwargs.enable_thinking=false on every upstream call. */
+  disableThinking?: boolean
 }
 
 /** One model served by an endpoint (GET /api/endpoints/:id/models). */
@@ -157,6 +159,8 @@ export type EndpointInput = {
   apiKey?: string
   /** Optional http(s) proxy URL. Omit to keep on update; "" or null clears it. */
   proxyUrl?: string | null
+  /** Optional. Omit to keep on update; false clears it. */
+  disableThinking?: boolean
 }
 
 export type AgentRun = {

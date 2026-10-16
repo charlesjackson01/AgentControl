@@ -2421,3 +2421,43 @@ describe('orchestration Part 5: review rounds', () => {
     expect(lead.name).toBe('Lead')
   })
 })
+
+describe('GET /api/projects/:id/runs/:runId', () => {
+  it('returns a project task run; 404 for wrong project, missing run, or chat-only', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana', { role: 'Writer' })
+    const p = await makeProject('RunRoute', [ana.id])
+    const other = await makeProject('Other', [ana.id])
+    mockTeam({ reply: 'Ana drafts.', tasks: [{ agent: ana.id, task: 'Draft the note' }] })
+    const { body } = await planAndApply(p.id, 'Write a note')
+    await whenProjectIdle(store, p.id)
+
+    const result = body.messages.find((m) => m.kind === 'task-assignment')
+    expect(result).toBeDefined()
+    const msgs = await thread(p.id)
+    const taskResult = msgs.find((m) => m.taskId === result?.id && m.runId)
+    expect(taskResult?.runId).toBeTruthy()
+    const runId = taskResult!.runId!
+
+    const ok = await inject('GET', `/api/projects/${p.id}/runs/${runId}`)
+    expect(ok.statusCode).toBe(200)
+    const run = ok.json() as { id: string; projectId?: string; agentId: string; input: string; status: string }
+    expect(run).toMatchObject({ id: runId, projectId: p.id, agentId: ana.id, status: 'succeeded' })
+    expect(run.input).toContain('Draft the note')
+    // Vault keys live on endpoints, never on AgentRun.
+    expect(JSON.stringify(run)).not.toMatch(/apiKey|endpointKeys|vault/i)
+
+    expect((await inject('GET', `/api/projects/${other.id}/runs/${runId}`)).statusCode).toBe(404)
+    expect((await inject('GET', `/api/projects/${p.id}/runs/run_missing`)).statusCode).toBe(404)
+    expect((await inject('GET', `/api/projects/proj_gone/runs/${runId}`)).statusCode).toBe(404)
+
+    // Chat-only runs (no projectId) are not exposed on this route.
+    mockUpstream(() => 'chat reply')
+    const chat = await inject('POST', `/api/agents/${ana.id}/runs`, { input: 'hello from chat' })
+    expect(chat.statusCode).toBe(200)
+    const chatRun = chat.json() as { id: string; projectId?: string }
+    expect(chatRun.projectId).toBeUndefined()
+    expect((await inject('GET', `/api/projects/${p.id}/runs/${chatRun.id}`)).statusCode).toBe(404)
+    expect(lead.name).toBe('Lead')
+  })
+})

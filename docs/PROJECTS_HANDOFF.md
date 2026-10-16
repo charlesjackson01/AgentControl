@@ -7,6 +7,10 @@ Progress (2026-10-13): Part 0 on master (PR #6). Part 1 routes in PR #7.
 Part 1 chat page, Part 2 and Part 3 on `feat/projects-chat` (stacked on PR #7
 and PR #8); see "Implementation notes" at the end.
 
+Orchestration (2026-10-16): Parts 1–6 implemented on
+`cursor/orchestration-part*-94d1` (see docs/ORCHESTRATION_HANDOFF.md). Part 6
+adds `GET /api/projects/:id/runs/:runId` and the FE "What it saw" disclosure.
+
 ## Goal
 
 Projects becomes a real feature instead of a hardcoded frontend stub. A

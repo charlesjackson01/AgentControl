@@ -293,6 +293,16 @@ export const api = {
     })
   },
 
+  /**
+   * One project task run (Part 6 "What it saw"). 404 when the run is missing,
+   * belongs to another project, or is a chat-only run (no projectId).
+   */
+  async getProjectRun(projectId: string, runId: string): Promise<AgentRun> {
+    return request<AgentRun>(
+      `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`,
+    )
+  },
+
   /** 409 unless the task failed or was cancelled; re-queues it. */
   async retryProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
     return request<ProjectUpdate>(

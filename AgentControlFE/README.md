@@ -106,12 +106,16 @@ fails, the error comes with **Retry** for the same prompt.
 
 Assigned tasks show as *Team Lead → Agent* rows with a status; results arrive
 as the agent's replies (a failed attempt in red), and a failed task has
-**Retry**. While a task is queued or running, or after a refresh failed, the
-page refreshes every 1.5 s (backing off on errors) and stops when idle. Team
-edits start from the server's current team and library. If the project is
-deleted while its chat is open, the next action shows "Project not found". The
-Agents page tags project specialists with their project; their task runs stay
-out of the agent's own chat.
+**Retry**. A result that used teammate inputs shows **Used** meta and a
+collapsed **What it saw** disclosure (`GET /api/projects/:id/runs/:runId`) with
+the prompt sent to the assignee. Work pause/resume/stop and task cancel live on
+the work bar; after a round finishes, **Ask Primary to review** opens a review
+card (continue / done / ask). While a task is queued or running, or after a
+refresh failed, the page refreshes every 1.5 s (backing off on errors) and stops
+when idle. Team edits start from the server's current team and library. If the
+project is deleted while its chat is open, the next action shows "Project not
+found". The Agents page tags project specialists with their project; their task
+runs stay out of the agent's own chat.
 
 ## Backend
 

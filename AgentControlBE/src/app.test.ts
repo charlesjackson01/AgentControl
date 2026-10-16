@@ -2282,16 +2282,37 @@ describe('chat-first Part 2: conversations', () => {
     expect(full.hasMore).toBe(false)
   })
 
-  it('stores, trims, validates and clears userName', async () => {
-    const set = await inject('PATCH', '/api/settings', { userName: '  Charles  ' })
-    expect(set.statusCode).toBe(200)
-    expect(set.json()).toMatchObject({ userName: 'Charles' })
-    expect((await inject('GET', '/api/settings')).json()).toMatchObject({ userName: 'Charles' })
-    expect(createStore(join(dir, 'store.json')).settings.userName).toBe('Charles')
-    expect((await inject('PATCH', '/api/settings', { userName: 5 })).statusCode).toBe(400)
-    expect((await inject('PATCH', '/api/settings', { userName: 'x'.repeat(81) })).statusCode).toBe(400)
-    expect((await inject('PATCH', '/api/settings', { notify: 'yes' })).statusCode).toBe(400)
-    const cleared = await inject('PATCH', '/api/settings', { userName: null })
-    expect((cleared.json() as { userName?: string }).userName).toBeUndefined()
+  it('runs first-run profile setup and edits', async () => {
+    const fresh = (await inject('GET', '/api/profile')).json() as { name: string; onboardedAt: string | null }
+    expect(fresh).toEqual({ name: '', onboardedAt: null })
+    expect((await inject('PUT', '/api/profile', { name: '  ' })).statusCode).toBe(400)
+    expect((await inject('PUT', '/api/profile', { name: 'x'.repeat(81) })).statusCode).toBe(400)
+    expect((await inject('PUT', '/api/profile', { name: 'C', avatar: { kind: 'image' } })).statusCode).toBe(400)
+    expect(((await inject('GET', '/api/profile')).json() as { onboardedAt: unknown }).onboardedAt).toBeNull()
+
+    const saved = await inject('PUT', '/api/profile', { name: ' Charles ', avatar: { kind: 'emoji', value: '🦊' } })
+    expect(saved.statusCode).toBe(200)
+    const p1 = saved.json() as { name: string; avatar: unknown; onboardedAt: string }
+    expect(p1).toMatchObject({ name: 'Charles', avatar: { kind: 'emoji', value: '🦊' } })
+    expect(typeof p1.onboardedAt).toBe('string')
+
+    // Later edits keep onboardedAt and (when omitted) the avatar.
+    const edited = (await inject('PUT', '/api/profile', { name: 'Chuck' })).json() as typeof p1
+    expect(edited).toMatchObject({ name: 'Chuck', avatar: p1.avatar, onboardedAt: p1.onboardedAt })
+    expect(createStore(join(dir, 'store.json')).profile.name).toBe('Chuck')
+
+    // Image upload, fetch, delete.
+    const png = Buffer.from('89504e470d0a1a0a', 'hex')
+    const up = await app.inject({ method: 'PUT', url: '/api/profile/avatar', payload: png, headers: { 'content-type': 'image/png' } })
+    expect(up.statusCode).toBe(200)
+    expect((up.json() as { avatar: { kind: string } }).avatar.kind).toBe('image')
+    const got = await inject('GET', '/api/profile/avatar')
+    expect(got.statusCode).toBe(200)
+    expect(got.headers['content-type']).toBe('image/png')
+    expect((await app.inject({ method: 'PUT', url: '/api/profile/avatar', payload: 'x', headers: { 'content-type': 'text/plain' } })).statusCode).toBe(415)
+    const del = await inject('DELETE', '/api/profile/avatar')
+    expect((del.json() as { avatar?: unknown }).avatar).toBeUndefined()
+    expect((await inject('GET', '/api/profile/avatar')).statusCode).toBe(404)
   })
+
 })

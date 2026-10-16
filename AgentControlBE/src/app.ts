@@ -33,6 +33,7 @@ import {
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
   type AgentInput,
+  type UserProfile,
   type Conversation,
   type Endpoint,
   type EndpointInput,
@@ -258,6 +259,13 @@ function avatarPath(store: WorkspaceStore, file: string): string | null {
 function removeAvatarFile(store: WorkspaceStore, agent: Agent): void {
   if (agent.avatar?.kind !== 'image') return
   const path = avatarPath(store, agent.avatar.file)
+  if (path) rmSync(path, { force: true })
+}
+
+function removeProfileAvatarFile(store: WorkspaceStore): void {
+  const avatar = store.profile.avatar
+  if (avatar?.kind !== 'image') return
+  const path = avatarPath(store, avatar.file)
   if (path) rmSync(path, { force: true })
 }
 
@@ -567,7 +575,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
   app.get('/api/settings', async () => store.settings)
 
-  // Partial update; only known fields. userName "" or null clears it.
+  // Partial update; only known boolean fields.
   app.patch('/api/settings', async (request) => {
     const body = (request.body ?? {}) as Record<string, unknown>
     if (typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object.')
@@ -576,16 +584,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       if (body[key] === undefined) continue
       if (typeof body[key] !== 'boolean') fail(400, `${key} must be a boolean`)
       next[key] = body[key] as boolean
-    }
-    if (body.userName !== undefined) {
-      if (body.userName === null || body.userName === '') delete next.userName
-      else if (typeof body.userName !== 'string') fail(400, 'userName must be a string or null')
-      else {
-        const name = body.userName.trim()
-        if (name.length > MAX_USER_NAME_CHARS) fail(400, `userName is at most ${MAX_USER_NAME_CHARS} characters`)
-        if (name) next.userName = name
-        else delete next.userName
-      }
     }
     store.settings = next
     store.save()
@@ -834,6 +832,71 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       store.save()
       return next
     })
+
+    // The user's own image avatar, stored as data/avatars/_profile.<ext> (agent ids never start with _).
+    scope.put('/api/profile/avatar', { bodyLimit: MAX_AVATAR_BYTES }, async (request) => {
+      const type = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
+      const ext = AVATAR_TYPES[type]
+      const body = request.body
+      if (!ext || !Buffer.isBuffer(body)) fail(415, 'Upload a PNG, JPEG, WebP or GIF image.')
+      if (body.length === 0) fail(400, 'The image is empty.')
+      mkdirSync(store.avatarsDir, { recursive: true })
+      const file = `_profile.${ext}`
+      const temporary = join(store.avatarsDir, `.${file}.${process.pid}.tmp`)
+      writeFileSync(temporary, body, { mode: 0o600 })
+      renameSync(temporary, join(store.avatarsDir, file))
+      const current = store.profile.avatar
+      if (current?.kind === 'image' && current.file !== file) removeProfileAvatarFile(store)
+      store.profile = { ...store.profile, avatar: { kind: 'image', file, updatedAt: new Date().toISOString() } }
+      store.save()
+      return store.profile
+    })
+  })
+
+  // User profile. Saving a name for the first time completes onboarding.
+  app.get('/api/profile', async () => store.profile)
+
+  app.put('/api/profile', async (request) => {
+    const raw = (request.body ?? {}) as Record<string, unknown>
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    if (!name) fail(400, '"name" is required.')
+    if (name.length > MAX_USER_NAME_CHARS) fail(400, `"name" is at most ${MAX_USER_NAME_CHARS} characters.`)
+    const next: UserProfile = { ...store.profile, name, onboardedAt: store.profile.onboardedAt ?? new Date().toISOString() }
+    if (raw.avatar !== undefined) {
+      if (raw.avatar === null) {
+        removeProfileAvatarFile(store)
+        delete next.avatar
+      } else {
+        const a = raw.avatar as Record<string, unknown>
+        const value = typeof a?.value === 'string' ? a.value.trim() : ''
+        if (a?.kind !== 'emoji' || !value || value.length > MAX_EMOJI_CHARS || /[\s<>]/.test(value)) {
+          fail(400, '"avatar" must be { kind: "emoji", value: "<one emoji>" } or null. Upload images with PUT /api/profile/avatar.')
+        }
+        removeProfileAvatarFile(store)
+        next.avatar = { kind: 'emoji', value }
+      }
+    }
+    store.profile = next
+    store.save()
+    return store.profile
+  })
+
+  app.get('/api/profile/avatar', async (_request, reply) => {
+    const avatar = store.profile.avatar
+    const path = avatar?.kind === 'image' ? avatarPath(store, avatar.file) : null
+    if (!avatar || avatar.kind !== 'image' || !path || !existsSync(path)) fail(404, 'The profile has no image avatar.')
+    const ext = avatar.file.slice(avatar.file.lastIndexOf('.') + 1)
+    const type = Object.entries(AVATAR_TYPES).find(([, e]) => e === ext)?.[0] ?? 'application/octet-stream'
+    void reply.header('content-type', type).header('cache-control', 'private, no-cache')
+    return reply.send(readFileSync(path))
+  })
+
+  app.delete('/api/profile/avatar', async () => {
+    removeProfileAvatarFile(store)
+    const { avatar: _dropped, ...next } = store.profile
+    store.profile = next
+    store.save()
+    return store.profile
   })
 
   app.get('/api/agents/:id/avatar', async (request, reply) => {

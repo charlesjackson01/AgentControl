@@ -412,11 +412,22 @@ export interface WorkspaceSettings {
   autoRun: boolean
   notify: boolean
   telemetry: boolean
-  /** How the user is shown in chat (sidebar, message headers). Optional. */
-  userName?: string
 }
 
 export const MAX_USER_NAME_CHARS = 80
+
+/** The person using the workspace. onboardedAt stays null until first-run setup saves a name. */
+export interface UserProfile {
+  name: string
+  avatar?: AgentAvatar
+  onboardedAt: string | null
+}
+
+export interface UserProfileInput {
+  name: string
+  /** Emoji only; null clears; omitted keeps. Upload images with PUT /api/profile/avatar. */
+  avatar?: { kind: 'emoji'; value: string } | null
+}
 
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 

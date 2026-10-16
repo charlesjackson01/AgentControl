@@ -88,6 +88,20 @@ export function summaryBlock(skill: Skill): string {
     .join('\n')
 }
 
+export const RULES_HEADER = '## Rules\nAlways follow these rules:\n'
+
+/**
+ * The agent's own part of the system prompt: its instructions plus, when it
+ * has any, its standing rules as their own section. With no rules the result
+ * is exactly `instructions`, so existing prompts stay byte-identical.
+ */
+export function agentInstructions(instructions: string, rules?: readonly string[]): string {
+  const list = (rules ?? []).map((r) => r.trim()).filter(Boolean)
+  if (list.length === 0) return instructions
+  const section = `${RULES_HEADER}${list.map((r) => `- ${r}`).join('\n')}`
+  return instructions ? `${instructions}${BLOCK_SEPARATOR}${section}` : section
+}
+
 /** System prompt = instructions + the attached skill blocks. */
 function buildSystem(instructions: string, blocks: string[]): string {
   return [instructions, blocks.length > 0 ? `${SKILLS_HEADER}${blocks.join(BLOCK_SEPARATOR)}` : '']

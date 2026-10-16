@@ -101,6 +101,8 @@ export interface PromptBudgetInput {
   endpointId: string
   skillIds: string[]
   instructions?: string
+  /** Standing rules, counted as the prompt's "Rules" section. */
+  rules?: string[]
 }
 
 /** POST /api/prompt-budget response: the plan a run would use (computed with an empty input). */
@@ -115,6 +117,8 @@ export interface PromptBudget {
   summarizedSkillIds: string[]
   /** Tools the run would offer, in the order sent upstream. */
   toolNames: string[]
+  /** Tokens the agent's rules section adds (0 without rules). */
+  rulesTokens: number
 }
 
 export interface AgentRun {
@@ -144,6 +148,15 @@ export interface AgentRun {
   projectId?: string
 }
 
+/** Agent picture: one emoji, or an uploaded image stored under data/avatars/. */
+export type AgentAvatar =
+  | { kind: 'emoji'; value: string }
+  | { kind: 'image'; file: string; updatedAt: string }
+
+export const MAX_AGENT_RULES = 20
+export const MAX_AGENT_RULE_CHARS = 500
+export const MAX_AVATAR_BYTES = 1024 * 1024
+
 export interface Agent {
   id: string
   name: string
@@ -169,6 +182,14 @@ export interface Agent {
    * applied, kept by agent updates, and cleared when the project is deleted.
    */
   projectId?: string
+  /** Chat-first Part 1. Unset means the UI shows initials. */
+  avatar?: AgentAvatar
+  /** Standing rules, kept apart from `instructions`; sent as a "Rules" prompt section. */
+  rules?: string[]
+  /** Chip / avatar colour as '#rrggbb'. */
+  color?: string
+  pinned?: boolean
+  hidden?: boolean
 }
 
 export interface AgentInput {
@@ -183,6 +204,14 @@ export interface AgentInput {
   /** 0–2. Omitted keeps the stored value (unset on create). */
   temperature?: number
   skillIds: string[]
+  /** Omitted keeps the stored value on update. */
+  rules?: string[]
+  /** null clears it. */
+  color?: string | null
+  pinned?: boolean
+  hidden?: boolean
+  /** Emoji only; images go through PUT /api/agents/:id/avatar. null clears it. */
+  avatar?: { kind: 'emoji'; value: string } | null
 }
 
 export interface Project {

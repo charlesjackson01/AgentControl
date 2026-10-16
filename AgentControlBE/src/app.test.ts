@@ -1992,3 +1992,132 @@ describe('endpoint proxyUrl field', () => {
     expect((cleared.json() as Endpoint).proxyUrl).toBeUndefined()
   })
 })
+
+describe('chat-first Part 1: agent profile fields', () => {
+  async function agentBody(endpointId: string, extra: Record<string, unknown> = {}) {
+    return { name: 'Profiled', description: '', instructions: 'Be brief.', modelId: 'test-model', endpointId, skillIds: [], ...extra }
+  }
+
+  it('creates and keeps rules, color, pinned, hidden and an emoji avatar', async () => {
+    const { endpoint } = await makeRunner()
+    const res = await inject('POST', '/api/agents', await agentBody(endpoint.id, {
+      rules: ['  Answer in English.  ', '', 'Never guess numbers.'],
+      color: '#AABBCC',
+      pinned: true,
+      hidden: false,
+      avatar: { kind: 'emoji', value: '🦊' },
+    }))
+    expect(res.statusCode).toBe(201)
+    const agent = res.json() as Agent
+    expect(agent.rules).toEqual(['Answer in English.', 'Never guess numbers.'])
+    expect(agent.color).toBe('#aabbcc')
+    expect(agent.pinned).toBe(true)
+    expect(agent.hidden).toBe(false)
+    expect(agent.avatar).toEqual({ kind: 'emoji', value: '🦊' })
+
+    // An update that omits them keeps them; null clears color and avatar.
+    const kept = await inject('PUT', `/api/agents/${agent.id}`, await agentBody(endpoint.id))
+    expect((kept.json() as Agent).rules).toEqual(agent.rules)
+    expect((kept.json() as Agent).avatar).toEqual(agent.avatar)
+    const cleared = await inject('PUT', `/api/agents/${agent.id}`, await agentBody(endpoint.id, { color: null, avatar: null }))
+    const next = cleared.json() as Agent
+    expect(next.color).toBeUndefined()
+    expect(next.avatar).toBeUndefined()
+    expect(next.rules).toEqual(agent.rules)
+
+    // Persisted across a reload.
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.agents.find((a) => a.id === agent.id)?.rules).toEqual(agent.rules)
+  })
+
+  it('rejects bad profile fields with 400', async () => {
+    const { endpoint } = await makeRunner()
+    for (const extra of [
+      { rules: 'one rule' },
+      { rules: Array.from({ length: 21 }, (_, i) => `r${i}`) },
+      { rules: ['x'.repeat(501)] },
+      { color: 'red' },
+      { pinned: 'yes' },
+      { avatar: { kind: 'image', file: '../store.json' } },
+      { avatar: { kind: 'emoji', value: '' } },
+    ]) {
+      const res = await inject('POST', '/api/agents', await agentBody(endpoint.id, extra))
+      expect(res.statusCode, JSON.stringify(extra)).toBe(400)
+    }
+  })
+
+  it('sends rules as their own section and leaves rule-less prompts byte-identical', async () => {
+    const mock = mockChat('ok')
+    const { agent, endpoint } = await makeRunner()
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    const before = lastRequest(mock).messages?.[0]?.content ?? ''
+    expect(before).not.toContain('## Rules')
+
+    await inject('PUT', `/api/agents/${agent.id}`, {
+      name: 'Runner', description: '', instructions: 'Be brief.', modelId: 'test-model',
+      endpointId: endpoint.id, skillIds: ['summarization'], rules: ['Answer in English.'],
+    })
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    const after = lastRequest(mock).messages?.[0]?.content ?? ''
+    expect(after.startsWith('Be brief.\n\n## Rules\nAlways follow these rules:\n- Answer in English.')).toBe(true)
+    expect(after.replace('\n\n## Rules\nAlways follow these rules:\n- Answer in English.', '')).toBe(before)
+  })
+
+  it('counts rules in the prompt budget', async () => {
+    const { endpoint } = await makeRunner()
+    const base = await inject('POST', '/api/prompt-budget', { endpointId: endpoint.id, skillIds: [], instructions: 'Hi.' })
+    expect(base.statusCode).toBe(200)
+    const withRules = await inject('POST', '/api/prompt-budget', {
+      endpointId: endpoint.id, skillIds: [], instructions: 'Hi.', rules: ['x'.repeat(400)],
+    })
+    expect(withRules.json().estimatedTokens).toBeGreaterThan(base.json().estimatedTokens)
+    expect(base.json().rulesTokens).toBe(0)
+    expect(withRules.json().rulesTokens).toBeGreaterThan(0)
+  })
+
+  it('uploads, serves, replaces and deletes an image avatar under data/avatars', async () => {
+    const { agent } = await makeRunner()
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3])
+    const up = await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}/avatar`, payload: png, headers: { 'content-type': 'image/png' } })
+    expect(up.statusCode).toBe(200)
+    const withImage = up.json() as Agent
+    expect(withImage.avatar).toMatchObject({ kind: 'image', file: `${agent.id}.png` })
+    expect(existsSync(join(dir, 'avatars', `${agent.id}.png`))).toBe(true)
+
+    const got = await app.inject({ method: 'GET', url: `/api/agents/${agent.id}/avatar` })
+    expect(got.statusCode).toBe(200)
+    expect(got.headers['content-type']).toBe('image/png')
+    expect(got.rawPayload.equals(png)).toBe(true)
+
+    const jpg = await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}/avatar`, payload: Buffer.from([0xff, 0xd8, 1]), headers: { 'content-type': 'image/jpeg' } })
+    expect((jpg.json() as Agent).avatar).toMatchObject({ file: `${agent.id}.jpg` })
+    expect(existsSync(join(dir, 'avatars', `${agent.id}.png`))).toBe(false)
+
+    const del = await inject('DELETE', `/api/agents/${agent.id}/avatar`)
+    expect(del.statusCode).toBe(200)
+    expect((del.json() as Agent).avatar).toBeUndefined()
+    expect(existsSync(join(dir, 'avatars', `${agent.id}.jpg`))).toBe(false)
+    expect((await app.inject({ method: 'GET', url: `/api/agents/${agent.id}/avatar` })).statusCode).toBe(404)
+  })
+
+  it('rejects other types, oversized images and unknown agents', async () => {
+    const { agent } = await makeRunner()
+    const svg = await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}/avatar`, payload: '<svg/>', headers: { 'content-type': 'image/svg+xml' } })
+    expect(svg.statusCode).toBe(415)
+    const big = await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}/avatar`, payload: Buffer.alloc(1024 * 1024 + 1), headers: { 'content-type': 'image/png' } })
+    expect(big.statusCode).toBe(413)
+    const missing = await app.inject({ method: 'PUT', url: '/api/agents/agt_nope/avatar', payload: Buffer.from([1]), headers: { 'content-type': 'image/png' } })
+    expect(missing.statusCode).toBe(404)
+  })
+
+  it('removes the avatar file when the agent is deleted', async () => {
+    const { endpoint } = await makeRunner()
+    const agent = (await inject('POST', '/api/agents', await agentBody(endpoint.id))).json() as Agent
+    expect(agent.isPrimary).toBe(false)
+    await app.inject({ method: 'PUT', url: `/api/agents/${agent.id}/avatar`, payload: Buffer.from([1, 2]), headers: { 'content-type': 'image/webp' } })
+    expect(existsSync(join(dir, 'avatars', `${agent.id}.webp`))).toBe(true)
+    const res = await inject('DELETE', `/api/agents/${agent.id}`)
+    expect(res.statusCode).toBe(204)
+    expect(existsSync(join(dir, 'avatars', `${agent.id}.webp`))).toBe(false)
+  })
+})

@@ -19,7 +19,7 @@
  */
 import { fail, uid } from './http.js'
 import { mentionCandidates, resolveMentions } from './mentions.js'
-import { attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE, SKILL_HEADROOM } from './prompt.js'
+import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE, SKILL_HEADROOM } from './prompt.js'
 import { executeRun } from './runs.js'
 import type {
   Agent,
@@ -2011,7 +2011,7 @@ export function fitTaskInput(
 
   const skills = attachedSkills(store.skills, assignee.skillIds)
   const overhead = planPrompt({
-    instructions: assignee.instructions,
+    instructions: agentInstructions(assignee.instructions, assignee.rules),
     skills,
     input: '',
     contextWindow: endpoint.contextWindow,

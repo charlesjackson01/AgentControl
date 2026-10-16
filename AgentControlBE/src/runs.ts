@@ -5,7 +5,7 @@
  * projectId.
  */
 import { fail, uid } from './http.js'
-import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
+import { agentInstructions, attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
@@ -81,7 +81,7 @@ export async function executeRun(
   // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
   const injectedSkills = attachedSkills(store.skills, agent.skillIds)
   const plan = planPrompt({
-    instructions: agent.instructions,
+    instructions: agentInstructions(agent.instructions, agent.rules),
     skills: injectedSkills,
     input,
     contextWindow: endpoint.contextWindow,

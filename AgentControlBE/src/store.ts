@@ -43,6 +43,8 @@ export interface WorkspaceStore {
   notes: Note[]
   /** Absolute root under which project folders are created. */
   projectsRoot: string
+  /** Folder holding uploaded agent avatars (data/avatars beside the store). */
+  avatarsDir: string
   /** Migration bookkeeping. Persisted, never served by any route. */
   meta: StoreMeta
   /** Persist to disk; returns false (and logs) when the write fails. */
@@ -535,6 +537,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
   const store: WorkspaceStore = {
     ...data,
     projectsRoot,
+    avatarsDir: join(dir, 'avatars'),
     endpointKeys,
     save() {
       const temporary = `${path}.${randomUUID()}.tmp`

@@ -301,7 +301,7 @@ describe('POST /api/prompt-budget', () => {
     expect(res.statusCode).toBe(200)
     const budget = res.json() as PromptBudget
     expect(Object.keys(budget).sort()).toEqual(
-      ['contextWindow', 'estimatedTokens', 'mode', 'responseReserve', 'summarizedSkillIds', 'toolNames'],
+      ['contextWindow', 'estimatedTokens', 'mode', 'responseReserve', 'rulesTokens', 'summarizedSkillIds', 'toolNames'],
     )
     expect(budget).toMatchObject({ contextWindow: 8192, responseReserve: RESPONSE_RESERVE, mode: 'summary' })
     expect(budget.estimatedTokens + RESPONSE_RESERVE + SKILL_HEADROOM).toBeLessThanOrEqual(8192)
@@ -354,6 +354,7 @@ describe('POST /api/prompt-budget', () => {
     expect(none).toEqual({
       contextWindow: 8192,
       responseReserve: RESPONSE_RESERVE,
+      rulesTokens: 0,
       estimatedTokens: 0,
       mode: 'full',
       summarizedSkillIds: [],

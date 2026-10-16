@@ -2,13 +2,35 @@ import { useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import { MenuIcon, PanelIcon, SearchIcon } from './icons'
-import { allNav } from '../lib/nav'
+import { allNav, CHATS_LABEL } from '../lib/nav'
+import ConversationsProvider from '../state/ConversationsProvider'
+import ProfileProvider from '../state/ProfileProvider'
+import { useProfile } from '../state/profile-context'
+import { needsOnboarding } from '../lib/profile'
+import Onboarding from '../pages/Onboarding'
 import { useSidebar } from '../hooks/useSidebar'
 
 export default function AppShell() {
+  return (
+    <ProfileProvider>
+      <OnboardingGate />
+    </ProfileProvider>
+  )
+}
+
+/** First-run setup before the app; never blocks when the BE has no profile route. */
+function OnboardingGate() {
+  const { profile, setProfile } = useProfile()
+  if (profile === undefined) return <div className="shell" aria-busy="true" />
+  if (profile && needsOnboarding(profile)) return <Onboarding profile={profile} onDone={setProfile} />
+  return <Shell />
+}
+
+function Shell() {
   const sidebar = useSidebar()
   const { pathname } = useLocation()
   const current = allNav.find((n) => pathname.startsWith(n.to))
+  const crumb = current?.label ?? (pathname === '/' || pathname.startsWith('/c/') ? CHATS_LABEL : 'Overview')
 
   useEffect(() => {
     if (!sidebar.mobileOpen) return
@@ -20,6 +42,7 @@ export default function AppShell() {
   }, [sidebar])
 
   return (
+    <ConversationsProvider>
     <div className="shell">
       <Sidebar {...sidebar} />
 
@@ -40,7 +63,7 @@ export default function AppShell() {
           <div className="crumbs">
             <span>AgentControl</span>
             <span className="crumbs__sep">/</span>
-            <span className="crumbs__current">{current?.label ?? 'Overview'}</span>
+            <span className="crumbs__current">{crumb}</span>
           </div>
 
           <div className="topbar__actions">
@@ -55,5 +78,6 @@ export default function AppShell() {
         <Outlet />
       </div>
     </div>
+    </ConversationsProvider>
   )
 }

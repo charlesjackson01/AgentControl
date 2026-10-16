@@ -1,0 +1,114 @@
+/* Pure helpers for the chat-first sidebar and thread (tests/conversations.test.mjs). */
+import type { Agent, ChatMessage, ConversationSummary } from './types.ts'
+
+type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
+type Summary = Pick<ConversationSummary, 'id' | 'agentId' | 'updatedAt'>
+
+function rank(c: Summary, agents: Map<string, AgentLike>): number {
+  const agent = agents.get(c.agentId)
+  if (agent?.isPrimary) return 0
+  if (agent?.pinned) return 1
+  return 2
+}
+
+/** Primary's DM first, then pinned agents, then by last activity (updatedAt, newest first). */
+export function sortConversations<T extends Summary>(list: readonly T[], agents: readonly AgentLike[]): T[] {
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  return [...list].sort(
+    (a, b) => rank(a, byId) - rank(b, byId) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id),
+  )
+}
+
+/** Drops DMs with hidden agents unless `showHidden`, and DMs whose agent no longer exists. */
+export function visibleConversations<T extends Summary>(list: readonly T[], agents: readonly AgentLike[], showHidden = false): T[] {
+  const byId = new Map(agents.map((a) => [a.id, a]))
+  return list.filter((c) => {
+    const agent = byId.get(c.agentId)
+    return Boolean(agent) && (showHidden || !agent?.hidden)
+  })
+}
+
+export function hiddenCount(list: readonly Summary[], agents: readonly AgentLike[]): number {
+  return visibleConversations(list, agents, true).length - visibleConversations(list, agents, false).length
+}
+
+/** The Primary agent's DM. */
+export function primaryConversation<T extends Summary>(list: readonly T[], agents: readonly AgentLike[]): T | undefined {
+  const primary = agents.find((a) => a.isPrimary)
+  return primary ? list.find((c) => c.agentId === primary.id) : undefined
+}
+
+/** One-line preview: "You: " for the user, whitespace collapsed, clipped to `max` characters. */
+export function previewText(last: Pick<ChatMessage, 'role' | 'content'> | null | undefined, max = 80): string {
+  if (!last) return 'No messages yet'
+  const body = last.content.replace(/\s+/g, ' ').trim() || '…'
+  const full = (last.role === 'user' ? 'You: ' : '') + body
+  const chars = Array.from(full)
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : full
+}
+
+/** Compact relative time for sidebar rows: "now", "5m", "3h", "Yesterday", "Mon", "Oct 3", "Oct 3, 2025". */
+export function relativeTime(iso: string, now: Date = new Date()): string {
+  const then = new Date(iso)
+  const t = then.getTime()
+  if (Number.isNaN(t)) return ''
+  const diff = now.getTime() - t
+  if (diff < 60_000) return 'now'
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m`
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const days = Math.round((startOfDay(now) - startOfDay(then)) / 86_400_000)
+  if (days <= 0) return `${Math.floor(diff / 3_600_000)}h`
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return then.toLocaleDateString('en-US', { weekday: 'short' })
+  if (then.getFullYear() === now.getFullYear()) return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+/** Badge text: "" for none, "99+" past 99. */
+export function unreadLabel(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return ''
+  return n > 99 ? '99+' : String(Math.floor(n))
+}
+
+export function totalUnread(list: readonly Pick<ConversationSummary, 'unreadCount'>[]): number {
+  return list.reduce((sum, c) => sum + Math.max(0, c.unreadCount || 0), 0)
+}
+
+/** Optimistic "read": zero the badge and stamp lastReadAt. Same array back when nothing changes. */
+export function markReadLocally<T extends Pick<ConversationSummary, 'id' | 'unreadCount' | 'lastReadAt'>>(
+  list: T[],
+  id: string,
+  at: string = new Date().toISOString(),
+): T[] {
+  const i = list.findIndex((c) => c.id === id)
+  if (i < 0 || list[i].unreadCount === 0) return list
+  const next = [...list]
+  next[i] = { ...list[i], unreadCount: 0, lastReadAt: at }
+  return next
+}
+
+/** Insert or replace a summary (e.g. the POST /read response). */
+export function upsertConversation<T extends { id: string }>(list: readonly T[], c: T): T[] {
+  const i = list.findIndex((x) => x.id === c.id)
+  if (i < 0) return [...list, c]
+  const next = [...list]
+  next[i] = c
+  return next
+}
+
+/** Merge message lists by id (later copies win), oldest first. */
+export function mergeMessages(...lists: readonly (readonly ChatMessage[])[]): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>()
+  for (const list of lists) for (const m of list) byId.set(m.id, m)
+  return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+}
+
+/** `before` cursor for the next older page: createdAt of the oldest message shown. */
+export function olderCursor(messages: readonly ChatMessage[]): string | undefined {
+  return messages[0]?.createdAt
+}
+
+/** Mirrors the BE: assistant messages newer than lastReadAt (null = never opened -> all). */
+export function countUnread(messages: readonly Pick<ChatMessage, 'role' | 'createdAt'>[], lastReadAt: string | null): number {
+  return messages.filter((m) => m.role === 'assistant' && (lastReadAt === null || m.createdAt > lastReadAt)).length
+}

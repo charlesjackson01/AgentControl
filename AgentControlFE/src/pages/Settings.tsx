@@ -7,6 +7,8 @@ import { useAsync } from '../hooks/useAsync'
 import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_LABELS, OPENROUTER_DEFAULT_BASE_URL } from '../lib/api'
 import type { Endpoint, EndpointInput, EndpointKind } from '../lib/types'
 import { PROXY_URL_HINT, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
+import UserProfileForm from '../components/UserProfileForm'
+import { useProfile } from '../state/profile-context'
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
@@ -346,7 +348,29 @@ function EndpointsSection() {
    )
  }
 
- export default function Settings() {
+ function ProfileSection() {
+  const { profile, setProfile } = useProfile()
+  return (
+    <section className="section" id="profile">
+      <div className="section__head">
+        <h2 className="section__title">Your profile</h2>
+      </div>
+      {profile === undefined ? (
+        <p className="field__hint">Loading…</p>
+      ) : profile === null ? (
+        <p className="field__hint">This server does not support profiles yet.</p>
+      ) : (
+        <div className="formcard">
+          <div className="formsection">
+            <UserProfileForm profile={profile} onSaved={setProfile} />
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+export default function Settings() {
   const { theme, setTheme } = useTheme()
   const [autoRun, setAutoRun] = useState(true)
   const [notify, setNotify] = useState(true)
@@ -354,6 +378,7 @@ function EndpointsSection() {
 
   return (
     <PageShell eyebrow="Workspace" title="Settings" subtitle="Workspace defaults, appearance, and runtime behavior.">
+      <ProfileSection />
       <EndpointsSection />
 
       <section className="section">

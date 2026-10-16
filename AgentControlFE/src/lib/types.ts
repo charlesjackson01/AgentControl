@@ -461,3 +461,71 @@ export type ProjectInput = {
   desc?: string
   teamAgentIds?: string[]
 }
+
+/* ==========================================================================
+   Chat-first Part 2: conversations. Mirrors BE shared/types.ts @ 8a9acd3
+   (feat/chat-first-p2-be). One DM per agent, auto-created by GET /api/conversations.
+   ========================================================================== */
+
+/** One message in a chat-first conversation (independent of run pruning). */
+export type ChatMessage = {
+  id: string
+  conversationId: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: string
+  /** The run that produced this message, when there was one. */
+  runId?: string
+}
+
+/** A 1:1 chat with one agent. One per agent, created lazily. */
+export type Conversation = {
+  id: string
+  kind: 'dm'
+  agentId: string
+  createdAt: string
+  /** Time of the newest message (or creation). */
+  updatedAt: string
+  /** Assistant messages newer than this are unread; null = never opened. */
+  lastReadAt: string | null
+}
+
+export type ConversationSummary = Conversation & {
+  lastMessage: ChatMessage | null
+  unreadCount: number
+}
+
+export const CONVERSATION_PAGE_SIZE = 50
+export const MAX_CONVERSATION_PAGE_SIZE = 200
+
+/** GET /api/conversations/:id/messages response (messages oldest -> newest). `hasMore` since BE 2a6078c. */
+export type ConversationMessagesResponse = {
+  conversation: Conversation
+  messages: ChatMessage[]
+  hasMore?: boolean
+}
+
+/** POST /api/conversations/:id/messages response (BE 2a6078c). */
+export type ConversationSendResult = {
+  conversation: ConversationSummary
+  /** This turn's messages (user, and assistant/error when there is one). */
+  messages: ChatMessage[]
+  run: { id: string; status: AgentRun['status']; error?: string | null }
+}
+
+/** Normalized page for the thread view. */
+export type ChatMessagePage = Omit<ConversationMessagesResponse, 'hasMore'> & { hasMore: boolean }
+
+/** Chat-first: the workspace owner's profile (GET/PUT /api/profile). */
+export type UserProfile = {
+  name: string
+  avatar?: AgentAvatar
+  /** null until first-run setup is saved. */
+  onboardedAt: string | null
+}
+
+/** PUT /api/profile body (BE c16c83a). `name` required; the first save with a name stamps onboardedAt. Emoji only; images via /api/profile/avatar. */
+export type UserProfileInput = {
+  name?: string
+  avatar?: { kind: 'emoji'; value: string } | null
+}

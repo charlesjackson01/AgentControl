@@ -1,4 +1,5 @@
 import { MAX_AVATAR_BYTES } from './types'
+import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
 import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, ReviewResult, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
 
 /* ==========================================================================
@@ -44,7 +45,7 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? ''
  */
 const AUTH_TOKEN = import.meta.env.VITE_AUTH_TOKEN
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Merge existing request headers, auth header, and the JSON content type.
   const headers: Record<string, string> = {}
   if (AUTH_TOKEN) {
@@ -111,10 +112,16 @@ function avatarUploadMessage(status: number, serverMessage: string | null): stri
   return serverMessage ?? 'Could not upload the avatar.'
 }
 
-async function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
+/** Absolute URL for an API path (honours VITE_API_BASE). */
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`
+}
+
+/** PUT a raw image body to an avatar route; friendly 400/413/415 messages. */
+export async function putAvatarImage<T>(path: string, file: Blob): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': file.type || 'application/octet-stream' }
   if (AUTH_TOKEN) headers.Authorization = `Bearer ${AUTH_TOKEN}`
-  const res = await fetch(agentAvatarUrl(agentId), { method: 'PUT', headers, body: file })
+  const res = await fetch(apiUrl(path), { method: 'PUT', headers, body: file })
   if (!res.ok) {
     let serverMessage: string | null = null
     try {
@@ -125,10 +132,67 @@ async function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
     }
     throw new ApiError(avatarUploadMessage(res.status, serverMessage), res.status)
   }
-  return (await res.json()) as Agent
+  return (await res.json()) as T
 }
 
+function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
+  return putAvatarImage<Agent>(`/api/agents/${encodeURIComponent(agentId)}/avatar`, file)
+}
+
+/* --------------------------------------------------------------------------
+   Chat-first Part 2 (BE 8a9acd3):
+     GET  /api/conversations                               -> ConversationSummary[] (auto-creates DMs)
+     GET  /api/conversations/:id/messages?before=&limit=   -> { conversation, messages } oldest->newest
+          `before` = ISO createdAt of the oldest message shown (exclusive); limit 1..200, default 50
+     POST /api/conversations/:id/read                      -> ConversationSummary
+   No send route: messages are sent with POST /api/agents/:id/run and the run
+   appends both turns to the agent's DM.
+   -------------------------------------------------------------------------- */
+
 export const api = {
+  async listConversations(): Promise<ConversationSummary[]> {
+    return request<ConversationSummary[]>('/api/conversations')
+  },
+
+  async listConversationMessages(id: string, options?: { before?: string; limit?: number }): Promise<ChatMessagePage> {
+    const limit = options?.limit ?? CONVERSATION_PAGE_SIZE
+    const qs = new URLSearchParams({ limit: String(limit) })
+    if (options?.before) qs.set('before', options.before)
+    const body = await request<ConversationMessagesResponse>(`/api/conversations/${encodeURIComponent(id)}/messages?${qs}`)
+    // BE 2a6078c sends hasMore; older BEs: a full page means there may be more.
+    return { conversation: body.conversation, messages: body.messages, hasMore: body.hasMore ?? body.messages.length >= limit }
+  },
+
+  /**
+   * Send in a DM: POST /api/conversations/:id/messages {text} -> {conversation, messages, run}.
+   * The only place the chat screen sends from. Falls back to the agent run route
+   * (+ refetch) when the BE predates the send route (404 with no conversation match).
+   */
+  async sendConversationMessage(conversationId: string, agentId: string, text: string): Promise<ConversationSendResult> {
+    try {
+      return await request<ConversationSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ text }),
+      })
+    } catch (err) {
+      if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405) || !/^Route /.test(err.message)) throw err
+      const run = await api.runAgent(agentId, text)
+      const page = await api.listConversationMessages(conversationId)
+      const [summary] = (await api.listConversations()).filter((c) => c.id === conversationId)
+      return {
+        conversation: summary,
+        messages: page.messages.filter((m) => m.runId === run.id),
+        run: { id: run.id, status: run.status, error: run.error },
+      }
+    }
+  },
+
+  async markConversationRead(id: string): Promise<ConversationSummary> {
+    return request<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/read`, { method: 'POST', body: '{}' })
+  },
+
+
+
   /** Upload (replace) an agent's image avatar. Resolves with the updated agent when the BE returns it. */
   async uploadAgentAvatar(id: string, file: Blob): Promise<Agent> {
     return uploadAvatar(id, file)

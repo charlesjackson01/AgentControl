@@ -89,6 +89,8 @@ export type Endpoint = {
   proxyUrl?: string
   /** Sends chat_template_kwargs.enable_thinking=false on every upstream call. */
   disableThinking?: boolean
+  /** Reply budget (max_tokens) for runs; unset means the server default (4096). */
+  maxOutputTokens?: number
 }
 
 /** One model served by an endpoint (GET /api/endpoints/:id/models). */
@@ -161,6 +163,8 @@ export type EndpointInput = {
   proxyUrl?: string | null
   /** Optional. Omit to keep on update; false clears it. */
   disableThinking?: boolean
+  /** Optional integer, 0 < n < contextWindow. Omit to keep on update; null clears it (server default). */
+  maxOutputTokens?: number | null
 }
 
 export type AgentRun = {

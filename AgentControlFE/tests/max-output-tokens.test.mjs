@@ -55,3 +55,14 @@ describe('maxOutputTokensLabel', () => {
     assert.equal(MAX_OUTPUT_TOKENS_PLACEHOLDER, '4096 (default)')
   })
 })
+
+import { endpointServerErrorField } from '../src/lib/max-output-tokens.ts'
+describe('endpointServerErrorField', () => {
+  it('routes BE 400s to their field', () => {
+    assert.equal(endpointServerErrorField('"maxOutputTokens" must be a whole number above 0 and below the context window (8192), or null for the default.'), 'maxOutputTokens')
+    assert.equal(endpointServerErrorField('"contextWindow" must be above the endpoint maxOutputTokens'), 'maxOutputTokens')
+    assert.equal(endpointServerErrorField('"contextWindow" must be a positive integer'), 'contextWindow')
+    assert.equal(endpointServerErrorField('Name is required'), null)
+    assert.equal(endpointServerErrorField(null), null)
+  })
+})

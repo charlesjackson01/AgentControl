@@ -33,3 +33,11 @@ export function maxOutputTokensPatch(value: string, stored: number | undefined |
 export function maxOutputTokensLabel(n: number | undefined | null): string {
   return typeof n === 'number' ? ` · reply ${n}` : ''
 }
+
+/** Which endpoint-form field a server 400 belongs to, so it can render inline; null keeps it form-level. */
+export function endpointServerErrorField(message: string | null | undefined): 'maxOutputTokens' | 'contextWindow' | null {
+  if (!message) return null
+  if (/maxOutputTokens|reply budget|max reply/i.test(message)) return 'maxOutputTokens'
+  if (/contextWindow|context window/i.test(message)) return 'contextWindow'
+  return null
+}

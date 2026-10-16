@@ -6,7 +6,7 @@ import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
-import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE } from './prompt.js'
+import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { clearAgentConversations, ensureDm, messagesOf, summarize } from './conversations.js'
@@ -55,6 +55,20 @@ function resolveBaseUrl(kind: EndpointKind, baseUrl: string): string {
   const trimmed = baseUrl.trim()
   if (!trimmed && kind === 'openrouter') return OPENROUTER_DEFAULT_BASE_URL
   return trimBase(trimmed)
+}
+
+/**
+ * maxOutputTokens for a create/update: omitted keeps `current`, null clears.
+ * Must be an integer with 0 < n < contextWindow (re-checked when only the
+ * window changes, so a shrunk window cannot strand an oversized budget).
+ */
+function resolveMaxOutputTokens(raw: unknown, current: number | undefined, contextWindow: number): number | undefined {
+  const value = raw === undefined ? current : raw === null ? undefined : raw
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0 || value >= contextWindow) {
+    fail(400, `"maxOutputTokens" must be a whole number above 0 and below the context window (${contextWindow}), or null for the default.`)
+  }
+  return value as number
 }
 
 function assertEndpointInput(input: EndpointInput, storedKey: string): void {
@@ -645,10 +659,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       skills: attachedSkills(store.skills, skillIds),
       input: '',
       contextWindow: endpoint.contextWindow,
+      responseReserve: replyReserve(endpoint),
     })
     return {
       contextWindow: endpoint.contextWindow,
-      responseReserve: RESPONSE_RESERVE,
+      responseReserve: replyReserve(endpoint),
       estimatedTokens: plan.estimatedTokens,
       mode: plan.mode,
       summarizedSkillIds: plan.summarizedSkillIds,
@@ -961,6 +976,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       ...(raw.proxyUrl !== undefined ? { proxyUrl: raw.proxyUrl } : {}),
     }
     assertEndpointInput(input, '')
+    const maxOutputTokens = resolveMaxOutputTokens(raw.maxOutputTokens, undefined, input.contextWindow)
     if (raw.disableThinking !== undefined && typeof raw.disableThinking !== 'boolean') fail(400, '"disableThinking" must be true or false.')
     const proxyUrl = resolveProxy(raw.proxyUrl, undefined)
     const id = uid('ep')
@@ -980,6 +996,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       ...(input.timeoutMs !== undefined ? { timeoutMs: Math.floor(input.timeoutMs) } : {}),
       ...(proxyUrl ? { proxyUrl } : {}),
       ...(raw.disableThinking === true ? { disableThinking: true } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
     }
     store.endpoints = [endpoint, ...store.endpoints]
     store.endpointModels[id] = [endpoint.defaultModel]
@@ -1005,6 +1022,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       ...(raw.proxyUrl !== undefined ? { proxyUrl: raw.proxyUrl } : {}),
     }
     assertEndpointInput(merged, store.endpointKeys[id] ?? '')
+    const maxOutputTokens = resolveMaxOutputTokens(raw.maxOutputTokens, current.maxOutputTokens, Math.floor(merged.contextWindow))
     if (raw.disableThinking !== undefined && typeof raw.disableThinking !== 'boolean') fail(400, '"disableThinking" must be true or false.')
     const proxyUrl = resolveProxy(raw.proxyUrl, current.proxyUrl)
     // Write-only key semantics: omitted keeps, non-empty replaces, "" clears.
@@ -1028,6 +1046,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     else delete next.proxyUrl
     if (raw.disableThinking === true) next.disableThinking = true
     else if (raw.disableThinking === false) delete next.disableThinking
+    if (maxOutputTokens !== undefined) next.maxOutputTokens = maxOutputTokens
+    else delete next.maxOutputTokens
     store.endpoints = store.endpoints.map((e, i) => (i === index ? next : e))
     const models = store.endpointModels[id] ?? []
     if (!models.includes(next.defaultModel)) store.endpointModels[id] = [...models, next.defaultModel]

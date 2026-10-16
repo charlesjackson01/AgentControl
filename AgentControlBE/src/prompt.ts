@@ -17,6 +17,11 @@ import type { ToolDeclaration } from './upstream.js'
 
 /** Tokens kept free for the model's reply (the upstream max_tokens ceiling). */
 export const RESPONSE_RESERVE = 4096
+
+/** The endpoint's reply budget: its maxOutputTokens, else RESPONSE_RESERVE. */
+export function replyReserve(endpoint: { maxOutputTokens?: number }): number {
+  return endpoint.maxOutputTokens ?? RESPONSE_RESERVE
+}
 /**
  * Tokens a summarized plan aims to leave free for history turns and tool
  * results (so a summarized skill can actually be read). Full mode does not
@@ -36,6 +41,8 @@ export interface PromptPlanInput {
   /** The user's message ('' for a budget preview). */
   input: string
   contextWindow: number
+  /** Tokens kept free for the reply (replyReserve(endpoint)); defaults to RESPONSE_RESERVE. */
+  responseReserve?: number
 }
 
 export interface PromptPlan {
@@ -149,8 +156,8 @@ function schemaChars(tools: ToolDeclaration[]): number {
  * the full one is dropped. 'too-large' means the plan still breaks the hard
  * limit, so the run would be rejected.
  */
-export function planPrompt({ instructions, skills, input, contextWindow }: PromptPlanInput): PromptPlan {
-  const hardLimit = contextWindow - RESPONSE_RESERVE
+export function planPrompt({ instructions, skills, input, contextWindow, responseReserve = RESPONSE_RESERVE }: PromptPlanInput): PromptPlan {
+  const hardLimit = contextWindow - responseReserve
   const budget = hardLimit - SKILL_HEADROOM
   const baseTools = skillTools(skills)
   const getSkill = baseTools.some((t) => t.name === GET_SKILL) ? undefined : toolDeclaration(GET_SKILL)

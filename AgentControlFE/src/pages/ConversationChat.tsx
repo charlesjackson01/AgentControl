@@ -11,7 +11,7 @@ import { mergeMessages, olderCursor } from '../lib/conversations'
 import type { ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
-import { EMPTY_REPLY_ERROR, isEmptyReply, runReplyView } from '../lib/run-reply'
+import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
@@ -139,15 +139,14 @@ export default function ConversationChat() {
       const result = await api.sendConversationMessage(conversationId, agent.id, text)
       setMessages((prev) => mergeMessages(prev ?? [], result.messages))
       if (result.conversation) upsert(result.conversation)
-      // A failed run may have stored no assistant message; surface its error inline.
-      const answered = result.messages.some((m) => m.role === 'assistant' && !isEmptyReply(m.content))
-      if (!answered) {
-        const view = runReplyView({ status: result.run.status, output: '', error: result.run.error })
-        setPending({ text, ts: new Date().toISOString(), status: 'error', error: view.text })
+      // A flagged failed reply renders as its own error bubble; otherwise surface run.error once.
+      const outcome = liveRunOutcome(result.run, result.messages)
+      if (outcome.kind === 'pending') {
+        setPending({ text, ts: new Date().toISOString(), status: 'error', error: outcome.text })
         setRunError(null)
       } else {
         setPending(null)
-        setRunError(result.run.status === 'failed' ? (result.run.error || 'The run failed.') : null)
+        setRunError(outcome.kind === 'banner' ? (outcome.text ?? 'The run failed.') : null)
       }
     } catch (err) {
       setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
@@ -229,7 +228,10 @@ export default function ConversationChat() {
                 <p className="chat__empty">{agent ? `Say hi to ${agent.name}.` : 'No messages yet.'}</p>
               )}
               {messages.map((m, i) => {
+                const lastErrorIdx = messages.length - 1
                 const prev = messages[i - 1]
+                const view = chatMessageView(m)
+                const retryText = view.kind === 'error' ? retryTextBefore(messages, i) : undefined
                 const gap = prev ? new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() : Infinity
                 return (
                   <div className="chat__turn" key={m.id}>
@@ -238,17 +240,18 @@ export default function ConversationChat() {
                         <span>{turnTime(m.createdAt)}</span>
                       </div>
                     )}
-                    {m.role === 'user' ? (
-                      <Bubble kind="user">
-                        <div className="bubble__body">{m.content}</div>
-                      </Bubble>
-                    ) : isEmptyReply(m.content) ? (
+                    {view.kind === 'error' ? (
                       <Bubble kind="error">
-                        <div className="bubble__body">{EMPTY_REPLY_ERROR}</div>
+                        <div className="bubble__body">{view.text}</div>
+                        {retryText !== undefined && i === lastErrorIdx && (
+                          <button type="button" className="chat__retry" onClick={() => void send(retryText)} disabled={sending}>
+                            Retry
+                          </button>
+                        )}
                       </Bubble>
                     ) : (
-                      <Bubble kind="assistant">
-                        <div className="bubble__body">{m.content}</div>
+                      <Bubble kind={view.kind}>
+                        <div className="bubble__body">{view.text}</div>
                       </Bubble>
                     )}
                   </div>

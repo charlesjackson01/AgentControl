@@ -113,3 +113,15 @@ describe('messages', () => {
     assert.equal(olderCursor([]), undefined)
   })
 })
+
+describe('previewText error replies', () => {
+  it('prefixes failed replies with Failed:', async () => {
+    const { previewText, isErrorPreview } = await import('../src/lib/conversations.ts')
+    const m = { role: 'assistant', content: 'The model used its whole reply budget thinking', error: true }
+    assert.equal(previewText(m), 'Failed: The model used its whole reply budget thinking')
+    assert.equal(isErrorPreview(m), true)
+    assert.equal(isErrorPreview({ role: 'assistant', content: 'ok' }), false)
+    assert.equal(isErrorPreview({ role: 'user', content: 'x', error: true }), false)
+    assert.equal(previewText({ role: 'assistant', content: '', error: true }), 'Failed: The run failed.')
+  })
+})

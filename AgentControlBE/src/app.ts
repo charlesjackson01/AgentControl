@@ -15,6 +15,7 @@ import {
   cancelTask,
   createTaskRunner,
   pauseWork,
+  requestReview,
   requestTeamPlan,
   resumeWork,
   retryTask,
@@ -421,6 +422,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.post('/api/projects/:id/team-plan/apply', async (request) => {
     const { id } = request.params as { id: string }
     return applyTeamPlan(store, tasks, id, request.body)
+  })
+
+  // Part 5: review a settled round; writes nothing until the user applies.
+  app.post('/api/projects/:id/review', async (request) => {
+    const { id } = request.params as { id: string }
+    return requestReview(store, id, request.body)
   })
 
   app.post('/api/projects/:id/tasks/:messageId/retry', async (request) => {

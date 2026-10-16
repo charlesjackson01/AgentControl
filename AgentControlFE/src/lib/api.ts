@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, ReviewResult, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -272,10 +272,22 @@ export const api = {
    * Commit a plan the user confirmed: the BE validates `plan` again against
    * the current library and team, creates and adds the accepted agents, then
    * queues the accepted tasks. 400 for a bad selection, 409 when a new
-   * specialist's name is taken.
+   * specialist's name is taken. Pass `round` when applying a review (Part 5).
    */
   async applyTeamPlan(projectId: string, body: TeamPlanApply): Promise<ProjectUpdate> {
     return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/team-plan/apply`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+  },
+
+  /**
+   * Ask Primary to review a settled round (Part 5). Writes nothing; returns
+   * the next-round plan (or a closing summary/question). 409 when there is no
+   * Primary, the round is still open, or the request is closed.
+   */
+  async requestReview(projectId: string, body: { promptId: string }): Promise<ReviewResult> {
+    return request<ReviewResult>(`/api/projects/${encodeURIComponent(projectId)}/review`, {
       method: 'POST',
       body: JSON.stringify(body),
     })

@@ -2625,6 +2625,28 @@ a.teamchip__name:hover {
   overflow-wrap: anywhere;
 }
 
+/* Part 5: round divider between rounds of one request */
+.chat__round {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-text-3);
+}
+
+.chat__round::before,
+.chat__round::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--c-border);
+}
+
 /* A prompt Primary has not answered yet */
 .chat__nudge {
   display: flex;

@@ -463,51 +463,46 @@ export type ProjectInput = {
 }
 
 /* ==========================================================================
-   Chat-first Part 2: conversations (DMs + project chats). Provisional shapes
-   until Backend Dev freezes feat/chat-first-p2-be; adjust here only.
+   Chat-first Part 2: conversations. Mirrors BE shared/types.ts @ 8a9acd3
+   (feat/chat-first-p2-be). One DM per agent, auto-created by GET /api/conversations.
    ========================================================================== */
 
-/** 'user' or the speaking agent's id. */
-export type ChatAuthor = 'user' | string
-
-export type ConversationLastMessage = {
-  author: ChatAuthor
-  /** Short preview, already trimmed by the BE. */
-  text: string
-  createdAt: string
-}
-
-export type Conversation = {
-  id: string
-  kind: 'dm' | 'project'
-  /** Set on kind 'dm': the agent this 1:1 is with. */
-  agentId?: string
-  /** Set on kind 'project'. */
-  projectId?: string
-  createdAt: string
-  lastMessage?: ConversationLastMessage
-  unreadCount: number
-  lastReadAt?: string
-}
-
+/** One message in a chat-first conversation (independent of run pruning). */
 export type ChatMessage = {
   id: string
   conversationId: string
-  author: ChatAuthor
-  text: string
-  runId?: string
-  mentions?: string[]
+  role: 'user' | 'assistant'
+  content: string
   createdAt: string
+  /** The run that produced this message, when there was one. */
+  runId?: string
 }
 
-/** Normalized GET /api/conversations/:id/messages page (oldest first). */
-export type ChatMessagePage = {
-  messages: ChatMessage[]
-  hasMore: boolean
+/** A 1:1 chat with one agent. One per agent, created lazily. */
+export type Conversation = {
+  id: string
+  kind: 'dm'
+  agentId: string
+  createdAt: string
+  /** Time of the newest message (or creation). */
+  updatedAt: string
+  /** Assistant messages newer than this are unread; null = never opened. */
+  lastReadAt: string | null
 }
 
-/** POST /api/conversations/:id/messages response. */
-export type ConversationSendResult = {
+export type ConversationSummary = Conversation & {
+  lastMessage: ChatMessage | null
+  unreadCount: number
+}
+
+export const CONVERSATION_PAGE_SIZE = 50
+export const MAX_CONVERSATION_PAGE_SIZE = 200
+
+/** GET /api/conversations/:id/messages response (messages oldest -> newest). */
+export type ConversationMessagesResponse = {
   conversation: Conversation
   messages: ChatMessage[]
 }
+
+/** Normalized page for the thread view. */
+export type ChatMessagePage = ConversationMessagesResponse & { hasMore: boolean }

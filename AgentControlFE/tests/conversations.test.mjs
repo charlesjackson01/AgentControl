@@ -1,59 +1,57 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  conversationTitle, countUnread, hiddenCount, lastActivity, markReadLocally, mergeMessages, olderCursor,
-  previewText, primaryConversation, relativeTime, sortConversations, totalUnread, unreadLabel,
-  upsertConversation, visibleConversations,
+  countUnread, hiddenCount, markReadLocally, mergeMessages, olderCursor, previewText, primaryConversation,
+  relativeTime, sortConversations, totalUnread, unreadLabel, upsertConversation, visibleConversations,
 } from '../src/lib/conversations.ts'
-import { normalizeMessagePage } from '../src/lib/api-pages.ts'
 
 const agents = [
   { id: 'p', name: 'Primary', isPrimary: true },
   { id: 'a', name: 'Alice', isPrimary: false, pinned: true },
   { id: 'b', name: 'Bob', isPrimary: false },
+  { id: 'c', name: 'Cy', isPrimary: false },
   { id: 'h', name: 'Hidden', isPrimary: false, hidden: true },
 ]
-const conv = (id, extra) => ({ id, kind: 'dm', createdAt: '2026-10-01T00:00:00Z', unreadCount: 0, ...extra })
-const msg = (id, createdAt, author = 'p') => ({ id, conversationId: 'c', author, text: id, createdAt })
+const conv = (id, agentId, updatedAt = '2026-10-01T00:00:00Z', extra = {}) => ({
+  id, kind: 'dm', agentId, createdAt: '2026-10-01T00:00:00Z', updatedAt, lastReadAt: null, lastMessage: null, unreadCount: 0, ...extra,
+})
+const msg = (id, createdAt, role = 'assistant') => ({ id, conversationId: 'x', role, content: id, createdAt })
 
 describe('sorting and visibility', () => {
   const list = [
-    conv('cb', { agentId: 'b', lastMessage: { author: 'b', text: 'x', createdAt: '2026-10-16T10:00:00Z' } }),
-    conv('proj', { kind: 'project', projectId: 'x', lastMessage: { author: 'user', text: 'y', createdAt: '2026-10-16T12:00:00Z' } }),
-    conv('ca', { agentId: 'a' }),
-    conv('cp', { agentId: 'p' }),
-    conv('ch', { agentId: 'h' }),
-    conv('gone', { agentId: 'zzz' }),
+    conv('cb', 'b', '2026-10-16T10:00:00Z'),
+    conv('cc', 'c', '2026-10-16T12:00:00Z'),
+    conv('ca', 'a'),
+    conv('cp', 'p'),
+    conv('ch', 'h', '2026-10-16T13:00:00Z'),
+    conv('gone', 'zzz'),
   ]
-  it('Primary first, then pinned, then by last activity', () => {
-    assert.deepEqual(sortConversations(list, agents).map((c) => c.id).slice(0, 4), ['cp', 'ca', 'proj', 'cb'])
+  it('Primary first, then pinned, then newest updatedAt', () => {
+    assert.deepEqual(sortConversations(visibleConversations(list, agents), agents).map((c) => c.id), ['cp', 'ca', 'cc', 'cb'])
   })
-  it('hides hidden + orphaned DMs unless showHidden', () => {
-    assert.deepEqual(visibleConversations(list, agents).map((c) => c.id).sort(), ['ca', 'cb', 'cp', 'proj'])
+  it('hidden and orphaned DMs drop out unless showHidden', () => {
+    assert.ok(!visibleConversations(list, agents).some((c) => c.id === 'ch' || c.id === 'gone'))
     assert.ok(visibleConversations(list, agents, true).some((c) => c.id === 'ch'))
+    assert.ok(!visibleConversations(list, agents, true).some((c) => c.id === 'gone'))
     assert.equal(hiddenCount(list, agents), 1)
   })
-  it('finds Primary DM and titles', () => {
+  it('primaryConversation', () => {
     assert.equal(primaryConversation(list, agents)?.id, 'cp')
     assert.equal(primaryConversation(list, []), undefined)
-    assert.equal(conversationTitle(list[2], agents), 'Alice')
-    assert.equal(conversationTitle(list[1], agents, [{ id: 'x', name: 'Launch' }]), 'Launch')
-    assert.equal(conversationTitle(list[1], agents), 'Project chat')
   })
-  it('lastActivity falls back to createdAt', () => assert.equal(lastActivity(list[2]), '2026-10-01T00:00:00Z'))
 })
 
 describe('previewText', () => {
-  it('empty conversation', () => assert.equal(previewText(undefined), 'No messages yet'))
-  it('prefixes You and collapses whitespace', () =>
-    assert.equal(previewText({ author: 'user', text: ' hi\n\n there ', createdAt: '' }), 'You: hi there'))
-  it('names speakers in project chats only', () => {
-    const last = { author: 'a', text: 'done', createdAt: '' }
-    assert.equal(previewText(last, { kind: 'project', agents }), 'Alice: done')
-    assert.equal(previewText(last, { kind: 'dm', agents }), 'done')
+  it('empty', () => {
+    assert.equal(previewText(null), 'No messages yet')
+    assert.equal(previewText(undefined), 'No messages yet')
+  })
+  it('prefixes You for the user and collapses whitespace', () => {
+    assert.equal(previewText({ role: 'user', content: ' hi\n\n there ' }), 'You: hi there')
+    assert.equal(previewText({ role: 'assistant', content: 'done' }), 'done')
   })
   it('clips with an ellipsis', () => {
-    const out = previewText({ author: 'b', text: 'x'.repeat(200), createdAt: '' }, { kind: 'dm', max: 10 })
+    const out = previewText({ role: 'assistant', content: 'x'.repeat(200) }, 10)
     assert.equal(Array.from(out).length, 10)
     assert.ok(out.endsWith('…'))
   })
@@ -77,14 +75,14 @@ describe('relativeTime', () => {
 })
 
 describe('unread math', () => {
-  it('labels', () => {
+  it('labels and totals', () => {
     assert.equal(unreadLabel(0), '')
     assert.equal(unreadLabel(7), '7')
     assert.equal(unreadLabel(150), '99+')
+    assert.equal(totalUnread([{ unreadCount: 2 }, { unreadCount: -1 }, { unreadCount: 3 }]), 5)
   })
-  it('total ignores negatives', () => assert.equal(totalUnread([{ unreadCount: 2 }, { unreadCount: -1 }, { unreadCount: 3 }]), 5))
-  it('markReadLocally zeros one row and keeps identity when unchanged', () => {
-    const list = [conv('x', { unreadCount: 4 }), conv('y', { unreadCount: 0 })]
+  it('markReadLocally zeros one row, keeps identity when unchanged', () => {
+    const list = [conv('x', 'b', undefined, { unreadCount: 4 }), conv('y', 'c')]
     const next = markReadLocally(list, 'x', '2026-10-16T00:00:00Z')
     assert.equal(next[0].unreadCount, 0)
     assert.equal(next[0].lastReadAt, '2026-10-16T00:00:00Z')
@@ -92,33 +90,26 @@ describe('unread math', () => {
     assert.equal(markReadLocally(list, 'y'), list)
     assert.equal(markReadLocally(list, 'missing'), list)
   })
-  it('countUnread skips the user and read messages', () => {
+  it('countUnread mirrors the BE (assistant only, null = all)', () => {
     const ms = [msg('1', '2026-10-16T01:00:00Z'), msg('2', '2026-10-16T02:00:00Z', 'user'), msg('3', '2026-10-16T03:00:00Z')]
     assert.equal(countUnread(ms, '2026-10-16T01:30:00Z'), 1)
-    assert.equal(countUnread(ms, undefined), 2)
+    assert.equal(countUnread(ms, null), 2)
   })
   it('upsert replaces or appends', () => {
-    const list = [conv('x', { unreadCount: 1 })]
-    assert.equal(upsertConversation(list, conv('x', { unreadCount: 0 }))[0].unreadCount, 0)
-    assert.equal(upsertConversation(list, conv('z')).length, 2)
+    const list = [conv('x', 'b', undefined, { unreadCount: 1 })]
+    assert.equal(upsertConversation(list, conv('x', 'b'))[0].unreadCount, 0)
+    assert.equal(upsertConversation(list, conv('z', 'c')).length, 2)
   })
 })
 
 describe('messages', () => {
-  it('merge dedupes by id and sorts oldest first', () => {
+  it('merge dedupes by id and sorts oldest first; older cursor', () => {
     const a = [msg('2', '2026-10-16T02:00:00Z'), msg('1', '2026-10-16T01:00:00Z')]
-    const b = [{ ...msg('2', '2026-10-16T02:00:00Z'), text: 'edited' }, msg('3', '2026-10-16T03:00:00Z')]
+    const b = [{ ...msg('2', '2026-10-16T02:00:00Z'), content: 'edited' }, msg('3', '2026-10-16T03:00:00Z')]
     const out = mergeMessages(a, b)
     assert.deepEqual(out.map((m) => m.id), ['1', '2', '3'])
-    assert.equal(out[1].text, 'edited')
+    assert.equal(out[1].content, 'edited')
     assert.equal(olderCursor(out), '2026-10-16T01:00:00Z')
     assert.equal(olderCursor([]), undefined)
-  })
-  it('normalizes both page shapes', () => {
-    const arr = [msg('2', '2026-10-16T02:00:00Z'), msg('1', '2026-10-16T01:00:00Z')]
-    assert.deepEqual(normalizeMessagePage(arr, 2).messages.map((m) => m.id), ['1', '2'])
-    assert.equal(normalizeMessagePage(arr, 2).hasMore, true)
-    assert.equal(normalizeMessagePage(arr, 50).hasMore, false)
-    assert.equal(normalizeMessagePage({ messages: arr, hasMore: false }, 2).hasMore, false)
   })
 })

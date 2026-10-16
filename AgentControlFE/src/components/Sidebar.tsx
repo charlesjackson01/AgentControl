@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import Avatar from './Avatar'
-import { ProjectsIcon, SparkIcon } from './icons'
+import { SparkIcon } from './icons'
 import { primaryNav, secondaryNav, type NavItem } from '../lib/nav'
 import {
-  conversationTitle,
   hiddenCount,
-  lastActivity,
   previewText,
   relativeTime,
   sortConversations,
   unreadLabel,
   visibleConversations,
 } from '../lib/conversations'
-import type { Agent, Conversation, Project } from '../lib/types'
+import type { Agent, ConversationSummary } from '../lib/types'
 import { useConversations } from '../state/conversations-context'
 import type { useSidebar } from '../hooks/useSidebar'
 
@@ -51,52 +49,40 @@ function useNow(): Date {
 
 function ConversationRow({
   c,
-  agents,
-  projects,
+  agent,
   now,
   collapsed,
   onNavigate,
 }: {
-  c: Conversation
-  agents: Agent[]
-  projects: Project[]
+  c: ConversationSummary
+  agent: Agent
   now: Date
   collapsed: boolean
   onNavigate: () => void
 }) {
-  const agent = c.kind === 'dm' ? agents.find((a) => a.id === c.agentId) : undefined
-  const title = conversationTitle(c, agents, projects)
   const unread = unreadLabel(c.unreadCount)
-  // D-C6: project chats still live on the ProjectChat screen this milestone.
-  const to = c.kind === 'project' && c.projectId ? `/projects/${c.projectId}` : `/c/${c.id}`
   return (
     <NavLink
-      to={to}
+      to={`/c/${c.id}`}
       onClick={onNavigate}
       className={({ isActive }) => `convrow${isActive ? ' convrow--active' : ''}${unread ? ' convrow--unread' : ''}`}
-      aria-label={`${title}${unread ? `, ${c.unreadCount} unread` : ''}`}
-      title={collapsed ? title : undefined}
+      aria-label={`${agent.name}${unread ? `, ${c.unreadCount} unread` : ''}`}
+      title={collapsed ? agent.name : undefined}
     >
       <span className="convrow__avatar">
-        {agent ? (
-          <Avatar name={agent.name} agentId={agent.id} avatar={agent.avatar} color={agent.color} size="md" decorative />
-        ) : (
-          <span className="convrow__group" aria-hidden="true">
-            <ProjectsIcon size={16} />
-          </span>
-        )}
+        <Avatar name={agent.name} agentId={agent.id} avatar={agent.avatar} color={agent.color} size="md" decorative />
         {unread && <span className="convrow__dot" aria-hidden="true" />}
       </span>
       <span className="convrow__text sidebar__fade">
         <span className="convrow__top">
           <span className="convrow__name">
-            {title}
-            {agent?.isPrimary && <span className="convrow__tag">Primary</span>}
+            {agent.name}
+            {agent.isPrimary && <span className="convrow__tag">Primary</span>}
           </span>
-          <span className="convrow__time">{c.lastMessage ? relativeTime(lastActivity(c), now) : ''}</span>
+          <span className="convrow__time">{c.lastMessage ? relativeTime(c.lastMessage.createdAt, now) : ''}</span>
         </span>
         <span className="convrow__bottom">
-          <span className="convrow__preview">{previewText(c.lastMessage, { kind: c.kind, agents })}</span>
+          <span className="convrow__preview">{previewText(c.lastMessage)}</span>
           {unread && <span className="convrow__badge">{unread}</span>}
         </span>
       </span>
@@ -108,7 +94,7 @@ export default function Sidebar({ collapsed, mobileOpen, isMobile, close }: Side
   // On mobile the drawer is always full-width, so labels never fade out.
   const rail = collapsed && !isMobile
   const classes = ['sidebar', rail ? 'sidebar--collapsed' : '', mobileOpen ? 'sidebar--open' : '']
-  const { conversations, agents, projects, error, reload } = useConversations()
+  const { conversations, agents, error, reload } = useConversations()
   const [showHidden, setShowHidden] = useState(() => localStorage.getItem(SHOW_HIDDEN_KEY) === '1')
   const now = useNow()
 
@@ -146,9 +132,10 @@ export default function Sidebar({ collapsed, mobileOpen, isMobile, close }: Side
         ) : rows.length === 0 ? (
           <p className="convlist__note sidebar__fade">No chats yet.</p>
         ) : (
-          rows.map((c) => (
-            <ConversationRow key={c.id} c={c} agents={agents} projects={projects} now={now} collapsed={rail} onNavigate={close} />
-          ))
+          rows.map((c) => {
+            const agent = agents.find((a) => a.id === c.agentId)
+            return agent ? <ConversationRow key={c.id} c={c} agent={agent} now={now} collapsed={rail} onNavigate={close} /> : null
+          })
         )}
         {(hidden > 0 || showHidden) && !rail && (
           <button type="button" className="linkbtn convlist__hidden sidebar__fade" onClick={() => setShowHidden((v) => !v)}>

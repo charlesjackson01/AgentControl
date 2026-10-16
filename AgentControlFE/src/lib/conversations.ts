@@ -1,71 +1,48 @@
 /* Pure helpers for the chat-first sidebar and thread (tests/conversations.test.mjs). */
-import type { Agent, ChatMessage, Conversation, ConversationLastMessage, Project } from './types.ts'
+import type { Agent, ChatMessage, ConversationSummary } from './types.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
-type ProjectLike = Pick<Project, 'id' | 'name'>
+type Summary = Pick<ConversationSummary, 'id' | 'agentId' | 'updatedAt'>
 
-/** When a conversation last had activity (last message, else creation). */
-export function lastActivity(c: Pick<Conversation, 'createdAt' | 'lastMessage'>): string {
-  return c.lastMessage?.createdAt ?? c.createdAt
-}
-
-function rank(c: Conversation, agents: Map<string, AgentLike>): number {
-  const agent = c.agentId ? agents.get(c.agentId) : undefined
-  if (c.kind === 'dm' && agent?.isPrimary) return 0
+function rank(c: Summary, agents: Map<string, AgentLike>): number {
+  const agent = agents.get(c.agentId)
+  if (agent?.isPrimary) return 0
   if (agent?.pinned) return 1
   return 2
 }
 
-/** Primary's DM first, then pinned agents' DMs, then everything else by last activity (newest first). */
-export function sortConversations(list: readonly Conversation[], agents: readonly AgentLike[]): Conversation[] {
+/** Primary's DM first, then pinned agents, then by last activity (updatedAt, newest first). */
+export function sortConversations<T extends Summary>(list: readonly T[], agents: readonly AgentLike[]): T[] {
   const byId = new Map(agents.map((a) => [a.id, a]))
   return [...list].sort(
-    (a, b) => rank(a, byId) - rank(b, byId) || lastActivity(b).localeCompare(lastActivity(a)) || a.id.localeCompare(b.id),
+    (a, b) => rank(a, byId) - rank(b, byId) || b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id),
   )
 }
 
-/** Drops DMs with hidden agents unless `showHidden`; also DMs whose agent no longer exists. */
-export function visibleConversations(list: readonly Conversation[], agents: readonly AgentLike[], showHidden = false): Conversation[] {
+/** Drops DMs with hidden agents unless `showHidden`, and DMs whose agent no longer exists. */
+export function visibleConversations<T extends Summary>(list: readonly T[], agents: readonly AgentLike[], showHidden = false): T[] {
   const byId = new Map(agents.map((a) => [a.id, a]))
   return list.filter((c) => {
-    if (c.kind !== 'dm') return true
-    const agent = c.agentId ? byId.get(c.agentId) : undefined
-    if (!agent) return false
-    return showHidden || !agent.hidden
+    const agent = byId.get(c.agentId)
+    return Boolean(agent) && (showHidden || !agent?.hidden)
   })
 }
 
-export function hiddenCount(list: readonly Conversation[], agents: readonly AgentLike[]): number {
+export function hiddenCount(list: readonly Summary[], agents: readonly AgentLike[]): number {
   return visibleConversations(list, agents, true).length - visibleConversations(list, agents, false).length
 }
 
-/** The Primary agent's DM, if the BE has one. */
-export function primaryConversation(list: readonly Conversation[], agents: readonly AgentLike[]): Conversation | undefined {
+/** The Primary agent's DM. */
+export function primaryConversation<T extends Summary>(list: readonly T[], agents: readonly AgentLike[]): T | undefined {
   const primary = agents.find((a) => a.isPrimary)
-  return primary ? list.find((c) => c.kind === 'dm' && c.agentId === primary.id) : undefined
+  return primary ? list.find((c) => c.agentId === primary.id) : undefined
 }
 
-/** Row title: agent name for DMs, project name for project chats. */
-export function conversationTitle(c: Conversation, agents: readonly AgentLike[], projects: readonly ProjectLike[] = []): string {
-  if (c.kind === 'dm') return agents.find((a) => a.id === c.agentId)?.name ?? 'Unknown agent'
-  return projects.find((p) => p.id === c.projectId)?.name ?? 'Project chat'
-}
-
-/** One-line preview: whitespace collapsed, "You: " for the user (and the speaker in group chats), clipped. */
-export function previewText(
-  last: ConversationLastMessage | undefined,
-  opts: { kind: Conversation['kind']; agents?: readonly AgentLike[]; max?: number } = { kind: 'dm' },
-): string {
+/** One-line preview: "You: " for the user, whitespace collapsed, clipped to `max` characters. */
+export function previewText(last: Pick<ChatMessage, 'role' | 'content'> | null | undefined, max = 80): string {
   if (!last) return 'No messages yet'
-  const max = opts.max ?? 80
-  const body = last.text.replace(/\s+/g, ' ').trim() || '…'
-  let prefix = ''
-  if (last.author === 'user') prefix = 'You: '
-  else if (opts.kind === 'project') {
-    const name = opts.agents?.find((a) => a.id === last.author)?.name
-    if (name) prefix = `${name}: `
-  }
-  const full = prefix + body
+  const body = last.content.replace(/\s+/g, ' ').trim() || '…'
+  const full = (last.role === 'user' ? 'You: ' : '') + body
   const chars = Array.from(full)
   return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : full
 }
@@ -93,12 +70,16 @@ export function unreadLabel(n: number): string {
   return n > 99 ? '99+' : String(Math.floor(n))
 }
 
-export function totalUnread(list: readonly Pick<Conversation, 'unreadCount'>[]): number {
+export function totalUnread(list: readonly Pick<ConversationSummary, 'unreadCount'>[]): number {
   return list.reduce((sum, c) => sum + Math.max(0, c.unreadCount || 0), 0)
 }
 
-/** Optimistic "read": zero the badge and stamp lastReadAt. Returns the same array when nothing changes. */
-export function markReadLocally(list: Conversation[], id: string, at: string = new Date().toISOString()): Conversation[] {
+/** Optimistic "read": zero the badge and stamp lastReadAt. Same array back when nothing changes. */
+export function markReadLocally<T extends Pick<ConversationSummary, 'id' | 'unreadCount' | 'lastReadAt'>>(
+  list: T[],
+  id: string,
+  at: string = new Date().toISOString(),
+): T[] {
   const i = list.findIndex((c) => c.id === id)
   if (i < 0 || list[i].unreadCount === 0) return list
   const next = [...list]
@@ -106,8 +87,8 @@ export function markReadLocally(list: Conversation[], id: string, at: string = n
   return next
 }
 
-/** Insert or replace a conversation (e.g. from a send result). */
-export function upsertConversation(list: readonly Conversation[], c: Conversation): Conversation[] {
+/** Insert or replace a summary (e.g. the POST /read response). */
+export function upsertConversation<T extends { id: string }>(list: readonly T[], c: T): T[] {
   const i = list.findIndex((x) => x.id === c.id)
   if (i < 0) return [...list, c]
   const next = [...list]
@@ -122,12 +103,12 @@ export function mergeMessages(...lists: readonly (readonly ChatMessage[])[]): Ch
   return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
 }
 
-/** Cursor for the next older page: createdAt of the oldest message shown. */
+/** `before` cursor for the next older page: createdAt of the oldest message shown. */
 export function olderCursor(messages: readonly ChatMessage[]): string | undefined {
   return messages[0]?.createdAt
 }
 
-/** Messages after the user's last read point that weren't written by the user. */
-export function countUnread(messages: readonly ChatMessage[], lastReadAt: string | undefined): number {
-  return messages.filter((m) => m.author !== 'user' && (!lastReadAt || m.createdAt > lastReadAt)).length
+/** Mirrors the BE: assistant messages newer than lastReadAt (null = never opened -> all). */
+export function countUnread(messages: readonly Pick<ChatMessage, 'role' | 'createdAt'>[], lastReadAt: string | null): number {
+  return messages.filter((m) => m.role === 'assistant' && (lastReadAt === null || m.createdAt > lastReadAt)).length
 }

@@ -3,7 +3,7 @@ import { Skeleton } from '../components/States'
 import { primaryConversation } from '../lib/conversations'
 import { useConversations } from '../state/conversations-context'
 
-/** D-C1: land on Primary's 1:1. Falls back to the old agent chat, then /agents. */
+/** D-C1: land on Primary's 1:1 (the BE auto-creates DMs). Falls back to /agents. */
 export default function Landing() {
   const { conversations, agents, loaded } = useConversations()
   if (!loaded) {
@@ -17,6 +17,5 @@ export default function Landing() {
   }
   const dm = primaryConversation(conversations ?? [], agents)
   if (dm) return <Navigate to={`/c/${dm.id}`} replace />
-  const primary = agents.find((a) => a.isPrimary)
-  return <Navigate to={primary ? `/agents/${primary.id}` : '/agents'} replace />
+  return <Navigate to="/agents" replace />
 }

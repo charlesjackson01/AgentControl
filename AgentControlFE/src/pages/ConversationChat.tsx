@@ -22,9 +22,9 @@ type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: s
 /** Chat-first Part 2: one conversation's thread (Primary's 1:1 is the landing page). */
 export default function ConversationChat() {
   const { conversationId = '' } = useParams()
-  const { conversations, agents, loaded, markRead, upsert, reload: reloadSidebar } = useConversations()
+  const { conversations, agents, loaded, markRead, reload: reloadSidebar } = useConversations()
   const conversation = conversations?.find((c) => c.id === conversationId)
-  const agent = conversation?.kind === 'dm' ? agents.find((a) => a.id === conversation.agentId) : undefined
+  const agent = conversation ? agents.find((a) => a.id === conversation.agentId) : undefined
 
   const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined)
   const [hasMore, setHasMore] = useState(false)
@@ -132,17 +132,18 @@ export default function ConversationChat() {
     setPending({ text, ts: new Date().toISOString(), status: 'typing' })
     setDraft('')
     try {
-      const result = await api.sendConversationMessage(conversationId, text)
-      setMessages((prev) => mergeMessages(prev ?? [], result.messages))
-      upsert(result.conversation)
+      if (!agent) throw new Error('This chat has no agent.')
+      // No send route on the BE: the 1:1 run appends both turns to this DM.
+      await api.runAgent(agent.id, text)
+      const page = await api.listConversationMessages(conversationId)
+      setMessages((prev) => mergeMessages(prev ?? [], page.messages))
       setPending(null)
+      reloadSidebar()
     } catch (err) {
       setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
     }
   }
 
-  const nameOf = (author: string) => agents.find((a) => a.id === author)?.name ?? 'Agent'
-  const isGroup = conversation?.kind === 'project'
 
   if (loaded && conversations && !conversation) {
     return (
@@ -173,7 +174,7 @@ export default function ConversationChat() {
               </button>
             )}
             <div className="chat__header__id">
-              <h1 className="chat__header__name">{agent?.name ?? (conversation ? 'Project chat' : '')}</h1>
+              <h1 className="chat__header__name">{agent?.name ?? ''}</h1>
               {agent?.role && <p className="chat__header__role">{agent.role}</p>}
             </div>
             {agent && (
@@ -227,13 +228,13 @@ export default function ConversationChat() {
                         <span>{turnTime(m.createdAt)}</span>
                       </div>
                     )}
-                    {m.author === 'user' ? (
+                    {m.role === 'user' ? (
                       <Bubble kind="user">
-                        <div className="bubble__body">{m.text}</div>
+                        <div className="bubble__body">{m.content}</div>
                       </Bubble>
                     ) : (
-                      <Bubble kind="assistant" speaker={isGroup || m.author !== agent?.id ? nameOf(m.author) : undefined}>
-                        <div className="bubble__body">{m.text || '(no output)'}</div>
+                      <Bubble kind="assistant">
+                        <div className="bubble__body">{m.content || '(no output)'}</div>
                       </Bubble>
                     )}
                   </div>

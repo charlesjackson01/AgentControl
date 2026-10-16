@@ -3519,16 +3519,6 @@ a.teamchip__name:hover {
 .convrow:hover { background: var(--c-surface-2); }
 .convrow--active { background: var(--c-accent-soft); }
 .convrow__avatar { position: relative; flex: none; display: inline-flex; }
-.convrow__group {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: var(--r-full);
-  background: var(--c-surface-2);
-  color: var(--c-text-2);
-}
 .convrow__dot {
   position: absolute;
   top: -1px;

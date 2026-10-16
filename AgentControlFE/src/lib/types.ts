@@ -212,6 +212,8 @@ export type PromptBudget = {
   summarizedSkillIds: string[]
   /** Tools a run would offer, in the order sent upstream. */
   toolNames: string[]
+  /** Estimated tokens for the Rules section (header included); 0 when there are no rules. */
+  rulesTokens?: number
 }
 
 /** Body for POST /api/agents/:id/runs. */

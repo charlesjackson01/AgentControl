@@ -61,9 +61,9 @@ describe('BE-aligned limits', () => {
     assert.equal(MAX_RULES, 20)
     assert.equal(MAX_RULE_LENGTH, 500)
   })
-  it('rulesTokenCost is the with/without difference, never negative', () => {
-    assert.equal(rulesTokenCost({ estimatedTokens: 25 }, { estimatedTokens: 4 }), 21)
-    assert.equal(rulesTokenCost({ estimatedTokens: 4 }, { estimatedTokens: 9 }), 0)
+  it('rulesTokenCost reads rulesTokens from the budget, defaulting to 0', () => {
+    assert.equal(rulesTokenCost({ rulesTokens: 21 }), 21)
+    assert.equal(rulesTokenCost({}), 0)
   })
   it('describeRulesCost covers each state', () => {
     const base = { ruleCount: 2, hasEndpoint: true, cost: 1234, pending: false }

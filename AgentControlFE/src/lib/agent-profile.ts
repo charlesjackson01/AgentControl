@@ -35,8 +35,8 @@ export const MAX_RULE_LENGTH = MAX_AGENT_RULE_CHARS
  * Tokens the Rules section adds, from two /api/prompt-budget answers for the
  * same draft (with and without rules). Never negative.
  */
-export function rulesTokenCost(withRules: { estimatedTokens: number }, withoutRules: { estimatedTokens: number }): number {
-  return Math.max(0, withRules.estimatedTokens - withoutRules.estimatedTokens)
+export function rulesTokenCost(budget: { rulesTokens?: number }): number {
+  return Math.max(0, budget.rulesTokens ?? 0)
 }
 
 /** The hint line under the Rules heading. `cost` is null when no budget answer is available. */

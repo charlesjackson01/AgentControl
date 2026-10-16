@@ -214,15 +214,10 @@ export default function AgentProfile({
     const controller = new AbortController()
     const timer = setTimeout(() => {
       const opts = { signal: controller.signal }
-      const hasRules = (budgetRequest.rules ?? []).length > 0
-      // Rules cost = this draft's budget minus the same draft without rules (the BE has no per-section breakdown).
-      Promise.all([
-        api.getPromptBudget(budgetRequest, opts),
-        hasRules ? api.getPromptBudget({ ...budgetRequest, rules: [] }, opts) : Promise.resolve(null),
-      ]).then(
-        ([value, withoutRules]) => {
+      api.getPromptBudget(budgetRequest, opts).then(
+        (value) => {
           if (!controller.signal.aborted) {
-            setBudget({ request: budgetRequest, value, rulesCost: withoutRules ? rulesTokenCost(value, withoutRules) : 0 })
+            setBudget({ request: budgetRequest, value, rulesCost: rulesTokenCost(value) })
           }
         },
         () => {

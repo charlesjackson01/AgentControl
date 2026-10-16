@@ -281,12 +281,41 @@ export const api = {
     })
   },
 
-  /** 409 unless the task failed; re-queues it. */
+  /** 409 unless the task failed or was cancelled; re-queues it. */
   async retryProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
     return request<ProjectUpdate>(
       `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/retry`,
       { method: 'POST' },
     )
+  },
+
+  /** Cancel a task and its non-done dependents. 409 when the task is already done. */
+  async cancelProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(
+      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/cancel`,
+      { method: 'POST' },
+    )
+  },
+
+  /** Pause: start nothing new; the in-flight call keeps going. */
+  async pauseProjectWork(projectId: string): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/pause`, {
+      method: 'POST',
+    })
+  },
+
+  /** Resume: clear pause and kick the queue. */
+  async resumeProjectWork(projectId: string): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/resume`, {
+      method: 'POST',
+    })
+  },
+
+  /** Stop: abort the in-flight call and cancel every queued/running task. */
+  async stopProjectWork(projectId: string): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/stop`, {
+      method: 'POST',
+    })
   },
 
   async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {

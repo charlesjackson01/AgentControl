@@ -9,7 +9,17 @@ import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
-import { appendProjectMessage, applyTeamPlan, createTaskRunner, requestTeamPlan, retryTask } from './projects.js'
+import {
+  appendProjectMessage,
+  applyTeamPlan,
+  cancelTask,
+  createTaskRunner,
+  pauseWork,
+  requestTeamPlan,
+  resumeWork,
+  retryTask,
+  stopWork,
+} from './projects.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
   OPENROUTER_DEFAULT_BASE_URL,
@@ -416,6 +426,28 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.post('/api/projects/:id/tasks/:messageId/retry', async (request) => {
     const { id, messageId } = request.params as { id: string; messageId: string }
     return retryTask(store, tasks, id, messageId)
+  })
+
+  app.post('/api/projects/:id/tasks/:messageId/cancel', async (request) => {
+    const { id, messageId } = request.params as { id: string; messageId: string }
+    return cancelTask(store, tasks, id, messageId)
+  })
+
+  // D-O5: pause starts nothing new; resume clears the flag and kicks; stop
+  // aborts the in-flight call and cancels queued tasks (retryable).
+  app.post('/api/projects/:id/work/pause', async (request) => {
+    const { id } = request.params as { id: string }
+    return pauseWork(store, id)
+  })
+
+  app.post('/api/projects/:id/work/resume', async (request) => {
+    const { id } = request.params as { id: string }
+    return resumeWork(store, tasks, id)
+  })
+
+  app.post('/api/projects/:id/work/stop', async (request) => {
+    const { id } = request.params as { id: string }
+    return stopWork(store, tasks, id)
   })
 
   app.get('/api/settings', async () => store.settings)

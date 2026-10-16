@@ -2402,6 +2402,33 @@ ul {
   color: var(--c-text-3);
 }
 
+.workbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 0 0;
+  font-size: 12px;
+  color: var(--c-text-2);
+}
+
+.workbar__label {
+  min-width: 0;
+}
+
+.workbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.btn--sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 /* Settings drawer: danger zone rows */
 .drawer__danger {
   display: flex;
@@ -2668,6 +2695,22 @@ a.teamchip__name:hover {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.task__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task--paused {
+  opacity: 0.72;
+}
+
+.status--paused {
+  color: var(--c-text-2);
+  background: var(--c-surface-2);
+  border-color: transparent;
 }
 
 /* Task status pills: running in the accent with a pulse, done as success */

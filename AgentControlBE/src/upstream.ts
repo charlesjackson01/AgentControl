@@ -147,6 +147,9 @@ function serializeMessage(message: ChatMessage): Record<string, unknown> {
   return out
 }
 
+/** User (or TaskRunner) aborted the call via an AbortSignal. Distinct from a timeout. */
+export const STOPPED_BY_YOU = 'Stopped by you'
+
 /** POST {baseUrl}/v1/chat/completions (or `{baseUrl}/chat/completions`). */
 export async function chatCompletion(
   baseUrl: string,
@@ -157,10 +160,12 @@ export async function chatCompletion(
   maxTokens?: number,
   tools?: ToolDeclaration[],
   temperature?: number,
+  /** Optional; combined with the timeout via AbortSignal.any (orchestration Part 2). */
+  signal?: AbortSignal,
 ): Promise<ChatResult> {
   const started = Date.now()
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timeout = AbortSignal.timeout(timeoutMs)
+  const combined = signal ? AbortSignal.any([timeout, signal]) : timeout
   try {
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' }
     if (apiKey) headers.authorization = `Bearer ${apiKey}`
@@ -177,7 +182,7 @@ export async function chatCompletion(
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
-      signal: controller.signal,
+      signal: combined,
     })
     const latencyMs = Date.now() - started
     if (!response.ok) {
@@ -206,13 +211,19 @@ export async function chatCompletion(
     return { ok: true, content, latencyMs, finishReason }
   } catch (err) {
     const aborted = err instanceof Error && err.name === 'AbortError'
+    // Prefer the caller's signal over the timeout when both may have fired.
+    const stopped = aborted && signal?.aborted === true
     return {
       ok: false,
       content: '',
       latencyMs: Date.now() - started,
-      error: aborted ? `Upstream timed out after ${timeoutMs}ms` : err instanceof Error ? err.message : 'Request failed',
+      error: stopped
+        ? STOPPED_BY_YOU
+        : aborted
+          ? `Upstream timed out after ${timeoutMs}ms`
+          : err instanceof Error
+            ? err.message
+            : 'Request failed',
     }
-  } finally {
-    clearTimeout(timer)
   }
 }

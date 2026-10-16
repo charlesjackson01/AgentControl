@@ -9,7 +9,7 @@ import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
-import { chatCompletion, type ChatMessage, type ChatResult, type ToolDeclaration } from './upstream.js'
+import { chatCompletion, STOPPED_BY_YOU, type ChatMessage, type ChatResult, type ToolDeclaration } from './upstream.js'
 
 export interface RunOptions {
   /**
@@ -17,6 +17,12 @@ export interface RunOptions {
    * the same project become history; a run without it never sees project runs.
    */
   projectId?: string
+  /**
+   * Optional abort signal (orchestration Part 2). Checked before each upstream
+   * and tool call; an aborted run is stored as failed with "Stopped by you"
+   * and keeps any toolCalls already recorded.
+   */
+  signal?: AbortSignal
 }
 
 /** Runs kept per agent and scope (its own chat, or one project). */
@@ -160,8 +166,13 @@ export async function executeRun(
     ...(plannerGetSkill ? { skillScope: new Set(injectedSkills.map((s) => s.id)) } : {}),
   }
 
+  const signal = opts.signal
   const startedAt = new Date().toISOString()
   for (let iteration = 0; ; iteration++) {
+    if (signal?.aborted) {
+      result = { ok: false, content: '', latencyMs: 0, error: STOPPED_BY_YOU }
+      break
+    }
     const finalCall = iteration >= MAX_TOOL_ITERATIONS || forceFinal
     const withSchemas = !finalCall && sendTools !== undefined
     const systemText =
@@ -212,6 +223,7 @@ export async function executeRun(
       maxTokens,
       finalCall ? undefined : sendTools,
       agent.temperature,
+      signal,
     )
     steps += 1
     totalLatency += result.latencyMs
@@ -227,6 +239,10 @@ export async function executeRun(
       for (const call of result.toolCalls) loopChars += call.name.length + call.arguments.length
       let callsThisTurn = 0
       for (const call of result.toolCalls) {
+        if (signal?.aborted) {
+          result = { ok: false, content: '', latencyMs: 0, error: STOPPED_BY_YOU }
+          break
+        }
         callsThisTurn += 1
         // What the context window still holds for this result. Paging tools
         // size their page to it; anything larger is clipped below.
@@ -269,6 +285,7 @@ export async function executeRun(
           ok,
         })
       }
+      if (!result.ok) break
       continue
     }
     break

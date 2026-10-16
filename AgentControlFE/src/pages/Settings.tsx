@@ -6,6 +6,7 @@ import { useTheme, type Theme } from '../hooks/useTheme'
 import { useAsync } from '../hooks/useAsync'
 import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_LABELS, OPENROUTER_DEFAULT_BASE_URL } from '../lib/api'
 import type { Endpoint, EndpointInput, EndpointKind } from '../lib/types'
+import { MAX_OUTPUT_TOKENS_HINT, MAX_OUTPUT_TOKENS_PLACEHOLDER, maxOutputTokensLabel, maxOutputTokensPatch, validateMaxOutputTokens } from '../lib/max-output-tokens'
 import { DISABLE_THINKING_HINT, disableThinkingPatch } from '../lib/run-reply'
 import { PROXY_URL_HINT, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
 import UserProfileForm from '../components/UserProfileForm'
@@ -58,7 +59,8 @@ function EndpointForm({
   const [apiKey, setApiKey] = useState('')
   const [proxyUrl, setProxyUrl] = useState(initial?.proxyUrl ?? '')
   const [disableThinking, setDisableThinking] = useState(Boolean(initial?.disableThinking))
-  const [errors, setErrors] = useState<{ name?: string; baseUrl?: string; defaultModel?: string; contextWindow?: string; apiKey?: string; proxyUrl?: string }>({})
+  const [maxOutputTokens, setMaxOutputTokens] = useState(initial?.maxOutputTokens != null ? String(initial.maxOutputTokens) : '')
+  const [errors, setErrors] = useState<{ name?: string; baseUrl?: string; defaultModel?: string; contextWindow?: string; apiKey?: string; proxyUrl?: string; maxOutputTokens?: string }>({})
 
   const pickKind = (next: EndpointKind) => {
     setKind(next)
@@ -90,6 +92,8 @@ function EndpointForm({
     }
     const proxyErr = validateProxyUrl(proxyUrl)
     if (proxyErr) next.proxyUrl = proxyErr
+    const maxErr = validateMaxOutputTokens(maxOutputTokens, Number.isFinite(ctx) && ctx > 0 ? ctx : undefined)
+    if (maxErr) next.maxOutputTokens = maxErr
     setErrors(next)
     if (Object.keys(next).length > 0) return
     onSubmit({
@@ -102,6 +106,7 @@ function EndpointForm({
       ...(apiKey ? { apiKey } : {}),
       ...proxyUrlPatch(proxyUrl, initial?.proxyUrl, Boolean(initial)),
       ...disableThinkingPatch(disableThinking, initial?.disableThinking, Boolean(initial)),
+      ...maxOutputTokensPatch(maxOutputTokens, initial?.maxOutputTokens, Boolean(initial)),
     })
   }
 
@@ -149,6 +154,11 @@ function EndpointForm({
           <span>Disable thinking</span>
         </label>
         <p className="field__hint">{DISABLE_THINKING_HINT}</p>
+      </div>
+      <div className="field">
+        <label className="field__label" htmlFor="ep-max-output">Max reply tokens</label>
+        <input id="ep-max-output" className={`input${errors.maxOutputTokens ? ' input--invalid' : ''}`} value={maxOutputTokens} onChange={(e) => { setMaxOutputTokens(e.target.value); setErrors((er) => ({ ...er, maxOutputTokens: undefined })) }} type="number" min={1} step={1} inputMode="numeric" placeholder={MAX_OUTPUT_TOKENS_PLACEHOLDER} aria-invalid={Boolean(errors.maxOutputTokens)} />
+        {errors.maxOutputTokens ? <p className="field__err">{errors.maxOutputTokens}</p> : <p className="field__hint">{MAX_OUTPUT_TOKENS_HINT}</p>}
       </div>
       <div className="field">
         <label className="field__label" htmlFor="ep-model">
@@ -287,7 +297,7 @@ function EndpointsSection() {
             <div className="row" key={ep.id}>
               <div className="row__text" style={{ minWidth: 0 }}>
                 <p className="row__label">{ep.name}</p>
-                <p className="row__hint meta__v--mono">{ep.baseUrl} · {ep.defaultModel} · {ep.contextWindow.toLocaleString()} ctx · {ep.apiKeySet ? 'key set' : 'no key'}{ep.proxyUrl ? ` · via ${ep.proxyUrl}` : ''}{ep.disableThinking ? ' · thinking off' : ''}</p>
+                <p className="row__hint meta__v--mono">{ep.baseUrl} · {ep.defaultModel} · {ep.contextWindow.toLocaleString()} ctx · {ep.apiKeySet ? 'key set' : 'no key'}{ep.proxyUrl ? ` · via ${ep.proxyUrl}` : ''}{ep.disableThinking ? ' · thinking off' : ''}{maxOutputTokensLabel(ep.maxOutputTokens)}</p>
                 {testNote[ep.id] && <p className="field__hint">{testNote[ep.id]}</p>}
               </div>
               <div className="row__control" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>

@@ -38,11 +38,17 @@ export function primaryConversation<T extends Summary>(list: readonly T[], agent
   return primary ? list.find((c) => c.agentId === primary.id) : undefined
 }
 
-/** One-line preview: "You: " for the user, whitespace collapsed, clipped to `max` characters. */
-export function previewText(last: Pick<ChatMessage, 'role' | 'content'> | null | undefined, max = 80): string {
+/** True when the preview is a failed reply (assistant message with `error: true`). */
+export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null | undefined): boolean {
+  return !!last && last.role === 'assistant' && last.error === true
+}
+
+/** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
+export function previewText(last: Pick<ChatMessage, 'role' | 'content' | 'error'> | null | undefined, max = 80): string {
   if (!last) return 'No messages yet'
-  const body = last.content.replace(/\s+/g, ' ').trim() || '…'
-  const full = (last.role === 'user' ? 'You: ' : '') + body
+  const body = last.content.replace(/\s+/g, ' ').trim() || (isErrorPreview(last) ? 'The run failed.' : '…')
+  const prefix = last.role === 'user' ? 'You: ' : isErrorPreview(last) ? 'Failed: ' : ''
+  const full = prefix + body
   const chars = Array.from(full)
   return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : full
 }

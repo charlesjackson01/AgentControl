@@ -480,6 +480,8 @@ export type ChatMessage = {
   createdAt: string
   /** The run that produced this message, when there was one. */
   runId?: string
+  /** Assistant message stored for a failed run; `content` is the error text (BE fix/chat-error-flag). */
+  error?: true
 }
 
 /** A 1:1 chat with one agent. One per agent, created lazily. */

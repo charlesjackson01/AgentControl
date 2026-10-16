@@ -5,6 +5,7 @@ import { SparkIcon } from './icons'
 import { primaryNav, secondaryNav, type NavItem } from '../lib/nav'
 import {
   hiddenCount,
+  isErrorPreview,
   previewText,
   relativeTime,
   sortConversations,
@@ -100,7 +101,10 @@ function ConversationRow({
           <span className="convrow__time">{c.lastMessage ? relativeTime(c.lastMessage.createdAt, now) : ''}</span>
         </span>
         <span className="convrow__bottom">
-          <span className="convrow__preview">{previewText(c.lastMessage)}</span>
+          <span className={`convrow__preview${isErrorPreview(c.lastMessage) ? ' convrow__preview--error' : ''}`}>
+            {isErrorPreview(c.lastMessage) && <span aria-hidden="true">⚠ </span>}
+            {previewText(c.lastMessage)}
+          </span>
           {unread && <span className="convrow__badge">{unread}</span>}
         </span>
       </span>

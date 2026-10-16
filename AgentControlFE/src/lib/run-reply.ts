@@ -37,3 +37,40 @@ export function disableThinkingPatch(checked: boolean, stored: boolean | undefin
   if (checked === Boolean(stored)) return {}
   return { disableThinking: checked }
 }
+
+type MsgLike = { role: 'user' | 'assistant'; content: string; error?: boolean }
+
+/** How a stored chat message renders: flagged failures and empty replies are errors. */
+export function chatMessageView(m: MsgLike): { kind: 'user' | 'assistant' | 'error'; text: string } {
+  if (m.role === 'user') return { kind: 'user', text: m.content }
+  if (m.error === true) return { kind: 'error', text: isEmptyReply(m.content) ? 'The run failed without an error message.' : m.content.trim() }
+  if (isEmptyReply(m.content)) return { kind: 'error', text: EMPTY_REPLY_ERROR }
+  return { kind: 'assistant', text: m.content }
+}
+
+/** Text of the nearest user message before index `i`, for Retry; undefined when none. */
+export function retryTextBefore(messages: readonly MsgLike[], i: number): string | undefined {
+  for (let j = i - 1; j >= 0; j--) {
+    const m = messages[j]
+    if (m && m.role === 'user' && m.content.trim()) return m.content
+  }
+  return undefined
+}
+
+/**
+ * After a live send: what extra error UI to show beyond the stored messages.
+ * - 'pending': no usable assistant message came back; show the run error on the pending turn.
+ * - 'banner': a normal-looking reply came back but the run failed (unflagged older backend).
+ * - 'none': the reply is fine, or the stored message already renders as an error bubble.
+ */
+export function liveRunOutcome(
+  run: { status?: string; error?: string | null },
+  messages: readonly MsgLike[],
+): { kind: 'pending' | 'banner' | 'none'; text?: string } {
+  const replies = messages.filter((m) => m.role === 'assistant')
+  if (replies.some((m) => m.error === true)) return { kind: 'none' }
+  const answered = replies.some((m) => !isEmptyReply(m.content))
+  if (!answered) return { kind: 'pending', text: runReplyView({ status: run.status, output: '', error: run.error }).text }
+  if (run.status === 'failed') return { kind: 'banner', text: (run.error ?? '').trim() || 'The run failed.' }
+  return { kind: 'none' }
+}

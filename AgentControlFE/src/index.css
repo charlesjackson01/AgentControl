@@ -3563,6 +3563,7 @@ a.teamchip__name:hover {
   text-overflow: ellipsis;
 }
 .convrow--unread .convrow__preview { color: var(--c-text); }
+.convrow__preview--error, .convrow--unread .convrow__preview--error { color: var(--c-danger, #c0392b); }
 .convrow__badge {
   flex: none;
   min-width: 18px;

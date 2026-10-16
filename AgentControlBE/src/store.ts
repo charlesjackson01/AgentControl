@@ -12,9 +12,12 @@ import {
   vendoredSeedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
+import { migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
 import type {
   Agent,
   AgentRun,
+  ChatMessage,
+  Conversation,
   Endpoint,
   Note,
   Project,
@@ -32,6 +35,10 @@ export interface WorkspaceStore {
   projects: Project[]
   /** Flat project chat log; GET /projects/:id/messages filters + sorts. */
   projectMessages: ProjectMessage[]
+  /** Chat-first 1:1 conversations (one DM per agent). */
+  conversations: Conversation[]
+  /** Messages for every conversation; routes filter + sort. */
+  chatMessages: ChatMessage[]
   skills: Skill[]
   endpoints: Endpoint[]
   /** endpoint id -> cached model ids (live GET /v1/models refreshes this). */
@@ -131,6 +138,8 @@ interface Persisted {
   runs: AgentRun[]
   projects: Project[]
   projectMessages: ProjectMessage[]
+  conversations: Conversation[]
+  chatMessages: ChatMessage[]
   skills: Skill[]
   endpoints: Endpoint[]
   endpointModels: Record<string, string[]>
@@ -182,7 +191,16 @@ export function slugifyProjectName(name: string): string {
 }
 
 function seed(projectsRoot: string): Persisted {
+  const data = seedData(projectsRoot)
+  const state = { agents: data.agents, runs: data.runs, conversations: data.conversations, chatMessages: data.chatMessages }
+  migrateRunsToConversations(state, data.meta.migrations)
+  return { ...data, conversations: state.conversations, chatMessages: state.chatMessages }
+}
+
+function seedData(projectsRoot: string): Persisted {
   return {
+    conversations: [],
+    chatMessages: [],
     agents: structuredClone(seedAgents),
     runs: structuredClone(seedRuns),
     projects: seedProjects(projectsRoot),
@@ -489,12 +507,19 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
     }
   }
 
+  const conversations = normalizeConversations(raw.conversations, agentIds)
+  const chatMessages = normalizeChatMessages(raw.chatMessages, new Set(conversations.map((c) => c.id)))
+  const conversationState = { agents: agents as Agent[], runs, conversations, chatMessages }
+  if (migrateRunsToConversations(conversationState, meta.migrations)) changed = true
+
   return {
     data: {
       agents: agents as Agent[],
       runs,
       projects,
       projectMessages: normalizeProjectMessages(raw.projectMessages),
+      conversations: conversationState.conversations,
+      chatMessages: conversationState.chatMessages,
       skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
@@ -548,6 +573,8 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           runs: store.runs,
           projects: store.projects,
           projectMessages: store.projectMessages,
+          conversations: store.conversations,
+          chatMessages: store.chatMessages,
           skills: store.skills,
           endpoints: store.endpoints,
           endpointModels: store.endpointModels,

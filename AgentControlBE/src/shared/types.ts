@@ -422,3 +422,34 @@ export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
  * (OpenAI-compatible or OpenRouter); replace this for the final build.
  */
 export const DEFAULT_ENDPOINT_BASE_URL = 'http://100.79.242.24:8791'
+
+/** One message in a chat-first conversation (independent of run pruning). */
+export interface ChatMessage {
+  id: string
+  conversationId: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: string
+  /** The run that produced this message, when there was one. */
+  runId?: string
+}
+
+/** A 1:1 chat with one agent. One per agent, created lazily. */
+export interface Conversation {
+  id: string
+  kind: 'dm'
+  agentId: string
+  createdAt: string
+  /** Time of the newest message (or creation). */
+  updatedAt: string
+  /** Assistant messages newer than this are unread; null = never opened. */
+  lastReadAt: string | null
+}
+
+export interface ConversationSummary extends Conversation {
+  lastMessage: ChatMessage | null
+  unreadCount: number
+}
+
+export const CONVERSATION_PAGE_SIZE = 50
+export const MAX_CONVERSATION_PAGE_SIZE = 200

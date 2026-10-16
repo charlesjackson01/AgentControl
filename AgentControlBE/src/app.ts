@@ -9,6 +9,7 @@ import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
+import { clearAgentConversations, ensureDm, messagesOf, summarize } from './conversations.js'
 import {
   appendProjectMessage,
   applyTeamPlan,
@@ -22,6 +23,8 @@ import {
   stopWork,
 } from './projects.js'
 import {
+  CONVERSATION_PAGE_SIZE,
+  MAX_CONVERSATION_PAGE_SIZE,
   DEFAULT_ENDPOINT_BASE_URL,
   MAX_AGENT_RULE_CHARS,
   MAX_AGENT_RULES,
@@ -29,6 +32,7 @@ import {
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
   type AgentInput,
+  type Conversation,
   type Endpoint,
   type EndpointInput,
   type EndpointKind,
@@ -640,12 +644,69 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       .slice(0, RUNS_PER_SCOPE)
   })
 
+  // Chat-first conversations. Every agent has a DM; it is created on first list.
+  const conversationOr404 = (id: string) => {
+    const conversation = store.conversations.find((c) => c.id === id)
+    if (!conversation) fail(404, `No conversation with id "${id}"`)
+    return conversation as Conversation
+  }
+
+  app.get('/api/conversations', async () => {
+    let created = false
+    for (const agent of store.agents) {
+      if (!store.conversations.some((c) => c.agentId === agent.id)) {
+        ensureDm(store, agent.id)
+        created = true
+      }
+    }
+    if (created) store.save()
+    return store.conversations
+      .map((c) => summarize(store, c))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  })
+
+  app.get('/api/conversations/:id/messages', async (request) => {
+    const { id } = request.params as { id: string }
+    const conversation = conversationOr404(id)
+    const query = request.query as { before?: unknown; limit?: unknown }
+    let limit = CONVERSATION_PAGE_SIZE
+    if (query.limit !== undefined) {
+      const n = Number(query.limit)
+      if (!Number.isInteger(n) || n < 1 || n > MAX_CONVERSATION_PAGE_SIZE) {
+        fail(400, `limit must be an integer from 1 to ${MAX_CONVERSATION_PAGE_SIZE}`)
+      }
+      limit = n
+    }
+    let messages = messagesOf(store, conversation.id)
+    if (query.before !== undefined) {
+      if (typeof query.before !== 'string' || Number.isNaN(Date.parse(query.before))) {
+        fail(400, 'before must be an ISO timestamp')
+      }
+      const before = query.before as string
+      messages = messages.filter((m) => m.createdAt < before)
+    }
+    return { conversation, messages: messages.slice(-limit) }
+  })
+
+  app.post('/api/conversations/:id/read', async (request) => {
+    const { id } = request.params as { id: string }
+    const conversation = conversationOr404(id)
+    const newest = messagesOf(store, conversation.id).at(-1)?.createdAt
+    const now = new Date().toISOString()
+    // Never move backwards, and cover messages stamped slightly in the future.
+    const readAt = newest && newest > now ? newest : now
+    if (conversation.lastReadAt === null || readAt > conversation.lastReadAt) conversation.lastReadAt = readAt
+    store.save()
+    return summarize(store, conversation)
+  })
+
   app.delete('/api/agents/:id/runs', async (request, reply) => {
     const { id } = request.params as { id: string }
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
     // Clears the agent's own chat; its project task runs stay (deleting the agent removes them).
     store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined)
+    clearAgentConversations(store, id, false)
     store.save()
     void reply.status(204)
     return null
@@ -768,6 +829,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
     removeAvatarFile(store, agent)
+    clearAgentConversations(store, id, true)
     // It leaves every project team too, so a team PATCH never trips on a stale id.
     store.projects = store.projects.map((p) =>
       p.teamAgentIds.includes(id) ? { ...p, teamAgentIds: p.teamAgentIds.filter((x) => x !== id) } : p,

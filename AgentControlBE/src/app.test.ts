@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
-import type { Agent, AgentRun, Endpoint, Note, Skill } from './shared/types.js'
+import type { Agent, AgentRun, ChatMessage, Conversation, ConversationSummary, Endpoint, Note, Skill } from './shared/types.js'
 import { DEFAULT_ENDPOINT_BASE_URL } from './shared/types.js'
 import { seedEndpointModels, seedEndpoints, seedSkills, vendoredSeedSkills } from './db/seed.js'
 import { builtinTools, executeToolCall, toolDeclaration, type ToolEntry } from './tools.js'
@@ -2119,5 +2119,148 @@ describe('chat-first Part 1: agent profile fields', () => {
     const res = await inject('DELETE', `/api/agents/${agent.id}`)
     expect(res.statusCode).toBe(204)
     expect(existsSync(join(dir, 'avatars', `${agent.id}.webp`))).toBe(false)
+  })
+})
+
+describe('chat-first Part 2: conversations', () => {
+  async function dmFor(agentId: string) {
+    const list = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
+    const dm = list.find((c) => c.agentId === agentId)
+    expect(dm).toBeDefined()
+    return dm as ConversationSummary
+  }
+
+  it('lists a DM for every agent, newest first', async () => {
+    const res = await inject('GET', '/api/conversations')
+    expect(res.statusCode).toBe(200)
+    const list = res.json() as ConversationSummary[]
+    for (const agent of store.agents) expect(list.some((c) => c.agentId === agent.id && c.kind === 'dm')).toBe(true)
+    const times = list.map((c) => c.updatedAt)
+    expect(times).toEqual([...times].sort().reverse())
+    // Listing twice does not create duplicates.
+    const again = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
+    expect(again.map((c) => c.id).sort()).toEqual(list.map((c) => c.id).sort())
+  })
+
+  it('records 1:1 runs as messages, counts unread, and marks read', async () => {
+    const { agent } = await makeRunner()
+    mockChat('hello back')
+    expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
+
+    const dm = await dmFor(agent.id)
+    expect(dm.unreadCount).toBe(1)
+    expect(dm.lastMessage).toMatchObject({ role: 'assistant', content: 'hello back' })
+
+    const page = await inject('GET', `/api/conversations/${dm.id}/messages`)
+    expect(page.statusCode).toBe(200)
+    const body = page.json() as { conversation: Conversation; messages: ChatMessage[] }
+    expect(body.conversation.id).toBe(dm.id)
+    expect(body.messages.map((m) => [m.role, m.content])).toEqual([['user', 'hi'], ['assistant', 'hello back']])
+    expect(body.messages[0]?.runId).toBe(body.messages[1]?.runId)
+
+    const read = await inject('POST', `/api/conversations/${dm.id}/read`)
+    expect(read.statusCode).toBe(200)
+    expect(read.json()).toMatchObject({ id: dm.id, unreadCount: 0 })
+    expect((read.json() as ConversationSummary).lastReadAt).not.toBeNull()
+    expect((await dmFor(agent.id)).unreadCount).toBe(0)
+
+    // Persisted across a reload.
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.chatMessages.filter((m) => m.conversationId === dm.id)).toHaveLength(2)
+    expect(reloaded.conversations.find((c) => c.id === dm.id)?.lastReadAt).toBe((read.json() as ConversationSummary).lastReadAt)
+  })
+
+  it('pages with before and limit, and validates them', async () => {
+    const { agent } = await makeRunner()
+    mockChat('ok')
+    for (const input of ['one', 'two', 'three']) await inject('POST', `/api/agents/${agent.id}/runs`, { input })
+    const dm = await dmFor(agent.id)
+    const all = ((await inject('GET', `/api/conversations/${dm.id}/messages`)).json() as { messages: ChatMessage[] }).messages
+    expect(all).toHaveLength(6)
+    const last2 = ((await inject('GET', `/api/conversations/${dm.id}/messages?limit=2`)).json() as { messages: ChatMessage[] }).messages
+    expect(last2).toEqual(all.slice(-2))
+    const cutoff = all[2]?.createdAt as string
+    const older = ((await inject('GET', `/api/conversations/${dm.id}/messages?before=${encodeURIComponent(cutoff)}`)).json() as { messages: ChatMessage[] }).messages
+    expect(older.every((m) => m.createdAt < cutoff)).toBe(true)
+    expect((await inject('GET', `/api/conversations/${dm.id}/messages?limit=0`)).statusCode).toBe(400)
+    expect((await inject('GET', `/api/conversations/${dm.id}/messages?before=nope`)).statusCode).toBe(400)
+  })
+
+  it('404s unknown conversations', async () => {
+    expect((await inject('GET', '/api/conversations/nope/messages')).statusCode).toBe(404)
+    expect((await inject('POST', '/api/conversations/nope/read')).statusCode).toBe(404)
+  })
+
+  it('keeps project runs out of DMs', async () => {
+    const { agent } = await makeRunner()
+    const { executeRun } = await import('./runs.js')
+    mockChat('project reply')
+    await executeRun(store, store.agents.find((a) => a.id === agent.id) as Agent, 'task input', { projectId: 'proj-x' })
+    expect(store.chatMessages.some((m) => m.content === 'task input')).toBe(false)
+    const dm = await dmFor(agent.id)
+    const msgs = ((await inject('GET', `/api/conversations/${dm.id}/messages`)).json() as { messages: ChatMessage[] }).messages
+    expect(msgs.some((m) => m.content === 'task input')).toBe(false)
+  })
+
+  it('clearing an agent chat empties its DM; deleting the agent drops it', async () => {
+    const { endpoint } = await makeRunner()
+    const created = await inject('POST', '/api/agents', {
+      name: 'Second', description: '', instructions: 'Be brief.', modelId: 'test-model', endpointId: endpoint.id, skillIds: [],
+    })
+    expect(created.statusCode).toBe(201)
+    const agent = created.json() as Agent
+    mockChat('x')
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    const dm = await dmFor(agent.id)
+    expect((await inject('DELETE', `/api/agents/${agent.id}/runs`)).statusCode).toBe(204)
+    expect(((await inject('GET', `/api/conversations/${dm.id}/messages`)).json() as { messages: ChatMessage[] }).messages).toEqual([])
+    expect((await inject('DELETE', `/api/agents/${agent.id}`)).statusCode).toBe(204)
+    expect((await inject('GET', `/api/conversations/${dm.id}/messages`)).statusCode).toBe(404)
+  })
+
+  it('migrates legacy 1:1 runs once, as read history, and is idempotent', async () => {
+    const { agent } = await makeRunner()
+    const legacyDir = mkdtempSync(join(tmpdir(), 'ac-conv-'))
+    try {
+      const path = join(legacyDir, 'store.json')
+      writeFileSync(path, readFileSync(join(dir, 'store.json'), 'utf8'))
+      const agentId = agent.id
+      const run = (id: string, at: string, extra: Partial<AgentRun> = {}): AgentRun => ({
+        id, agentId, startedAt: at, status: 'succeeded', durationMs: 1000, steps: 1, input: `in ${id}`, output: `out ${id}`, error: null, ...extra,
+      })
+      // Simulate a pre-Part-2 store.json: no conversations, no marker.
+      const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown> & { meta: { migrations: string[] } }
+      raw.runs = [
+        run('r2', '2026-01-02T00:00:00.000Z'),
+        run('r1', '2026-01-01T00:00:00.000Z'),
+        run('rp', '2026-01-03T00:00:00.000Z', { projectId: 'p1' }),
+      ]
+      delete raw.conversations
+      delete raw.chatMessages
+      raw.meta.migrations = raw.meta.migrations.filter((m) => m !== 'conversations-from-runs-v1')
+      writeFileSync(path, JSON.stringify(raw))
+
+      const first = createStore(path)
+      const dm = first.conversations.find((c) => c.agentId === agentId) as Conversation
+      const msgs = first.chatMessages.filter((m) => m.conversationId === dm.id)
+      expect(msgs.map((m) => m.content)).toEqual(['in r1', 'out r1', 'in r2', 'out r2'])
+      expect(dm.lastReadAt).toBe(dm.updatedAt)
+      expect(dm.updatedAt).toBe('2026-01-02T00:00:01.000Z')
+      expect(first.meta.migrations).toContain('conversations-from-runs-v1')
+
+      // Reloading never duplicates.
+      const second = createStore(path)
+      expect(second.chatMessages).toHaveLength(first.chatMessages.length)
+      expect(second.conversations).toHaveLength(first.conversations.length)
+
+      // Even with the marker lost, runId dedupe keeps it idempotent.
+      const again = JSON.parse(readFileSync(path, 'utf8')) as { meta: { migrations: string[] } }
+      again.meta.migrations = again.meta.migrations.filter((m) => m !== 'conversations-from-runs-v1')
+      writeFileSync(path, JSON.stringify(again))
+      const third = createStore(path)
+      expect(third.chatMessages).toHaveLength(first.chatMessages.length)
+    } finally {
+      rmSync(legacyDir, { recursive: true, force: true })
+    }
   })
 })

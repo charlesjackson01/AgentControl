@@ -4,6 +4,7 @@
  * around runAgent; project tasks (src/projects.ts) call executeRun with a
  * projectId.
  */
+import { recordRunMessages } from './conversations.js'
 import { fail, uid } from './http.js'
 import { agentInstructions, attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
@@ -332,6 +333,8 @@ export async function executeRun(
     const drop = new Set(scoped.slice(RUNS_PER_SCOPE).map((r) => r.id))
     store.runs = store.runs.filter((r) => !drop.has(r.id))
   }
+  // Chat-first: 1:1 runs also land in the agent's DM (kept past run pruning).
+  recordRunMessages(store, run)
   agent.lastRunAt = run.startedAt
   agent.runCount += 1
   agent.status = run.status === 'succeeded' ? 'idle' : 'error'

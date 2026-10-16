@@ -2314,5 +2314,59 @@ describe('chat-first Part 2: conversations', () => {
     expect((del.json() as { avatar?: unknown }).avatar).toBeUndefined()
     expect((await inject('GET', '/api/profile/avatar')).statusCode).toBe(404)
   })
+})
 
+describe('empty and length-cut replies', () => {
+  function stubReply(message: Record<string, unknown>, finish_reason: string) {
+    const mock = vi.fn(async (_url: string, _init?: { body?: string }) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ choices: [{ index: 0, message: { role: 'assistant', ...message }, finish_reason }] }),
+    }))
+    vi.stubGlobal('fetch', mock)
+    return mock
+  }
+
+  it('fails a run whose reply budget went to reasoning, with a clear error', async () => {
+    const { agent } = await makeRunner()
+    stubReply({ content: '', reasoning_content: 'thinking…' }, 'length')
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.output).toBe('')
+    expect(run.error).toMatch(/whole reply budget thinking/)
+  })
+
+  it('fails an empty stop reply too', async () => {
+    const { agent } = await makeRunner()
+    stubReply({ content: '   ' }, 'stop')
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.error).toMatch(/empty reply/)
+  })
+
+  it('keeps a length-cut reply that has text', async () => {
+    const { agent } = await makeRunner()
+    stubReply({ content: 'partial answer' }, 'length')
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run.status).toBe('succeeded')
+    expect(run.output).toBe('partial answer')
+  })
+
+  it('stores disableThinking and sends chat_template_kwargs only when on', async () => {
+    const { endpoint, agent } = await makeRunner()
+    expect((await inject('PATCH', `/api/endpoints/${endpoint.id}`, { disableThinking: 'yes' })).statusCode).toBe(400)
+    const on = await inject('PATCH', `/api/endpoints/${endpoint.id}`, { disableThinking: true })
+    expect((on.json() as Endpoint).disableThinking).toBe(true)
+    let mock = stubReply({ content: 'ok' }, 'stop')
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect(JSON.parse(mock.mock.calls.at(-1)?.[1]?.body ?? '{}').chat_template_kwargs).toEqual({ enable_thinking: false })
+
+    // Omitted keeps it; false clears it.
+    expect(((await inject('PATCH', `/api/endpoints/${endpoint.id}`, { name: 'Renamed' })).json() as Endpoint).disableThinking).toBe(true)
+    const off = await inject('PATCH', `/api/endpoints/${endpoint.id}`, { disableThinking: false })
+    expect((off.json() as Endpoint).disableThinking).toBeUndefined()
+    mock = stubReply({ content: 'ok' }, 'stop')
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect(JSON.parse(mock.mock.calls.at(-1)?.[1]?.body ?? '{}').chat_template_kwargs).toBeUndefined()
+  })
 })

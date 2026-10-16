@@ -961,6 +961,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       ...(raw.proxyUrl !== undefined ? { proxyUrl: raw.proxyUrl } : {}),
     }
     assertEndpointInput(input, '')
+    if (raw.disableThinking !== undefined && typeof raw.disableThinking !== 'boolean') fail(400, '"disableThinking" must be true or false.')
     const proxyUrl = resolveProxy(raw.proxyUrl, undefined)
     const id = uid('ep')
     const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey : ''
@@ -978,6 +979,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       createdAt: new Date().toISOString(),
       ...(input.timeoutMs !== undefined ? { timeoutMs: Math.floor(input.timeoutMs) } : {}),
       ...(proxyUrl ? { proxyUrl } : {}),
+      ...(raw.disableThinking === true ? { disableThinking: true } : {}),
     }
     store.endpoints = [endpoint, ...store.endpoints]
     store.endpointModels[id] = [endpoint.defaultModel]
@@ -1003,6 +1005,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       ...(raw.proxyUrl !== undefined ? { proxyUrl: raw.proxyUrl } : {}),
     }
     assertEndpointInput(merged, store.endpointKeys[id] ?? '')
+    if (raw.disableThinking !== undefined && typeof raw.disableThinking !== 'boolean') fail(400, '"disableThinking" must be true or false.')
     const proxyUrl = resolveProxy(raw.proxyUrl, current.proxyUrl)
     // Write-only key semantics: omitted keeps, non-empty replaces, "" clears.
     if (raw.apiKey !== undefined) {
@@ -1023,6 +1026,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     if (proxyUrl) next.proxyUrl = proxyUrl
     else delete next.proxyUrl
+    if (raw.disableThinking === true) next.disableThinking = true
+    else if (raw.disableThinking === false) delete next.disableThinking
     store.endpoints = store.endpoints.map((e, i) => (i === index ? next : e))
     const models = store.endpointModels[id] ?? []
     if (!models.includes(next.defaultModel)) store.endpointModels[id] = [...models, next.defaultModel]

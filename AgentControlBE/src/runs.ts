@@ -6,7 +6,7 @@
  */
 import { recordRunMessages } from './conversations.js'
 import { fail, uid } from './http.js'
-import { agentInstructions, attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
+import { agentInstructions, attachedSkills, planPrompt, replyReserve } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
@@ -86,7 +86,9 @@ export async function executeRun(
     skills: injectedSkills,
     input,
     contextWindow: endpoint.contextWindow,
+    responseReserve: replyReserve(endpoint),
   })
+  const reserve = replyReserve(endpoint)
   const system = plan.system
   const toolDeclarations: ToolDeclaration[] = plan.toolDeclarations
   const summarized = new Set(plan.summarizedSkillIds)
@@ -181,17 +183,17 @@ export async function executeRun(
 
     let turns = history
     let estimated = estimate(turns, withSchemas)
-    while (estimated + RESPONSE_RESERVE > contextWindow && turns.length > 0) {
+    while (estimated + reserve > contextWindow && turns.length > 0) {
       turns = turns.slice(1)
       estimated = estimate(turns, withSchemas)
     }
     const baseEstimated = estimate([], withSchemas)
-    if (baseEstimated + RESPONSE_RESERVE > contextWindow) {
+    if (baseEstimated + reserve > contextWindow) {
       if (toolAudit.length === 0) {
         fail(
           413,
           `Prompt too large for this endpoint's context window: about ${baseEstimated} tokens of prompt ` +
-            `plus ${RESPONSE_RESERVE} reserved for the reply exceed the ${contextWindow}-token window. ` +
+            `plus ${reserve} reserved for the reply exceed the ${contextWindow}-token window. ` +
             "Detach skills, shorten the instructions or the message, or raise the endpoint's context window in Settings.",
         )
       }
@@ -204,7 +206,7 @@ export async function executeRun(
       contextExhausted = true
       break
     }
-    const maxTokens = Math.min(RESPONSE_RESERVE, contextWindow - estimated)
+    const maxTokens = Math.min(reserve, contextWindow - estimated)
 
     const messages: ChatMessage[] = []
     if (systemText) messages.push({ role: 'system', content: systemText })
@@ -249,7 +251,7 @@ export async function executeRun(
         callsThisTurn += 1
         // What the context window still holds for this result. Paging tools
         // size their page to it; anything larger is clipped below.
-        const remainingChars = (contextWindow - RESPONSE_RESERVE - estimate([], true)) * 4
+        const remainingChars = (contextWindow - reserve - estimate([], true)) * 4
         const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
         toolCtx.resultMaxChars = limit
         let outcome: ToolOutcome

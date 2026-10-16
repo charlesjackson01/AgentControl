@@ -2397,3 +2397,40 @@ describe('chat error flag', () => {
     expect(flagged.map((m) => m.id)).toEqual([reply?.id])
   })
 })
+
+describe('endpoint maxOutputTokens', () => {
+  it('validates, keeps, clears, and drives max_tokens and the budget preview', async () => {
+    const { endpoint, agent } = await makeRunner()
+    for (const bad of [0, -1, 1.5, 8192, 9000, '100']) {
+      expect((await inject('PATCH', `/api/endpoints/${endpoint.id}`, { maxOutputTokens: bad })).statusCode).toBe(400)
+    }
+    const set = await inject('PATCH', `/api/endpoints/${endpoint.id}`, { maxOutputTokens: 1000 })
+    expect((set.json() as Endpoint).maxOutputTokens).toBe(1000)
+    expect(((await inject('PATCH', `/api/endpoints/${endpoint.id}`, { name: 'Kept' })).json() as Endpoint).maxOutputTokens).toBe(1000)
+    // Shrinking the window below the budget is rejected.
+    expect((await inject('PATCH', `/api/endpoints/${endpoint.id}`, { contextWindow: 1000 })).statusCode).toBe(400)
+
+    const mock = mockChat('ok')
+    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
+    expect(lastRequest(mock).max_tokens).toBe(1000)
+
+    const budget = await inject('POST', '/api/prompt-budget', { endpointId: endpoint.id, skillIds: [] })
+    expect((budget.json() as { responseReserve: number }).responseReserve).toBe(1000)
+
+    const cleared = await inject('PATCH', `/api/endpoints/${endpoint.id}`, { maxOutputTokens: null })
+    expect((cleared.json() as Endpoint).maxOutputTokens).toBeUndefined()
+    const after = await inject('POST', '/api/prompt-budget', { endpointId: endpoint.id, skillIds: [] })
+    expect((after.json() as { responseReserve: number }).responseReserve).toBe(4096)
+  })
+
+  it('accepts it on create', async () => {
+    const res = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible', name: 'E', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 8192, maxOutputTokens: 2048,
+    })
+    expect(res.statusCode).toBe(201)
+    expect((res.json() as Endpoint).maxOutputTokens).toBe(2048)
+    expect((await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible', name: 'E', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 8192, maxOutputTokens: 8192,
+    })).statusCode).toBe(400)
+  })
+})

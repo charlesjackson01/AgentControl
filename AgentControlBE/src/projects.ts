@@ -19,7 +19,7 @@
  */
 import { fail, uid } from './http.js'
 import { mentionCandidates, resolveMentions } from './mentions.js'
-import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE, SKILL_HEADROOM } from './prompt.js'
+import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve, SKILL_HEADROOM } from './prompt.js'
 import { executeRun } from './runs.js'
 import type {
   Agent,
@@ -430,6 +430,8 @@ export function buildPlannerRequest(
   lead: Agent,
   prompt: PlannerPrompt,
   contextWindow: number,
+  /** The endpoint's maxOutputTokens, when set: caps the plan's max_tokens. */
+  maxOutputTokens?: number,
 ): PlannerRequest {
   const maxTasks = contextWindow <= SMALL_WINDOW ? MAX_TASKS_SMALL : MAX_TASKS
   const system = plannerSystem(lead, prompt.messageId !== undefined, maxTasks)
@@ -549,7 +551,7 @@ export function buildPlannerRequest(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    maxTokens: Math.min(PLAN_MAX_TOKENS, contextWindow - estimated),
+    maxTokens: Math.min(PLAN_MAX_TOKENS, maxOutputTokens ?? PLAN_MAX_TOKENS, contextWindow - estimated),
     refs,
   }
 }
@@ -967,6 +969,8 @@ export function buildReviewRequest(
   promptId: string,
   state: ThreadState,
   contextWindow: number,
+  /** The endpoint's maxOutputTokens, when set: caps the review's max_tokens. */
+  maxOutputTokens?: number,
 ): PlannerRequest {
   const nextRound = state.round + 1
   const finalRound = nextRound > MAX_ROUNDS
@@ -1105,7 +1109,7 @@ export function buildReviewRequest(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    maxTokens: Math.min(PLAN_MAX_TOKENS, contextWindow - estimated),
+    maxTokens: Math.min(PLAN_MAX_TOKENS, maxOutputTokens ?? PLAN_MAX_TOKENS, contextWindow - estimated),
     refs,
   }
 }
@@ -1182,7 +1186,7 @@ export async function requestReview(store: WorkspaceStore, projectId: string, bo
 
   const project = projectOrFail(store, projectId)
   const nextRound = state.round + 1
-  const request = buildReviewRequest(store, project, lead, promptId, state, endpoint.contextWindow)
+  const request = buildReviewRequest(store, project, lead, promptId, state, endpoint.contextWindow, endpoint.maxOutputTokens)
 
   const result = await chatCompletion(
     endpoint.baseUrl,
@@ -1280,7 +1284,7 @@ export async function requestTeamPlan(store: WorkspaceStore, projectId: string, 
   if (!lead) fail(409, 'Create the Team Lead first: Primary plans the team and its tasks.')
   const endpoint = store.endpoints.find((e) => e.id === lead.endpointId)
   if (!endpoint) fail(400, `Agent "${lead.name}" has no valid endpoint. Pick one in its settings.`)
-  const request = buildPlannerRequest(store, projectOrFail(store, projectId), lead, prompt, endpoint.contextWindow)
+  const request = buildPlannerRequest(store, projectOrFail(store, projectId), lead, prompt, endpoint.contextWindow, endpoint.maxOutputTokens)
 
   const result = await chatCompletion(
     endpoint.baseUrl,
@@ -2017,8 +2021,9 @@ export function fitTaskInput(
     skills,
     input: '',
     contextWindow: endpoint.contextWindow,
+    responseReserve: replyReserve(endpoint),
   }).estimatedTokens
-  const roomTokens = endpoint.contextWindow - RESPONSE_RESERVE - SKILL_HEADROOM - overhead
+  const roomTokens = endpoint.contextWindow - replyReserve(endpoint) - SKILL_HEADROOM - overhead
   const roomChars = roomTokens * 4
   if (roomChars < INPUT_CHARS_MIN) {
     return {

@@ -312,3 +312,14 @@ describe('attachedSkills', () => {
     expect(attachedSkills([first, second], ['dup'])[0]).toBe(first)
   })
 })
+
+describe('replyReserve and planPrompt responseReserve', () => {
+  it('defaults to RESPONSE_RESERVE and moves the hard limit', async () => {
+    const { replyReserve, RESPONSE_RESERVE, planPrompt } = await import('./prompt.js')
+    expect(replyReserve({})).toBe(RESPONSE_RESERVE)
+    expect(replyReserve({ maxOutputTokens: 512 })).toBe(512)
+    const base = { instructions: 'x'.repeat(4 * 3000), skills: [], input: '', contextWindow: 8192 }
+    expect(planPrompt({ ...base, responseReserve: 6000 }).mode).toBe('too-large')
+    expect(planPrompt({ ...base, responseReserve: 1000 }).mode).not.toBe('too-large')
+  })
+})

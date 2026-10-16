@@ -31,6 +31,8 @@ export interface Endpoint {
   proxyUrl?: string
   /** Ask the server not to think (chat_template_kwargs.enable_thinking=false). */
   disableThinking?: boolean
+  /** Tokens reserved for (and capping) each reply; 0 < n < contextWindow. Defaults to 4096. */
+  maxOutputTokens?: number
 }
 
 /** One model served by an endpoint (GET /api/endpoints/:id/models). */
@@ -54,6 +56,8 @@ export interface EndpointInput {
   proxyUrl?: string | null
   /** Optional. Omit to keep on update. */
   disableThinking?: boolean
+  /** Optional integer, 0 < n < contextWindow. Omit to keep on update; null clears (back to the default). */
+  maxOutputTokens?: number | null
 }
 
 export type EndpointPatch = Partial<EndpointInput>

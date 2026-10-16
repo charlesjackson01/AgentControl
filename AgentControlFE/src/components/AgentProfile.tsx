@@ -13,6 +13,7 @@ import {
   normalizeRules,
   removeRule,
   rulesEqual,
+  rulesTokenEstimate,
   updateRule,
 } from '../lib/agent-profile'
 import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, Skill } from '../lib/types'
@@ -201,9 +202,11 @@ export default function AgentProfile({
   // failed request just hides the line, so the form never shows a budget error.
   const budgetRequest = useMemo<PromptBudgetInput | null>(() => {
     if (isBootstrap || !draft.endpointId) return null
-    if (draft.skillIds.length === 0 && !draft.instructions.trim()) return null
-    return { endpointId: draft.endpointId, skillIds: draft.skillIds, instructions: draft.instructions }
-  }, [isBootstrap, draft.endpointId, draft.skillIds, draft.instructions])
+    const savedRules = normalizeRules(draft.rules ?? [])
+    if (draft.skillIds.length === 0 && !draft.instructions.trim() && savedRules.length === 0) return null
+    return { endpointId: draft.endpointId, skillIds: draft.skillIds, instructions: draft.instructions, rules: savedRules }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the normalized rules text
+  }, [isBootstrap, draft.endpointId, draft.skillIds, draft.instructions, normalizeRules(draft.rules ?? []).join('\n')])
   const [budget, setBudget] = useState<{ request: PromptBudgetInput; value: PromptBudget } | null>(null)
   useEffect(() => {
     if (!budgetRequest) return
@@ -390,7 +393,7 @@ export default function AgentProfile({
                       <p className="field__err" role="alert">{avatarError}</p>
                     ) : (
                       <p className="field__hint">
-                        Pick an emoji or upload an image (PNG, JPEG, WebP, GIF). Without one, initials are shown.
+                        Pick an emoji or upload an image (PNG, JPEG, WebP or GIF, up to 1 MB). Without one, initials are shown.
                       </p>
                     )}
                   </div>
@@ -482,6 +485,13 @@ export default function AgentProfile({
                 </div>
                 <span className="pill">{normalizeRules(rules).length} / {MAX_RULES}</span>
               </div>
+              <p className="field__hint" role="status" aria-live="polite">
+                {rulesTokenEstimate(rules) > 0 ? `Rules add ≈${rulesTokenEstimate(rules).toLocaleString()} tokens to the prompt` : 'No rules yet'}
+                {shownBudget
+                  ? ` · prompt ≈${shownBudget.value.estimatedTokens.toLocaleString()} of ${(shownBudget.value.contextWindow - shownBudget.value.responseReserve).toLocaleString()} tokens available`
+                  : ''}
+                .
+              </p>
               {rules.length > 0 && (
                 <ol className="rules" aria-label="Rules">
                   {rules.map((rule, i) => (

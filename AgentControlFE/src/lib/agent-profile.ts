@@ -26,8 +26,26 @@ export function paletteColor(seed: string): string {
 /** Emoji offered by the avatar picker. */
 export const AVATAR_EMOJI = ['🤖', '🧠', '🦊', '🐙', '🦉', '🐝', '🚀', '🛠️', '📚', '🔍', '✍️', '🎯', '🧪', '💡', '🛡️', '🌱']
 
-export const MAX_RULES = 30
-export const MAX_RULE_LENGTH = 500
+import { MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES } from './types.ts'
+
+export const MAX_RULES = MAX_AGENT_RULES
+export const MAX_RULE_LENGTH = MAX_AGENT_RULE_CHARS
+
+/** Mirrors BE prompt.ts RULES_HEADER / agentInstructions. */
+export const RULES_HEADER = '## Rules\nAlways follow these rules:\n'
+
+/** chars/4 estimate (as the BE budget counts) of the Rules prompt section incl. its separator. */
+export function rulesTokenEstimate(rules: readonly string[]): number {
+  const list = normalizeRules(rules)
+  if (list.length === 0) return 0
+  const section = `\n\n${RULES_HEADER}${list.map((r) => `- ${r}`).join('\n')}`
+  return Math.ceil(section.length / 4)
+}
+
+/** BE accepts '#rrggbb' only. */
+export function isHexColor(v: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(v)
+}
 
 export function addRule(rules: readonly string[], text = ''): string[] {
   if (rules.length >= MAX_RULES) return [...rules]

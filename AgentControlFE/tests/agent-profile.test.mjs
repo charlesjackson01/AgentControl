@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   AVATAR_PALETTE, MAX_RULES, MAX_RULE_LENGTH, addRule, initialsOf, moveRule, normalizeRules,
-  paletteColor, removeRule, rulesEqual, updateRule,
+  paletteColor, removeRule, rulesTokenEstimate, isHexColor, RULES_HEADER, rulesEqual, updateRule,
 } from '../src/lib/agent-profile.ts'
 
 describe('initialsOf', () => {
@@ -54,4 +54,22 @@ describe('rules helpers', () => {
     assert.ok(rulesEqual(['a ', ''], ['a']))
     assert.ok(!rulesEqual(['a', 'b'], ['b', 'a']))
   })
+})
+
+describe('BE-aligned limits', () => {
+  it('rules cap at 20 x 500', () => {
+    assert.equal(MAX_RULES, 20)
+    assert.equal(MAX_RULE_LENGTH, 500)
+  })
+  it('rulesTokenEstimate mirrors the BE section (chars/4, separator included)', () => {
+    assert.equal(rulesTokenEstimate([' ', '']), 0)
+    const section = `\n\n${RULES_HEADER}- a\n- bb`
+    assert.equal(rulesTokenEstimate(['a', ' bb ', 'a']), Math.ceil(section.length / 4))
+  })
+  it('isHexColor accepts #rrggbb only', () => {
+    assert.ok(isHexColor('#a1B2c3'))
+    assert.ok(!isHexColor('#abc'))
+    assert.ok(!isHexColor('red'))
+  })
+  it('palette is all #rrggbb', () => assert.ok(AVATAR_PALETTE.every(isHexColor)))
 })

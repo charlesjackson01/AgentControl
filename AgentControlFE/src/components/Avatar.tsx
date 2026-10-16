@@ -32,7 +32,7 @@ export default function Avatar({
   className,
   decorative = false,
 }: AvatarProps) {
-  const imageSrc = previewUrl ?? (avatar?.kind === 'image' && agentId ? agentAvatarUrl(agentId, avatar.value) : null)
+  const imageSrc = previewUrl ?? (avatar?.kind === 'image' && agentId ? agentAvatarUrl(agentId, avatar.updatedAt) : null)
   // Remember which src failed so a new src gets a fresh try without an effect.
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
   const showImage = imageSrc !== null && failedSrc !== imageSrc

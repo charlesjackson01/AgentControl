@@ -13,7 +13,7 @@ import {
   addCandidates,
   applyBody,
   createBlock,
-  describeProgress,
+  descendants,
   initialSelection,
   isFailedResult,
   isTaskResult,
@@ -42,6 +42,7 @@ import {
   toggleAdd,
   toggleCreate,
   toggleTask,
+  workBarLabel,
   type ApplyBody,
   type PlanContext,
   type PlanSelection,
@@ -331,15 +332,22 @@ function PlanCard({
 function TaskAssignment({
   message,
   names,
+  paused,
   onRetry,
+  onCancel,
+  onStop,
 }: {
   message: ProjectMessage
   names: Names
+  paused: boolean
   onRetry: () => Promise<void>
+  onCancel: () => void
+  onStop: () => void
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const status = message.taskStatus ?? 'queued'
+  const showPaused = status === 'queued' && paused
 
   const retry = async () => {
     if (busy) return
@@ -355,7 +363,7 @@ function TaskAssignment({
   }
 
   return (
-    <div className={`task task--${status}`}>
+    <div className={`task task--${status}${showPaused ? ' task--paused' : ''}`}>
       <div className="task__head">
         <span className="task__route">
           {message.assigneeId === message.author
@@ -363,20 +371,73 @@ function TaskAssignment({
             : `${names.of(message.author)} → ${names.of(message.assigneeId)}`}
         </span>
         <TaskPill status={status} />
+        {showPaused && <span className="status status--paused">Paused</span>}
       </div>
       <div className="task__body">
         <MentionText text={message.text} mentions={message.mentions} names={names} />
       </div>
-      {status === 'failed' && (
-        <button type="button" className="chat__retry" onClick={() => void retry()} disabled={busy}>
-          {busy ? 'Retrying…' : 'Retry'}
-        </button>
-      )}
+      <div className="task__actions">
+        {(status === 'failed' || status === 'cancelled') && (
+          <button type="button" className="chat__retry" onClick={() => void retry()} disabled={busy}>
+            {busy ? 'Retrying…' : 'Retry'}
+          </button>
+        )}
+        {status === 'running' && (
+          <button type="button" className="chat__retry" onClick={onStop} disabled={busy}>
+            Stop
+          </button>
+        )}
+        {(status === 'queued' || status === 'running' || status === 'failed') && (
+          <button type="button" className="chat__retry" onClick={onCancel} disabled={busy}>
+            Cancel
+          </button>
+        )}
+      </div>
       {error && (
         <p className="field__err" role="alert">
           {error}
         </p>
       )}
+    </div>
+  )
+}
+
+/* -- Work bar (D-O5) ---------------------------------------------------------- */
+
+function WorkBar({
+  progress,
+  paused,
+  busy,
+  onPause,
+  onResume,
+  onStop,
+}: {
+  progress: ReturnType<typeof taskProgress>
+  paused: boolean
+  busy: boolean
+  onPause: () => void
+  onResume: () => void
+  onStop: () => void
+}) {
+  const label = workBarLabel(progress, paused)
+  if (!label && !paused) return null
+  return (
+    <div className="workbar" role="status">
+      <span className="workbar__label">{label || 'Working'}</span>
+      <div className="workbar__actions">
+        {paused ? (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onResume} disabled={busy}>
+            Resume
+          </button>
+        ) : (
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onPause} disabled={busy}>
+            Pause
+          </button>
+        )}
+        <button type="button" className="btn btn--ghost btn--sm" onClick={onStop} disabled={busy}>
+          Stop
+        </button>
+      </div>
     </div>
   )
 }
@@ -516,6 +577,12 @@ function ProjectChatPage({ id }: { id: string }) {
   const [removeTarget, setRemoveTarget] = useState<string | null>(null)
   const [removing, setRemoving] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
+  // D-O5: confirm Stop (project-wide) or Cancel (one task + dependents).
+  const [workConfirm, setWorkConfirm] = useState<
+    null | { kind: 'stop' } | { kind: 'cancel'; taskId: string }
+  >(null)
+  const [workBusy, setWorkBusy] = useState(false)
+  const [workError, setWorkError] = useState<string | null>(null)
 
   // Every refresh and every route response takes a ticket. A refresh applies
   // only if nothing newer landed since it started, so a slow poll never rolls
@@ -594,7 +661,8 @@ function ProjectChatPage({ id }: { id: string }) {
     [refresh],
   )
 
-  const polling = messages !== undefined && needsPolling(messages, syncError !== null)
+  const polling =
+    messages !== undefined && needsPolling(messages, syncError !== null, project?.paused === true)
 
   // Chained timeouts: one request in flight at a time, backing off on errors,
   // stopped when idle and on unmount.
@@ -729,6 +797,27 @@ function ProjectChatPage({ id }: { id: string }) {
     }
   }
 
+  const runWork = async (action: () => Promise<ProjectUpdate>, fallback: string) => {
+    if (workBusy) return
+    setWorkBusy(true)
+    setWorkError(null)
+    try {
+      take(await action())
+      setWorkConfirm(null)
+    } catch (err) {
+      resyncOn(err)
+      setWorkError(friendlyError(err, fallback))
+    } finally {
+      setWorkBusy(false)
+    }
+  }
+
+  const pauseWork = () => void runWork(() => api.pauseProjectWork(id), 'Could not pause work.')
+  const resumeWork = () => void runWork(() => api.resumeProjectWork(id), 'Could not resume work.')
+  const confirmStop = () => void runWork(() => api.stopProjectWork(id), 'Could not stop work.')
+  const confirmCancel = (taskId: string) =>
+    void runWork(() => api.cancelProjectTask(id, taskId), 'Could not cancel the task.')
+
   const send = async () => {
     const text = draft.trim()
     if (!text || !primary || busy.current.sending || busy.current.planning) return
@@ -860,7 +949,21 @@ function ProjectChatPage({ id }: { id: string }) {
   }
   const sendButtonLabel = sendLabel(pickedMentions, primary?.id, (mid) => byId.get(mid)?.name)
   const teamEmpty = Boolean(project) && members.length === 0
-  const working = progress.running + progress.queued > 0
+  const working = progress.running + progress.queued > 0 || project?.paused === true
+  const cancelTarget =
+    workConfirm?.kind === 'cancel' ? messages?.find((m) => m.id === workConfirm.taskId) : undefined
+  const cancelAffected = cancelTarget
+    ? [
+        cancelTarget,
+        ...descendants(cancelTarget.id, messages ?? []).filter(
+          (d) => d.taskStatus !== 'done' && d.taskStatus !== 'cancelled',
+        ),
+      ]
+    : []
+  const stopAffected = (messages ?? []).filter(
+    (m) =>
+      m.kind === 'task-assignment' && (m.taskStatus === 'queued' || m.taskStatus === 'running'),
+  )
 
   /** What shows after a prompt's last message: planning, the error, the pending card. */
   const renderPlanSlot = (promptId: string) => {
@@ -908,7 +1011,22 @@ function ProjectChatPage({ id }: { id: string }) {
         </p>
       )
     } else if (m.kind === 'task-assignment') {
-      body = <TaskAssignment message={m} names={names} onRetry={() => retryTask(m.id)} />
+      body = (
+        <TaskAssignment
+          message={m}
+          names={names}
+          paused={project?.paused === true}
+          onRetry={() => retryTask(m.id)}
+          onCancel={() => {
+            setWorkError(null)
+            setWorkConfirm({ kind: 'cancel', taskId: m.id })
+          }}
+          onStop={() => {
+            setWorkError(null)
+            setWorkConfirm({ kind: 'stop' })
+          }}
+        />
+      )
     } else if (m.author === 'user') {
       body = (
         <Bubble kind="user">
@@ -955,7 +1073,7 @@ function ProjectChatPage({ id }: { id: string }) {
   const composerHint = planning !== null
     ? `${primaryName} is planning…`
     : working
-      ? `Working: ${describeProgress(progress)}`
+      ? null
       : askHint
         ? `Describe what to build or accomplish; ${primaryName} proposes a team for it.`
         : 'Enter to send · Shift+Enter for a new line'
@@ -1155,6 +1273,18 @@ function ProjectChatPage({ id }: { id: string }) {
             <p className="field__err" role="alert">
               {sendError}
             </p>
+          ) : working ? (
+            <WorkBar
+              progress={progress}
+              paused={project?.paused === true}
+              busy={workBusy}
+              onPause={pauseWork}
+              onResume={resumeWork}
+              onStop={() => {
+                setWorkError(null)
+                setWorkConfirm({ kind: 'stop' })
+              }}
+            />
           ) : (
             <p className="chat__composer__hint">{composerHint}</p>
           )}
@@ -1186,6 +1316,72 @@ function ProjectChatPage({ id }: { id: string }) {
         {removeError && (
           <p className="field__err" role="alert">
             {removeError}
+          </p>
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={workConfirm?.kind === 'stop'}
+        title="Stop all work on this project?"
+        subtitle="The running call is aborted and every queued task is cancelled. You can retry them later."
+        confirmLabel="Stop work"
+        loading={workBusy}
+        onCancel={() => {
+          if (!workBusy) {
+            setWorkConfirm(null)
+            setWorkError(null)
+          }
+        }}
+        onConfirm={confirmStop}
+      >
+        {stopAffected.length > 0 ? (
+          <ul className="prose">
+            {stopAffected.map((t) => (
+              <li key={t.id}>
+                {names.of(t.assigneeId)} · {TASK_STATUS_LABELS[t.taskStatus ?? 'queued']}: {t.text.slice(0, 80)}
+                {t.text.length > 80 ? '…' : ''}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="prose">No queued or running tasks right now.</p>
+        )}
+        {workError && (
+          <p className="field__err" role="alert">
+            {workError}
+          </p>
+        )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={workConfirm?.kind === 'cancel'}
+        title="Cancel this task?"
+        subtitle={
+          cancelAffected.length > 1
+            ? `This also cancels ${cancelAffected.length - 1} dependent task${cancelAffected.length - 1 === 1 ? '' : 's'}.`
+            : 'The task can be retried later.'
+        }
+        confirmLabel="Cancel task"
+        loading={workBusy}
+        onCancel={() => {
+          if (!workBusy) {
+            setWorkConfirm(null)
+            setWorkError(null)
+          }
+        }}
+        onConfirm={() => cancelTarget && confirmCancel(cancelTarget.id)}
+      >
+        <ul className="prose">
+          {cancelAffected.map((t) => (
+            <li key={t.id}>
+              {names.of(t.assigneeId)} · {TASK_STATUS_LABELS[t.taskStatus ?? 'queued']}: {t.text.slice(0, 80)}
+              {t.text.length > 80 ? '…' : ''}
+            </li>
+          ))}
+        </ul>
+        {workError && (
+          <p className="field__err" role="alert">
+            {workError}
           </p>
         )}
       </ConfirmDialog>

@@ -34,7 +34,7 @@ import type {
 } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { clipText } from './tools/limits.js'
-import { chatCompletion, type ChatMessage } from './upstream.js'
+import { chatCompletion, STOPPED_BY_YOU, type ChatMessage } from './upstream.js'
 
 /** Plan limits: what one plan may propose. */
 const MAX_ADD = 10
@@ -908,12 +908,14 @@ export function applyTeamPlan(store: WorkspaceStore, runner: TaskRunner, project
   return { project: nextProject, messages }
 }
 
-/** POST /api/projects/:id/tasks/:messageId/retry: re-queue a failed task. */
+/** POST /api/projects/:id/tasks/:messageId/retry: re-queue a failed or cancelled task. */
 export function retryTask(store: WorkspaceStore, runner: TaskRunner, projectId: string, messageId: string): ProjectUpdate {
   const project = projectOrFail(store, projectId)
   const task = findMessage(store, projectId, messageId)
   if (!task || task.kind !== 'task-assignment') fail(404, `No task with id "${messageId.slice(0, 100)}" in this project.`)
-  if (task.taskStatus !== 'failed') fail(409, `Only a failed task can be retried; this one is ${task.taskStatus ?? 'unknown'}.`)
+  if (task.taskStatus !== 'failed' && task.taskStatus !== 'cancelled') {
+    fail(409, `Only a failed or cancelled task can be retried; this one is ${task.taskStatus ?? 'unknown'}.`)
+  }
   if (!store.agents.some((a) => a.id === task.assigneeId)) {
     fail(409, 'The agent assigned to this task is no longer in the library.')
   }
@@ -928,6 +930,158 @@ export function retryTask(store: WorkspaceStore, runner: TaskRunner, projectId: 
   return { project, messages: [queued] }
 }
 
+/** Tasks that name `taskId` in `inputs` (and their transitive dependents), newest-ready first. */
+export function dependentTasks(store: WorkspaceStore, projectId: string, taskId: string): ProjectMessage[] {
+  const open = new Set([taskId])
+  const found: ProjectMessage[] = []
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const m of store.projectMessages) {
+      if (m.projectId !== projectId || m.kind !== 'task-assignment' || !m.inputs?.length) continue
+      if (found.some((f) => f.id === m.id) || open.has(m.id)) continue
+      if (!m.inputs.some((id) => open.has(id))) continue
+      found.push(m)
+      open.add(m.id)
+      grew = true
+    }
+  }
+  return found
+}
+
+function setProjectPaused(store: WorkspaceStore, project: Project, paused: boolean): Project {
+  const next: Project = paused ? { ...project, paused: true } : (() => {
+    const { paused: _drop, ...rest } = project
+    return rest
+  })()
+  store.projects = store.projects.map((p) => (p.id === project.id ? next : p))
+  return next
+}
+
+/** POST /api/projects/:id/work/pause — start nothing new; the in-flight call keeps going (D-O5). */
+export function pauseWork(store: WorkspaceStore, projectId: string): ProjectUpdate {
+  const project = projectOrFail(store, projectId)
+  if (project.paused) return { project, messages: [] }
+  const previous = store.projects
+  const next = setProjectPaused(store, project, true)
+  if (!store.save()) {
+    store.projects = previous
+    fail(500, 'The project could not be paused in storage. Please retry.')
+  }
+  return { project: next, messages: [] }
+}
+
+/** POST /api/projects/:id/work/resume — clear pause and kick the queue. */
+export function resumeWork(store: WorkspaceStore, runner: TaskRunner, projectId: string): ProjectUpdate {
+  const project = projectOrFail(store, projectId)
+  if (!project.paused) {
+    runner.kick(projectId)
+    return { project, messages: [] }
+  }
+  const previous = store.projects
+  const next = setProjectPaused(store, project, false)
+  if (!store.save()) {
+    store.projects = previous
+    fail(500, 'The project could not be resumed in storage. Please retry.')
+  }
+  runner.kick(projectId)
+  return { project: next, messages: [] }
+}
+
+/**
+ * Mark tasks cancelled (and leave a result line). Does not abort an in-flight
+ * run; the caller aborts first when stopping a running task.
+ */
+function cancelAssignments(
+  store: WorkspaceStore,
+  projectId: string,
+  tasks: ProjectMessage[],
+  reason: string,
+): ProjectMessage[] {
+  if (tasks.length === 0) return []
+  const now = new Date().toISOString()
+  const ids = new Set(tasks.map((t) => t.id))
+  const clock = messageClock(store, projectId)
+  const changed: ProjectMessage[] = []
+  const results: ProjectMessage[] = []
+  for (const task of tasks) {
+    if (task.taskStatus === 'done' || task.taskStatus === 'cancelled') continue
+    const next: ProjectMessage = { ...task, taskStatus: 'cancelled', updatedAt: now }
+    changed.push(next)
+    results.push({
+      id: uid('msg'),
+      projectId,
+      author: task.assigneeId ?? task.author,
+      text: reason,
+      kind: 'message',
+      createdAt: clock(),
+      taskId: task.id,
+      taskStatus: 'cancelled',
+    })
+  }
+  if (changed.length === 0) return []
+  store.projectMessages = [
+    ...store.projectMessages.map((m) => (ids.has(m.id) ? (changed.find((c) => c.id === m.id) ?? m) : m)),
+    ...results,
+  ]
+  return [...changed, ...results]
+}
+
+/**
+ * POST /api/projects/:id/tasks/:messageId/cancel — cancel a queued/running/failed
+ * task and any non-done dependents that name it in `inputs` (D-O4). 409 when done.
+ */
+export function cancelTask(
+  store: WorkspaceStore,
+  runner: TaskRunner,
+  projectId: string,
+  messageId: string,
+): ProjectUpdate {
+  const project = projectOrFail(store, projectId)
+  const task = findMessage(store, projectId, messageId)
+  if (!task || task.kind !== 'task-assignment') fail(404, `No task with id "${messageId.slice(0, 100)}" in this project.`)
+  if (task.taskStatus === 'done') fail(409, 'A finished task cannot be cancelled.')
+  if (task.taskStatus === 'cancelled') return { project, messages: [] }
+
+  const deps = dependentTasks(store, projectId, task.id).filter(
+    (d) => d.taskStatus !== 'done' && d.taskStatus !== 'cancelled',
+  )
+  const previousMessages = store.projectMessages
+  if (task.taskStatus === 'running') runner.halt(projectId)
+  const messages = cancelAssignments(store, projectId, [task, ...deps], 'Cancelled by you.')
+  if (!store.save()) {
+    store.projectMessages = previousMessages
+    fail(500, 'The task could not be cancelled in storage. Please retry.')
+  }
+  return { project, messages }
+}
+
+/**
+ * POST /api/projects/:id/work/stop — abort the in-flight call and cancel every
+ * queued (and running) task; each can be retried (D-O5).
+ */
+export function stopWork(store: WorkspaceStore, runner: TaskRunner, projectId: string): ProjectUpdate {
+  const project = projectOrFail(store, projectId)
+  const open = store.projectMessages.filter(
+    (m) =>
+      m.projectId === projectId &&
+      m.kind === 'task-assignment' &&
+      (m.taskStatus === 'queued' || m.taskStatus === 'running'),
+  )
+  const previousProjects = store.projects
+  const previousMessages = store.projectMessages
+  runner.halt(projectId)
+  const messages = cancelAssignments(store, projectId, open, 'Stopped by you.')
+  // Stop clears pause so a later resume/retry is not blocked by a stale flag.
+  const next = project.paused ? setProjectPaused(store, project, false) : project
+  if (!store.save()) {
+    store.projects = previousProjects
+    store.projectMessages = previousMessages
+    fail(500, 'The project work could not be stopped in storage. Please retry.')
+  }
+  return { project: next, messages }
+}
+
 // ---------------------------------------------------------------------------
 // Task runner
 
@@ -938,8 +1092,13 @@ export interface TaskRunner {
   whenIdle(projectId: string): Promise<void>
   /** True while a drain for the project is running or waiting. */
   busy(projectId: string): boolean
-  /** Start no further tasks for the project (it was deleted); the one in flight finishes. */
+  /**
+   * Start no further tasks for the project (it was deleted) and abort the call
+   * in flight when there is one (D-O5).
+   */
   stop(projectId: string): void
+  /** Abort the call in flight for this project, if any. Queue control is separate. */
+  halt(projectId: string): void
   /** Start no further tasks anywhere and wait for the ones in flight. */
   close(): Promise<void>
 }
@@ -948,6 +1107,7 @@ interface Lane {
   tail: Promise<void>
   waiting: boolean
   stopped: boolean
+  current?: { taskId: string; controller: AbortController }
 }
 
 /** The latest runner per store, for whenProjectIdle. */
@@ -1000,48 +1160,69 @@ function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMe
 }
 
 /**
- * Fail every queued or running task (with a result message saying why) so
- * the user can retry it. Used at startup: tasks a previous process left behind
- * never finish on their own. Projects `busy` reports are skipped.
+ * On process start: fail only running tasks left behind, and pause any project
+ * that still has queued work (D-O5). Projects `busy` reports are skipped.
  */
 export function failInterruptedTasks(store: WorkspaceStore, busy: (projectId: string) => boolean = () => false): number {
-  const stale = store.projectMessages.filter(
+  const running = store.projectMessages.filter(
     (m) =>
       m.kind === 'task-assignment' &&
-      (m.taskStatus === 'queued' || m.taskStatus === 'running') &&
+      m.taskStatus === 'running' &&
       !busy(m.projectId) &&
       store.projects.some((p) => p.id === m.projectId),
   )
-  if (stale.length === 0) return 0
   const now = new Date().toISOString()
-  const failedIds = new Set(stale.map((m) => m.id))
-  const clocks = new Map<string, () => string>()
-  const results: ProjectMessage[] = stale.map((m) => {
-    const clock = clocks.get(m.projectId) ?? messageClock(store, m.projectId)
-    clocks.set(m.projectId, clock)
-    return {
-      id: uid('msg'),
-      projectId: m.projectId,
-      author: m.assigneeId ?? m.author,
-      text: 'Could not finish: interrupted by a restart. Retry the task to run it again.',
-      kind: 'message',
-      createdAt: clock(),
-      taskId: m.id,
-      taskStatus: 'failed',
-    }
-  })
-  store.projectMessages = [
-    ...store.projectMessages.map((m) => (failedIds.has(m.id) ? { ...m, taskStatus: 'failed' as const, updatedAt: now } : m)),
-    ...results,
-  ]
-  store.save()
-  return stale.length
+  let changed = 0
+  if (running.length > 0) {
+    const failedIds = new Set(running.map((m) => m.id))
+    const clocks = new Map<string, () => string>()
+    const results: ProjectMessage[] = running.map((m) => {
+      const clock = clocks.get(m.projectId) ?? messageClock(store, m.projectId)
+      clocks.set(m.projectId, clock)
+      return {
+        id: uid('msg'),
+        projectId: m.projectId,
+        author: m.assigneeId ?? m.author,
+        text: 'Could not finish: interrupted by a restart. Retry the task to run it again.',
+        kind: 'message',
+        createdAt: clock(),
+        taskId: m.id,
+        taskStatus: 'failed',
+      }
+    })
+    store.projectMessages = [
+      ...store.projectMessages.map((m) => (failedIds.has(m.id) ? { ...m, taskStatus: 'failed' as const, updatedAt: now } : m)),
+      ...results,
+    ]
+    changed += running.length
+  }
+
+  // Queued tasks stay queued; pause those projects so nothing starts until the user resumes.
+  const queuedProjectIds = new Set(
+    store.projectMessages
+      .filter(
+        (m) =>
+          m.kind === 'task-assignment' &&
+          m.taskStatus === 'queued' &&
+          !busy(m.projectId) &&
+          store.projects.some((p) => p.id === m.projectId),
+      )
+      .map((m) => m.projectId),
+  )
+  if (queuedProjectIds.size > 0) {
+    store.projects = store.projects.map((p) => (queuedProjectIds.has(p.id) && !p.paused ? { ...p, paused: true } : p))
+    changed += queuedProjectIds.size
+  }
+
+  if (changed > 0) store.save()
+  return changed
 }
 
 /**
  * Per-project task queues: each project runs its queued tasks one at a time,
  * oldest queue time first; different projects run concurrently. Creating a
- * runner first fails tasks a previous process left queued or running.
+ * runner first fails running tasks a previous process left behind and pauses
+ * projects that still have queued work.
  */
 export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => void = console.error): TaskRunner {
   const previous = runners.get(store)
@@ -1050,16 +1231,20 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
   const lanes = new Map<string, Lane>()
   let closed = false
 
-  async function runTask(projectId: string, taskId: string): Promise<void> {
+  async function runTask(projectId: string, taskId: string, lane: Lane): Promise<void> {
     const project = store.projects.find((p) => p.id === projectId)
     const task = findMessage(store, projectId, taskId)
     if (!project || !task || task.taskStatus !== 'queued') return
     replaceMessage(store, { ...task, taskStatus: 'running', updatedAt: new Date().toISOString() })
     store.save()
 
+    const controller = new AbortController()
+    lane.current = { taskId, controller }
+
     const assignee = store.agents.find((a) => a.id === task.assigneeId)
     let text: string
     let ok = false
+    let stopped = false
     let runId: string | undefined
     if (!assignee) {
       text = 'Could not finish: the assigned agent is no longer in the library.'
@@ -1067,9 +1252,13 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       try {
         // A failed save of the run is not a task failure: the run is in the
         // store, and the save below persists it with the result message.
-        const { run } = await executeRun(store, assignee, buildTaskInput(store, project, task, assignee), { projectId })
+        const { run } = await executeRun(store, assignee, buildTaskInput(store, project, task, assignee), {
+          projectId,
+          signal: controller.signal,
+        })
         runId = run.id
         ok = run.status === 'succeeded'
+        stopped = run.error === STOPPED_BY_YOU
         text = ok
           ? clipText(run.output.trim(), RESULT_TEXT_MAX) || '(The agent replied with no text.)'
           : `Could not finish: ${run.error ?? 'the run failed.'}`
@@ -1077,6 +1266,8 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
         text = `Could not finish: ${err instanceof Error ? err.message : String(err)}`
       }
     }
+
+    if (lane.current?.taskId === taskId) lane.current = undefined
 
     // The project (and its chat) may have been deleted while the run was in
     // flight: then its run goes too, like the project's other runs.
@@ -1088,6 +1279,10 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       }
       return
     }
+    // Cancel/stop may have marked the task already; never overwrite that.
+    if (current.taskStatus === 'cancelled') return
+
+    const status = ok ? ('done' as const) : stopped ? ('cancelled' as const) : ('failed' as const)
     const result: ProjectMessage = {
       id: uid('msg'),
       projectId,
@@ -1096,7 +1291,7 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       kind: 'message',
       createdAt: messageClock(store, projectId)(),
       taskId,
-      taskStatus: ok ? 'done' : 'failed',
+      taskStatus: status,
       ...(runId ? { runId } : {}),
       // D-O11: an agent tagging a teammate is a hand-off request; a tag of
       // Primary is a question. The runner records the ids; nothing starts.
@@ -1107,7 +1302,7 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
     }
     store.projectMessages = [
       ...store.projectMessages.map((m) =>
-        m.id === taskId ? { ...current, taskStatus: ok ? ('done' as const) : ('failed' as const), updatedAt: new Date().toISOString() } : m,
+        m.id === taskId ? { ...current, taskStatus: status, updatedAt: new Date().toISOString() } : m,
       ),
       result,
     ]
@@ -1117,9 +1312,11 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
   async function drain(projectId: string, lane: Lane): Promise<void> {
     for (let i = 0; i < TASKS_PER_DRAIN; i++) {
       if (closed || lane.stopped || !store.projects.some((p) => p.id === projectId)) return
+      const project = store.projects.find((p) => p.id === projectId)
+      if (project?.paused) return
       const next = nextQueuedTask(store, projectId)
       if (!next) return
-      await runTask(projectId, next.id)
+      await runTask(projectId, next.id, lane)
     }
     // Still busy after a full drain: queue another behind anything waiting.
     kick(projectId)
@@ -1149,6 +1346,11 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
     })
   }
 
+  function abortCurrent(projectId: string): void {
+    const lane = lanes.get(projectId)
+    lane?.current?.controller.abort()
+  }
+
   const runner: TaskRunner = {
     kick,
     async whenIdle(projectId) {
@@ -1164,10 +1366,17 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
     busy: (projectId) => lanes.has(projectId),
     stop(projectId) {
       const lane = lanes.get(projectId)
-      if (lane) lane.stopped = true
+      if (lane) {
+        lane.stopped = true
+        lane.current?.controller.abort()
+      }
+    },
+    halt(projectId) {
+      abortCurrent(projectId)
     },
     async close() {
       closed = true
+      for (const lane of lanes.values()) lane.current?.controller.abort()
       await Promise.all([...lanes.values()].map((l) => l.tail))
     },
   }

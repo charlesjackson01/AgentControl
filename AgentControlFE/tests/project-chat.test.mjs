@@ -8,6 +8,7 @@ import {
   addCandidates,
   applyBody,
   createBlock,
+  descendants,
   describeProgress,
   initialSelection,
   isFailedResult,
@@ -38,6 +39,7 @@ import {
   toggleAdd,
   toggleCreate,
   toggleTask,
+  workBarLabel,
 } from '../src/lib/project-chat.ts'
 
 // Contract (src/lib/types.ts): message kinds are 'message' | 'team-update' |
@@ -142,6 +144,31 @@ describe('polling, progress and resync', () => {
     assert.equal(needsPolling([task('running')], false), true)
     // A plain message that merely carries a status field is not a task.
     assert.equal(needsPolling([msg('m', T(0), { taskStatus: 'queued' })], false), false)
+  })
+
+  it('does not poll queued tasks while the project is paused, but still polls a running one', () => {
+    assert.equal(needsPolling([task('queued')], false, true), false)
+    assert.equal(needsPolling([task('running'), task('queued')], false, true), true)
+    assert.equal(needsPolling([task('queued')], true, true), true)
+  })
+
+  it('lists transitive dependents for cancel confirm', () => {
+    const t1 = msg('t1', T(1), { kind: 'task-assignment', taskStatus: 'queued' })
+    const t2 = msg('t2', T(2), { kind: 'task-assignment', taskStatus: 'queued', inputs: ['t1'] })
+    const t3 = msg('t3', T(3), { kind: 'task-assignment', taskStatus: 'queued', inputs: ['t2'] })
+    const other = msg('tx', T(4), { kind: 'task-assignment', taskStatus: 'queued', inputs: ['gone'] })
+    assert.deepEqual(
+      descendants('t1', [t1, t2, t3, other]).map((m) => m.id),
+      ['t2', 't3'],
+    )
+    assert.deepEqual(descendants('t3', [t1, t2, t3]), [])
+  })
+
+  it('labels the work bar for active and paused projects', () => {
+    const progress = { queued: 1, running: 1, done: 0, failed: 0, cancelled: 0, total: 2 }
+    assert.equal(workBarLabel(progress, false), '1 running · 1 queued')
+    assert.equal(workBarLabel(progress, true), 'Paused · 2 tasks waiting')
+    assert.equal(workBarLabel({ queued: 0, running: 0, done: 1, failed: 0, cancelled: 0, total: 1 }, true), 'Paused')
   })
 
   it('keeps polling while a refresh is failing, even when idle (no "Updates paused" forever)', () => {

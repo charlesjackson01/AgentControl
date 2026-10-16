@@ -136,15 +136,56 @@ export function stickAfterScroll(
 /* -- Polling and progress ---------------------------------------------------- */
 
 /**
- * Poll while any task is queued or running, and while the last refresh failed
- * (with backoff) so "Updates paused" recovers on its own. Planning is a single
- * request/response and needs no polling.
+ * Poll while a task is running, or while a queued task can start (project not
+ * paused), and while the last refresh failed (with backoff) so "Updates paused"
+ * recovers on its own. Planning is a single request/response and needs no polling.
  */
-export function needsPolling(messages: readonly ProjectMessage[], syncFailed: boolean): boolean {
-  return (
-    syncFailed ||
-    messages.some((m) => m.kind === 'task-assignment' && (m.taskStatus === 'queued' || m.taskStatus === 'running'))
-  )
+export function needsPolling(
+  messages: readonly ProjectMessage[],
+  syncFailed: boolean,
+  paused = false,
+): boolean {
+  if (syncFailed) return true
+  if (messages.some((m) => m.kind === 'task-assignment' && m.taskStatus === 'running')) return true
+  if (paused) return false
+  return messages.some((m) => m.kind === 'task-assignment' && m.taskStatus === 'queued')
+}
+
+/**
+ * Tasks that list `taskId` in `inputs`, plus their transitive dependents
+ * (orchestration Part 2 cancel confirm). Order is discovery order.
+ */
+export function descendants(taskId: string, messages: readonly ProjectMessage[]): ProjectMessage[] {
+  const open = new Set([taskId])
+  const found: ProjectMessage[] = []
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const m of messages) {
+      if (m.kind !== 'task-assignment' || !m.inputs?.length) continue
+      if (found.some((f) => f.id === m.id) || open.has(m.id)) continue
+      if (!m.inputs.some((id) => open.has(id))) continue
+      found.push(m)
+      open.add(m.id)
+      grew = true
+    }
+  }
+  return found
+}
+
+/** WorkBar line: "1 running · 1 queued" or "Paused · 2 queued". */
+export function workBarLabel(progress: TaskProgress, paused: boolean): string {
+  if (paused) {
+    const waiting = progress.queued + progress.running
+    if (waiting === 0) return 'Paused'
+    return `Paused · ${waiting} ${waiting === 1 ? 'task' : 'tasks'} waiting`
+  }
+  const parts: string[] = []
+  if (progress.running > 0) parts.push(`${progress.running} running`)
+  if (progress.queued > 0) parts.push(`${progress.queued} queued`)
+  if (progress.failed > 0) parts.push(`${progress.failed} failed`)
+  if (progress.cancelled > 0) parts.push(`${progress.cancelled} cancelled`)
+  return parts.join(' · ')
 }
 
 /** Delay before the next poll: POLL_MS, doubling per consecutive failure up to POLL_MAX_MS. */

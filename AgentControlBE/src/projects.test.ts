@@ -47,10 +47,27 @@ function mockUpstream(handler: (req: ChatRequest) => Reply | Promise<Reply>): Ch
   const requests: ChatRequest[] = []
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (_url: string, init?: { body?: string }) => {
+    vi.fn(async (_url: string, init?: { body?: string; signal?: AbortSignal }) => {
       const req = JSON.parse(init?.body ?? '{}') as ChatRequest
       requests.push(req)
-      const out = await handler(req)
+      // Honour abort so Stop/Cancel tests can cut a held upstream call short.
+      if (init?.signal?.aborted) {
+        const err = new Error('aborted')
+        err.name = 'AbortError'
+        throw err
+      }
+      const aborted = new Promise<never>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            const err = new Error('aborted')
+            err.name = 'AbortError'
+            reject(err)
+          },
+          { once: true },
+        )
+      })
+      const out = await Promise.race([handler(req), aborted])
       if (out instanceof Error) throw out
       if (typeof out !== 'string') {
         return { ok: false, status: out.status, text: async () => 'upstream exploded', json: async () => ({}) }
@@ -1255,7 +1272,7 @@ describe('project task runner', () => {
     expect(reloaded.agents.find((a) => a.id === helper.id)?.projectId).toBeUndefined()
   })
 
-  it('fails tasks a previous process left queued or running, so they can be retried', async () => {
+  it('fails only running tasks left by a previous process, and pauses projects with queued work (D-O5)', async () => {
     const lead = await makeLead()
     const ana = await makeAgent('Ana')
     const p = await makeProject('Restart', [ana.id])
@@ -1274,22 +1291,33 @@ describe('project task runner', () => {
     try {
       const byId = (id: string) => reloaded.projectMessages.find((m) => m.id === id)
       expect([byId('msg_queued')?.taskStatus, byId('msg_running')?.taskStatus, byId('msg_done')?.taskStatus]).toEqual([
-        'failed',
+        'queued',
         'failed',
         'done',
       ])
+      expect(reloaded.projects.find((x) => x.id === p.id)?.paused).toBe(true)
       const results = reloaded.projectMessages.filter((m) => m.taskId)
       expect(results.map((m) => [m.kind, m.taskId, m.author, m.taskStatus])).toEqual([
-        ['message', 'msg_queued', ana.id, 'failed'],
         ['message', 'msg_running', ana.id, 'failed'],
       ])
       for (const r of results) expect(r.text).toContain('interrupted by a restart')
       // Persisted, and the user message is untouched.
       const again = createStore(join(dir, 'store.json'))
       expect(again.projectMessages.find((m) => m.id === 'msg_running')?.taskStatus).toBe('failed')
+      expect(again.projectMessages.find((m) => m.id === 'msg_queued')?.taskStatus).toBe('queued')
+      expect(again.projects.find((x) => x.id === p.id)?.paused).toBe(true)
       expect(again.projectMessages.find((m) => m.id === prompt.id)?.kind).toBe('message')
 
+      // Stub upstream before resume: kick starts the queued task immediately.
       const requests = mockTeam({ reply: 'unused' })
+      expect(
+        (
+          await restarted.inject({
+            method: 'POST',
+            url: `/api/projects/${p.id}/work/resume`,
+          })
+        ).statusCode,
+      ).toBe(200)
       const retried = await restarted.inject({
         method: 'POST',
         url: `/api/projects/${p.id}/tasks/msg_running/retry`,
@@ -1298,8 +1326,9 @@ describe('project task runner', () => {
       expect(retried.statusCode).toBe(200)
       await whenProjectIdle(reloaded, p.id)
       expect(reloaded.projectMessages.find((m) => m.id === 'msg_running')?.taskStatus).toBe('done')
-      // The retried task still reads the user's prompt through replyTo.
-      expect(lastUser(requests[0] ?? {})).toContain('The user asked:\nBefore the crash')
+      expect(reloaded.projectMessages.find((m) => m.id === 'msg_queued')?.taskStatus).toBe('done')
+      // Task runs still read the user's prompt through replyTo.
+      expect(lastUser(requests.find((r) => !isPlanner(r)) ?? {})).toContain('The user asked:\nBefore the crash')
     } finally {
       await restarted.close()
     }
@@ -1596,5 +1625,142 @@ describe('D-O11 mentions', () => {
     expect(result?.mentions).toEqual([lead.id])
     // D-O11: a tag starts nothing by itself (D-O1): only the one task ran.
     expect(requests.filter((r) => !isPlanner(r))).toHaveLength(1)
+  })
+})
+
+describe('orchestration Part 2 work controls (D-O5)', () => {
+  it('pause holds the queue, resume kicks it, and stop aborts the in-flight call (D-O5)', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const ben = await makeAgent('Ben')
+    const p = await makeProject('Controls', [ana.id, ben.id])
+    const anaStarted = gate()
+    const anaHold = gate()
+    const requests = mockTeam(
+      {
+        reply: 'Both work.',
+        tasks: [
+          { agent: ana.id, task: 'First' },
+          { agent: ben.id, task: 'Second' },
+        ],
+      },
+      async (req) => {
+        if (systemOf(req).includes('I am Ana.')) {
+          anaStarted.open()
+          await anaHold.wait
+          return 'Ana done.'
+        }
+        return 'Ben done.'
+      },
+    )
+    await planAndApply(p.id, 'Do both')
+    await anaStarted.wait
+
+    const paused = await inject('POST', `/api/projects/${p.id}/work/pause`)
+    expect(paused.statusCode).toBe(200)
+    expect((paused.json() as ProjectUpdate).project.paused).toBe(true)
+
+    anaHold.open()
+    // Ana finishes; Ben stays queued while paused (drain returns without starting it).
+    await whenProjectIdle(store, p.id)
+    expect(store.projectMessages.find((m) => m.kind === 'task-assignment' && m.assigneeId === ana.id)?.taskStatus).toBe(
+      'done',
+    )
+    expect(store.projectMessages.find((m) => m.kind === 'task-assignment' && m.assigneeId === ben.id)?.taskStatus).toBe(
+      'queued',
+    )
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(1)
+
+    const resumed = await inject('POST', `/api/projects/${p.id}/work/resume`)
+    expect(resumed.statusCode).toBe(200)
+    expect((resumed.json() as ProjectUpdate).project.paused).toBeUndefined()
+    await whenProjectIdle(store, p.id)
+    expect(store.projectMessages.find((m) => m.kind === 'task-assignment' && m.assigneeId === ben.id)?.taskStatus).toBe(
+      'done',
+    )
+  })
+
+  it('stop cancels queued tasks and aborts a running one; cancel takes dependents; retry accepts cancelled', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const ben = await makeAgent('Ben')
+    const p = await makeProject('Stop', [ana.id, ben.id])
+    const anaStarted = gate()
+    const anaHold = gate()
+    mockTeam(
+      {
+        reply: 'Both work.',
+        tasks: [
+          { agent: ana.id, task: 'First' },
+          { agent: ben.id, task: 'Second' },
+        ],
+      },
+      async (req) => {
+        if (systemOf(req).includes('I am Ana.')) {
+          anaStarted.open()
+          await anaHold.wait
+          return 'Ana done.'
+        }
+        return 'Ben done.'
+      },
+    )
+    await planAndApply(p.id, 'Do both')
+    await anaStarted.wait
+
+    const stopped = await inject('POST', `/api/projects/${p.id}/work/stop`)
+    expect(stopped.statusCode).toBe(200)
+    const update = stopped.json() as ProjectUpdate
+    expect(update.messages.some((m) => m.taskStatus === 'cancelled')).toBe(true)
+    anaHold.open()
+    await whenProjectIdle(store, p.id)
+
+    const assignments = store.projectMessages.filter((m) => m.kind === 'task-assignment')
+    expect(assignments.every((m) => m.taskStatus === 'cancelled')).toBe(true)
+    // Retry a cancelled task.
+    mockTeam({ reply: 'unused' }, () => 'Retry ok.')
+    const anaTask = assignments.find((m) => m.assigneeId === ana.id)!
+    const retried = await inject('POST', `/api/projects/${p.id}/tasks/${anaTask.id}/retry`)
+    expect(retried.statusCode).toBe(200)
+    await whenProjectIdle(store, p.id)
+    expect(store.projectMessages.find((m) => m.id === anaTask.id)?.taskStatus).toBe('done')
+
+    // Cancel with dependents: seed a chain via inputs.
+    const lead = store.agents.find((a) => a.isPrimary)!
+    const prompt = await say(p.id, 'Chain')
+    const t1: ProjectMessage = {
+      id: 'msg_t1',
+      projectId: p.id,
+      author: lead.id,
+      text: '@Lead → @Ana: t1',
+      kind: 'task-assignment',
+      createdAt: new Date().toISOString(),
+      assigneeId: ana.id,
+      replyTo: prompt.id,
+      taskStatus: 'queued',
+      label: 't1',
+    }
+    const t2: ProjectMessage = {
+      id: 'msg_t2',
+      projectId: p.id,
+      author: lead.id,
+      text: '@Lead → @Ben: t2',
+      kind: 'task-assignment',
+      createdAt: new Date().toISOString(),
+      assigneeId: ben.id,
+      replyTo: prompt.id,
+      taskStatus: 'queued',
+      label: 't2',
+      inputs: ['msg_t1'],
+    }
+    store.projectMessages = [...store.projectMessages, t1, t2]
+    store.save()
+    const cancelled = await inject('POST', `/api/projects/${p.id}/tasks/msg_t1/cancel`)
+    expect(cancelled.statusCode).toBe(200)
+    expect(store.projectMessages.find((m) => m.id === 'msg_t1')?.taskStatus).toBe('cancelled')
+    expect(store.projectMessages.find((m) => m.id === 'msg_t2')?.taskStatus).toBe('cancelled')
+    expect((await inject('POST', `/api/projects/${p.id}/tasks/msg_t1/cancel`)).statusCode).toBe(200)
+    // Done tasks cannot be cancelled.
+    const doneId = store.projectMessages.find((m) => m.kind === 'task-assignment' && m.taskStatus === 'done')!.id
+    expect((await inject('POST', `/api/projects/${p.id}/tasks/${doneId}/cancel`)).statusCode).toBe(409)
   })
 })

@@ -97,6 +97,8 @@ export interface PromptBudgetInput {
   endpointId: string
   skillIds: string[]
   instructions?: string
+  /** Standing rules, counted as the prompt's "Rules" section. */
+  rules?: string[]
 }
 
 /** POST /api/prompt-budget response: the plan a run would use (computed with an empty input). */

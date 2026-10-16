@@ -8,6 +8,7 @@ import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly, turnTime } from '../lib/chat-format'
 import type { AgentRun } from '../lib/types'
+import { runReplyView } from '../lib/run-reply'
 import { useAsync } from '../hooks/useAsync'
 
 /**
@@ -80,6 +81,15 @@ type Pending = {
   status: 'typing' | 'done' | 'error'
   run?: AgentRun
   error?: string
+}
+
+function RunReply({ run }: { run: AgentRun }) {
+  const view = runReplyView(run)
+  return (
+    <Bubble kind={view.kind}>
+      <div className="bubble__body">{view.text}</div>
+    </Bubble>
+  )
 }
 
 export default function AgentChat() {
@@ -228,15 +238,7 @@ export default function AgentChat() {
                   <Bubble kind="user">
                     <div className="bubble__body">{run.input}</div>
                   </Bubble>
-                  {run.error ? (
-                    <Bubble kind="error">
-                      <div className="bubble__body">{run.error}</div>
-                    </Bubble>
-                  ) : (
-                    <Bubble kind="assistant">
-                      <div className="bubble__body">{run.output || '(no output)'}</div>
-                    </Bubble>
-                  )}
+                  <RunReply run={run} />
                   <TurnAudit run={run} />
                 </div>
               ))}
@@ -254,15 +256,7 @@ export default function AgentChat() {
                   {pendingActive.status === 'typing' && <TypingBubble label="Agent is typing" />}
                   {pendingActive.status === 'done' && pendingActive.run && (
                     <>
-                      {pendingActive.run.error ? (
-                        <Bubble kind="error">
-                          <div className="bubble__body">{pendingActive.run.error}</div>
-                        </Bubble>
-                      ) : (
-                        <Bubble kind="assistant">
-                          <div className="bubble__body">{pendingActive.run.output || '(no output)'}</div>
-                        </Bubble>
-                      )}
+                      <RunReply run={pendingActive.run} />
                     </>
                   )}
                   {pendingActive.status === 'error' && (

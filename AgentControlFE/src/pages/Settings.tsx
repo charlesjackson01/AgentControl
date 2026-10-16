@@ -6,6 +6,7 @@ import { useTheme, type Theme } from '../hooks/useTheme'
 import { useAsync } from '../hooks/useAsync'
 import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_LABELS, OPENROUTER_DEFAULT_BASE_URL } from '../lib/api'
 import type { Endpoint, EndpointInput, EndpointKind } from '../lib/types'
+import { DISABLE_THINKING_HINT, disableThinkingPatch } from '../lib/run-reply'
 import { PROXY_URL_HINT, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
 import UserProfileForm from '../components/UserProfileForm'
 import { useProfile } from '../state/profile-context'
@@ -56,6 +57,7 @@ function EndpointForm({
   const [contextWindow, setContextWindow] = useState(String(initial?.contextWindow ?? 8192))
   const [apiKey, setApiKey] = useState('')
   const [proxyUrl, setProxyUrl] = useState(initial?.proxyUrl ?? '')
+  const [disableThinking, setDisableThinking] = useState(Boolean(initial?.disableThinking))
   const [errors, setErrors] = useState<{ name?: string; baseUrl?: string; defaultModel?: string; contextWindow?: string; apiKey?: string; proxyUrl?: string }>({})
 
   const pickKind = (next: EndpointKind) => {
@@ -99,6 +101,7 @@ function EndpointForm({
       // Omit when blank so a stored key survives edits; the key itself is never read back.
       ...(apiKey ? { apiKey } : {}),
       ...proxyUrlPatch(proxyUrl, initial?.proxyUrl, Boolean(initial)),
+      ...disableThinkingPatch(disableThinking, initial?.disableThinking, Boolean(initial)),
     })
   }
 
@@ -139,6 +142,13 @@ function EndpointForm({
         <label className="field__label" htmlFor="ep-proxy">Proxy URL</label>
         <input id="ep-proxy" className={`input${errors.proxyUrl ? ' input--invalid' : ''}`} value={proxyUrl} onChange={(e) => { setProxyUrl(e.target.value); setErrors((er) => ({ ...er, proxyUrl: undefined })) }} placeholder="http://localhost:1055" inputMode="url" aria-invalid={Boolean(errors.proxyUrl)} />
         {errors.proxyUrl ? <p className="field__err">{errors.proxyUrl}</p> : <p className="field__hint">{PROXY_URL_HINT}</p>}
+      </div>
+      <div className="field">
+        <label className="field__check" htmlFor="ep-disable-thinking">
+          <input id="ep-disable-thinking" type="checkbox" checked={disableThinking} onChange={(e) => setDisableThinking(e.target.checked)} />
+          <span>Disable thinking</span>
+        </label>
+        <p className="field__hint">{DISABLE_THINKING_HINT}</p>
       </div>
       <div className="field">
         <label className="field__label" htmlFor="ep-model">
@@ -277,7 +287,7 @@ function EndpointsSection() {
             <div className="row" key={ep.id}>
               <div className="row__text" style={{ minWidth: 0 }}>
                 <p className="row__label">{ep.name}</p>
-                <p className="row__hint meta__v--mono">{ep.baseUrl} · {ep.defaultModel} · {ep.contextWindow.toLocaleString()} ctx · {ep.apiKeySet ? 'key set' : 'no key'}{ep.proxyUrl ? ` · via ${ep.proxyUrl}` : ''}</p>
+                <p className="row__hint meta__v--mono">{ep.baseUrl} · {ep.defaultModel} · {ep.contextWindow.toLocaleString()} ctx · {ep.apiKeySet ? 'key set' : 'no key'}{ep.proxyUrl ? ` · via ${ep.proxyUrl}` : ''}{ep.disableThinking ? ' · thinking off' : ''}</p>
                 {testNote[ep.id] && <p className="field__hint">{testNote[ep.id]}</p>}
               </div>
               <div className="row__control" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>

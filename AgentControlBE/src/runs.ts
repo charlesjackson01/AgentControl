@@ -150,6 +150,7 @@ export async function executeRun(
   const toolCtx: ToolContext = {
     store,
     agentId: agent.id,
+    ...(projectId !== undefined ? { projectId } : {}),
     runId,
     input,
     allowed: new Set(toolDeclarations.map((t) => t.name)),

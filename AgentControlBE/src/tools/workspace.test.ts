@@ -199,6 +199,22 @@ describe('workspace module', () => {
     const runs = call('read_run_log', {}, makeCtx()) as unknown as unknown[]
     expect(runs).toEqual([])
   })
+
+  it('D-O10: a project-task run reads only its own project\'s runs', () => {
+    const plain = makeRun('agent_lead', 1, 'succeeded')
+    const sameProject = { ...makeRun('agent_lead', 2, 'succeeded'), projectId: 'proj_a' }
+    const otherProject = { ...makeRun('agent_lead', 3, 'succeeded'), projectId: 'proj_b' }
+    store.runs = [plain, sameProject, otherProject]
+
+    // A project-task run sees only its project's runs (not the chat run, not
+    // another project's).
+    const scoped = call('read_run_log', {}, makeCtx({ projectId: 'proj_a' })) as unknown as { id: string }[]
+    expect(scoped.map((r) => r.id)).toEqual([sameProject.id])
+
+    // A chat run (no projectId) keeps today's behaviour: every run of the agent.
+    const unscoped = call('read_run_log', {}, makeCtx()) as unknown as { id: string }[]
+    expect(unscoped.map((r) => r.id)).toEqual([plain.id, sameProject.id, otherProject.id])
+  })
 })
 
 describe('get_agent', () => {

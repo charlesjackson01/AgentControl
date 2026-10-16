@@ -241,8 +241,10 @@ export const api = {
     return request<ProjectMessage[]>(`/api/projects/${encodeURIComponent(id)}/messages`)
   },
 
-  async postProjectMessage(id: string, input: ProjectMessageInput): Promise<ProjectMessage> {
-    return request<ProjectMessage>(`/api/projects/${encodeURIComponent(id)}/messages`, {
+  /** D-O11: answers with the project and every message the write created
+     (the message plus any direct tasks the user's @tags queued). */
+  async postProjectMessage(id: string, input: ProjectMessageInput): Promise<ProjectUpdate> {
+    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(id)}/messages`, {
       method: 'POST',
       body: JSON.stringify(input),
     })

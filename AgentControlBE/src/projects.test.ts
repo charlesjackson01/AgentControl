@@ -103,10 +103,12 @@ async function makeProject(name: string, teamAgentIds: string[] = [], desc = '')
   return res.json() as Project
 }
 
-async function say(projectId: string, text: string, author = 'user'): Promise<ProjectMessage> {
-  const res = await inject('POST', `/api/projects/${projectId}/messages`, { author, text })
+async function say(projectId: string, text: string, author = 'user', mentions?: string[]): Promise<ProjectMessage> {
+  const res = await inject('POST', `/api/projects/${projectId}/messages`, { author, text, ...(mentions ? { mentions } : {}) })
   expect(res.statusCode).toBe(201)
-  return res.json() as ProjectMessage
+  // D-O11: the route answers with the project and every message it wrote
+  // (the message plus any direct tasks the user's @tags queued).
+  return (res.json() as ProjectUpdate).messages[0] as ProjectMessage
 }
 
 async function askPlan(projectId: string, text: string) {
@@ -643,7 +645,8 @@ describe('POST /api/projects/:id/team-plan', () => {
     const body = applied.json() as ProjectUpdate
     expect(body.messages.map((x) => [x.kind, x.author, x.text])).toEqual([
       ['message', lead.id, 'Ana writes.'],
-      ['task-assignment', lead.id, 'Write the intro'],
+      // D-O11: assignments name the lead and the assignee as @tags.
+      ['task-assignment', lead.id, `@${lead.name} → @Ana: Write the intro`],
     ])
     expect(body.messages.every((x) => !('replyTo' in x))).toBe(true)
     await whenProjectIdle(store, p.id)
@@ -694,9 +697,9 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
       assigneeId: ana.id,
       taskStatus: 'queued',
       replyTo: prompt.id,
-      text: 'Draft the announcement',
+      text: `@${lead.name} → @Ana: Draft the announcement`,
     })
-    expect(t2).toMatchObject({ kind: 'task-assignment', assigneeId: ben.id, taskStatus: 'queued', replyTo: prompt.id, text: 'Review the announcement' })
+    expect(t2).toMatchObject({ kind: 'task-assignment', assigneeId: ben.id, taskStatus: 'queued', replyTo: prompt.id, text: `@${lead.name} → @Ben: Review the announcement` })
 
     await whenProjectIdle(store, p.id)
     expect(Date.now() - started).toBeLessThan(1_000)
@@ -720,7 +723,9 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     expect(taskInput).toContain('Lead assigned you this task:\nDraft the announcement')
     expect(taskInput).toContain('Your teammates:\n- Ben (Reviewer)')
     expect(taskInput).not.toContain('- Ana (Writer)')
-    expect(taskInput.endsWith('Reply with your result for the team.')).toBe(true)
+    // D-O11: the only change to a task input is the trailing tagging line.
+    expect(taskInput).toContain('Reply with your result for the team.')
+    expect(taskInput).toContain('Address teammates and the lead by @Name in your result')
   })
 
   it('applies a partial selection: creates tagged specialists, updates the team, drops orphaned tasks', async () => {
@@ -778,8 +783,8 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
         'Assigned 2 tasks.',
     )
     expect(assignments.map((m) => [m.kind, m.assigneeId, m.text, m.taskStatus, m.author, m.replyTo])).toEqual([
-      ['task-assignment', ana.id, 'Draft the post', 'queued', lead.id, prompt.id],
-      ['task-assignment', editor.id, 'Edit the draft', 'queued', lead.id, prompt.id],
+      ['task-assignment', ana.id, `@${lead.name} → @Ana: Draft the post`, 'queued', lead.id, prompt.id],
+      ['task-assignment', editor.id, `@${lead.name} → @Copy Editor: Edit the draft`, 'queued', lead.id, prompt.id],
     ])
 
     await whenProjectIdle(store, p.id)
@@ -906,10 +911,10 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
     }
     expect(update?.text).not.toContain('ignored')
     expect(assignments).toHaveLength(10)
-    expect(assignments[0]).toMatchObject({ kind: 'task-assignment', author: lead.id, assigneeId: lead.id, text: 'Lead it', taskStatus: 'queued' })
+    expect(assignments[0]).toMatchObject({ kind: 'task-assignment', author: lead.id, assigneeId: lead.id, text: `@${lead.name} → @${lead.name}: Lead it`, taskStatus: 'queued' })
     expect(assignments[0]?.id).not.toBe('msg_evil')
     expect(assignments.slice(1).map((m) => [m.kind, m.assigneeId, m.text])).toEqual(
-      Array.from({ length: 9 }, (_, i) => ['task-assignment', ana.id, `Task ${i}`]),
+      Array.from({ length: 9 }, (_, i) => ['task-assignment', ana.id, `@${lead.name} → @Ana: Task ${i}`]),
     )
     for (const m of body.messages) expect(m).toMatchObject({ projectId: p.id, replyTo: prompt.id })
     await whenProjectIdle(store, p.id)
@@ -947,7 +952,7 @@ describe('POST /api/projects/:id/team-plan/apply', () => {
         'Skipped the task "Never": "Unticked" is not on the team, in this plan, or the team lead. ' +
         'Assigned 1 task.',
     )
-    expect(body.messages[1]).toMatchObject({ assigneeId: valid.id, text: 'Check it' })
+    expect(body.messages[1]).toMatchObject({ assigneeId: valid.id, text: '@Lead → @Valid: Check it' })
     expect(body.messages.every((m) => !('replyTo' in m))).toBe(true)
     await whenProjectIdle(store, p.id)
   })
@@ -1502,5 +1507,94 @@ describe('planner rules', () => {
     // The example's tasks are independent: no task edits or reviews another's draft.
     const example = system.slice(system.indexOf('Example:'))
     expect(example).not.toMatch(/\b(edit|review|check)\b[^"]*\b(draft|post)\b/i)
+  })
+})
+
+describe('D-O11 mentions', () => {
+  it('fills mentions on every message kind', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Tags', [ana.id])
+    mockTeam({ reply: 'Thanks @Ana, I will add you.', tasks: [{ agent: ana.id, task: 'Draft it' }] })
+    const { result, body } = await planAndApply(p.id, 'Draft the post, @Ana')
+
+    const prompt = body.messages.find((m) => m.author === 'user')
+    // User messages carry only the ids the client picked; @Ana in the text
+    // alone is not parsed for them.
+    expect(prompt?.mentions).toBeUndefined()
+    // Primary's reply tags Ana by @Name.
+    const reply = result.plan.reply
+    const replyMsg = body.messages.find((m) => m.kind === 'message' && m.author === lead.id)
+    expect(reply).toContain('@Ana')
+    expect(replyMsg?.mentions).toEqual([ana.id])
+    // The assignment names the lead and the assignee.
+    const task = body.messages.find((m) => m.kind === 'task-assignment')
+    expect(task?.mentions).toEqual([lead.id, ana.id])
+  })
+
+  it('a user message tagging team members queues direct tasks; tagging Primary does not', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const ben = await makeAgent('Ben')
+    const p = await makeProject('Direct', [ana.id, ben.id])
+    // The direct tasks run: answer them so nothing reaches the network.
+    const requests = mockTeam({ reply: 'unused' })
+
+    const res = await inject('POST', `/api/projects/${p.id}/messages`, {
+      author: 'user',
+      text: 'please polish this',
+      mentions: [ana.id, ben.id],
+    })
+    expect(res.statusCode).toBe(201)
+    const body = res.json() as ProjectUpdate
+    expect(body.messages.map((m) => m.kind)).toEqual(['message', 'task-assignment', 'task-assignment'])
+    expect(body.messages[1]).toMatchObject({ author: 'user', assigneeId: ana.id, taskStatus: 'queued', text: 'please polish this' })
+    expect(body.messages[2]).toMatchObject({ author: 'user', assigneeId: ben.id, taskStatus: 'queued' })
+
+    await whenProjectIdle(store, p.id)
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(2)
+
+    // Tagging only Primary: a question, no direct tasks.
+    const res2 = await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'what next?', mentions: [lead.id] })
+    const body2 = res2.json() as ProjectUpdate
+    expect(body2.messages).toHaveLength(1)
+    expect(body2.messages[0]?.mentions).toEqual([lead.id])
+    await whenProjectIdle(store, p.id)
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(2)
+  })
+
+  it('ignores picked ids outside Primary and the team, and dedupes', async () => {
+    await makeLead()
+    const ana = await makeAgent('Ana')
+    const outsider = await makeAgent('Outsider')
+    const p = await makeProject('Picky', [ana.id])
+    mockTeam({ reply: 'unused' })
+    const res = await inject('POST', `/api/projects/${p.id}/messages`, {
+      author: 'user',
+      text: 'hi',
+      mentions: [outsider.id, ana.id, ana.id, 'msg_nope'],
+    })
+    const body = res.json() as ProjectUpdate
+    expect(body.messages).toHaveLength(2) // the message + one direct task for Ana
+    expect(body.messages[0]?.mentions).toEqual([ana.id])
+    await whenProjectIdle(store, p.id)
+  })
+
+  it('an agent result that tags a teammate records the mention and starts nothing', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Hand-off', [ana.id])
+    const requests = mockTeam(
+      { reply: 'Ana drafts.', tasks: [{ agent: ana.id, task: 'Draft it' }] },
+      () => 'Draft done. @Lead I am stuck on the numbers.',
+    )
+    await planAndApply(p.id, 'Draft the post')
+    await whenProjectIdle(store, p.id)
+
+    const msgs = await thread(p.id)
+    const result = msgs.find((m) => m.taskId && m.taskStatus === 'done')
+    expect(result?.mentions).toEqual([lead.id])
+    // D-O11: a tag starts nothing by itself (D-O1): only the one task ran.
+    expect(requests.filter((r) => !isPlanner(r))).toHaveLength(1)
   })
 })

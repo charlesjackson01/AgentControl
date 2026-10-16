@@ -18,6 +18,7 @@
  * taskStatus).
  */
 import { fail, uid } from './http.js'
+import { mentionCandidates, resolveMentions } from './mentions.js'
 import { estimateTokens } from './prompt.js'
 import { executeRun } from './runs.js'
 import type {
@@ -132,6 +133,102 @@ function messageClock(store: WorkspaceStore, projectId: string): () => string {
 
 function replaceMessage(store: WorkspaceStore, next: ProjectMessage): void {
   store.projectMessages = store.projectMessages.map((m) => (m.id === next.id ? next : m))
+}
+
+/** D-O11 candidates for one write: Primary and the team first, then the library. */
+function mentionPool(store: WorkspaceStore, project: Project) {
+  return mentionCandidates(store.agents.find((a) => a.isPrimary), teamMembers(store, project), store.agents)
+}
+
+/**
+ * D-O11: fill `mentions` for one message. User messages carry the ids the
+ * client picked (validated against Primary and the team); every other write
+ * parses `@Name` from the text. Returns the ids, in order, deduped.
+ */
+function resolveMessageMentions(
+  store: WorkspaceStore,
+  project: Project,
+  author: string,
+  text: string,
+  picked?: string[],
+): string[] {
+  const pool = mentionPool(store, project)
+  if (author === 'user') {
+    const allowed = new Set([
+      ...(store.agents.find((a) => a.isPrimary) ? [store.agents.find((a) => a.isPrimary)!.id] : []),
+      ...project.teamAgentIds,
+    ])
+    const ids: string[] = []
+    for (const id of picked ?? []) {
+      if (!allowed.has(id) || ids.includes(id)) continue
+      ids.push(id)
+    }
+    return ids
+  }
+  return resolveMentions(text, pool).ids
+}
+
+/**
+ * POST /api/projects/:id/messages: append one chat message with its D-O11
+ * mentions. When the user's message tags team members (a tag of Primary does
+ * not count), that is the user's own delegation: one 'task-assignment' per
+ * tagged member (author 'user', the message as the task) is queued with it
+ * and returned together. No confirm card (the user wrote it).
+ */
+export function appendProjectMessage(store: WorkspaceStore, projectId: string, body: unknown): ProjectUpdate {
+  const project = projectOrFail(store, projectId)
+  const raw = (body ?? {}) as Record<string, unknown>
+  const author = typeof raw.author === 'string' ? raw.author.trim() : ''
+  if (!author) fail(400, 'Set the author: "user" or an agent id.')
+  if (author !== 'user' && !store.agents.some((a) => a.id === author)) {
+    fail(400, `No agent with id "${author}"`)
+  }
+  const text = typeof raw.text === 'string' ? raw.text.trim() : ''
+  if (!text) fail(400, 'Message text cannot be empty.')
+  if (text.length > 20_000) fail(400, 'Message text must be 20,000 characters or fewer.')
+  if (raw.mentions !== undefined && !Array.isArray(raw.mentions)) fail(400, '"mentions" must be a list of agent ids.')
+
+  const mentions = resolveMessageMentions(store, project, author, text, raw.mentions as string[] | undefined)
+  const message: ProjectMessage = {
+    id: uid('msg'),
+    projectId,
+    author,
+    text,
+    kind: 'message',
+    createdAt: '',
+    ...(mentions.length > 0 ? { mentions } : {}),
+  }
+
+  // The user tagging team members delegates to them directly (D-O11).
+  const primaryId = store.agents.find((a) => a.isPrimary)?.id
+  const targets = author === 'user' ? mentions.filter((id) => id !== primaryId && project.teamAgentIds.includes(id)) : []
+
+  const clock = messageClock(store, projectId)
+  message.createdAt = clock()
+  const assignments: ProjectMessage[] = targets.map((assigneeId) => {
+    const taskMentions = resolveMentions(text, mentionPool(store, project)).ids
+    return {
+      id: uid('msg'),
+      projectId,
+      author,
+      text,
+      kind: 'task-assignment',
+      createdAt: clock(),
+      assigneeId,
+      taskStatus: 'queued',
+      ...(taskMentions.length > 0 ? { mentions: taskMentions } : {}),
+    }
+  })
+
+  const created = [message, ...assignments]
+  const previous = store.projectMessages
+  store.projectMessages = [...store.projectMessages, ...created]
+  if (!store.save()) {
+    store.projectMessages = previous
+    fail(500, 'The message could not be saved. Please retry.')
+  }
+  if (assignments.length > 0) runners.get(store)?.kick(projectId)
+  return { project, messages: created }
 }
 
 /** By id first, then by case-insensitive name. */
@@ -760,24 +857,38 @@ export function applyTeamPlan(store: WorkspaceStore, runner: TaskRunner, project
   const clock = messageClock(store, projectId)
   const thread = replyTo ? { replyTo } : {}
   const messages: ProjectMessage[] = []
+  // Specialists created by this apply are not in the store yet: add them to
+  // the mention pool so an assignment naming one resolves.
+  const pool = mentionCandidates(lead, [...teamMembers(store, project), ...created], store.agents)
+  const mentionIds = (text: string): { mentions?: string[] } => {
+    const ids = resolveMentions(text, pool).ids
+    return ids.length > 0 ? { mentions: ids } : {}
+  }
   if (plan.reply) {
-    messages.push({ id: uid('msg'), projectId, author: lead.id, text: plan.reply, kind: 'message', createdAt: clock(), ...thread })
+    messages.push({ id: uid('msg'), projectId, author: lead.id, text: plan.reply, kind: 'message', createdAt: clock(), ...thread, ...mentionIds(plan.reply) })
   }
   // The team update says who joined, and why anything the user accepted was dropped.
   if (teamChanged || plan.warnings.length > 0) {
-    messages.push({ id: uid('msg'), projectId, author: lead.id, text: lines.join(' '), kind: 'team-update', createdAt: clock(), ...thread })
+    const updateText = lines.join(' ')
+    messages.push({ id: uid('msg'), projectId, author: lead.id, text: updateText, kind: 'team-update', createdAt: clock(), ...thread, ...mentionIds(updateText) })
   }
   for (const t of tasks) {
+    // D-O11: assignments name the lead and the assignee as @tags. The
+    // assignee may be a specialist created moments ago (not in the store yet).
+    const assigneeName =
+      created.find((c) => c.id === t.assigneeId)?.name ?? store.agents.find((a) => a.id === t.assigneeId)?.name ?? 'someone'
+    const text = `@${lead.name} → @${assigneeName}: ${t.task}`
     messages.push({
       id: uid('msg'),
       projectId,
       author: lead.id,
-      text: t.task,
+      text,
       kind: 'task-assignment',
       createdAt: clock(),
       ...thread,
       assigneeId: t.assigneeId,
       taskStatus: 'queued',
+      ...mentionIds(text),
     })
   }
   if (messages.length === 0) return { project, messages }
@@ -863,6 +974,9 @@ function nextQueuedTask(store: WorkspaceStore, projectId: string): ProjectMessag
 function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMessage, assignee: Agent): string {
   const prompt = task.replyTo ? findMessage(store, project.id, task.replyTo) : undefined
   const lead = store.agents.find((a) => a.id === task.author) ?? store.agents.find((a) => a.isPrimary)
+  // D-O11: assignments carry a "@lead → @assignee: " tag prefix for the chat;
+  // the assignee gets the task text without it.
+  const taskText = task.text.replace(/^@[^:]{1,140}: /, '')
   const teammates = teamMembers(store, project)
     .filter((a) => a.id !== assignee.id)
     .slice(0, TASK_TEAMMATES_MAX)
@@ -871,12 +985,15 @@ function buildTaskInput(store: WorkspaceStore, project: Project, task: ProjectMe
     `Project: ${project.name}${desc ? `\n${desc}` : ''}`,
     prompt ? `The user asked:\n${clipText(prompt.text.trim(), TASK_PROMPT_MAX)}` : '',
     lead && lead.id === assignee.id
-      ? `As the team lead, you took this task:\n${task.text}`
-      : `${lead?.name ?? 'The team lead'} assigned you this task:\n${task.text}`,
+      ? `As the team lead, you took this task:\n${taskText}`
+      : `${lead?.name ?? 'The team lead'} assigned you this task:\n${taskText}`,
     teammates.length > 0
       ? `Your teammates:\n${teammates.map((a) => `- ${a.name}${a.role ? ` (${a.role})` : ''}`).join('\n')}`
       : '',
     'Reply with your result for the team.',
+    teammates.length > 0 || lead
+      ? `Address teammates and the lead by @Name in your result (for example "@${(teammates[0] ?? lead)?.name ?? 'teammate'} …") to hand work on or ask the lead a question.`
+      : '',
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -981,6 +1098,12 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
       taskId,
       taskStatus: ok ? 'done' : 'failed',
       ...(runId ? { runId } : {}),
+      // D-O11: an agent tagging a teammate is a hand-off request; a tag of
+      // Primary is a question. The runner records the ids; nothing starts.
+      ...(() => {
+        const ids = resolveMentions(text, mentionPool(store, project)).ids
+        return ids.length > 0 ? { mentions: ids } : {}
+      })(),
     }
     store.projectMessages = [
       ...store.projectMessages.map((m) =>

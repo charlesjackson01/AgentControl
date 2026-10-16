@@ -21,6 +21,9 @@ import {
   latestPrompt,
   latestUnansweredPrompt,
   memberIds,
+  mentionCandidates,
+  mentionParts,
+  mentionQuery,
   mergeMessages,
   needsPolling,
   newerProject,
@@ -30,6 +33,7 @@ import {
   pollDelay,
   resyncAfter,
   selectedCount,
+  sendLabel,
   sortMessages,
   stickAfterScroll,
   taskBlock,
@@ -41,6 +45,7 @@ import {
   type ApplyBody,
   type PlanContext,
   type PlanSelection,
+  type TextPart,
 } from '../lib/project-chat'
 import type { Agent, Project, ProjectMessage, ProjectUpdate, TaskStatus, TeamPlan } from '../lib/types'
 
@@ -61,6 +66,50 @@ const TASK_PILL: Record<TaskStatus, { cls: string; dot: string }> = {
   running: { cls: ' status--active', dot: ' dot--warn dot--pulse' },
   done: { cls: ' status--done', dot: '' },
   failed: { cls: ' status--error', dot: ' dot--danger' },
+  cancelled: { cls: ' status--cancelled', dot: ' dot--idle' },
+}
+
+/** D-O11: message text with @Name mentions rendered as chips. */
+function MentionText({ text, mentions, names }: { text: string; mentions: readonly string[] | undefined; names: Names }) {
+  const parts: TextPart[] = mentionParts(text, mentions, (id) => names.byId.get(id)?.name)
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.kind === 'text' ? (
+          <span key={i}>{p.text}</span>
+        ) : (
+          <span key={i} className="mention-chip" title={names.of(p.id)}>
+            @{p.name}
+          </span>
+        ),
+      )}
+    </>
+  )
+}
+
+/** D-O11: the composer's '@' picker list (keyboard: ↑↓, Enter/Tab, Esc). */
+function MentionPicker({ options, index, onPick }: { options: readonly Agent[]; index: number; onPick: (a: Agent) => void }) {
+  if (options.length === 0) return null
+  return (
+    <div className="mention-picker" role="listbox" aria-label="Mention an agent">
+      {options.map((a, i) => (
+        <button
+          key={a.id}
+          type="button"
+          role="option"
+          aria-selected={i === index}
+          className={`mention-picker__item${i === index ? ' mention-picker__item--on' : ''}`}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            onPick(a)
+          }}
+        >
+          @{a.name}
+          {a.isPrimary ? <span className="mention-picker__tag">lead</span> : null}
+        </button>
+      ))}
+    </div>
+  )
 }
 
 function TaskPill({ status }: { status: TaskStatus }) {
@@ -315,7 +364,9 @@ function TaskAssignment({
         </span>
         <TaskPill status={status} />
       </div>
-      <div className="task__body">{message.text}</div>
+      <div className="task__body">
+        <MentionText text={message.text} mentions={message.mentions} names={names} />
+      </div>
       {status === 'failed' && (
         <button type="button" className="chat__retry" onClick={() => void retry()} disabled={busy}>
           {busy ? 'Retrying…' : 'Retry'}
@@ -448,6 +499,11 @@ function ProjectChatPage({ id }: { id: string }) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+  // D-O11: the composer's '@' picker — the '@' word under the caret, the
+  // highlighted candidate, and the ids picked so far (sent as `mentions`).
+  const [mentionAt, setMentionAt] = useState<{ start: number; query: string } | null>(null)
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const [pickedMentions, setPickedMentions] = useState<string[]>([])
   /** The prompt Primary is planning for, while POST team-plan is in flight. */
   const [planning, setPlanning] = useState<string | null>(null)
   const [planError, setPlanError] = useState<{ messageId: string; message: string } | null>(null)
@@ -570,6 +626,12 @@ function ProjectChatPage({ id }: { id: string }) {
     }),
     [byId],
   )
+  // D-O11: the '@' picker's candidates (the pick handler is below, near send).
+  const mentionOptions = useMemo(
+    () => (mentionAt ? mentionCandidates(primary, project?.teamAgentIds ?? [], agents ?? [], mentionAt.query) : []),
+    [mentionAt, primary, project, agents],
+  )
+
   const members = useMemo(() => memberIds(project?.teamAgentIds ?? [], primary?.id), [project, primary])
   const candidates = useMemo(() => addCandidates(agents ?? [], project?.teamAgentIds ?? []), [agents, project])
   const planCtx = useMemo<PlanContext>(
@@ -670,15 +732,27 @@ function ProjectChatPage({ id }: { id: string }) {
   const send = async () => {
     const text = draft.trim()
     if (!text || !primary || busy.current.sending || busy.current.planning) return
+    // D-O11: send the picked ids whose @Name is still in the text; tagging
+    // team members (and not Primary) queues one direct task each.
+    const mentions = pickedMentions.filter((pid) => {
+      const name = byId.get(pid)?.name
+      return name !== undefined && text.includes(`@${name}`)
+    })
     busy.current.sending = true
     setSending(true)
     setSendError(null)
     stick.current = true
     try {
-      const message = await api.postProjectMessage(id, { author: 'user', text })
-      take({ messages: [message] })
+      const update = await api.postProjectMessage(id, {
+        author: 'user',
+        text,
+        ...(mentions.length > 0 ? { mentions } : {}),
+      })
+      take(update)
       setDraft('')
-      void requestPlan(message.id)
+      setPickedMentions([])
+      const mine = update.messages.find((m) => m.author === 'user' && m.kind === 'message')
+      if (mine) void requestPlan(mine.id)
     } catch (err) {
       if (alive.current) {
         resyncOn(err)
@@ -768,6 +842,23 @@ function ProjectChatPage({ id }: { id: string }) {
   // Typing stays open while Primary plans; only sending waits.
   const canSend = Boolean(primary) && !sending && planning === null
   const canAsk = Boolean(primary) && !sending && planning === null
+
+  // D-O11: the pick handler replaces the '@word' under the caret with '@Name '.
+  const acceptMention = (a: Agent) => {
+    if (!mentionAt) return
+    const before = draft.slice(0, mentionAt.start)
+    const after = draft.slice(mentionAt.start + 1 + mentionAt.query.length)
+    const insert = `@${a.name} `
+    setDraft(before + insert + after)
+    setPickedMentions((prev) => (prev.includes(a.id) ? prev : [...prev, a.id]))
+    setMentionAt(null)
+    const caret = before.length + insert.length
+    requestAnimationFrame(() => {
+      composerRef.current?.focus()
+      composerRef.current?.setSelectionRange(caret, caret)
+    })
+  }
+  const sendButtonLabel = sendLabel(pickedMentions, primary?.id, (mid) => byId.get(mid)?.name)
   const teamEmpty = Boolean(project) && members.length === 0
   const working = progress.running + progress.queued > 0
 
@@ -810,10 +901,10 @@ function ProjectChatPage({ id }: { id: string }) {
       ) : null
 
     let body: ReactNode
-    if (m.kind === 'team-update') {
+    if (m.kind === 'team-update' || m.kind === 'progress') {
       body = (
         <p className="chat__system" role="status">
-          {m.text}
+          <MentionText text={m.text} mentions={m.mentions} names={names} />
         </p>
       )
     } else if (m.kind === 'task-assignment') {
@@ -821,7 +912,9 @@ function ProjectChatPage({ id }: { id: string }) {
     } else if (m.author === 'user') {
       body = (
         <Bubble kind="user">
-          <div className="bubble__body">{m.text}</div>
+          <div className="bubble__body">
+            <MentionText text={m.text} mentions={m.mentions} names={names} />
+          </div>
         </Bubble>
       )
     } else {
@@ -830,7 +923,9 @@ function ProjectChatPage({ id }: { id: string }) {
       const failed = isFailedResult(m)
       body = (
         <Bubble kind={failed ? 'error' : 'assistant'} speaker={names.of(m.author)}>
-          <div className="bubble__body">{m.text}</div>
+          <div className="bubble__body">
+            <MentionText text={m.text} mentions={m.mentions} names={names} />
+          </div>
           {result && <div className="bubble__meta">{failed ? 'Task failed' : 'Task result'}</div>}
         </Bubble>
       )
@@ -998,12 +1093,46 @@ function ProjectChatPage({ id }: { id: string }) {
             </p>
           ) : null}
           <div className="chat__composer__input">
+            {mentionAt && primary ? (
+              <MentionPicker
+                options={mentionOptions}
+                index={Math.min(mentionIndex, Math.max(mentionOptions.length - 1, 0))}
+                onPick={(a) => acceptMention(a)}
+              />
+            ) : null}
             <textarea
               ref={composerRef}
               className="textarea"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                setMentionAt(mentionQuery(e.target.value, e.target.selectionStart ?? e.target.value.length))
+                setMentionIndex(0)
+              }}
+              onClick={(e) => setMentionAt(mentionQuery(draft, e.currentTarget.selectionStart ?? 0))}
               onKeyDown={(e) => {
+                if (mentionAt && mentionOptions.length > 0) {
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setMentionIndex((i) => (i + 1) % mentionOptions.length)
+                    return
+                  }
+                  if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setMentionIndex((i) => (i - 1 + mentionOptions.length) % mentionOptions.length)
+                    return
+                  }
+                  if (e.key === 'Enter' || e.key === 'Tab') {
+                    e.preventDefault()
+                    acceptMention(mentionOptions[Math.min(mentionIndex, mentionOptions.length - 1)])
+                    return
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault()
+                    setMentionAt(null)
+                    return
+                  }
+                }
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   void send()
@@ -1018,7 +1147,7 @@ function ProjectChatPage({ id }: { id: string }) {
             <div className="chat__composer__actions">
               <button type="button" className="btn btn--primary" onClick={() => void send()} disabled={!canSend || !draft.trim()}>
                 {(sending || planning !== null) && <span className="spinner" aria-hidden="true" />}
-                {sending ? 'Sending…' : planning !== null ? 'Planning…' : 'Send'}
+                {sending ? 'Sending…' : planning !== null ? 'Planning…' : sendButtonLabel}
               </button>
             </div>
           </div>

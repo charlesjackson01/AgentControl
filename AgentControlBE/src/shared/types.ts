@@ -191,6 +191,8 @@ export interface Project {
   teamAgentIds: string[]
   createdAt: string
   updatedAt: string
+  /** D-O5 (orchestration Part 2): set while the user has paused this project's work. */
+  paused?: boolean
 }
 
 /** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
@@ -233,10 +235,28 @@ export interface ProjectMessage {
   taskId?: string
   /** A task's result message: the agent run that produced it. */
   runId?: string
+  /**
+   * D-O11: agents tagged in `text` as @Name, as ids in order of first tag,
+   * deduped. The BE fills it on every write: from the ids the user picked
+   * (user messages) or by parsing the text (everything else).
+   */
+  mentions?: string[]
+  /** task-assignment: its label within its plan ("t2"). Orchestration Part 3. */
+  label?: string
+  /** task-assignment: earlier task-assignment ids whose results it receives (at most 3). Part 3. */
+  inputs?: string[]
+  /** Written by an apply: the round of its request (absent = 1). Part 5. */
+  round?: number
+  /** Primary's reply that closes a request: a final summary or a question for the user. Part 5. */
+  verdict?: 'done' | 'ask'
+  /** A task's result message: the inputs it received and how much of each was sent. Part 3. */
+  used?: { taskId: string; chars: number; sentChars: number }[]
 }
 
-export type ProjectMessageKind = 'message' | 'team-update' | 'task-assignment'
-export type TaskStatus = 'queued' | 'running' | 'done' | 'failed'
+/** 'progress': a status line the runner writes without a model call (Parts 2–3). */
+export type ProjectMessageKind = 'message' | 'team-update' | 'task-assignment' | 'progress'
+/** 'cancelled': the user cancelled or stopped the task; it can be retried (Part 2). */
+export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 /** A library agent Primary proposes to add to the team. */
 export interface TeamPlanAdd {
@@ -258,6 +278,8 @@ export interface TeamPlanCreate {
 export interface TeamPlanTask {
   agent: string
   task: string
+  /** Hand-offs (Part 3): "t1" (an earlier task of this plan) or an earlier done task-assignment id; at most 3. */
+  inputs?: string[]
 }
 
 /** Primary's validated answer to a project prompt. */
@@ -269,6 +291,8 @@ export interface TeamPlan {
   tasks: TeamPlanTask[]
   /** Entries the BE dropped while validating, in plain words. */
   warnings: string[]
+  /** Review rounds (Part 5): keep going, finish with a summary, or ask the user. */
+  verdict?: 'continue' | 'done' | 'ask'
 }
 
 /**
@@ -301,6 +325,15 @@ export interface TeamPlanApply {
   add?: string[]
   create?: number[]
   tasks?: number[]
+  /** Review rounds (Part 5): the round this apply starts; the BE checks it is the next one. */
+  round?: number
+}
+
+/** Response of the review route (Part 5): Primary's next-round plan for a request; nothing is written. */
+export interface ReviewResult {
+  plan: TeamPlan
+  replyTo: string
+  round: number
 }
 
 /** Response of the apply and task-retry routes. */
@@ -310,10 +343,17 @@ export interface ProjectUpdate {
   messages: ProjectMessage[]
 }
 
-/** Body for POST /api/projects/:id/messages. */
+/**
+ * Body for POST /api/projects/:id/messages. `mentions` (user messages) are
+ * the agent ids the user picked with @ in the composer: Primary or team
+ * members. A user message that tags team members and not Primary also
+ * queues one task-assignment per tagged member (D-O11); the response is the
+ * message, and the tasks appear in the thread.
+ */
 export interface ProjectMessageInput {
   author: string
   text: string
+  mentions?: string[]
 }
 
 /**

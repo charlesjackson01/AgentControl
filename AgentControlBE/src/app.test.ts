@@ -1935,7 +1935,10 @@ describe('project chat', () => {
     expect(m1.statusCode).toBe(201)
     const m2 = await inject('POST', `/api/projects/${p.id}/messages`, { author: agent.id, text: 'second' })
     expect(m2.statusCode).toBe(201)
-    expect(m2.json()).toMatchObject({ projectId: p.id, author: agent.id, text: 'second', kind: 'message' })
+    // D-O11: the route answers with the project and the messages it wrote.
+    expect((m2.json() as { messages: unknown[] }).messages).toMatchObject([
+      { projectId: p.id, author: agent.id, text: 'second', kind: 'message' },
+    ])
 
     const list = await inject('GET', `/api/projects/${p.id}/messages`)
     const msgs = list.json() as { text: string }[]

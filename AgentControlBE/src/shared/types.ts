@@ -451,6 +451,8 @@ export interface ChatMessage {
   createdAt: string
   /** The run that produced this message, when there was one. */
   runId?: string
+  /** Set on an assistant message that is a failed run's error text (content holds the error). */
+  error?: true
 }
 
 /** A 1:1 chat with one agent. One per agent, created lazily. */

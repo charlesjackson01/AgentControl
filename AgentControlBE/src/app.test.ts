@@ -2370,3 +2370,30 @@ describe('empty and length-cut replies', () => {
     expect(JSON.parse(mock.mock.calls.at(-1)?.[1]?.body ?? '{}').chat_template_kwargs).toBeUndefined()
   })
 })
+
+describe('chat error flag', () => {
+  it('flags failed-run replies, keeps it across reloads, and backfills old ones', async () => {
+    const { agent } = await makeRunner()
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down', json: async () => ({}) })))
+    const list = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
+    const dm = list.find((c) => c.agentId === agent.id) as ConversationSummary
+    const sent = (await inject('POST', `/api/conversations/${dm.id}/messages`, { text: 'hi' })).json() as { messages: ChatMessage[] }
+    const reply = sent.messages.find((m) => m.role === 'assistant')
+    expect(reply).toMatchObject({ error: true })
+    expect(reply?.content).toMatch(/500/)
+    expect(sent.messages.find((m) => m.role === 'user')?.error).toBeUndefined()
+
+    mockChat('fine')
+    const ok = (await inject('POST', `/api/conversations/${dm.id}/messages`, { text: 'again' })).json() as { messages: ChatMessage[] }
+    expect(ok.messages.some((m) => m.error)).toBe(false)
+
+    // Reload keeps the flag; a stored message missing it is backfilled from its failed run.
+    const path = join(dir, 'store.json')
+    const raw = JSON.parse(readFileSync(path, 'utf8')) as { chatMessages: ChatMessage[] }
+    for (const m of raw.chatMessages) delete m.error
+    writeFileSync(path, JSON.stringify(raw))
+    const reloaded = createStore(path)
+    const flagged = reloaded.chatMessages.filter((m) => m.error === true)
+    expect(flagged.map((m) => m.id)).toEqual([reply?.id])
+  })
+})

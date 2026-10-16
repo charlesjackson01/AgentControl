@@ -8,7 +8,7 @@ import type { UserProfile } from '../lib/types'
 
 type Props = {
   profile: UserProfile
-  /** First-run: also asks the BE to stamp onboardedAt. */
+  /** First-run mode (the BE stamps onboardedAt on the first save with a name). */
   onboarding?: boolean
   submitLabel?: string
   onSaved: (p: UserProfile) => void
@@ -43,7 +43,6 @@ export default function UserProfileForm({ profile, onboarding = false, submitLab
       let saved = await updateProfile({
         name: name.trim(),
         ...(plan.avatar !== undefined ? { avatar: plan.avatar } : {}),
-        ...(onboarding ? { onboarded: true } : {}),
       })
       if (plan.upload && avatarDraft.file) saved = await uploadProfileAvatar(avatarDraft.file)
       setAvatarDraft(avatarBaseline(saved.avatar))

@@ -524,10 +524,8 @@ export type UserProfile = {
   onboardedAt: string | null
 }
 
-/** PUT /api/profile body. Emoji only; images go through /api/profile/avatar. */
+/** PUT /api/profile body (BE c16c83a). `name` required; the first save with a name stamps onboardedAt. Emoji only; images via /api/profile/avatar. */
 export type UserProfileInput = {
   name?: string
   avatar?: { kind: 'emoji'; value: string } | null
-  /** First-run save: ask the BE to stamp onboardedAt. */
-  onboarded?: boolean
 }

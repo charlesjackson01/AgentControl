@@ -1,6 +1,6 @@
 /* --------------------------------------------------------------------------
    Chat-first: the workspace owner's profile. Isolated here so the contract is
-   easy to adjust once the BE lands it. Spec (Team lead):
+   easy to adjust. Matches BE c16c83a (GET starts as {name:'', onboardedAt:null}):
      GET    /api/profile          -> UserProfile { name, avatar?, onboardedAt }
      PUT    /api/profile          -> UserProfile  body: UserProfileInput
      GET    /api/profile/avatar   -> image bytes (404 when none); ?v=<updatedAt>

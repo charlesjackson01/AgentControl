@@ -1195,6 +1195,7 @@ export async function requestReview(store: WorkspaceStore, projectId: string, bo
     PLANNER_TEMPERATURE,
     undefined,
     endpoint.proxyUrl,
+    { disableThinking: endpoint.disableThinking === true },
   )
   if (!result.ok) fail(502, `${lead.name} could not answer: ${result.error ?? 'request failed'}. Nothing was changed.`)
 
@@ -1292,6 +1293,7 @@ export async function requestTeamPlan(store: WorkspaceStore, projectId: string, 
     PLANNER_TEMPERATURE,
     undefined,
     endpoint.proxyUrl,
+    { disableThinking: endpoint.disableThinking === true },
   )
   if (!result.ok) fail(502, `${lead.name} could not answer: ${result.error ?? 'request failed'}. Nothing was changed.`)
 
@@ -2272,11 +2274,13 @@ export function createTaskRunner(store: WorkspaceStore, log: (err: unknown) => v
             signal: controller.signal,
           })
           runId = run.id
-          ok = run.status === 'succeeded'
+          const output = run.output.trim()
+          // An empty reply is never a Done result, and no placeholder is passed on.
+          ok = run.status === 'succeeded' && output !== ''
           stopped = run.error === STOPPED_BY_YOU
           text = ok
-            ? clipText(run.output.trim(), RESULT_TEXT_MAX) || '(The agent replied with no text.)'
-            : `Could not finish: ${run.error ?? 'the run failed.'}`
+            ? clipText(output, RESULT_TEXT_MAX)
+            : `Could not finish: ${run.status === 'succeeded' ? 'the agent replied with no text.' : (run.error ?? 'the run failed.')}`
         } catch (err) {
           text = `Could not finish: ${err instanceof Error ? err.message : String(err)}`
         }

@@ -165,6 +165,16 @@ function serializeMessage(message: ChatMessage): Record<string, unknown> {
   return out
 }
 
+/** A reply cut off at max_tokens before any visible text (e.g. all spent on reasoning_content). */
+export const REPLY_BUDGET_EXHAUSTED =
+  'The model used its whole reply budget thinking and returned no text. Turn on "Disable thinking" for this endpoint, or give it a larger context window.'
+
+/** Per-call request options that come from the endpoint. */
+export interface UpstreamOptions {
+  /** Send chat_template_kwargs.enable_thinking=false (llama.cpp / Qwen-style templates). */
+  disableThinking?: boolean
+}
+
 /** User (or TaskRunner) aborted the call via an AbortSignal. Distinct from a timeout. */
 export const STOPPED_BY_YOU = 'Stopped by you'
 
@@ -182,6 +192,7 @@ export async function chatCompletion(
   signal?: AbortSignal,
   /** Optional per-endpoint HTTP proxy (Endpoint.proxyUrl). */
   proxyUrl?: string,
+  options: UpstreamOptions = {},
 ): Promise<ChatResult> {
   const started = Date.now()
   const timeout = AbortSignal.timeout(timeoutMs)
@@ -192,6 +203,7 @@ export async function chatCompletion(
     const payload: Record<string, unknown> = { model, messages: messages.map(serializeMessage) }
     if (typeof maxTokens === 'number') payload.max_tokens = maxTokens
     if (typeof temperature === 'number') payload.temperature = temperature
+    if (options.disableThinking) payload.chat_template_kwargs = { enable_thinking: false }
     if (tools && tools.length > 0) {
       payload.tools = tools.map((tool) => ({
         type: 'function',
@@ -226,6 +238,13 @@ export async function chatCompletion(
     }
     if (content === null) {
       return { ok: false, content: '', latencyMs, error: 'Upstream response had no message content.' }
+    }
+    // Cut off before any visible text: never a usable reply.
+    if (content.trim() === '' && finishReason === 'length') {
+      return { ok: false, content: '', latencyMs, error: REPLY_BUDGET_EXHAUSTED, finishReason }
+    }
+    if (content.trim() === '') {
+      return { ok: false, content: '', latencyMs, error: 'The model returned an empty reply.', finishReason }
     }
     return { ok: true, content, latencyMs, finishReason }
   } catch (err) {

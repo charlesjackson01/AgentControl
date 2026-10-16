@@ -226,6 +226,7 @@ export async function executeRun(
       agent.temperature,
       signal,
       endpoint.proxyUrl,
+      { disableThinking: endpoint.disableThinking === true },
     )
     steps += 1
     totalLatency += result.latencyMs

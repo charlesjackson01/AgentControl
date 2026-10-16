@@ -1193,6 +1193,8 @@ export async function requestReview(store: WorkspaceStore, projectId: string, bo
     request.maxTokens,
     undefined,
     PLANNER_TEMPERATURE,
+    undefined,
+    endpoint.proxyUrl,
   )
   if (!result.ok) fail(502, `${lead.name} could not answer: ${result.error ?? 'request failed'}. Nothing was changed.`)
 
@@ -1288,6 +1290,8 @@ export async function requestTeamPlan(store: WorkspaceStore, projectId: string, 
     request.maxTokens,
     undefined,
     PLANNER_TEMPERATURE,
+    undefined,
+    endpoint.proxyUrl,
   )
   if (!result.ok) fail(502, `${lead.name} could not answer: ${result.error ?? 'request failed'}. Nothing was changed.`)
 

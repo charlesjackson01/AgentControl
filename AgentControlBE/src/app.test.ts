@@ -1976,3 +1976,19 @@ describe('project chat', () => {
     expect(reloaded.projectMessages.filter((m) => m.projectId === p.id).map((m) => m.text)).toEqual(['durable'])
   })
 })
+
+describe('endpoint proxyUrl field', () => {
+  it('stores, keeps, validates and clears proxyUrl', async () => {
+    const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
+    const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'socks5://x:1' })
+    expect(bad.statusCode).toBe(400)
+    const res = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'http://localhost:1055/' })
+    expect(res.statusCode).toBe(201)
+    const ep = res.json() as Endpoint
+    expect(ep.proxyUrl).toBe('http://localhost:1055')
+    const kept = await inject('PATCH', `/api/endpoints/${ep.id}`, { name: 'Renamed' })
+    expect((kept.json() as Endpoint).proxyUrl).toBe('http://localhost:1055')
+    const cleared = await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: '' })
+    expect((cleared.json() as Endpoint).proxyUrl).toBeUndefined()
+  })
+})

@@ -1,12 +1,12 @@
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
-import { attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
+import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import {
@@ -23,6 +23,9 @@ import {
 } from './projects.js'
 import {
   DEFAULT_ENDPOINT_BASE_URL,
+  MAX_AGENT_RULE_CHARS,
+  MAX_AGENT_RULES,
+  MAX_AVATAR_BYTES,
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
   type AgentInput,
@@ -151,6 +154,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
   }
 
   return {
+    ...parseProfileFields(raw),
     name,
     description: typeof raw.description === 'string' ? raw.description.trim() : '',
     instructions: typeof raw.instructions === 'string' ? raw.instructions.trim() : '',
@@ -161,6 +165,79 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     ...(temperature !== undefined ? { temperature } : {}),
     skillIds,
   }
+}
+
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
+const MAX_EMOJI_CHARS = 16
+
+/** Optional chat-first profile fields. Omitted keys stay omitted (PUT keeps the stored value). */
+function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
+  const out: Partial<AgentInput> = {}
+  if (raw.rules !== undefined) {
+    if (!Array.isArray(raw.rules) || !raw.rules.every((r): r is string => typeof r === 'string')) {
+      fail(400, '"rules" must be a list of strings.')
+    }
+    const rules = raw.rules.map((r) => r.trim()).filter(Boolean)
+    if (rules.length > MAX_AGENT_RULES) fail(400, `An agent can have at most ${MAX_AGENT_RULES} rules.`)
+    if (rules.some((r) => r.length > MAX_AGENT_RULE_CHARS)) {
+      fail(400, `Each rule can be at most ${MAX_AGENT_RULE_CHARS} characters.`)
+    }
+    out.rules = rules
+  }
+  if (raw.color !== undefined) {
+    if (raw.color !== null && (typeof raw.color !== 'string' || !HEX_COLOR.test(raw.color))) {
+      fail(400, '"color" must look like #rrggbb, or be null to clear it.')
+    }
+    out.color = raw.color === null ? null : (raw.color as string).toLowerCase()
+  }
+  for (const key of ['pinned', 'hidden'] as const) {
+    if (raw[key] === undefined) continue
+    if (typeof raw[key] !== 'boolean') fail(400, `"${key}" must be true or false.`)
+    out[key] = raw[key] as boolean
+  }
+  if (raw.avatar !== undefined) {
+    if (raw.avatar === null) {
+      out.avatar = null
+    } else {
+      const a = raw.avatar as Record<string, unknown>
+      const value = typeof a?.value === 'string' ? a.value.trim() : ''
+      if (a?.kind !== 'emoji' || !value || value.length > MAX_EMOJI_CHARS || /[\s<>]/.test(value)) {
+        fail(400, '"avatar" must be { kind: "emoji", value: "<one emoji>" } or null. Upload images with PUT /api/agents/:id/avatar.')
+      }
+      out.avatar = { kind: 'emoji', value }
+    }
+  }
+  return out
+}
+
+/** Apply an AgentInput onto an agent: null clears color/avatar, omitted keeps them. */
+function mergeAgent(current: Agent, input: AgentInput): Agent {
+  const { color, avatar, ...rest } = input
+  const next: Agent = { ...current, ...rest }
+  if (color === null) delete next.color
+  else if (color !== undefined) next.color = color
+  if (avatar === null) delete next.avatar
+  else if (avatar !== undefined) next.avatar = avatar
+  return next
+}
+
+const AVATAR_TYPES: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+/** Resolve an avatar file inside avatarsDir; null for anything that escapes it. */
+function avatarPath(store: WorkspaceStore, file: string): string | null {
+  if (!/^[A-Za-z0-9_-]+\.(png|jpg|webp|gif)$/.test(file)) return null
+  return join(store.avatarsDir, file)
+}
+
+function removeAvatarFile(store: WorkspaceStore, agent: Agent): void {
+  if (agent.avatar?.kind !== 'image') return
+  const path = avatarPath(store, agent.avatar.file)
+  if (path) rmSync(path, { force: true })
 }
 
 function slugify(name: string): string {
@@ -515,8 +592,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
     // Unknown skill ids are skipped, as a run skips deleted skills; the
     // instructions are trimmed the way saving the agent trims them.
+    const rules = parseProfileFields({ rules: raw.rules }).rules
+    const ownInstructions = typeof raw.instructions === 'string' ? raw.instructions.trim() : ''
+    const withRules = agentInstructions(ownInstructions, rules)
+    const rulesTokens = withRules === ownInstructions ? 0 : estimateTokens(withRules.length - ownInstructions.length)
     const plan = planPrompt({
-      instructions: typeof raw.instructions === 'string' ? raw.instructions.trim() : '',
+      instructions: withRules,
       skills: attachedSkills(store.skills, skillIds),
       input: '',
       contextWindow: endpoint.contextWindow,
@@ -528,6 +609,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       mode: plan.mode,
       summarizedSkillIds: plan.summarizedSkillIds,
       toolNames: plan.toolDeclarations.map((t) => t.name),
+      rulesTokens,
     }
   })
 
@@ -561,16 +643,24 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     // Exactly one primary: honor the request, otherwise promote the first agent.
     const isPrimary = input.isPrimary === true || !hasPrimary
-    const agent: Agent = {
-      id: uid('agt'),
-      ...input,
-      endpointId: input.endpointId,
-      isPrimary,
-      status: 'idle',
-      createdAt: new Date().toISOString(),
-      lastRunAt: null,
-      runCount: 0,
-    }
+    const agent: Agent = mergeAgent(
+      {
+        id: uid('agt'),
+        name: input.name,
+        description: input.description,
+        instructions: input.instructions,
+        modelId: input.modelId,
+        endpointId: input.endpointId,
+        isPrimary,
+        role: input.role,
+        skillIds: input.skillIds,
+        status: 'idle',
+        createdAt: new Date().toISOString(),
+        lastRunAt: null,
+        runCount: 0,
+      },
+      { ...input, isPrimary },
+    )
     store.agents = [agent, ...store.agents]
     store.save()
     void reply.status(201)
@@ -585,7 +675,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const input = parseAgentInput(store, request.body)
     const transferPrimary = input.isPrimary === true
     // The primary flag never flips off here; transfer by promoting another agent.
-    const next: Agent = { ...current, ...input, isPrimary: transferPrimary || current.isPrimary }
+    const next: Agent = { ...mergeAgent(current, input), isPrimary: transferPrimary || current.isPrimary }
     if (transferPrimary) {
       store.agents = store.agents.map((a, i) =>
         i === index ? next : a.isPrimary ? { ...a, isPrimary: false } : a,
@@ -593,6 +683,61 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     } else {
       store.agents = store.agents.map((a, i) => (i === index ? next : a))
     }
+    store.save()
+    return next
+  })
+
+  // Image avatars: raw image body, stored as data/avatars/<agentId>.<ext>.
+  app.register(async (scope) => {
+    for (const type of Object.keys(AVATAR_TYPES)) {
+      scope.addContentTypeParser(type, { parseAs: 'buffer', bodyLimit: MAX_AVATAR_BYTES }, (_req, body, done) =>
+        done(null, body),
+      )
+    }
+    scope.put('/api/agents/:id/avatar', { bodyLimit: MAX_AVATAR_BYTES }, async (request) => {
+      const { id } = request.params as { id: string }
+      const index = store.agents.findIndex((a) => a.id === id)
+      if (index === -1) fail(404, `No agent with id "${id}"`)
+      const type = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
+      const ext = AVATAR_TYPES[type]
+      const body = request.body
+      if (!ext || !Buffer.isBuffer(body)) fail(415, 'Upload a PNG, JPEG, WebP or GIF image.')
+      if (body.length === 0) fail(400, 'The image is empty.')
+      const current = store.agents[index] as Agent
+      mkdirSync(store.avatarsDir, { recursive: true })
+      const file = `${id}.${ext}`
+      const temporary = join(store.avatarsDir, `.${file}.${process.pid}.tmp`)
+      writeFileSync(temporary, body, { mode: 0o600 })
+      renameSync(temporary, join(store.avatarsDir, file))
+      if (current.avatar?.kind === 'image' && current.avatar.file !== file) removeAvatarFile(store, current)
+      const next: Agent = { ...current, avatar: { kind: 'image', file, updatedAt: new Date().toISOString() } }
+      store.agents = store.agents.map((a, i) => (i === index ? next : a))
+      store.save()
+      return next
+    })
+  })
+
+  app.get('/api/agents/:id/avatar', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    const avatar = agent.avatar
+    const path = avatar?.kind === 'image' ? avatarPath(store, avatar.file) : null
+    if (!avatar || avatar.kind !== 'image' || !path || !existsSync(path)) fail(404, 'This agent has no image avatar.')
+    const ext = avatar.file.slice(avatar.file.lastIndexOf('.') + 1)
+    const type = Object.entries(AVATAR_TYPES).find(([, e]) => e === ext)?.[0] ?? 'application/octet-stream'
+    void reply.header('content-type', type).header('cache-control', 'private, max-age=31536000, immutable')
+    return reply.send(readFileSync(path))
+  })
+
+  app.delete('/api/agents/:id/avatar', async (request) => {
+    const { id } = request.params as { id: string }
+    const index = store.agents.findIndex((a) => a.id === id)
+    if (index === -1) fail(404, `No agent with id "${id}"`)
+    const current = store.agents[index] as Agent
+    removeAvatarFile(store, current)
+    const { avatar: _dropped, ...next } = current
+    store.agents = store.agents.map((a, i) => (i === index ? next : a))
     store.save()
     return next
   })
@@ -606,6 +751,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
+    removeAvatarFile(store, agent)
     // It leaves every project team too, so a team PATCH never trips on a stale id.
     store.projects = store.projects.map((p) =>
       p.teamAgentIds.includes(id) ? { ...p, teamAgentIds: p.teamAgentIds.filter((x) => x !== id) } : p,

@@ -412,7 +412,11 @@ export interface WorkspaceSettings {
   autoRun: boolean
   notify: boolean
   telemetry: boolean
+  /** How the user is shown in chat (sidebar, message headers). Optional. */
+  userName?: string
 }
+
+export const MAX_USER_NAME_CHARS = 80
 
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
 

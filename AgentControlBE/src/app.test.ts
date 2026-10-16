@@ -2263,4 +2263,35 @@ describe('chat-first Part 2: conversations', () => {
       rmSync(legacyDir, { recursive: true, force: true })
     }
   })
+
+  it('sends through the DM route and returns the turn', async () => {
+    const { agent } = await makeRunner()
+    const dm = await dmFor(agent.id)
+    mockChat('pong')
+    const res = await inject('POST', `/api/conversations/${dm.id}/messages`, { text: '  ping  ' })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as { conversation: ConversationSummary; messages: ChatMessage[]; run: { status: string } }
+    expect(body.messages.map((m) => [m.role, m.content])).toEqual([['user', 'ping'], ['assistant', 'pong']])
+    expect(body.conversation).toMatchObject({ id: dm.id, unreadCount: 1 })
+    expect(body.run.status).toBe('succeeded')
+    expect((await inject('POST', `/api/conversations/${dm.id}/messages`, { text: ' ' })).statusCode).toBe(400)
+    expect((await inject('POST', '/api/conversations/nope/messages', { text: 'x' })).statusCode).toBe(404)
+    const page = (await inject('GET', `/api/conversations/${dm.id}/messages?limit=1`)).json() as { hasMore: boolean }
+    expect(page.hasMore).toBe(true)
+    const full = (await inject('GET', `/api/conversations/${dm.id}/messages`)).json() as { hasMore: boolean }
+    expect(full.hasMore).toBe(false)
+  })
+
+  it('stores, trims, validates and clears userName', async () => {
+    const set = await inject('PATCH', '/api/settings', { userName: '  Charles  ' })
+    expect(set.statusCode).toBe(200)
+    expect(set.json()).toMatchObject({ userName: 'Charles' })
+    expect((await inject('GET', '/api/settings')).json()).toMatchObject({ userName: 'Charles' })
+    expect(createStore(join(dir, 'store.json')).settings.userName).toBe('Charles')
+    expect((await inject('PATCH', '/api/settings', { userName: 5 })).statusCode).toBe(400)
+    expect((await inject('PATCH', '/api/settings', { userName: 'x'.repeat(81) })).statusCode).toBe(400)
+    expect((await inject('PATCH', '/api/settings', { notify: 'yes' })).statusCode).toBe(400)
+    const cleared = await inject('PATCH', '/api/settings', { userName: null })
+    expect((cleared.json() as { userName?: string }).userName).toBeUndefined()
+  })
 })

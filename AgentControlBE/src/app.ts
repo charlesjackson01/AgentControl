@@ -25,6 +25,7 @@ import {
 import {
   CONVERSATION_PAGE_SIZE,
   MAX_CONVERSATION_PAGE_SIZE,
+  MAX_USER_NAME_CHARS,
   DEFAULT_ENDPOINT_BASE_URL,
   MAX_AGENT_RULE_CHARS,
   MAX_AGENT_RULES,
@@ -566,6 +567,31 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
   app.get('/api/settings', async () => store.settings)
 
+  // Partial update; only known fields. userName "" or null clears it.
+  app.patch('/api/settings', async (request) => {
+    const body = (request.body ?? {}) as Record<string, unknown>
+    if (typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object.')
+    const next = { ...store.settings }
+    for (const key of ['autoRun', 'notify', 'telemetry'] as const) {
+      if (body[key] === undefined) continue
+      if (typeof body[key] !== 'boolean') fail(400, `${key} must be a boolean`)
+      next[key] = body[key] as boolean
+    }
+    if (body.userName !== undefined) {
+      if (body.userName === null || body.userName === '') delete next.userName
+      else if (typeof body.userName !== 'string') fail(400, 'userName must be a string or null')
+      else {
+        const name = body.userName.trim()
+        if (name.length > MAX_USER_NAME_CHARS) fail(400, `userName is at most ${MAX_USER_NAME_CHARS} characters`)
+        if (name) next.userName = name
+        else delete next.userName
+      }
+    }
+    store.settings = next
+    store.save()
+    return store.settings
+  })
+
   app.get('/api/agents', async () => store.agents)
 
   app.get('/api/agents/:id', async (request) => {
@@ -685,7 +711,23 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       const before = query.before as string
       messages = messages.filter((m) => m.createdAt < before)
     }
-    return { conversation, messages: messages.slice(-limit) }
+    return { conversation, messages: messages.slice(-limit), hasMore: messages.length > limit }
+  })
+
+  // Send in a DM: runs the agent (same as POST /api/agents/:id/runs) and
+  // returns the turn's messages. A failed run still returns its user message
+  // and, when there is one, the error as the assistant message.
+  app.post('/api/conversations/:id/messages', async (request) => {
+    const { id } = request.params as { id: string }
+    const conversation = conversationOr404(id)
+    const agent = store.agents.find((a) => a.id === conversation.agentId)
+    if (!agent) fail(404, `No agent for conversation "${id}"`)
+    const body = (request.body ?? {}) as { text?: unknown }
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    if (!text) fail(400, 'Provide a "text" string.')
+    const run = await runAgent(store, agent as Agent, text)
+    const messages = messagesOf(store, conversation.id).filter((m) => m.runId === run.id)
+    return { conversation: summarize(store, conversation), messages, run: { id: run.id, status: run.status, error: run.error } }
   })
 
   app.post('/api/conversations/:id/read', async (request) => {

@@ -2,13 +2,15 @@ import { useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import { MenuIcon, PanelIcon, SearchIcon } from './icons'
-import { allNav } from '../lib/nav'
+import { allNav, CHATS_LABEL } from '../lib/nav'
+import ConversationsProvider from '../state/ConversationsProvider'
 import { useSidebar } from '../hooks/useSidebar'
 
 export default function AppShell() {
   const sidebar = useSidebar()
   const { pathname } = useLocation()
   const current = allNav.find((n) => pathname.startsWith(n.to))
+  const crumb = current?.label ?? (pathname === '/' || pathname.startsWith('/c/') ? CHATS_LABEL : 'Overview')
 
   useEffect(() => {
     if (!sidebar.mobileOpen) return
@@ -20,6 +22,7 @@ export default function AppShell() {
   }, [sidebar])
 
   return (
+    <ConversationsProvider>
     <div className="shell">
       <Sidebar {...sidebar} />
 
@@ -40,7 +43,7 @@ export default function AppShell() {
           <div className="crumbs">
             <span>AgentControl</span>
             <span className="crumbs__sep">/</span>
-            <span className="crumbs__current">{current?.label ?? 'Overview'}</span>
+            <span className="crumbs__current">{crumb}</span>
           </div>
 
           <div className="topbar__actions">
@@ -55,5 +58,6 @@ export default function AppShell() {
         <Outlet />
       </div>
     </div>
+    </ConversationsProvider>
   )
 }

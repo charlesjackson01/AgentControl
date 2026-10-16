@@ -461,3 +461,53 @@ export type ProjectInput = {
   desc?: string
   teamAgentIds?: string[]
 }
+
+/* ==========================================================================
+   Chat-first Part 2: conversations (DMs + project chats). Provisional shapes
+   until Backend Dev freezes feat/chat-first-p2-be; adjust here only.
+   ========================================================================== */
+
+/** 'user' or the speaking agent's id. */
+export type ChatAuthor = 'user' | string
+
+export type ConversationLastMessage = {
+  author: ChatAuthor
+  /** Short preview, already trimmed by the BE. */
+  text: string
+  createdAt: string
+}
+
+export type Conversation = {
+  id: string
+  kind: 'dm' | 'project'
+  /** Set on kind 'dm': the agent this 1:1 is with. */
+  agentId?: string
+  /** Set on kind 'project'. */
+  projectId?: string
+  createdAt: string
+  lastMessage?: ConversationLastMessage
+  unreadCount: number
+  lastReadAt?: string
+}
+
+export type ChatMessage = {
+  id: string
+  conversationId: string
+  author: ChatAuthor
+  text: string
+  runId?: string
+  mentions?: string[]
+  createdAt: string
+}
+
+/** Normalized GET /api/conversations/:id/messages page (oldest first). */
+export type ChatMessagePage = {
+  messages: ChatMessage[]
+  hasMore: boolean
+}
+
+/** POST /api/conversations/:id/messages response. */
+export type ConversationSendResult = {
+  conversation: Conversation
+  messages: ChatMessage[]
+}

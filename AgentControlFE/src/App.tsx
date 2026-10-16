@@ -8,12 +8,15 @@ import Projects from './pages/Projects'
 import Settings from './pages/Settings'
 import SkillLibrary from './pages/SkillLibrary'
 import Notes from './pages/Notes'
+import ConversationChat from './pages/ConversationChat'
+import Landing from './pages/Landing'
 
 export default function App() {
   return (
     <Routes>
       <Route element={<AppShell />}>
-        <Route index element={<Navigate to="/agents" replace />} />
+        <Route index element={<Landing />} />
+        <Route path="c/:conversationId" element={<ConversationChat />} />
         <Route path="agents" element={<Agents />} />
         <Route path="agents/new" element={<AgentFormPage />} />
         <Route path="agents/:id" element={<AgentChat />} />
@@ -23,7 +26,7 @@ export default function App() {
         <Route path="skills" element={<SkillLibrary />} />
         <Route path="notes" element={<Notes />} />
         <Route path="settings" element={<Settings />} />
-        <Route path="*" element={<Navigate to="/agents" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   )

@@ -9,6 +9,7 @@ export type NavItem = {
   count?: number
 }
 
+/** Chat-first: the sidebar body is the conversation list; these sit in its footer. */
 export const primaryNav: NavItem[] = [
   { label: 'Agents', to: '/agents', icon: AgentsIcon },
   { label: 'Projects', to: '/projects', icon: ProjectsIcon },
@@ -19,5 +20,8 @@ export const primaryNav: NavItem[] = [
 export const secondaryNav: NavItem[] = [
   { label: 'Settings', to: '/settings', icon: SettingsIcon },
 ]
+
+/** Breadcrumb label for conversation routes. */
+export const CHATS_LABEL = 'Chats'
 
 export const allNav: NavItem[] = [...primaryNav, ...secondaryNav]

@@ -1,4 +1,6 @@
 import { MAX_AVATAR_BYTES } from './types'
+import type { ChatMessage, ChatMessagePage, Conversation, ConversationSendResult } from './types'
+import { normalizeMessagePage } from './api-pages'
 import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, ReviewResult, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
 
 /* ==========================================================================
@@ -128,7 +130,44 @@ async function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
   return (await res.json()) as Agent
 }
 
+/* --------------------------------------------------------------------------
+   Chat-first Part 2: conversation routes (provisional until the BE freezes):
+     GET  /api/conversations                         -> Conversation[]
+     GET  /api/conversations/:id/messages?before=&limit= -> ChatMessage[] | { messages, hasMore }
+          `before` = createdAt of the oldest message already shown (exclusive)
+     POST /api/conversations/:id/messages { text }   -> { conversation, messages }
+     POST /api/conversations/:id/read                -> 204 / anything
+   -------------------------------------------------------------------------- */
+
+export const MESSAGE_PAGE_SIZE = 50
+
 export const api = {
+  async listConversations(): Promise<Conversation[]> {
+    return request<Conversation[]>('/api/conversations')
+  },
+
+  async listConversationMessages(id: string, options?: { before?: string; limit?: number }): Promise<ChatMessagePage> {
+    const limit = options?.limit ?? MESSAGE_PAGE_SIZE
+    const qs = new URLSearchParams({ limit: String(limit) })
+    if (options?.before) qs.set('before', options.before)
+    const body = await request<ChatMessage[] | { messages: ChatMessage[]; hasMore?: boolean }>(
+      `/api/conversations/${encodeURIComponent(id)}/messages?${qs}`,
+    )
+    return normalizeMessagePage(body, limit)
+  },
+
+  async sendConversationMessage(id: string, text: string): Promise<ConversationSendResult> {
+    return request<ConversationSendResult>(`/api/conversations/${encodeURIComponent(id)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    })
+  },
+
+  async markConversationRead(id: string): Promise<void> {
+    await request<unknown>(`/api/conversations/${encodeURIComponent(id)}/read`, { method: 'POST', body: '{}' })
+  },
+
+
   /** Upload (replace) an agent's image avatar. Resolves with the updated agent when the BE returns it. */
   async uploadAgentAvatar(id: string, file: Blob): Promise<Agent> {
     return uploadAvatar(id, file)

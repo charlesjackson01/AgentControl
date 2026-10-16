@@ -224,6 +224,7 @@ export async function executeRun(
       finalCall ? undefined : sendTools,
       agent.temperature,
       signal,
+      endpoint.proxyUrl,
     )
     steps += 1
     totalLatency += result.latencyMs

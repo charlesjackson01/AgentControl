@@ -79,6 +79,22 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
   if (input.timeoutMs !== undefined && (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0)) {
     fail(400, 'Timeout must be a positive number of milliseconds.')
   }
+  if (input.proxyUrl !== undefined && input.proxyUrl !== null && input.proxyUrl !== '') {
+    let proxy: URL
+    try {
+      proxy = new URL(String(input.proxyUrl))
+    } catch {
+      fail(400, 'Proxy must be a valid http(s) URL, e.g. http://localhost:1055.')
+    }
+    if (proxy.protocol !== 'http:' && proxy.protocol !== 'https:') fail(400, 'Proxy must start with http:// or https://.')
+  }
+}
+
+/** Stored proxy after a create/update: undefined means none. */
+function resolveProxy(raw: unknown, current: string | undefined): string | undefined {
+  if (raw === undefined) return current
+  if (raw === null || raw === '') return undefined
+  return String(raw).trim().replace(/\/+$/, '')
 }
 
 /**
@@ -775,8 +791,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : Number.NaN,
       ...(raw.apiKey !== undefined ? { apiKey: raw.apiKey } : {}),
       ...(raw.timeoutMs !== undefined ? { timeoutMs: raw.timeoutMs } : {}),
+      ...(raw.proxyUrl !== undefined ? { proxyUrl: raw.proxyUrl } : {}),
     }
     assertEndpointInput(input, '')
+    const proxyUrl = resolveProxy(raw.proxyUrl, undefined)
     const id = uid('ep')
     const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey : ''
     if (apiKey) store.endpointKeys[id] = apiKey
@@ -792,6 +810,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       lastCheckedAt: null,
       createdAt: new Date().toISOString(),
       ...(input.timeoutMs !== undefined ? { timeoutMs: Math.floor(input.timeoutMs) } : {}),
+      ...(proxyUrl ? { proxyUrl } : {}),
     }
     store.endpoints = [endpoint, ...store.endpoints]
     store.endpointModels[id] = [endpoint.defaultModel]
@@ -814,8 +833,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       contextWindow: raw.contextWindow ?? current.contextWindow,
       ...(raw.apiKey !== undefined ? { apiKey: raw.apiKey } : {}),
       timeoutMs: raw.timeoutMs ?? current.timeoutMs,
+      ...(raw.proxyUrl !== undefined ? { proxyUrl: raw.proxyUrl } : {}),
     }
     assertEndpointInput(merged, store.endpointKeys[id] ?? '')
+    const proxyUrl = resolveProxy(raw.proxyUrl, current.proxyUrl)
     // Write-only key semantics: omitted keeps, non-empty replaces, "" clears.
     if (raw.apiKey !== undefined) {
       if (raw.apiKey) store.endpointKeys[id] = raw.apiKey
@@ -833,6 +854,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       lastCheckedAt: null,
       ...(merged.timeoutMs !== undefined ? { timeoutMs: Math.floor(merged.timeoutMs) } : {}),
     }
+    if (proxyUrl) next.proxyUrl = proxyUrl
+    else delete next.proxyUrl
     store.endpoints = store.endpoints.map((e, i) => (i === index ? next : e))
     const models = store.endpointModels[id] ?? []
     if (!models.includes(next.defaultModel)) store.endpointModels[id] = [...models, next.defaultModel]
@@ -874,7 +897,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const endpoint = store.endpoints.find((e) => e.id === id)
     if (!endpoint) fail(404, `No endpoint with id "${id}"`)
-    const live = await fetchModels(endpoint.baseUrl, store.endpointKeys[id])
+    const live = await fetchModels(endpoint.baseUrl, store.endpointKeys[id], endpoint.proxyUrl)
     if (live.ok) {
       store.endpointModels[id] = live.models
       endpoint.status = 'reachable'
@@ -895,7 +918,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const endpoint = store.endpoints.find((e) => e.id === id)
     if (!endpoint) fail(404, `No endpoint with id "${id}"`)
-    const live = await fetchModels(endpoint.baseUrl, store.endpointKeys[id])
+    const live = await fetchModels(endpoint.baseUrl, store.endpointKeys[id], endpoint.proxyUrl)
     endpoint.status = live.ok ? 'reachable' : 'unreachable'
     endpoint.lastCheckedAt = new Date().toISOString()
     if (live.ok) store.endpointModels[id] = live.models

@@ -27,6 +27,8 @@ export interface Endpoint {
   createdAt: string
   /** Per-run upstream timeout in ms; falls back to 30000 when unset. */
   timeoutMs?: number
+  /** Optional HTTP(S) proxy for every upstream call, e.g. http://localhost:1055. */
+  proxyUrl?: string
 }
 
 /** One model served by an endpoint (GET /api/endpoints/:id/models). */
@@ -46,6 +48,8 @@ export interface EndpointInput {
   apiKey?: string
   /** Optional per-endpoint upstream timeout in ms (defaults to 30000). */
   timeoutMs?: number
+  /** Optional http(s) proxy URL. Omit to keep on update; "" or null clears it. */
+  proxyUrl?: string | null
 }
 
 export type EndpointPatch = Partial<EndpointInput>

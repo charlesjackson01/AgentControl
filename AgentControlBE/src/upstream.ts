@@ -1,3 +1,4 @@
+import { fetch as undiciFetch, ProxyAgent } from 'undici'
 /**
  * Server-side upstream calls for saved endpoints. The browser never calls
  * `baseUrl` directly (CORS/LAN), and the bearer key never leaves the server.
@@ -30,15 +31,32 @@ export interface ModelsResult {
   error?: string
 }
 
+const proxyAgents = new Map<string, ProxyAgent>()
+
+/**
+ * Global fetch, or undici's fetch through a cached ProxyAgent when the
+ * endpoint has a proxy (Node's fetch ignores HTTP_PROXY). Without a proxy the
+ * call is exactly the global fetch call it was before.
+ */
+function upstreamFetch(url: string, init: RequestInit, proxyUrl?: string): Promise<Response> {
+  if (!proxyUrl) return fetch(url, init)
+  let dispatcher = proxyAgents.get(proxyUrl)
+  if (!dispatcher) {
+    dispatcher = new ProxyAgent(proxyUrl)
+    proxyAgents.set(proxyUrl, dispatcher)
+  }
+  return undiciFetch(url, { ...(init as object), dispatcher } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>
+}
+
 /** GET {baseUrl}/v1/models (or `{baseUrl}/models` when base ends in /v1). */
-export async function fetchModels(baseUrl: string, apiKey?: string): Promise<ModelsResult> {
+export async function fetchModels(baseUrl: string, apiKey?: string, proxyUrl?: string): Promise<ModelsResult> {
   const started = Date.now()
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), MODELS_TIMEOUT_MS)
   try {
     const headers: Record<string, string> = { accept: 'application/json' }
     if (apiKey) headers.authorization = `Bearer ${apiKey}`
-    const response = await fetch(modelsUrl(baseUrl), { headers, signal: controller.signal })
+    const response = await upstreamFetch(modelsUrl(baseUrl), { headers, signal: controller.signal }, proxyUrl)
     const latencyMs = Date.now() - started
     if (!response.ok) {
       return { ok: false, models: [], latencyMs, error: `Upstream responded ${response.status}` }
@@ -162,6 +180,8 @@ export async function chatCompletion(
   temperature?: number,
   /** Optional; combined with the timeout via AbortSignal.any (orchestration Part 2). */
   signal?: AbortSignal,
+  /** Optional per-endpoint HTTP proxy (Endpoint.proxyUrl). */
+  proxyUrl?: string,
 ): Promise<ChatResult> {
   const started = Date.now()
   const timeout = AbortSignal.timeout(timeoutMs)
@@ -178,12 +198,11 @@ export async function chatCompletion(
         function: { name: tool.name, description: tool.description, parameters: tool.parameters },
       }))
     }
-    const response = await fetch(chatCompletionsUrl(baseUrl), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: combined,
-    })
+    const response = await upstreamFetch(
+      chatCompletionsUrl(baseUrl),
+      { method: 'POST', headers, body: JSON.stringify(payload), signal: combined },
+      proxyUrl,
+    )
     const latencyMs = Date.now() - started
     if (!response.ok) {
       const detail = await response.text().catch(() => '')

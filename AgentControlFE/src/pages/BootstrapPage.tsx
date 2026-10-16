@@ -1,4 +1,4 @@
-import AgentForm from '../components/AgentForm'
+import AgentProfile from '../components/AgentProfile'
 import { AgentsIcon } from '../components/icons'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
@@ -69,7 +69,7 @@ export default function BootstrapPage() {
           </div>
         </div>
 
-        <AgentForm
+        <AgentProfile
           compact
           isBootstrap
           noCancel

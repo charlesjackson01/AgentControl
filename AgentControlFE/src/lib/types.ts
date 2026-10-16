@@ -196,6 +196,8 @@ export type PromptBudgetInput = {
   endpointId: string
   skillIds: string[]
   instructions?: string
+  /** Chat-first Part 1: counted as the Rules prompt section (BE route accepts it). */
+  rules?: string[]
 }
 
 /** POST /api/prompt-budget response: the plan a run would use, with an empty message. */
@@ -210,6 +212,8 @@ export type PromptBudget = {
   summarizedSkillIds: string[]
   /** Tools a run would offer, in the order sent upstream. */
   toolNames: string[]
+  /** Estimated tokens for the Rules section (header included); 0 when there are no rules. */
+  rulesTokens?: number
 }
 
 /** Body for POST /api/agents/:id/runs. */
@@ -217,6 +221,16 @@ export type AgentRunInput = {
   input: string
   temperature?: number
 }
+
+/** Agent picture: one emoji, or an uploaded image stored under data/avatars/. (Mirrors BE shared/types.ts @ 5834fce.) */
+export type AgentAvatar =
+  | { kind: 'emoji'; value: string }
+  | { kind: 'image'; file: string; updatedAt: string }
+
+/* Limits mirrored from BE shared/types.ts (keep in sync). */
+export const MAX_AGENT_RULES = 20
+export const MAX_AGENT_RULE_CHARS = 500
+export const MAX_AVATAR_BYTES = 1024 * 1024
 
 /** Agent that runs in the workspace (the chat producer). */
 export type Agent = {
@@ -242,6 +256,15 @@ export type Agent = {
   temperature?: number
   /** D-P2: set on project-scoped specialists Primary created for that project. */
   projectId?: string
+  /** Chat-first Part 1: emoji or uploaded image; absent -> initials. */
+  avatar?: AgentAvatar
+  /** Chat-first Part 1 (D-C2): standing rules, separate from `instructions` (persona). */
+  rules?: string[]
+  /** Chip / avatar colour as '#rrggbb'. */
+  color?: string
+  /** Chat-first: sidebar pinning / hiding (Part 2 uses these). */
+  pinned?: boolean
+  hidden?: boolean
 }
 
 /** Everything the create/edit form owns. */
@@ -257,6 +280,13 @@ export type AgentInput = {
   skillIds: string[]
   /** Bootstrap only: set true when creating the first (Team Lead) agent. */
   isPrimary?: boolean
+  rules?: string[]
+  /** '#rrggbb'; null clears it. */
+  color?: string | null
+  pinned?: boolean
+  hidden?: boolean
+  /** Emoji only; images go through PUT /api/agents/:id/avatar. null clears it. */
+  avatar?: { kind: 'emoji'; value: string } | null
 }
 
 /** A project: a folder owned by AgentControl plus its team of library agents. */

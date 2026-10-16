@@ -1,3 +1,4 @@
+import { MAX_AVATAR_BYTES } from './types'
 import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, ReviewResult, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
 
 /* ==========================================================================
@@ -84,7 +85,61 @@ export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
 }
 
+/* --------------------------------------------------------------------------
+   Chat-first Part 1: avatar routes. Kept together so the contract is easy to
+   adjust. Frozen by BE @ 5834fce:
+     GET    /api/agents/:id/avatar  -> image bytes (404 when no image); ?v=<updatedAt> busts cache
+     PUT    /api/agents/:id/avatar  -> raw image body (Content-Type = file type), 200 Agent
+                                       (400 bad body, 413 over 1 MB, 415 wrong type)
+     DELETE /api/agents/:id/avatar  -> 200 Agent
+   -------------------------------------------------------------------------- */
+
+/** Allowed upload types and size cap for the avatar picker (mirror the BE once frozen). */
+export const AVATAR_MAX_BYTES = MAX_AVATAR_BYTES
+export const AVATAR_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+
+/** URL for an agent's uploaded avatar; `version` busts the browser cache after a re-upload. */
+export function agentAvatarUrl(agentId: string, version?: string): string {
+  const base = `${API_BASE}/api/agents/${encodeURIComponent(agentId)}/avatar`
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base
+}
+
+function avatarUploadMessage(status: number, serverMessage: string | null): string {
+  if (status === 413) return 'That image is too large. Use one that is 1 MB or smaller.'
+  if (status === 415) return 'That file type is not supported. Use a PNG, JPEG, WebP or GIF image.'
+  if (status === 400) return serverMessage ?? 'That image could not be read. Try a different file.'
+  return serverMessage ?? 'Could not upload the avatar.'
+}
+
+async function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
+  const headers: Record<string, string> = { 'Content-Type': file.type || 'application/octet-stream' }
+  if (AUTH_TOKEN) headers.Authorization = `Bearer ${AUTH_TOKEN}`
+  const res = await fetch(agentAvatarUrl(agentId), { method: 'PUT', headers, body: file })
+  if (!res.ok) {
+    let serverMessage: string | null = null
+    try {
+      const body = (await res.json()) as { message?: unknown }
+      if (typeof body.message === 'string') serverMessage = body.message
+    } catch {
+      // keep default
+    }
+    throw new ApiError(avatarUploadMessage(res.status, serverMessage), res.status)
+  }
+  return (await res.json()) as Agent
+}
+
 export const api = {
+  /** Upload (replace) an agent's image avatar. Resolves with the updated agent when the BE returns it. */
+  async uploadAgentAvatar(id: string, file: Blob): Promise<Agent> {
+    return uploadAvatar(id, file)
+  },
+
+  /** Remove an agent's avatar (image file and/or emoji); falls back to initials. */
+  async deleteAgentAvatar(id: string): Promise<Agent> {
+    return request<Agent>(`/api/agents/${encodeURIComponent(id)}/avatar`, { method: 'DELETE' })
+  },
+
+
   async listAgents(): Promise<Agent[]> {
     return request<Agent[]>('/api/agents')
   },

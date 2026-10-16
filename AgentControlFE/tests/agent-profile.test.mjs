@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
   AVATAR_PALETTE, MAX_RULES, MAX_RULE_LENGTH, addRule, initialsOf, moveRule, normalizeRules,
-  paletteColor, removeRule, rulesTokenEstimate, isHexColor, RULES_HEADER, rulesEqual, updateRule,
+  paletteColor, removeRule, rulesTokenCost, describeRulesCost, isHexColor, rulesEqual, updateRule,
 } from '../src/lib/agent-profile.ts'
 
 describe('initialsOf', () => {
@@ -61,10 +61,17 @@ describe('BE-aligned limits', () => {
     assert.equal(MAX_RULES, 20)
     assert.equal(MAX_RULE_LENGTH, 500)
   })
-  it('rulesTokenEstimate mirrors the BE section (chars/4, separator included)', () => {
-    assert.equal(rulesTokenEstimate([' ', '']), 0)
-    const section = `\n\n${RULES_HEADER}- a\n- bb`
-    assert.equal(rulesTokenEstimate(['a', ' bb ', 'a']), Math.ceil(section.length / 4))
+  it('rulesTokenCost is the with/without difference, never negative', () => {
+    assert.equal(rulesTokenCost({ estimatedTokens: 25 }, { estimatedTokens: 4 }), 21)
+    assert.equal(rulesTokenCost({ estimatedTokens: 4 }, { estimatedTokens: 9 }), 0)
+  })
+  it('describeRulesCost covers each state', () => {
+    const base = { ruleCount: 2, hasEndpoint: true, cost: 1234, pending: false }
+    assert.equal(describeRulesCost({ ...base, ruleCount: 0 }), 'No rules yet.')
+    assert.match(describeRulesCost({ ...base, hasEndpoint: false }), /Pick an endpoint/)
+    assert.match(describeRulesCost({ ...base, cost: null, pending: true }), /Measuring/)
+    assert.match(describeRulesCost({ ...base, cost: null }), /unavailable/)
+    assert.equal(describeRulesCost(base), 'Rules add ≈1,234 tokens to the prompt.')
   })
   it('isHexColor accepts #rrggbb only', () => {
     assert.ok(isHexColor('#a1B2c3'))

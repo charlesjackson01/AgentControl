@@ -13,7 +13,8 @@ import {
   normalizeRules,
   removeRule,
   rulesEqual,
-  rulesTokenEstimate,
+  describeRulesCost,
+  rulesTokenCost,
   updateRule,
 } from '../lib/agent-profile'
 import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, Skill } from '../lib/types'
@@ -207,14 +208,22 @@ export default function AgentProfile({
     return { endpointId: draft.endpointId, skillIds: draft.skillIds, instructions: draft.instructions, rules: savedRules }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the normalized rules text
   }, [isBootstrap, draft.endpointId, draft.skillIds, draft.instructions, normalizeRules(draft.rules ?? []).join('\n')])
-  const [budget, setBudget] = useState<{ request: PromptBudgetInput; value: PromptBudget } | null>(null)
+  const [budget, setBudget] = useState<{ request: PromptBudgetInput; value: PromptBudget; rulesCost: number | null } | null>(null)
   useEffect(() => {
     if (!budgetRequest) return
     const controller = new AbortController()
     const timer = setTimeout(() => {
-      api.getPromptBudget(budgetRequest, { signal: controller.signal }).then(
-        (value) => {
-          if (!controller.signal.aborted) setBudget({ request: budgetRequest, value })
+      const opts = { signal: controller.signal }
+      const hasRules = (budgetRequest.rules ?? []).length > 0
+      // Rules cost = this draft's budget minus the same draft without rules (the BE has no per-section breakdown).
+      Promise.all([
+        api.getPromptBudget(budgetRequest, opts),
+        hasRules ? api.getPromptBudget({ ...budgetRequest, rules: [] }, opts) : Promise.resolve(null),
+      ]).then(
+        ([value, withoutRules]) => {
+          if (!controller.signal.aborted) {
+            setBudget({ request: budgetRequest, value, rulesCost: withoutRules ? rulesTokenCost(value, withoutRules) : 0 })
+          }
         },
         () => {
           if (!controller.signal.aborted) setBudget(null)
@@ -486,11 +495,15 @@ export default function AgentProfile({
                 <span className="pill">{normalizeRules(rules).length} / {MAX_RULES}</span>
               </div>
               <p className="field__hint" role="status" aria-live="polite">
-                {rulesTokenEstimate(rules) > 0 ? `Rules add ≈${rulesTokenEstimate(rules).toLocaleString()} tokens to the prompt` : 'No rules yet'}
+                {describeRulesCost({
+                  ruleCount: normalizeRules(rules).length,
+                  hasEndpoint: Boolean(draft.endpointId),
+                  cost: shownBudget && !budgetStale ? shownBudget.rulesCost : null,
+                  pending: budgetStale || (Boolean(budgetRequest) && !shownBudget),
+                })}
                 {shownBudget
-                  ? ` · prompt ≈${shownBudget.value.estimatedTokens.toLocaleString()} of ${(shownBudget.value.contextWindow - shownBudget.value.responseReserve).toLocaleString()} tokens available`
+                  ? ` Prompt ≈${shownBudget.value.estimatedTokens.toLocaleString()} of ${(shownBudget.value.contextWindow - shownBudget.value.responseReserve).toLocaleString()} tokens available.`
                   : ''}
-                .
               </p>
               {rules.length > 0 && (
                 <ol className="rules" aria-label="Rules">

@@ -31,15 +31,25 @@ import { MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES } from './types.ts'
 export const MAX_RULES = MAX_AGENT_RULES
 export const MAX_RULE_LENGTH = MAX_AGENT_RULE_CHARS
 
-/** Mirrors BE prompt.ts RULES_HEADER / agentInstructions. */
-export const RULES_HEADER = '## Rules\nAlways follow these rules:\n'
+/**
+ * Tokens the Rules section adds, from two /api/prompt-budget answers for the
+ * same draft (with and without rules). Never negative.
+ */
+export function rulesTokenCost(withRules: { estimatedTokens: number }, withoutRules: { estimatedTokens: number }): number {
+  return Math.max(0, withRules.estimatedTokens - withoutRules.estimatedTokens)
+}
 
-/** chars/4 estimate (as the BE budget counts) of the Rules prompt section incl. its separator. */
-export function rulesTokenEstimate(rules: readonly string[]): number {
-  const list = normalizeRules(rules)
-  if (list.length === 0) return 0
-  const section = `\n\n${RULES_HEADER}${list.map((r) => `- ${r}`).join('\n')}`
-  return Math.ceil(section.length / 4)
+/** The hint line under the Rules heading. `cost` is null when no budget answer is available. */
+export function describeRulesCost(input: {
+  ruleCount: number
+  hasEndpoint: boolean
+  cost: number | null
+  pending: boolean
+}): string {
+  if (input.ruleCount === 0) return 'No rules yet.'
+  if (!input.hasEndpoint) return 'Pick an endpoint under Advanced to see what these rules cost.'
+  if (input.cost === null) return input.pending ? 'Measuring the rules’ token cost…' : 'Token cost unavailable right now.'
+  return `Rules add ≈${input.cost.toLocaleString('en-US')} tokens to the prompt.`
 }
 
 /** BE accepts '#rrggbb' only. */

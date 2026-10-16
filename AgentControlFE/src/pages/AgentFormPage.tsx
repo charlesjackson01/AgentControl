@@ -3,7 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from '../components/icons'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
-import AgentForm from '../components/AgentForm'
+import AgentProfile from '../components/AgentProfile'
 import { useAsync } from '../hooks/useAsync'
 
 export default function AgentFormPage() {
@@ -103,7 +103,7 @@ export default function AgentFormPage() {
           </div>
         </div>
 
-        <AgentForm
+        <AgentProfile
           key={id ?? 'new'}
           compact
           initial={agent.data ?? null}

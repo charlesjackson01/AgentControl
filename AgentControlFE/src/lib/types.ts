@@ -218,6 +218,14 @@ export type AgentRunInput = {
   temperature?: number
 }
 
+/**
+ * Chat-first Part 1 (D-C5): an agent's avatar. `emoji` holds the emoji itself;
+ * `image` means an uploaded file in the BE's data/avatars/, served at
+ * GET /api/agents/:id/avatar (`value` is the BE's file key, used only as a
+ * cache-buster here). Absent -> initials fallback.
+ */
+export type AgentAvatar = { kind: 'emoji' | 'image'; value: string }
+
 /** Agent that runs in the workspace (the chat producer). */
 export type Agent = {
   id: string
@@ -242,6 +250,15 @@ export type Agent = {
   temperature?: number
   /** D-P2: set on project-scoped specialists Primary created for that project. */
   projectId?: string
+  /** Chat-first Part 1: emoji or uploaded image; absent -> initials. */
+  avatar?: AgentAvatar
+  /** Chat-first Part 1 (D-C2): standing rules, separate from `instructions` (persona). */
+  rules?: string[]
+  /** Chat-first Part 1: accent colour for avatar/chips (CSS colour string). */
+  color?: string
+  /** Chat-first: sidebar pinning / hiding (Part 2 uses these). */
+  pinned?: boolean
+  hidden?: boolean
 }
 
 /** Everything the create/edit form owns. */
@@ -257,6 +274,12 @@ export type AgentInput = {
   skillIds: string[]
   /** Bootstrap only: set true when creating the first (Team Lead) agent. */
   isPrimary?: boolean
+  /** Emoji avatar to set; `null` clears it. Image avatars go through the avatar routes. */
+  avatar?: AgentAvatar | null
+  rules?: string[]
+  color?: string | null
+  pinned?: boolean
+  hidden?: boolean
 }
 
 /** A project: a folder owned by AgentControl plus its team of library agents. */

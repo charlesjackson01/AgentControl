@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
-import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
+import { api, AVATAR_MAX_BYTES, AVATAR_MIME_TYPES, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
+import Avatar from './Avatar'
+import {
+  AVATAR_EMOJI,
+  AVATAR_PALETTE,
+  MAX_RULE_LENGTH,
+  MAX_RULES,
+  addRule,
+  moveRule,
+  normalizeRules,
+  removeRule,
+  rulesEqual,
+  updateRule,
+} from '../lib/agent-profile'
 import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, Skill } from '../lib/types'
 import { describePromptBudget, grantedToolNames } from '../lib/prompt-budget'
 import { matchesSkillQuery } from '../lib/skill-search'
@@ -13,7 +26,7 @@ const MODELS_LOADING = 'Models are still loading — wait a moment.'
 /** Quiet period after the last endpoint/skills/instructions edit before the prompt-size preview refetches. */
 const BUDGET_DEBOUNCE_MS = 300
 
-const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [] }
+const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [], rules: [], color: null }
 
 /** DD-7 bootstrap: the lead's identity is set up for the user, not asked. */
 const LEAD_INSTRUCTIONS =
@@ -31,7 +44,26 @@ function toInput(agent: Agent): AgentInput {
     endpointId: agent.endpointId,
     temperature: agent.temperature ?? 0,
     skillIds: [...agent.skillIds],
+    rules: [...(agent.rules ?? [])],
+    color: agent.color ?? null,
   }
+}
+
+/** Avatar edits, applied on save: emoji goes in the agent body, images via the avatar routes. */
+type AvatarDraft = {
+  emoji: string | null
+  /** New image picked but not yet uploaded. */
+  file: File | null
+  /** Drop the agent's current uploaded image. */
+  removeImage: boolean
+}
+
+function avatarBaseline(agent: Agent | null): AvatarDraft {
+  return { emoji: agent?.avatar?.kind === 'emoji' ? agent.avatar.value : null, file: null, removeImage: false }
+}
+
+function avatarDirty(a: AvatarDraft, b: AvatarDraft): boolean {
+  return a.emoji !== b.emoji || a.file !== null || a.removeImage !== b.removeImage
 }
 
 function isDirty(a: AgentInput, b: AgentInput): boolean {
@@ -43,7 +75,9 @@ function isDirty(a: AgentInput, b: AgentInput): boolean {
     a.modelId.trim() !== b.modelId.trim() ||
     a.endpointId !== b.endpointId ||
     a.skillIds.length !== b.skillIds.length ||
-    a.skillIds.some((id) => !b.skillIds.includes(id))
+    a.skillIds.some((id) => !b.skillIds.includes(id)) ||
+    !rulesEqual(a.rules ?? [], b.rules ?? []) ||
+    (a.color ?? null) !== (b.color ?? null)
   )
 }
 
@@ -66,7 +100,7 @@ type FormProps = {
   onCancel?: () => void
 }
 
-export default function AgentForm({
+export default function AgentProfile({
   initial,
   isEdit,
   endpoints,
@@ -101,6 +135,46 @@ export default function AgentForm({
   const [saving, setSaving] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const [avatarDraft, setAvatarDraft] = useState<AvatarDraft>(() => avatarBaseline(initial))
+  const [avatarError, setAvatarError] = useState<string | null>(null)
+  // Endpoint/skills/parameters sit in a collapsible Advanced block; open for new agents.
+  const [advancedOpen, setAdvancedOpen] = useState(!isEdit)
+  const rules = draft.rules ?? []
+  const setRules = (next: string[]) => setDraft((d) => ({ ...d, rules: next }))
+
+  // Object URL for a picked-but-unsaved image; revoked when replaced or on unmount.
+  const previewUrl = useMemo(() => (avatarDraft.file ? URL.createObjectURL(avatarDraft.file) : null), [avatarDraft.file])
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+  }, [previewUrl])
+  const hasImage = initial?.avatar?.kind === 'image' && !avatarDraft.removeImage
+  const shownAvatar = avatarDraft.emoji
+    ? ({ kind: 'emoji', value: avatarDraft.emoji } as const)
+    : hasImage
+      ? initial?.avatar
+      : null
+
+  const pickEmoji = (emoji: string) => {
+    setAvatarError(null)
+    setAvatarDraft((a) => ({ emoji: a.emoji === emoji ? null : emoji, file: null, removeImage: a.removeImage || initial?.avatar?.kind === 'image' }))
+  }
+  const pickFile = (file: File | undefined) => {
+    if (!file) return
+    if (!AVATAR_MIME_TYPES.includes(file.type)) {
+      setAvatarError('Use a PNG, JPEG, WebP or GIF image.')
+      return
+    }
+    if (file.size > AVATAR_MAX_BYTES) {
+      setAvatarError(`Images must be ${Math.round(AVATAR_MAX_BYTES / 1024 / 1024)} MB or smaller.`)
+      return
+    }
+    setAvatarError(null)
+    setAvatarDraft((a) => ({ ...a, emoji: null, file }))
+  }
+  const clearAvatar = () => {
+    setAvatarError(null)
+    setAvatarDraft({ emoji: null, file: null, removeImage: initial?.avatar?.kind === 'image' })
+  }
 
   const backTo = isEdit && initial ? `/agents/${initial.id}` : '/agents'
 
@@ -208,6 +282,7 @@ export default function AgentForm({
       next.temperature = 'Set temperature between 0 and 2.'
     }
     setErrors(next)
+    if (next.endpointId || next.modelId || next.temperature) setAdvancedOpen(true)
     if (Object.keys(next).length > 0) {
       document.getElementById(next.name ? 'af-name' : next.endpointId ? 'af-endpoint' : 'af-model-name')?.focus()
       return
@@ -220,9 +295,15 @@ export default function AgentForm({
         ...draft,
         role: draft.role.trim(),
         modelId: effectiveModelId.trim(),
+        rules: normalizeRules(rules),
         ...(isBootstrap ? { isPrimary: true } : {}),
       }
-      const saved = initial ? await api.updateAgent(initial.id, payload) : await api.createAgent(payload)
+      // Emoji rides in the agent body; null clears it. An untouched image is left alone.
+      if (avatarDraft.emoji) payload.avatar = { kind: 'emoji', value: avatarDraft.emoji }
+      else if (!hasImage && !avatarDraft.file && initial?.avatar) payload.avatar = null
+      if (initial && avatarDraft.removeImage && initial.avatar?.kind === 'image') await api.deleteAgentAvatar(initial.id)
+      let saved = initial ? await api.updateAgent(initial.id, payload) : await api.createAgent(payload)
+      if (avatarDraft.file) saved = (await api.uploadAgentAvatar(saved.id, avatarDraft.file)) ?? saved
       if (onSaved) onSaved(saved)
       else navigate(isEdit && initial ? `/agents/${initial.id}` : `/agents/${saved.id}`, { replace: true })
     } catch (err) {
@@ -237,7 +318,7 @@ export default function AgentForm({
   }
 
   const leave = () => {
-    if (isDirty(draft, baseline)) setConfirmDiscard(true)
+    if (isDirty(draft, baseline) || avatarDirty(avatarDraft, avatarBaseline(initial))) setConfirmDiscard(true)
     else finish()
   }
 
@@ -247,6 +328,74 @@ export default function AgentForm({
             <div className="formsection">
               <h2 className="formsection__title">Basics</h2>
               <p className="formsection__hint">What this agent is called and what it is for.</p>
+
+              <div className="field">
+                <span className="field__label" id="af-avatar-label">Avatar</span>
+                <div className="avatarpick" role="group" aria-labelledby="af-avatar-label">
+                  <Avatar
+                    name={draft.name || 'New agent'}
+                    agentId={initial?.id}
+                    avatar={shownAvatar}
+                    previewUrl={previewUrl}
+                    color={draft.color}
+                    size="xl"
+                    decorative
+                  />
+                  <div className="avatarpick__body">
+                    <div className="avatarpick__emoji" role="group" aria-label="Emoji avatar">
+                      {AVATAR_EMOJI.map((e) => (
+                        <button
+                          type="button"
+                          key={e}
+                          aria-pressed={avatarDraft.emoji === e}
+                          aria-label={`Use ${e} as avatar`}
+                          onClick={() => pickEmoji(e)}
+                        >
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="avatarpick__actions">
+                      <label className="btn btn--sm">
+                        Upload image…
+                        <input
+                          type="file"
+                          accept={AVATAR_MIME_TYPES.join(',')}
+                          hidden
+                          onChange={(e) => {
+                            pickFile(e.target.files?.[0])
+                            e.target.value = ''
+                          }}
+                        />
+                      </label>
+                      {(shownAvatar || avatarDraft.file) && (
+                        <button type="button" className="btn btn--sm" onClick={clearAvatar}>
+                          Use initials
+                        </button>
+                      )}
+                      <div className="avatarpick__colors" role="group" aria-label="Avatar colour">
+                        {AVATAR_PALETTE.map((c) => (
+                          <button
+                            type="button"
+                            key={c}
+                            style={{ background: c }}
+                            aria-pressed={draft.color === c}
+                            aria-label={`Colour ${c}`}
+                            onClick={() => set('color', draft.color === c ? null : c)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    {avatarError ? (
+                      <p className="field__err" role="alert">{avatarError}</p>
+                    ) : (
+                      <p className="field__hint">
+                        Pick an emoji or upload an image (PNG, JPEG, WebP, GIF). Without one, initials are shown.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
 
               <div className="field">
                 <label className="field__label" htmlFor="af-name">
@@ -306,6 +455,88 @@ export default function AgentForm({
               )}
             </div>
 
+            {!isBootstrap && (
+              <>
+            <div className="formsection">
+              <h2 className="formsection__title">Persona</h2>
+              <p className="formsection__hint">Who this agent is and how it talks. Sent as the system prompt on every run.</p>
+              <div className="field">
+                <textarea
+                  id="af-instructions"
+                  className="textarea"
+                  value={draft.instructions}
+                  onChange={(e) => set('instructions', e.target.value)}
+                  placeholder="How it should behave, what to avoid, when to stop and ask."
+                  rows={7}
+                />
+              </div>
+            </div>
+
+            <div className="formsection">
+              <div className="formsection__bar">
+                <div>
+                  <h2 className="formsection__title">Rules</h2>
+                  <p className="formsection__hint">
+                    Standing rules the agent always follows, one per line item. Kept apart from the persona.
+                  </p>
+                </div>
+                <span className="pill">{normalizeRules(rules).length} / {MAX_RULES}</span>
+              </div>
+              {rules.length > 0 && (
+                <ol className="rules" aria-label="Rules">
+                  {rules.map((rule, i) => (
+                    <li className="rules__row" key={i}>
+                      <span className="rules__num" aria-hidden="true">{i + 1}.</span>
+                      <textarea
+                        id={`af-rule-${i}`}
+                        className="textarea"
+                        rows={1}
+                        value={rule}
+                        maxLength={MAX_RULE_LENGTH}
+                        onChange={(e) => setRules(updateRule(rules, i, e.target.value))}
+                        placeholder="e.g. Always cite the file you changed."
+                        aria-label={`Rule ${i + 1}`}
+                      />
+                      <span className="rules__tools">
+                        <button type="button" className="btn btn--sm" aria-label={`Move rule ${i + 1} up`} disabled={i === 0} onClick={() => setRules(moveRule(rules, i, -1))}>↑</button>
+                        <button type="button" className="btn btn--sm" aria-label={`Move rule ${i + 1} down`} disabled={i === rules.length - 1} onClick={() => setRules(moveRule(rules, i, 1))}>↓</button>
+                        <button type="button" className="btn btn--sm" aria-label={`Remove rule ${i + 1}`} onClick={() => setRules(removeRule(rules, i))}>×</button>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <div>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  disabled={rules.length >= MAX_RULES}
+                  onClick={() => {
+                    const next = addRule(rules)
+                    setRules(next)
+                    requestAnimationFrame(() => document.getElementById(`af-rule-${next.length - 1}`)?.focus())
+                  }}
+                >
+                  + Add rule
+                </button>
+              </div>
+            </div>
+
+            <div className="formsection">
+              <h2 className="formsection__title">Memory</h2>
+              <p className="formsection__hint">Facts this agent remembers about you and its work.</p>
+              <p className="memorystub">Coming in Part 3: memory facts the agent saves, and ones you add or remove here.</p>
+            </div>
+
+            <details
+              className="formsection formsection--advanced"
+              open={advancedOpen}
+              onToggle={(e) => setAdvancedOpen(e.currentTarget.open)}
+            >
+              <summary>
+                <h2 className="formsection__title">Advanced</h2>
+                <p className="formsection__hint">Endpoint, model, skills and parameters.</p>
+              </summary>
             <div className="formsection">
               <h2 className="formsection__title">Endpoint & model</h2>
               <p className="formsection__hint">
@@ -411,8 +642,6 @@ export default function AgentForm({
               )}
             </div>
 
-            {!isBootstrap && (
-              <>
             <div className="formsection">
               <div className="formsection__bar">
                 <div>
@@ -490,21 +719,6 @@ export default function AgentForm({
             </div>
 
             <div className="formsection">
-              <h2 className="formsection__title">Instructions</h2>
-              <p className="formsection__hint">Sent as the system prompt on every run.</p>
-              <div className="field">
-                <textarea
-                  id="af-instructions"
-                  className="textarea"
-                  value={draft.instructions}
-                  onChange={(e) => set('instructions', e.target.value)}
-                  placeholder="How it should behave, what to avoid, when to stop and ask."
-                  rows={7}
-                />
-              </div>
-            </div>
-
-            <div className="formsection">
               <h2 className="formsection__title">Parameters</h2>
               <p className="formsection__hint">Control how the agent reasons on each run.</p>
               <div className="field">
@@ -531,7 +745,115 @@ export default function AgentForm({
                 )}
               </div>
             </div>
+            </details>
               </>
+            )}
+            {isBootstrap && (
+            <div className="formsection">
+              <h2 className="formsection__title">Endpoint & model</h2>
+              <p className="formsection__hint">
+                Every agent runs on an endpoint. New agents start on the Team Lead's endpoint.
+              </p>
+
+              <div className="field">
+                <label className="field__label" htmlFor="af-endpoint">
+                  Endpoint <span className="field__req" aria-hidden="true">*</span>
+                </label>
+                <select
+                  id="af-endpoint"
+                  className={`select${errors.endpointId ? ' input--invalid' : ''}`}
+                  value={draft.endpointId}
+                  onChange={(e) => pickEndpoint(e.target.value)}
+                  aria-invalid={Boolean(errors.endpointId)}
+                  aria-describedby={errors.endpointId ? 'af-endpoint-err' : 'af-endpoint-hint'}
+                >
+                  {defaultEndpointId ? (
+                    <option value={defaultEndpointId}>Default — Team Lead's endpoint</option>
+                  ) : (
+                    <option value="">Select an endpoint…</option>
+                  )}
+                  {endpoints
+                    .filter((ep) => ep.id !== defaultEndpointId)
+                    .map((ep) => (
+                      <option key={ep.id} value={ep.id}>
+                        {ep.name} ({ENDPOINT_KIND_LABELS[ep.kind]})
+                      </option>
+                    ))}
+                </select>
+                {errors.endpointId ? (
+                  <p className="field__err" id="af-endpoint-err">
+                    {errors.endpointId}
+                  </p>
+                ) : (
+                  <p className="field__hint" id="af-endpoint-hint">
+                    {selectedEndpoint
+                      ? `${selectedEndpoint.baseUrl} · ${selectedEndpoint.contextWindow.toLocaleString()} ctx`
+                      : 'Add a server in Settings → Endpoints.'}
+                  </p>
+                )}
+              </div>
+
+              {draft.endpointId && selectedEndpoint ? (
+                <div className="field">
+                  <label className="field__label" htmlFor="af-model-name">
+                    Model <span className="field__req" aria-hidden="true">*</span>
+                  </label>
+                  <select
+                    id="af-model-name"
+                    className={`select${modelError ? ' input--invalid' : ''}`}
+                    value={effectiveModelId}
+                    onChange={(e) => set('modelId', e.target.value)}
+                    disabled={epModels.loading || Boolean(epModels.error) || (epModels.data ?? []).length === 0}
+                    aria-invalid={Boolean(modelError)}
+                    aria-describedby={modelError ? 'af-model-err' : 'af-model-hint'}
+                  >
+                    {epModels.loading ? (
+                      <option value="">Loading models…</option>
+                    ) : (
+                      <>
+                        <option value="">Select a model…</option>
+                        {(epModels.data ?? []).map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </>
+                    )}
+                  </select>
+                  {modelError ? (
+                    <p className="field__err" id="af-model-err">
+                      {modelError}
+                      {epModels.error && (
+                        <>
+                          {' '}
+                          <button type="button" className="btn" onClick={epModels.reload} style={{ marginLeft: 8 }}>
+                            Retry
+                          </button>
+                        </>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="field__hint" id="af-model-hint">
+                      Served by {selectedEndpoint.name} · {selectedEndpoint.baseUrl}
+                      {selectedEndpoint.apiKeySet ? ' · key set' : ''}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="field">
+                  <label className="field__label" htmlFor="af-model-name">
+                    Model <span className="field__req" aria-hidden="true">*</span>
+                  </label>
+                  <select id="af-model-name" className="select" value="" disabled aria-describedby="af-model-hint">
+                    <option value="">Pick an endpoint first…</option>
+                  </select>
+                  <p className="field__hint" id="af-model-hint">
+                    The model list comes from the selected endpoint.
+                  </p>
+                </div>
+              )}
+            </div>
+
             )}
 
             {submitError && (

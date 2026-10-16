@@ -84,7 +84,54 @@ export function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
 }
 
+/* --------------------------------------------------------------------------
+   Chat-first Part 1: avatar routes. Kept together so the contract is easy to
+   adjust once Backend Dev freezes it. Assumed:
+     GET    /api/agents/:id/avatar  -> image bytes
+     PUT    /api/agents/:id/avatar  -> raw image body (Content-Type = file type), 200 Agent
+     DELETE /api/agents/:id/avatar  -> 200 Agent or 204
+   -------------------------------------------------------------------------- */
+
+/** Allowed upload types and size cap for the avatar picker (mirror the BE once frozen). */
+export const AVATAR_MAX_BYTES = 2 * 1024 * 1024
+export const AVATAR_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+
+/** URL for an agent's uploaded avatar; `version` busts the browser cache after a re-upload. */
+export function agentAvatarUrl(agentId: string, version?: string): string {
+  const base = `${API_BASE}/api/agents/${encodeURIComponent(agentId)}/avatar`
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base
+}
+
+async function uploadAvatar(agentId: string, file: Blob): Promise<Agent | undefined> {
+  const headers: Record<string, string> = { 'Content-Type': file.type || 'application/octet-stream' }
+  if (AUTH_TOKEN) headers.Authorization = `Bearer ${AUTH_TOKEN}`
+  const res = await fetch(agentAvatarUrl(agentId), { method: 'PUT', headers, body: file })
+  if (!res.ok) {
+    let message = 'Could not upload the avatar.'
+    try {
+      const body = (await res.json()) as { message?: unknown }
+      if (typeof body.message === 'string') message = body.message
+    } catch {
+      // keep default
+    }
+    throw new ApiError(message, res.status)
+  }
+  if (res.status === 204) return undefined
+  return (await res.json()) as Agent
+}
+
 export const api = {
+  /** Upload (replace) an agent's image avatar. Resolves with the updated agent when the BE returns it. */
+  async uploadAgentAvatar(id: string, file: Blob): Promise<Agent | undefined> {
+    return uploadAvatar(id, file)
+  },
+
+  /** Remove an agent's avatar (image file and/or emoji); falls back to initials. */
+  async deleteAgentAvatar(id: string): Promise<Agent | undefined> {
+    return request<Agent | undefined>(`/api/agents/${encodeURIComponent(id)}/avatar`, { method: 'DELETE' })
+  },
+
+
   async listAgents(): Promise<Agent[]> {
     return request<Agent[]>('/api/agents')
   },

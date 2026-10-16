@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { Bubble, TypingBubble } from '../components/ChatBubble'
 import { StatusPill } from '../components/StatusPill'
-import { SettingsDrawer } from '../components/SettingsDrawer'
+import { ProfilePanel } from '../components/ProfilePanel'
+import Avatar from '../components/Avatar'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly, turnTime } from '../lib/chat-format'
@@ -163,6 +164,16 @@ export default function AgentChat() {
       <div className="page__inner">
         <header className="chat__header">
           <div className="chat__header__left">
+            {agent.data && (
+              <button
+                type="button"
+                className="chat__header__avatar"
+                onClick={() => setSettingsOpen(true)}
+                aria-label={`Open ${agent.data.name}'s profile`}
+              >
+                <Avatar name={agent.data.name} agentId={agent.data.id} avatar={agent.data.avatar} color={agent.data.color} size="md" decorative />
+              </button>
+            )}
             <div className="chat__header__id">
               <h1 className="chat__header__name">{agent.data?.name ?? ''}</h1>
               {agent.data?.role && <p className="chat__header__role">{agent.data.role}</p>}
@@ -183,13 +194,13 @@ export default function AgentChat() {
               type="button"
               className="btn"
               onClick={() => setSettingsOpen(true)}
-              aria-label="Agent settings"
+              aria-label="Agent profile"
             >
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <circle cx="12" cy="12" r="3.2" />
                 <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.08a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.08a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.05Z" />
               </svg>
-              Settings
+              Profile
             </button>
           </div>
         </header>
@@ -302,7 +313,7 @@ export default function AgentChat() {
         </div>
       </div>
 
-      <SettingsDrawer
+      <ProfilePanel
         open={settingsOpen}
         agent={agent.data ?? null}
         endpoints={endpoints.data ?? []}

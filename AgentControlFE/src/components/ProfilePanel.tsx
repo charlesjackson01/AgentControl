@@ -2,11 +2,11 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Dialog from './Dialog'
 import { Confirm } from './Confirm'
-import AgentForm from './AgentForm'
+import AgentProfile from './AgentProfile'
 import { api } from '../lib/api'
 import type { Agent, Endpoint, Skill } from '../lib/types'
 
-type SettingsDrawerProps = {
+type ProfilePanelProps = {
   open: boolean
   agent: Agent | null
   endpoints: Endpoint[]
@@ -25,7 +25,8 @@ function friendly(err: unknown, fallback: string): string {
     : msg
 }
 
-export function SettingsDrawer({ open, agent, endpoints, skills, onClose, onSaved, onCleared }: SettingsDrawerProps) {
+/** The agent profile panel (chat-first Part 1): replaces the old settings drawer. */
+export function ProfilePanel({ open, agent, endpoints, skills, onClose, onSaved, onCleared }: ProfilePanelProps) {
   const navigate = useNavigate()
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -68,8 +69,8 @@ export function SettingsDrawer({ open, agent, endpoints, skills, onClose, onSave
   return (
     <Dialog
       open={open}
-      title={`${agent.name} — Settings`}
-      subtitle="Changes take effect on the next run."
+      title={agent.name}
+      subtitle="Profile · changes take effect on the next run."
       onClose={onClose}
       size="md"
       footer={
@@ -78,7 +79,7 @@ export function SettingsDrawer({ open, agent, endpoints, skills, onClose, onSave
         </button>
       }
     >
-      <AgentForm
+      <AgentProfile
         key={agent.id}
         initial={agent}
         isEdit

@@ -113,6 +113,8 @@ export interface PromptBudget {
   summarizedSkillIds: string[]
   /** Tools the run would offer, in the order sent upstream. */
   toolNames: string[]
+  /** Tokens the agent's rules section adds (0 without rules). */
+  rulesTokens: number
 }
 
 export interface AgentRun {

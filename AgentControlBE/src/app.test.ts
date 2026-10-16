@@ -2055,6 +2055,8 @@ describe('chat-first Part 1: agent profile fields', () => {
       endpointId: endpoint.id, skillIds: [], instructions: 'Hi.', rules: ['x'.repeat(400)],
     })
     expect(withRules.json().estimatedTokens).toBeGreaterThan(base.json().estimatedTokens)
+    expect(base.json().rulesTokens).toBe(0)
+    expect(withRules.json().rulesTokens).toBeGreaterThan(0)
   })
 
   it('uploads, serves, replaces and deletes an image avatar under data/avatars', async () => {

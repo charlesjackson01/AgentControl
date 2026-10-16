@@ -6,7 +6,7 @@ import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
-import { agentInstructions, attachedSkills, planPrompt, RESPONSE_RESERVE } from './prompt.js'
+import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import {
@@ -593,8 +593,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     // Unknown skill ids are skipped, as a run skips deleted skills; the
     // instructions are trimmed the way saving the agent trims them.
     const rules = parseProfileFields({ rules: raw.rules }).rules
+    const ownInstructions = typeof raw.instructions === 'string' ? raw.instructions.trim() : ''
+    const withRules = agentInstructions(ownInstructions, rules)
+    const rulesTokens = withRules === ownInstructions ? 0 : estimateTokens(withRules.length - ownInstructions.length)
     const plan = planPrompt({
-      instructions: agentInstructions(typeof raw.instructions === 'string' ? raw.instructions.trim() : '', rules),
+      instructions: withRules,
       skills: attachedSkills(store.skills, skillIds),
       input: '',
       contextWindow: endpoint.contextWindow,
@@ -606,6 +609,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       mode: plan.mode,
       summarizedSkillIds: plan.summarizedSkillIds,
       toolNames: plan.toolDeclarations.map((t) => t.name),
+      rulesTokens,
     }
   })
 

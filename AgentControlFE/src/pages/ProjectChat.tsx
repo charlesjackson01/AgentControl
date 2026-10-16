@@ -9,6 +9,7 @@ import { api, ApiError } from '../lib/api'
 import { friendlyError, turnTime } from '../lib/chat-format'
 import {
   TASK_STATUS_LABELS,
+  activeWorkRound,
   addBlock,
   addCandidates,
   applyBody,
@@ -20,6 +21,7 @@ import {
   isTaskResult,
   isUserPrompt,
   latestPrompt,
+  latestRound,
   latestUnansweredPrompt,
   memberIds,
   mentionCandidates,
@@ -35,6 +37,9 @@ import {
   planTaskChip,
   pollDelay,
   resyncAfter,
+  reviewDue,
+  roundDividers,
+  roundOf,
   selectedCount,
   sendLabel,
   sortMessages,
@@ -139,6 +144,10 @@ type PendingPlan = {
   plan: TeamPlan
   /** Bumped per answer, so asking again resets the card's selection. */
   seq: number
+  /** Part 5: review card (not stored) vs the first team-plan card. */
+  mode?: 'plan' | 'review'
+  /** Part 5: round to send on apply when mode is review. */
+  round?: number
 }
 
 /* -- Plan confirm card ------------------------------------------------------ */
@@ -160,36 +169,78 @@ function PlanCard({
   onApply: (body: ApplyBody) => Promise<void>
   onCancel: () => void
 }) {
-  const { plan, messageId } = pending
+  const { plan, messageId, mode = 'plan', round } = pending
+  const review = mode === 'review'
   const [selection, setSelection] = useState<PlanSelection>(() => initialSelection(plan))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const body = applyBody(plan, selection, ctx, messageId)
+  const body = applyBody(plan, selection, ctx, messageId, review ? round : undefined)
   const count = selectedCount(body)
   const hasItems = planHasItems(plan)
+  const verdict = plan.verdict ?? (hasItems ? 'continue' : 'done')
   // A plan with nothing to change only offers to keep Primary's reply.
-  const canApply = !busy && (hasItems ? count > 0 : Boolean(plan.reply))
+  const canApply = !busy && (hasItems ? count > 0 : Boolean(plan.reply) || review)
 
-  const apply = async () => {
-    if (!canApply) return
+  const runApply = async (next: ApplyBody, fallback: string) => {
     setBusy(true)
     setError(null)
     try {
-      await onApply(body)
+      await onApply(next)
     } catch (err) {
-      setError(friendlyError(err, 'Could not apply the plan.'))
+      setError(friendlyError(err, fallback))
     } finally {
       setBusy(false)
     }
   }
 
+  const apply = async () => {
+    if (!canApply) return
+    await runApply(body, 'Could not apply the plan.')
+  }
+
+  /** Part 5: close the request (summary, question, or Finish here). */
+  const closeRequest = async (verdict: 'done' | 'ask', reply: string, fallback: string) => {
+    const closing: TeamPlan = {
+      ...plan,
+      verdict,
+      add: [],
+      create: [],
+      tasks: [],
+      reply,
+      warnings: [],
+    }
+    const closeBody = applyBody(closing, { add: [], create: [], tasks: [] }, ctx, messageId, round)
+    await runApply(closeBody, fallback)
+  }
+
+  const finishHere = async () => {
+    await closeRequest('done', plan.reply || 'Finished here.', 'Could not finish the request.')
+  }
+
+  const postClosing = async () => {
+    if (verdict === 'ask') await closeRequest('ask', plan.reply || 'I need your input.', 'Could not post the question.')
+    else await closeRequest('done', plan.reply || 'Done.', 'Could not post the summary.')
+  }
+
   const blockedNote = (reason: string | null) => reason && <span className="plan__blocked">{reason}</span>
 
+  const pillLabel = review
+    ? verdict === 'ask'
+      ? 'Needs you · not saved yet'
+      : verdict === 'done'
+        ? 'Summary · not saved yet'
+        : hasItems
+          ? `Round ${round ?? '?'} · awaiting your approval`
+          : 'Review · not saved yet'
+    : hasItems
+      ? 'Plan · awaiting your approval'
+      : 'Not saved yet'
+
   return (
-    <section className="plan" aria-label="Team plan">
+    <section className="plan" aria-label={review ? 'Round review' : 'Team plan'}>
       <div className="plan__head">
         <span className="plan__title">{leadName}</span>
-        <span className={`pill${hasItems ? ' pill--lead' : ''}`}>{hasItems ? 'Plan · awaiting your approval' : 'Not saved yet'}</span>
+        <span className={`pill${hasItems || review ? ' pill--lead' : ''}`}>{pillLabel}</span>
       </div>
 
       {plan.reply && <div className="plan__reply">{plan.reply}</div>}
@@ -326,13 +377,21 @@ function PlanCard({
 
       <div className="plan__foot">
         <p className="plan__hint">
-          {!hasItems
-            ? plan.reply
-              ? 'No team changes or tasks. Keep the reply in the chat, or dismiss it.'
-              : `${leadName} proposed nothing for this prompt.`
-            : count === 0
-              ? 'Nothing selected. Tick what to accept, or cancel the plan.'
-              : 'Nothing changes until you apply.'}
+          {review
+            ? verdict === 'ask'
+              ? 'Post the question to close this request, finish here, or cancel.'
+              : verdict === 'done'
+                ? 'Post the summary to close this request, finish here, or cancel.'
+                : count === 0
+                  ? 'Nothing selected. Tick next-round tasks, finish here, or cancel.'
+                  : `Nothing starts until you apply round ${round ?? ''}.`.trim()
+            : !hasItems
+              ? plan.reply
+                ? 'No team changes or tasks. Keep the reply in the chat, or dismiss it.'
+                : `${leadName} proposed nothing for this prompt.`
+              : count === 0
+                ? 'Nothing selected. Tick what to accept, or cancel the plan.'
+                : 'Nothing changes until you apply.'}
         </p>
         {error && (
           <p className="field__err plan__err" role="alert">
@@ -340,9 +399,32 @@ function PlanCard({
           </p>
         )}
         <button type="button" className="btn" onClick={onCancel} disabled={busy}>
-          {hasItems ? 'Cancel' : 'Dismiss'}
+          {hasItems || review ? 'Cancel' : 'Dismiss'}
         </button>
-        {(hasItems || plan.reply) && (
+        {review && (
+          <button type="button" className="btn" onClick={() => void finishHere()} disabled={busy}>
+            Finish here
+          </button>
+        )}
+        {review && verdict === 'ask' && (
+          <button type="button" className="btn btn--primary" onClick={() => void postClosing()} disabled={busy}>
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {busy ? 'Posting…' : 'Post question'}
+          </button>
+        )}
+        {review && verdict === 'done' && (
+          <button type="button" className="btn btn--primary" onClick={() => void postClosing()} disabled={busy}>
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {busy ? 'Posting…' : 'Post summary'}
+          </button>
+        )}
+        {review && verdict === 'continue' && (hasItems || plan.reply) && (
+          <button type="button" className="btn btn--primary" onClick={() => void apply()} disabled={!canApply}>
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {busy ? 'Applying…' : hasItems ? `Apply round ${round ?? ''}` : 'Keep reply'}
+          </button>
+        )}
+        {!review && (hasItems || plan.reply) && (
           <button type="button" className="btn btn--primary" onClick={() => void apply()} disabled={!canApply}>
             {busy && <span className="spinner" aria-hidden="true" />}
             {busy ? 'Applying…' : hasItems ? `Apply (${count})` : 'Keep reply'}
@@ -442,6 +524,7 @@ function WorkBar({
   progress,
   paused,
   busy,
+  round,
   onPause,
   onResume,
   onStop,
@@ -449,11 +532,12 @@ function WorkBar({
   progress: ReturnType<typeof taskProgress>
   paused: boolean
   busy: boolean
+  round?: number
   onPause: () => void
   onResume: () => void
   onStop: () => void
 }) {
-  const label = workBarLabel(progress, paused)
+  const label = workBarLabel(progress, paused, round)
   if (!label && !paused) return null
   return (
     <div className="workbar" role="status">
@@ -602,7 +686,9 @@ function ProjectChatPage({ id }: { id: string }) {
   const [pickedMentions, setPickedMentions] = useState<string[]>([])
   /** The prompt Primary is planning for, while POST team-plan is in flight. */
   const [planning, setPlanning] = useState<string | null>(null)
-  const [planError, setPlanError] = useState<{ messageId: string; message: string } | null>(null)
+  /** Part 5: promptId while POST /review is in flight. */
+  const [reviewing, setReviewing] = useState<string | null>(null)
+  const [planError, setPlanError] = useState<{ messageId: string; message: string; kind?: 'plan' | 'review' } | null>(null)
   /** Plans waiting for Apply or Cancel, by the prompt they answer. Page state only (D-P1). */
   const [plans, setPlans] = useState<Map<string, PendingPlan>>(() => new Map())
   /** "Ask Primary to build a team" with no prompt yet: the composer asks for one. */
@@ -625,7 +711,7 @@ function ProjectChatPage({ id }: { id: string }) {
   const ticket = useRef(0)
   const applied = useRef(0)
   const alive = useRef(true)
-  const busy = useRef({ sending: false, planning: false })
+  const busy = useRef({ sending: false, planning: false, reviewing: false })
   const failures = useRef(0)
   const planSeq = useRef(0)
   const composerRef = useRef<HTMLTextAreaElement>(null)
@@ -755,13 +841,28 @@ function ProjectChatPage({ id }: { id: string }) {
   const latest = useMemo(() => latestPrompt(messages ?? []), [messages])
   const unanswered = useMemo(() => latestUnansweredPrompt(messages ?? []), [messages])
   const progress = useMemo(() => taskProgress(messages ?? []), [messages])
-  // Where each pending plan, planning indicator or plan error shows.
+  // Where each pending plan, planning/review indicator or plan error shows.
   const anchors = useMemo(() => {
     const ids = [...plans.keys()]
     if (planning && !plans.has(planning)) ids.push(planning)
+    if (reviewing && !plans.has(reviewing)) ids.push(reviewing)
     if (planError && !ids.includes(planError.messageId)) ids.push(planError.messageId)
     return planAnchors(messages ?? [], ids)
-  }, [messages, plans, planning, planError])
+  }, [messages, plans, planning, reviewing, planError])
+  const dividers = useMemo(() => roundDividers(messages ?? []), [messages])
+  const workRound = useMemo(() => activeWorkRound(messages ?? []), [messages])
+  /** Last assignment id per prompt that is due for review (one nudge each). */
+  const reviewNudgeAt = useMemo(() => {
+    const list = messages ?? []
+    const at = new Map<string, string>()
+    for (const m of list) {
+      if (m.kind !== 'task-assignment' || !m.replyTo) continue
+      if (!reviewDue(list, m.replyTo, primary?.id)) continue
+      if (roundOf(m) !== latestRound(list, m.replyTo)) continue
+      at.set(m.replyTo, m.id)
+    }
+    return at
+  }, [messages, primary])
 
   // Stick to the bottom as messages arrive, unless the user scrolled up to read.
   const threadRef = useRef<HTMLElement>(null)
@@ -777,12 +878,12 @@ function ProjectChatPage({ id }: { id: string }) {
   const count = messages?.length ?? 0
   useEffect(() => {
     if (stick.current) endRef.current?.scrollIntoView({ block: 'end' })
-  }, [count, planning, planError, plans])
+  }, [count, planning, reviewing, planError, plans])
 
   /** Ask Primary to plan a prompt; the answer becomes a pending card (nothing is stored). */
   const requestPlan = useCallback(
     async (messageId: string) => {
-      if (busy.current.planning) return
+      if (busy.current.planning || busy.current.reviewing) return
       busy.current.planning = true
       setPlanning(messageId)
       setPlanError(null)
@@ -796,14 +897,52 @@ function ProjectChatPage({ id }: { id: string }) {
         if (!alive.current) return
         const answers = result.replyTo ?? messageId
         const seq = ++planSeq.current
-        setPlans((prev) => new Map(prev).set(answers, { messageId: answers, plan: result.plan, seq }))
+        setPlans((prev) => new Map(prev).set(answers, { messageId: answers, plan: result.plan, seq, mode: 'plan' }))
       } catch (err) {
         if (!alive.current) return
         resyncOn(err)
-        setPlanError({ messageId, message: friendlyError(err, 'Primary could not plan this.') })
+        setPlanError({ messageId, message: friendlyError(err, 'Primary could not plan this.'), kind: 'plan' })
       } finally {
         busy.current.planning = false
         if (alive.current) setPlanning(null)
+      }
+    },
+    [id, refresh, resyncOn],
+  )
+
+  /** Part 5 (D-O7): user clicks to ask Primary to review a settled round. */
+  const requestRoundReview = useCallback(
+    async (promptId: string) => {
+      if (busy.current.planning || busy.current.reviewing) return
+      busy.current.reviewing = true
+      setReviewing(promptId)
+      setPlanError(null)
+      stick.current = true
+      try {
+        const result = await api.requestReview(id, { promptId })
+        await refresh()
+        if (!alive.current) return
+        const seq = ++planSeq.current
+        setPlans((prev) =>
+          new Map(prev).set(result.replyTo, {
+            messageId: result.replyTo,
+            plan: result.plan,
+            seq,
+            mode: 'review',
+            round: result.round,
+          }),
+        )
+      } catch (err) {
+        if (!alive.current) return
+        resyncOn(err)
+        setPlanError({
+          messageId: promptId,
+          message: friendlyError(err, 'Primary could not review this round.'),
+          kind: 'review',
+        })
+      } finally {
+        busy.current.reviewing = false
+        if (alive.current) setReviewing(null)
       }
     },
     [id, refresh, resyncOn],
@@ -976,7 +1115,7 @@ function ProjectChatPage({ id }: { id: string }) {
   const removeAgent = removeTarget ? byId.get(removeTarget) : undefined
   // Typing stays open while Primary plans; only sending waits.
   const canSend = Boolean(primary) && !sending && planning === null
-  const canAsk = Boolean(primary) && !sending && planning === null
+  const canAsk = Boolean(primary) && !sending && planning === null && reviewing === null
 
   // D-O11: the pick handler replaces the '@word' under the caret with '@Name '.
   const acceptMention = (a: Agent) => {
@@ -1014,6 +1153,7 @@ function ProjectChatPage({ id }: { id: string }) {
   /** What shows after a prompt's last message: planning, the error, the pending card. */
   const renderPlanSlot = (promptId: string) => {
     const pending = plans.get(promptId)
+    const retryReview = pending?.mode === 'review' || planError?.kind === 'review'
     return (
       <div className="chat__turn" key={`plan-${promptId}`}>
         {pending && (
@@ -1029,10 +1169,18 @@ function ProjectChatPage({ id }: { id: string }) {
           />
         )}
         {planning === promptId && <TypingBubble label={`${primaryName} is planning`} speaker={`${primaryName} is planning…`} />}
-        {planning !== promptId && planError?.messageId === promptId && (
+        {reviewing === promptId && (
+          <TypingBubble label={`${primaryName} is reviewing`} speaker={`${primaryName} is reviewing…`} />
+        )}
+        {planning !== promptId && reviewing !== promptId && planError?.messageId === promptId && (
           <Bubble kind="error" speaker={primaryName}>
             <div className="bubble__body">{planError.message}</div>
-            <button type="button" className="chat__retry" onClick={() => void requestPlan(promptId)} disabled={!canAsk}>
+            <button
+              type="button"
+              className="chat__retry"
+              onClick={() => void (retryReview ? requestRoundReview(promptId) : requestPlan(promptId))}
+              disabled={!canAsk}
+            >
               Retry
             </button>
           </Bubble>
@@ -1042,10 +1190,17 @@ function ProjectChatPage({ id }: { id: string }) {
   }
 
   const renderMessage = (m: ProjectMessage, index: number) => {
-    const divider =
+    const turnDivider =
       index > 0 && isUserPrompt(m) ? (
         <div className="chat__ts">
           <span>{turnTime(m.createdAt)}</span>
+        </div>
+      ) : null
+    const roundN = dividers.get(m.id)
+    const roundDivider =
+      roundN !== undefined ? (
+        <div className="chat__round" role="separator" aria-label={`Round ${roundN}`}>
+          <span>Round {roundN}</span>
         </div>
       ) : null
 
@@ -1104,7 +1259,7 @@ function ProjectChatPage({ id }: { id: string }) {
 
     // A prompt Primary never answered (or whose plan was cancelled or lost to a reload).
     const nudge =
-      unanswered?.id === m.id && !plans.has(m.id) && planning === null && planError?.messageId !== m.id && primary ? (
+      unanswered?.id === m.id && !plans.has(m.id) && planning === null && reviewing === null && planError?.messageId !== m.id && primary ? (
         <div className="chat__nudge">
           <span>{primaryName} has not answered this yet.</span>
           <button type="button" className="chat__retry chat__retry--accent" onClick={() => void requestPlan(m.id)} disabled={!canAsk}>
@@ -1113,11 +1268,36 @@ function ProjectChatPage({ id }: { id: string }) {
         </div>
       ) : null
 
+    // Part 5 (D-O7): round finished → user clicks to review.
+    const reviewPromptId = m.replyTo
+    const reviewNudge =
+      reviewPromptId &&
+      reviewNudgeAt.get(reviewPromptId) === m.id &&
+      !plans.has(reviewPromptId) &&
+      reviewing !== reviewPromptId &&
+      planning === null &&
+      planError?.messageId !== reviewPromptId &&
+      primary ? (
+        <div className="chat__nudge">
+          <span>Round {roundOf(m)} finished.</span>
+          <button
+            type="button"
+            className="chat__retry chat__retry--accent"
+            onClick={() => void requestRoundReview(reviewPromptId)}
+            disabled={!canAsk}
+          >
+            Ask {primaryName} to review
+          </button>
+        </div>
+      ) : null
+
     return [
       <div className="chat__turn" key={m.id}>
-        {divider}
+        {turnDivider}
+        {roundDivider}
         {body}
         {nudge}
+        {reviewNudge}
       </div>,
       ...(anchors.get(m.id) ?? []).map(renderPlanSlot),
     ]
@@ -1125,11 +1305,13 @@ function ProjectChatPage({ id }: { id: string }) {
 
   const composerHint = planning !== null
     ? `${primaryName} is planning…`
-    : working
-      ? null
-      : askHint
-        ? `Describe what to build or accomplish; ${primaryName} proposes a team for it.`
-        : 'Enter to send · Shift+Enter for a new line'
+    : reviewing !== null
+      ? `${primaryName} is reviewing…`
+      : working
+        ? null
+        : askHint
+          ? `Describe what to build or accomplish; ${primaryName} proposes a team for it.`
+          : 'Enter to send · Shift+Enter for a new line'
 
   return (
     <main className="page page--chat">
@@ -1331,6 +1513,7 @@ function ProjectChatPage({ id }: { id: string }) {
               progress={progress}
               paused={project?.paused === true}
               busy={workBusy}
+              round={workRound}
               onPause={pauseWork}
               onResume={resumeWork}
               onStop={() => {

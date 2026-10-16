@@ -252,19 +252,99 @@ export function descendants(taskId: string, messages: readonly ProjectMessage[])
   return found
 }
 
-/** WorkBar line: "1 running · 1 queued" or "Paused · 2 queued". */
-export function workBarLabel(progress: TaskProgress, paused: boolean): string {
+/** Assignment round: written by apply, absent = 1 (Part 5). */
+export function roundOf(m: ProjectMessage): number {
+  return m.round && m.round >= 1 ? m.round : 1
+}
+
+const TERMINAL_TASK = new Set(['done', 'failed', 'cancelled'])
+
+/**
+ * Whether a prompt's latest round is settled and the request is still open
+ * (show "Ask Primary to review"). Closed when Primary has a reply with
+ * verdict done|ask for that prompt.
+ */
+export function reviewDue(
+  messages: readonly ProjectMessage[],
+  promptId: string,
+  primaryId?: string,
+): boolean {
+  const closed = messages.some(
+    (m) =>
+      m.kind === 'message' &&
+      m.replyTo === promptId &&
+      !m.taskId &&
+      (m.verdict === 'done' || m.verdict === 'ask') &&
+      (primaryId ? m.author === primaryId : m.author !== 'user'),
+  )
+  if (closed) return false
+  const assignments = messages.filter((m) => m.kind === 'task-assignment' && m.replyTo === promptId)
+  if (assignments.length === 0) return false
+  const latest = Math.max(...assignments.map(roundOf))
+  const tasks = assignments.filter((m) => roundOf(m) === latest)
+  return tasks.length > 0 && tasks.every((t) => TERMINAL_TASK.has(t.taskStatus ?? ''))
+}
+
+/** Highest assignment round for a prompt (0 when none). */
+export function latestRound(messages: readonly ProjectMessage[], promptId: string): number {
+  let max = 0
+  for (const m of messages) {
+    if (m.kind !== 'task-assignment' || m.replyTo !== promptId) continue
+    const r = roundOf(m)
+    if (r > max) max = r
+  }
+  return max
+}
+
+/**
+ * Round dividers: for each assignment that starts a new round (> 1), the
+ * message id before which to show "Round N". Keyed by the first assignment
+ * id of that round for the prompt.
+ */
+export function roundDividers(messages: readonly ProjectMessage[]): Map<string, number> {
+  const seen = new Set<string>()
+  const out = new Map<string, number>()
+  for (const m of messages) {
+    if (m.kind !== 'task-assignment' || !m.replyTo) continue
+    const r = roundOf(m)
+    if (r <= 1) continue
+    const key = `${m.replyTo}:${r}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.set(m.id, r)
+  }
+  return out
+}
+
+/** WorkBar line: "Round 1 · 1 running · 1 queued" or "Paused · 2 queued". */
+export function workBarLabel(progress: TaskProgress, paused: boolean, round?: number): string {
+  const roundLabel = round && round >= 1 ? `Round ${round}` : ''
   if (paused) {
     const waiting = progress.queued + progress.running
-    if (waiting === 0) return 'Paused'
-    return `Paused · ${waiting} ${waiting === 1 ? 'task' : 'tasks'} waiting`
+    const pausedBody =
+      waiting === 0 ? 'Paused' : `Paused · ${waiting} ${waiting === 1 ? 'task' : 'tasks'} waiting`
+    return roundLabel ? `${roundLabel} · ${pausedBody}` : pausedBody
   }
   const parts: string[] = []
   if (progress.running > 0) parts.push(`${progress.running} running`)
   if (progress.queued > 0) parts.push(`${progress.queued} queued`)
   if (progress.failed > 0) parts.push(`${progress.failed} failed`)
   if (progress.cancelled > 0) parts.push(`${progress.cancelled} cancelled`)
-  return parts.join(' · ')
+  const body = parts.join(' · ')
+  if (!body) return roundLabel
+  return roundLabel ? `${roundLabel} · ${body}` : body
+}
+
+/** Active (non-terminal) assignment round for the WorkBar, if any. */
+export function activeWorkRound(messages: readonly ProjectMessage[]): number | undefined {
+  let round: number | undefined
+  for (const m of messages) {
+    if (m.kind !== 'task-assignment') continue
+    if (m.taskStatus !== 'queued' && m.taskStatus !== 'running') continue
+    const r = roundOf(m)
+    if (round === undefined || r > round) round = r
+  }
+  return round
 }
 
 /** Delay before the next poll: POLL_MS, doubling per consecutive failure up to POLL_MAX_MS. */
@@ -662,16 +742,30 @@ export type ApplyBody = TeamPlanApply & { add: string[]; create: number[]; tasks
  * Body for POST /api/projects/:id/team-plan/apply: the plan as Primary sent
  * it, the prompt it answers, and the accepted entries in plan order, without
  * duplicates, out-of-range entries, or anything blocked (the BE would drop or
- * refuse it, so it is neither sent nor counted).
+ * refuse it, so it is neither sent nor counted). Pass `round` when applying a
+ * review card (Part 5).
  */
-export function applyBody(plan: TeamPlan, selection: PlanSelection, ctx: PlanContext, replyTo?: string): ApplyBody {
+export function applyBody(
+  plan: TeamPlan,
+  selection: PlanSelection,
+  ctx: PlanContext,
+  replyTo?: string,
+  round?: number,
+): ApplyBody {
   const add: string[] = []
   for (const a of plan.add) {
     if (!add.includes(a.agentId) && selection.add.includes(a.agentId) && !addBlock(a, ctx)) add.push(a.agentId)
   }
   const create = plan.create.map((_, i) => i).filter((i) => selection.create.includes(i) && !createBlock(plan.create[i], ctx))
   const tasks = plan.tasks.map((_, i) => i).filter((i) => selection.tasks.includes(i) && !taskBlock(plan, selection, i, ctx))
-  return { plan, ...(replyTo ? { replyTo } : {}), add, create, tasks }
+  return {
+    plan,
+    ...(replyTo ? { replyTo } : {}),
+    ...(round !== undefined ? { round } : {}),
+    add,
+    create,
+    tasks,
+  }
 }
 
 /** How many entries an apply body accepts (Apply is disabled at zero when the plan has items). */

@@ -6,6 +6,7 @@ import {
   TASK_STATUS_LABELS,
   addBlock,
   addCandidates,
+  activeWorkRound,
   applyBody,
   createBlock,
   descendants,
@@ -16,6 +17,7 @@ import {
   isTaskBlocked,
   isTaskResult,
   latestPrompt,
+  latestRound,
   latestUnansweredPrompt,
   memberIds,
   mentionCandidates,
@@ -37,6 +39,9 @@ import {
   planTaskLabel,
   pollDelay,
   resyncAfter,
+  reviewDue,
+  roundDividers,
+  roundOf,
   selectedCount,
   sendLabel,
   STICK_PX,
@@ -463,6 +468,63 @@ describe('plan confirm card and the apply body (D-P1)', () => {
     selection = toggleTask(selection, 0)
     assert.equal(taskBlock(handoff, selection, 1, ctx), null)
     assert.deepEqual(applyBody(handoff, selection, ctx).tasks, [0, 1, 2])
+  })
+})
+
+describe('orchestration Part 5 review rounds', () => {
+  const assignment = (id, replyTo, overrides = {}) =>
+    msg(id, T(1), { kind: 'task-assignment', replyTo, taskStatus: 'done', assigneeId: 'ana', ...overrides })
+
+  it('roundOf treats absent round as 1', () => {
+    assert.equal(roundOf(assignment('t1', 'p1')), 1)
+    assert.equal(roundOf(assignment('t2', 'p1', { round: 2 })), 2)
+    assert.equal(roundOf(assignment('t3', 'p1', { round: 0 })), 1)
+  })
+
+  it('reviewDue when the latest round is settled and the request is open', () => {
+    const open = [
+      msg('p1', T(0)),
+      assignment('t1', 'p1', { taskStatus: 'done', round: 1 }),
+      assignment('t2', 'p1', { taskStatus: 'done', round: 1, createdAt: T(2) }),
+    ]
+    assert.equal(reviewDue(open, 'p1', 'lead'), true)
+    assert.equal(latestRound(open, 'p1'), 1)
+
+    const running = [...open, assignment('t3', 'p1', { taskStatus: 'running', round: 2, createdAt: T(3) })]
+    assert.equal(reviewDue(running, 'p1', 'lead'), false)
+    assert.equal(latestRound(running, 'p1'), 2)
+
+    const closed = [
+      ...open,
+      msg('reply', T(3), { author: 'lead', replyTo: 'p1', verdict: 'done' }),
+    ]
+    assert.equal(reviewDue(closed, 'p1', 'lead'), false)
+  })
+
+  it('applyBody sends round when reviewing', () => {
+    const plan = { reply: 'Next.', add: [], create: [], tasks: [{ agent: 'ana', task: 'Edit' }], warnings: [], verdict: 'continue' }
+    const ctx = { teamAgentIds: ['ana'], primaryId: 'lead', agents: [{ id: 'ana', name: 'Ana' }, { id: 'lead', name: 'Lead' }] }
+    const body = applyBody(plan, initialSelection(plan), ctx, 'p1', 2)
+    assert.equal(body.round, 2)
+    assert.equal(body.replyTo, 'p1')
+    assert.deepEqual(body.tasks, [0])
+    // First plan: omit round.
+    assert.equal(applyBody(plan, initialSelection(plan), ctx, 'p1').round, undefined)
+  })
+
+  it('roundDividers and workBarLabel show Round N', () => {
+    const list = [
+      msg('p1', T(0)),
+      assignment('t1', 'p1', { round: 1 }),
+      assignment('t2', 'p1', { round: 2, createdAt: T(2), taskStatus: 'queued' }),
+      assignment('t3', 'p1', { round: 2, createdAt: T(3), taskStatus: 'queued' }),
+    ]
+    const divs = roundDividers(list)
+    assert.equal(divs.get('t2'), 2)
+    assert.equal(divs.has('t3'), false)
+    assert.equal(activeWorkRound(list), 2)
+    assert.equal(workBarLabel({ queued: 1, running: 1, done: 0, failed: 0, cancelled: 0, total: 2 }, false, 2), 'Round 2 · 1 running · 1 queued')
+    assert.equal(workBarLabel({ queued: 0, running: 0, done: 0, failed: 0, cancelled: 0, total: 0 }, true, 1), 'Round 1 · Paused')
   })
 })
 

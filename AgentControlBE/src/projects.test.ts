@@ -9,10 +9,11 @@ import {
   fitTaskInput,
   nextReadyTask,
   parsePlanJson,
+  threadState,
   validateTeamPlan,
   whenProjectIdle,
 } from './projects.js'
-import type { Agent, Endpoint, Project, ProjectMessage, ProjectUpdate, TeamPlanResult } from './shared/types.js'
+import type { Agent, Endpoint, Project, ProjectMessage, ProjectUpdate, ReviewResult, TeamPlanResult } from './shared/types.js'
 import { createStore, type WorkspaceStore } from './store.js'
 
 /**
@@ -45,7 +46,10 @@ type ChatRequest = {
 type Reply = string | Error | { status: number }
 
 const PLANNER_MARK = 'the team lead of this project in AgentControl'
-const isPlanner = (req: ChatRequest): boolean => (req.messages?.[0]?.content ?? '').includes(PLANNER_MARK)
+const REVIEW_MARK = 'reviewing the latest round of work'
+const isReview = (req: ChatRequest): boolean => (req.messages?.[0]?.content ?? '').includes(REVIEW_MARK)
+const isPlanner = (req: ChatRequest): boolean =>
+  (req.messages?.[0]?.content ?? '').includes(PLANNER_MARK) && !isReview(req)
 const systemOf = (req: ChatRequest): string => (req.messages?.[0]?.role === 'system' ? (req.messages[0]?.content ?? '') : '')
 const lastUser = (req: ChatRequest): string => req.messages?.[req.messages.length - 1]?.content ?? ''
 
@@ -2086,5 +2090,334 @@ describe('orchestration Part 3: hand-offs', () => {
       mk('newer_ready', 'queued', base),
     ]
     expect(nextReadyTask(store, p.id)?.id).toBe('old_ready')
+  })
+})
+
+describe('orchestration Part 5: review rounds', () => {
+  /** Plan → apply → wait for the round to settle. */
+  async function settleRound(
+    projectId: string,
+    text: string,
+    plan: unknown,
+    task: (req: ChatRequest) => Reply | Promise<Reply> = (req) => `${systemOf(req)}: done`,
+  ) {
+    mockUpstream((req) => (isPlanner(req) ? (typeof plan === 'string' ? plan : JSON.stringify(plan)) : task(req)))
+    const out = await planAndApply(projectId, text)
+    await whenProjectIdle(store, projectId)
+    return out
+  }
+
+  it('review writes nothing; returns the next-round plan', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('ReviewWrite', [ana.id])
+    await settleRound(p.id, 'Draft the post', {
+      reply: 'Ana drafts.',
+      tasks: [{ agent: ana.id, task: 'Draft' }],
+    })
+    const prompt = store.projectMessages.find((m) => m.author === 'user')!
+    const before = memory()
+    const saves = countSaves()
+    mockUpstream((req) => {
+      if (isReview(req)) {
+        return JSON.stringify({
+          verdict: 'continue',
+          reply: 'Next: polish.',
+          tasks: [{ agent: ana.id, task: 'Polish the draft', inputs: ['r1'] }],
+        })
+      }
+      return 'unexpected'
+    })
+    const res = await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ReviewResult
+    expect(body.replyTo).toBe(prompt.id)
+    expect(body.round).toBe(2)
+    expect(body.plan.verdict).toBe('continue')
+    expect(body.plan.tasks).toHaveLength(1)
+    expect(saves.count()).toBe(0)
+    expect(memory()).toBe(before)
+    saves.restore()
+    expect(threadState(store, p.id, prompt.id)).toMatchObject({ round: 1, settled: true, closed: false })
+  })
+
+  it('409 when there is no Primary, the round is open, or the request is closed; 502/413 like team-plan', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Review409', [ana.id])
+    expect((await inject('POST', `/api/projects/${p.id}/review`, {})).statusCode).toBe(400)
+    expect((await inject('POST', `/api/projects/${p.id}/review`, { promptId: 'msg_nope' })).statusCode).toBe(400)
+
+    await settleRound(p.id, 'Work', { reply: 'Go.', tasks: [{ agent: ana.id, task: 'One' }] })
+    const prompt = store.projectMessages.find((m) => m.author === 'user')!
+
+    // Round not finished: re-queue a task.
+    const task = store.projectMessages.find((m) => m.kind === 'task-assignment')!
+    store.projectMessages = store.projectMessages.map((m) =>
+      m.id === task.id ? { ...m, taskStatus: 'queued' as const } : m,
+    )
+    store.save()
+    mockUpstream(() => JSON.stringify({ verdict: 'done', reply: 'Done.' }))
+    expect((await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })).statusCode).toBe(409)
+    // Settle again.
+    store.projectMessages = store.projectMessages.map((m) =>
+      m.id === task.id ? { ...m, taskStatus: 'done' as const } : m,
+    )
+    store.save()
+
+    // Close the request, then review → 409.
+    store.projectMessages = [
+      ...store.projectMessages,
+      {
+        id: 'msg_close',
+        projectId: p.id,
+        author: lead.id,
+        text: 'All done.',
+        kind: 'message',
+        createdAt: new Date().toISOString(),
+        replyTo: prompt.id,
+        verdict: 'done',
+      },
+    ]
+    store.save()
+    expect((await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })).statusCode).toBe(409)
+
+    // Fresh project: no Lead → 409.
+    const p2 = await makeProject('NoLead', [ana.id])
+    const prompt2 = await say(p2.id, 'Hi')
+    store.agents = store.agents.map((a) => (a.id === lead.id ? { ...a, isPrimary: false } : a))
+    store.save()
+    expect((await inject('POST', `/api/projects/${p2.id}/review`, { promptId: prompt2.id })).statusCode).toBe(409)
+    store.agents = store.agents.map((a) => (a.id === lead.id ? { ...a, isPrimary: true } : a))
+    store.save()
+
+    // 502 on bad review answer.
+    const p3 = await makeProject('Review502', [ana.id])
+    await settleRound(p3.id, 'X', { reply: 'Go.', tasks: [{ agent: ana.id, task: 'T' }] })
+    const prompt3 = store.projectMessages.find((m) => m.projectId === p3.id && m.author === 'user')!
+    mockUpstream((req) => (isReview(req) ? 'not a plan at all' : 'done'))
+    expect((await inject('POST', `/api/projects/${p3.id}/review`, { promptId: prompt3.id })).statusCode).toBe(502)
+    mockUpstream(() => ({ status: 500 }))
+    expect((await inject('POST', `/api/projects/${p3.id}/review`, { promptId: prompt3.id })).statusCode).toBe(502)
+
+    // 413 when the review prompt cannot fit.
+    const ep = await inject('POST', '/api/endpoints', {
+      kind: 'openai-compatible',
+      name: 'tiny-review',
+      baseUrl: 'http://127.0.0.1:9',
+      defaultModel: 'tiny',
+      contextWindow: 64,
+    })
+    const tiny = ep.json() as Endpoint
+    store.agents = store.agents.map((a) =>
+      a.id === lead.id ? { ...a, endpointId: tiny.id, modelId: 'tiny', instructions: 'I'.repeat(20_000) } : a,
+    )
+    store.save()
+    const p4 = await makeProject('Review413', [ana.id])
+    // Seed a settled round without calling the (now tiny) planner.
+    const prompt4 = await say(p4.id, 'Huge request ' + 'z'.repeat(5_000))
+    const t4: ProjectMessage = {
+      id: 'msg_r413_t',
+      projectId: p4.id,
+      author: lead.id,
+      text: '@Lead → @Ana: T',
+      kind: 'task-assignment',
+      createdAt: new Date().toISOString(),
+      replyTo: prompt4.id,
+      assigneeId: ana.id,
+      taskStatus: 'done',
+      label: 't1',
+      round: 1,
+    }
+    store.projectMessages = [
+      ...store.projectMessages,
+      t4,
+      {
+        id: 'msg_r413_r',
+        projectId: p4.id,
+        author: ana.id,
+        text: 'Result ' + 'y'.repeat(2_000),
+        kind: 'message',
+        createdAt: new Date().toISOString(),
+        taskId: t4.id,
+        taskStatus: 'done',
+      },
+    ]
+    store.save()
+    expect((await inject('POST', `/api/projects/${p4.id}/review`, { promptId: prompt4.id })).statusCode).toBe(413)
+  })
+
+  it('409 on a stale round; apply round 2 after settle; verdict closes', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('RoundApply', [ana.id])
+    const { prompt } = await settleRound(p.id, 'First', {
+      reply: 'Ana.',
+      tasks: [{ agent: ana.id, task: 'Draft' }],
+    })
+
+    mockUpstream((req) => {
+      if (isReview(req)) {
+        return JSON.stringify({
+          verdict: 'continue',
+          reply: 'Round 2.',
+          tasks: [{ agent: ana.id, task: 'Edit' }],
+        })
+      }
+      return `${systemOf(req)}: done`
+    })
+    const reviewed = await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })
+    expect(reviewed.statusCode).toBe(200)
+    const review = reviewed.json() as ReviewResult
+    expect(review.round).toBe(2)
+
+    // Stale: apply as round 3.
+    const stale = await inject('POST', `/api/projects/${p.id}/team-plan/apply`, {
+      plan: review.plan,
+      replyTo: prompt.id,
+      round: 3,
+      tasks: [0],
+    })
+    expect(stale.statusCode).toBe(409)
+
+    const applied = await inject('POST', `/api/projects/${p.id}/team-plan/apply`, {
+      plan: review.plan,
+      replyTo: prompt.id,
+      round: 2,
+      tasks: [0],
+    })
+    expect(applied.statusCode).toBe(200)
+    const round2 = (applied.json() as ProjectUpdate).messages.filter((m) => m.kind === 'task-assignment')
+    expect(round2).toHaveLength(1)
+    expect(round2[0]?.round).toBe(2)
+    await whenProjectIdle(store, p.id)
+
+    // Close with done.
+    mockUpstream((req) =>
+      isReview(req) ? JSON.stringify({ verdict: 'done', reply: 'Here is the summary.', tasks: [] }) : 'done',
+    )
+    const closeReview = (await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })).json() as ReviewResult
+    expect(closeReview.round).toBe(3)
+    expect(closeReview.plan.verdict).toBe('done')
+    const closed = await inject('POST', `/api/projects/${p.id}/team-plan/apply`, {
+      plan: closeReview.plan,
+      replyTo: prompt.id,
+      round: 3,
+      tasks: [],
+    })
+    expect(closed.statusCode).toBe(200)
+    const reply = (closed.json() as ProjectUpdate).messages.find((m) => m.kind === 'message' && m.verdict === 'done')
+    expect(reply?.text).toMatch(/summary/i)
+    expect(threadState(store, p.id, prompt.id).closed).toBe(true)
+    // Review after close → 409.
+    expect((await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })).statusCode).toBe(409)
+    expect(lead.id).toBeTruthy()
+  })
+
+  it('round 5 review drops tasks (can only finish or ask)', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('Round5', [ana.id])
+    const prompt = await say(p.id, 'Long running request')
+    const base = Date.now()
+    // Seed a settled round 5.
+    const t5: ProjectMessage = {
+      id: 'msg_r5_t',
+      projectId: p.id,
+      author: lead.id,
+      text: '@Lead → @Ana: Round 5 work',
+      kind: 'task-assignment',
+      createdAt: new Date(base).toISOString(),
+      replyTo: prompt.id,
+      assigneeId: ana.id,
+      taskStatus: 'done',
+      label: 't1',
+      round: 5,
+    }
+    store.projectMessages = [
+      ...store.projectMessages,
+      t5,
+      {
+        id: 'msg_r5_r',
+        projectId: p.id,
+        author: ana.id,
+        text: 'Final draft.',
+        kind: 'message',
+        createdAt: new Date(base + 1).toISOString(),
+        taskId: t5.id,
+        taskStatus: 'done',
+      },
+    ]
+    store.save()
+    mockUpstream((req) =>
+      isReview(req)
+        ? JSON.stringify({
+            verdict: 'continue',
+            reply: 'One more polish.',
+            tasks: [{ agent: ana.id, task: 'Should be dropped' }],
+          })
+        : 'done',
+    )
+    const res = await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ReviewResult
+    expect(body.round).toBe(5)
+    expect(body.plan.tasks).toEqual([])
+    expect(body.plan.verdict).toBe('done')
+    expect(body.plan.warnings.join('\n')).toMatch(/at most 5 rounds/)
+  })
+
+  it('D-O11 teammate tag becomes a proposed hand-off on the review card', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const ben = await makeAgent('Ben')
+    const p = await makeProject('HandoffTag', [ana.id, ben.id])
+    mockUpstream((req) => {
+      if (isPlanner(req)) {
+        return JSON.stringify({ reply: 'Ana drafts.', tasks: [{ agent: ana.id, task: 'Draft' }] })
+      }
+      // Ana tags Ben in her result.
+      return '@Ben this draft is ready for editing'
+    })
+    const { prompt } = await planAndApply(p.id, 'Write then edit')
+    await whenProjectIdle(store, p.id)
+    const result = store.projectMessages.find(
+      (m) => m.kind === 'message' && m.author === ana.id && m.taskStatus === 'done',
+    )
+    expect(result?.mentions).toContain(ben.id)
+
+    mockUpstream((req) =>
+      isReview(req)
+        ? JSON.stringify({ verdict: 'continue', reply: 'Ben edits.', tasks: [] })
+        : 'done',
+    )
+    const res = await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })
+    expect(res.statusCode).toBe(200)
+    const body = res.json() as ReviewResult
+    const handoff = body.plan.tasks.find((t) => t.agent === ben.id)
+    expect(handoff).toBeTruthy()
+    expect(handoff?.inputs?.length).toBe(1)
+    const assignment = store.projectMessages.find((m) => m.kind === 'task-assignment' && m.replyTo === prompt.id)
+    expect(handoff?.inputs?.[0]).toBe(assignment?.id)
+    expect(handoff?.task).toMatch(/hand-off/i)
+  })
+
+  it('missing verdict becomes continue when there are tasks, otherwise done', async () => {
+    const lead = await makeLead()
+    const ana = await makeAgent('Ana')
+    const p = await makeProject('VerdictDefault', [ana.id])
+    await settleRound(p.id, 'Work', { reply: 'Go.', tasks: [{ agent: ana.id, task: 'One' }] })
+    const prompt = store.projectMessages.find((m) => m.author === 'user' && m.projectId === p.id)!
+
+    mockUpstream((req) =>
+      isReview(req) ? JSON.stringify({ reply: 'More.', tasks: [{ agent: ana.id, task: 'Two' }] }) : 'done',
+    )
+    const withTasks = (await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })).json() as ReviewResult
+    expect(withTasks.plan.verdict).toBe('continue')
+
+    mockUpstream((req) => (isReview(req) ? JSON.stringify({ reply: 'Finished.', tasks: [] }) : 'done'))
+    const noTasks = (await inject('POST', `/api/projects/${p.id}/review`, { promptId: prompt.id })).json() as ReviewResult
+    expect(noTasks.plan.verdict).toBe('done')
+    expect(lead.name).toBe('Lead')
   })
 })

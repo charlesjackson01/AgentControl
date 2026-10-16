@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
-import { api, AVATAR_MAX_BYTES, AVATAR_MIME_TYPES, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
-import Avatar from './Avatar'
+import { agentAvatarUrl, api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
+import AvatarPicker from './AvatarPicker'
+import { avatarBaseline, avatarDirty, avatarSavePlan, type AvatarDraft } from '../lib/avatar-draft'
 import {
-  AVATAR_EMOJI,
   AVATAR_PALETTE,
   MAX_RULE_LENGTH,
   MAX_RULES,
@@ -49,23 +49,6 @@ function toInput(agent: Agent): AgentInput {
     rules: [...(agent.rules ?? [])],
     color: agent.color ?? null,
   }
-}
-
-/** Avatar edits, applied on save: emoji goes in the agent body, images via the avatar routes. */
-type AvatarDraft = {
-  emoji: string | null
-  /** New image picked but not yet uploaded. */
-  file: File | null
-  /** Drop the agent's current uploaded image. */
-  removeImage: boolean
-}
-
-function avatarBaseline(agent: Agent | null): AvatarDraft {
-  return { emoji: agent?.avatar?.kind === 'emoji' ? agent.avatar.value : null, file: null, removeImage: false }
-}
-
-function avatarDirty(a: AvatarDraft, b: AvatarDraft): boolean {
-  return a.emoji !== b.emoji || a.file !== null || a.removeImage !== b.removeImage
 }
 
 function isDirty(a: AgentInput, b: AgentInput): boolean {
@@ -137,46 +120,12 @@ export default function AgentProfile({
   const [saving, setSaving] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
-  const [avatarDraft, setAvatarDraft] = useState<AvatarDraft>(() => avatarBaseline(initial))
+  const [avatarDraft, setAvatarDraft] = useState<AvatarDraft>(() => avatarBaseline(initial?.avatar))
   const [avatarError, setAvatarError] = useState<string | null>(null)
   // Endpoint/skills/parameters sit in a collapsible Advanced block; open for new agents.
   const [advancedOpen, setAdvancedOpen] = useState(!isEdit)
   const rules = draft.rules ?? []
   const setRules = (next: string[]) => setDraft((d) => ({ ...d, rules: next }))
-
-  // Object URL for a picked-but-unsaved image; revoked when replaced or on unmount.
-  const previewUrl = useMemo(() => (avatarDraft.file ? URL.createObjectURL(avatarDraft.file) : null), [avatarDraft.file])
-  useEffect(() => () => {
-    if (previewUrl) URL.revokeObjectURL(previewUrl)
-  }, [previewUrl])
-  const hasImage = initial?.avatar?.kind === 'image' && !avatarDraft.removeImage
-  const shownAvatar = avatarDraft.emoji
-    ? ({ kind: 'emoji', value: avatarDraft.emoji } as const)
-    : hasImage
-      ? initial?.avatar
-      : null
-
-  const pickEmoji = (emoji: string) => {
-    setAvatarError(null)
-    setAvatarDraft((a) => ({ emoji: a.emoji === emoji ? null : emoji, file: null, removeImage: a.removeImage || initial?.avatar?.kind === 'image' }))
-  }
-  const pickFile = (file: File | undefined) => {
-    if (!file) return
-    if (!AVATAR_MIME_TYPES.includes(file.type)) {
-      setAvatarError('Use a PNG, JPEG, WebP or GIF image.')
-      return
-    }
-    if (file.size > AVATAR_MAX_BYTES) {
-      setAvatarError(`Images must be ${Math.round(AVATAR_MAX_BYTES / 1024 / 1024)} MB or smaller.`)
-      return
-    }
-    setAvatarError(null)
-    setAvatarDraft((a) => ({ ...a, emoji: null, file }))
-  }
-  const clearAvatar = () => {
-    setAvatarError(null)
-    setAvatarDraft({ emoji: null, file: null, removeImage: initial?.avatar?.kind === 'image' })
-  }
 
   const backTo = isEdit && initial ? `/agents/${initial.id}` : '/agents'
 
@@ -305,12 +254,12 @@ export default function AgentProfile({
         rules: normalizeRules(rules),
         ...(isBootstrap ? { isPrimary: true } : {}),
       }
-      // Emoji rides in the agent body; null clears it. An untouched image is left alone.
-      if (avatarDraft.emoji) payload.avatar = { kind: 'emoji', value: avatarDraft.emoji }
-      else if (!hasImage && !avatarDraft.file && initial?.avatar) payload.avatar = null
-      if (initial && avatarDraft.removeImage && initial.avatar?.kind === 'image') await api.deleteAgentAvatar(initial.id)
+      // Emoji rides in the agent body; images go through the avatar routes.
+      const plan = avatarSavePlan(avatarDraft, initial?.avatar)
+      if (plan.avatar !== undefined) payload.avatar = plan.avatar
+      if (initial && plan.deleteImage) await api.deleteAgentAvatar(initial.id)
       let saved = initial ? await api.updateAgent(initial.id, payload) : await api.createAgent(payload)
-      if (avatarDraft.file) saved = (await api.uploadAgentAvatar(saved.id, avatarDraft.file)) ?? saved
+      if (plan.upload && avatarDraft.file) saved = await api.uploadAgentAvatar(saved.id, avatarDraft.file)
       if (onSaved) onSaved(saved)
       else navigate(isEdit && initial ? `/agents/${initial.id}` : `/agents/${saved.id}`, { replace: true })
     } catch (err) {
@@ -325,7 +274,7 @@ export default function AgentProfile({
   }
 
   const leave = () => {
-    if (isDirty(draft, baseline) || avatarDirty(avatarDraft, avatarBaseline(initial))) setConfirmDiscard(true)
+    if (isDirty(draft, baseline) || avatarDirty(avatarDraft, avatarBaseline(initial?.avatar))) setConfirmDiscard(true)
     else finish()
   }
 
@@ -336,73 +285,32 @@ export default function AgentProfile({
               <h2 className="formsection__title">Basics</h2>
               <p className="formsection__hint">What this agent is called and what it is for.</p>
 
-              <div className="field">
-                <span className="field__label" id="af-avatar-label">Avatar</span>
-                <div className="avatarpick" role="group" aria-labelledby="af-avatar-label">
-                  <Avatar
-                    name={draft.name || 'New agent'}
-                    agentId={initial?.id}
-                    avatar={shownAvatar}
-                    previewUrl={previewUrl}
-                    color={draft.color}
-                    size="xl"
-                    decorative
-                  />
-                  <div className="avatarpick__body">
-                    <div className="avatarpick__emoji" role="group" aria-label="Emoji avatar">
-                      {AVATAR_EMOJI.map((e) => (
-                        <button
-                          type="button"
-                          key={e}
-                          aria-pressed={avatarDraft.emoji === e}
-                          aria-label={`Use ${e} as avatar`}
-                          onClick={() => pickEmoji(e)}
-                        >
-                          {e}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="avatarpick__actions">
-                      <label className="btn btn--sm">
-                        Upload image…
-                        <input
-                          type="file"
-                          accept={AVATAR_MIME_TYPES.join(',')}
-                          hidden
-                          onChange={(e) => {
-                            pickFile(e.target.files?.[0])
-                            e.target.value = ''
-                          }}
-                        />
-                      </label>
-                      {(shownAvatar || avatarDraft.file) && (
-                        <button type="button" className="btn btn--sm" onClick={clearAvatar}>
-                          Use initials
-                        </button>
-                      )}
-                      <div className="avatarpick__colors" role="group" aria-label="Avatar colour">
-                        {AVATAR_PALETTE.map((c) => (
-                          <button
-                            type="button"
-                            key={c}
-                            style={{ background: c }}
-                            aria-pressed={draft.color === c}
-                            aria-label={`Colour ${c}`}
-                            onClick={() => set('color', draft.color === c ? null : c)}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                    {avatarError ? (
-                      <p className="field__err" role="alert">{avatarError}</p>
-                    ) : (
-                      <p className="field__hint">
-                        Pick an emoji or upload an image (PNG, JPEG, WebP or GIF, up to 1 MB). Without one, initials are shown.
-                      </p>
-                    )}
+              <AvatarPicker
+                id="af-avatar"
+                name={draft.name || 'New agent'}
+                agentId={initial?.id}
+                current={initial?.avatar}
+                storedImageUrl={initial?.avatar?.kind === 'image' ? agentAvatarUrl(initial.id, initial.avatar.updatedAt) : null}
+                color={draft.color}
+                value={avatarDraft}
+                onChange={setAvatarDraft}
+                error={avatarError}
+                onError={setAvatarError}
+                extra={
+                  <div className="avatarpick__colors" role="group" aria-label="Avatar colour">
+                    {AVATAR_PALETTE.map((c) => (
+                      <button
+                        type="button"
+                        key={c}
+                        style={{ background: c }}
+                        aria-pressed={draft.color === c}
+                        aria-label={`Colour ${c}`}
+                        onClick={() => set('color', draft.color === c ? null : c)}
+                      />
+                    ))}
                   </div>
-                </div>
-              </div>
+                }
+              />
 
               <div className="field">
                 <label className="field__label" htmlFor="af-name">

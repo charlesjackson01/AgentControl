@@ -22,7 +22,7 @@ type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: s
 /** Chat-first Part 2: one conversation's thread (Primary's 1:1 is the landing page). */
 export default function ConversationChat() {
   const { conversationId = '' } = useParams()
-  const { conversations, agents, loaded, markRead, reload: reloadSidebar } = useConversations()
+  const { conversations, agents, loaded, markRead, upsert, reload: reloadSidebar } = useConversations()
   const conversation = conversations?.find((c) => c.id === conversationId)
   const agent = conversation ? agents.find((a) => a.id === conversation.agentId) : undefined
 
@@ -35,6 +35,7 @@ export default function ConversationChat() {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [runError, setRunError] = useState<string | null>(null)
   const [shownFor, setShownFor] = useState(conversationId)
 
   // Reset per conversation during render (no effect), so a switch never flashes the old thread.
@@ -45,6 +46,7 @@ export default function ConversationChat() {
     setLoadError(undefined)
     setOlderError(null)
     setPending(null)
+    setRunError(null)
     setDraft('')
   }
 
@@ -133,12 +135,18 @@ export default function ConversationChat() {
     setDraft('')
     try {
       if (!agent) throw new Error('This chat has no agent.')
-      // No send route on the BE: the 1:1 run appends both turns to this DM.
-      await api.runAgent(agent.id, text)
-      const page = await api.listConversationMessages(conversationId)
-      setMessages((prev) => mergeMessages(prev ?? [], page.messages))
-      setPending(null)
-      reloadSidebar()
+      const result = await api.sendConversationMessage(conversationId, agent.id, text)
+      setMessages((prev) => mergeMessages(prev ?? [], result.messages))
+      if (result.conversation) upsert(result.conversation)
+      // A failed run may have stored no assistant message; surface its error inline.
+      const answered = result.messages.some((m) => m.role === 'assistant')
+      if (result.run.status === 'failed' && !answered) {
+        setPending({ text, ts: new Date().toISOString(), status: 'error', error: result.run.error || 'The run failed.' })
+        setRunError(null)
+      } else {
+        setPending(null)
+        setRunError(result.run.status === 'failed' ? (result.run.error || 'The run failed.') : null)
+      }
     } catch (err) {
       setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
     }
@@ -240,6 +248,9 @@ export default function ConversationChat() {
                   </div>
                 )
               })}
+              {runError && !pending && (
+                <p className="chat__runerr" role="alert">Last run failed: {runError}</p>
+              )}
               {pending && (
                 <div className="chat__turn">
                   <Bubble kind="user">

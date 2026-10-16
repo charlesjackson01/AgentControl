@@ -498,11 +498,36 @@ export type ConversationSummary = Conversation & {
 export const CONVERSATION_PAGE_SIZE = 50
 export const MAX_CONVERSATION_PAGE_SIZE = 200
 
-/** GET /api/conversations/:id/messages response (messages oldest -> newest). */
+/** GET /api/conversations/:id/messages response (messages oldest -> newest). `hasMore` since BE 2a6078c. */
 export type ConversationMessagesResponse = {
   conversation: Conversation
   messages: ChatMessage[]
+  hasMore?: boolean
+}
+
+/** POST /api/conversations/:id/messages response (BE 2a6078c). */
+export type ConversationSendResult = {
+  conversation: ConversationSummary
+  /** This turn's messages (user, and assistant/error when there is one). */
+  messages: ChatMessage[]
+  run: { id: string; status: AgentRun['status']; error?: string | null }
 }
 
 /** Normalized page for the thread view. */
-export type ChatMessagePage = ConversationMessagesResponse & { hasMore: boolean }
+export type ChatMessagePage = Omit<ConversationMessagesResponse, 'hasMore'> & { hasMore: boolean }
+
+/** Chat-first: the workspace owner's profile (GET/PUT /api/profile). */
+export type UserProfile = {
+  name: string
+  avatar?: AgentAvatar
+  /** null until first-run setup is saved. */
+  onboardedAt: string | null
+}
+
+/** PUT /api/profile body. Emoji only; images go through /api/profile/avatar. */
+export type UserProfileInput = {
+  name?: string
+  avatar?: { kind: 'emoji'; value: string } | null
+  /** First-run save: ask the BE to stamp onboardedAt. */
+  onboarded?: boolean
+}

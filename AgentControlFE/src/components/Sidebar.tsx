@@ -13,6 +13,10 @@ import {
 } from '../lib/conversations'
 import type { Agent, ConversationSummary } from '../lib/types'
 import { useConversations } from '../state/conversations-context'
+import { useProfile } from '../state/profile-context'
+import { displayName } from '../lib/profile'
+import { profileAvatarUrl } from '../lib/profile-api'
+import type { UserProfile } from '../lib/types'
 import type { useSidebar } from '../hooks/useSidebar'
 
 type SidebarProps = ReturnType<typeof useSidebar>
@@ -34,6 +38,20 @@ function NavRow({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boo
       {item.count !== undefined && <span className="nav__count sidebar__fade">{item.count}</span>}
       {collapsed && <span className="nav__tip" role="tooltip">{item.label}</span>}
     </NavLink>
+  )
+}
+
+function UserAvatar({ profile, name }: { profile: UserProfile | null | undefined; name: string }) {
+  const avatar = profile?.avatar
+  return (
+    <Avatar
+      name={name}
+      avatar={avatar}
+      previewUrl={avatar?.kind === 'image' ? profileAvatarUrl(avatar.updatedAt) : null}
+      color="#64748b"
+      size="md"
+      decorative
+    />
   )
 }
 
@@ -97,6 +115,8 @@ export default function Sidebar({ collapsed, mobileOpen, isMobile, close }: Side
   const { conversations, agents, error, reload } = useConversations()
   const [showHidden, setShowHidden] = useState(() => localStorage.getItem(SHOW_HIDDEN_KEY) === '1')
   const now = useNow()
+  const { profile } = useProfile()
+  const name = displayName(profile)
 
   useEffect(() => {
     localStorage.setItem(SHOW_HIDDEN_KEY, showHidden ? '1' : '0')
@@ -151,16 +171,13 @@ export default function Sidebar({ collapsed, mobileOpen, isMobile, close }: Side
       </nav>
 
       <div className="sidebar__footer">
-        <button type="button" className="account">
-          <span className="avatar">
-            CJ
-            <span className="avatar__dot" />
-          </span>
+        <NavLink to="/settings#profile" onClick={close} className="account" title={rail ? name : undefined}>
+          <UserAvatar profile={profile} name={name} />
           <span className="account__text sidebar__fade">
-            <span className="account__name">Casey Jack</span>
+            <span className="account__name">{name}</span>
             <span className="account__role">Workspace owner</span>
           </span>
-        </button>
+        </NavLink>
       </div>
     </aside>
   )

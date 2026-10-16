@@ -4,9 +4,29 @@ import Sidebar from './Sidebar'
 import { MenuIcon, PanelIcon, SearchIcon } from './icons'
 import { allNav, CHATS_LABEL } from '../lib/nav'
 import ConversationsProvider from '../state/ConversationsProvider'
+import ProfileProvider from '../state/ProfileProvider'
+import { useProfile } from '../state/profile-context'
+import { needsOnboarding } from '../lib/profile'
+import Onboarding from '../pages/Onboarding'
 import { useSidebar } from '../hooks/useSidebar'
 
 export default function AppShell() {
+  return (
+    <ProfileProvider>
+      <OnboardingGate />
+    </ProfileProvider>
+  )
+}
+
+/** First-run setup before the app; never blocks when the BE has no profile route. */
+function OnboardingGate() {
+  const { profile, setProfile } = useProfile()
+  if (profile === undefined) return <div className="shell" aria-busy="true" />
+  if (profile && needsOnboarding(profile)) return <Onboarding profile={profile} onDone={setProfile} />
+  return <Shell />
+}
+
+function Shell() {
   const sidebar = useSidebar()
   const { pathname } = useLocation()
   const current = allNav.find((n) => pathname.startsWith(n.to))

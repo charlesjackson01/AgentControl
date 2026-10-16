@@ -1,12 +1,13 @@
 # Project orchestration — implementation handoff
 
-Status: APPROVED FOR IMPLEMENTATION (2026-10-13). D-O1…D-O10 confirmed as
-recommended. D-O11 (@mentions) added at the owner's request: "the tagging
-system should be part of the chat system; agents should tag when there are
-hand-offs or delegation of tasks."
+Status: COMPLETE (Parts 1–6) — ready to merge on
+`cursor/orchestration-part6-94d1` (will be COMPLETE / shipped on master once
+merged). D-O1…D-O10 confirmed as recommended. D-O11 (@mentions) added at the
+owner's request: "the tagging system should be part of the chat system; agents
+should tag when there are hand-offs or delegation of tasks."
 
-Base: master after PR #9 (Projects Parts 0–3). D-P1…D-P3
-(docs/PROJECTS_HANDOFF.md) stand unchanged.
+Base: master after PR #9 (Projects Parts 0–3) plus orchestration Parts 1–5.
+D-P1…D-P3 (docs/PROJECTS_HANDOFF.md) stand unchanged.
 
 ## Goal
 
@@ -329,3 +330,52 @@ interface ReviewResult { plan: TeamPlan; replyTo: string; round: number }
 6. Part 5: review rounds (route, apply rounds, review card, dividers).
 7. Part 6: run route and "What it saw", screenshots, a run against a real 8k
    llama.cpp endpoint, implementation notes, README routes.
+
+## Implementation notes (Part 6)
+
+Parts 1–6 are implemented; this PR (`cursor/orchestration-part6-94d1`) is
+ready to merge. After merge, treat Status above as COMPLETE / shipped on
+master.
+
+**Shipped in Part 6**
+
+- `GET /api/projects/:id/runs/:runId` — returns the `AgentRun` when
+  `run.projectId === id`; 404 for a missing project, missing run, a run of
+  another project, or a chat-only run (no `projectId`). The response is the
+  stored run shape only (no vault / endpoint keys).
+- FE `api.getProjectRun` and a collapsed **What it saw** disclosure on task
+  result bubbles that have `runId`: fetches once on first open and shows
+  `run.input` (the prompt sent to the assignee, including framed teammate
+  results). Existing **Used** meta is unchanged.
+- BE/FE READMEs document orchestration routes (work pause/resume/stop, task
+  cancel, review, project run GET, team-plan/apply round/verdict, mentions).
+
+**Verified in CI / hermetic tests**
+
+- BE: hermetic inject test creates a project task run via plan/apply with
+  `mockUpstream`, GETs the run by id, and asserts 404 for the wrong project,
+  a missing run, and a chat-only agent run on the project route.
+- Parts 1–5 hermetic coverage (work controls, hand-offs / fitTaskInput on an
+  8,192-token fixture endpoint, review 409/502/413, mentions) remains in
+  `projects.test.ts` / related suites.
+- FE: no new pure helper for the disclosure (fetch + `<details>`); existing
+  `formatUsedMeta` tests cover Used meta. Full FE lint / typecheck / test /
+  build and BE typecheck / test / build are the gate for this PR.
+
+**Live 8k llama.cpp smoke — not run here**
+
+This cloud environment does not reliably reach a local llama.cpp (or other
+placeholder) endpoint, so a live 8k smoke and UI screenshots were skipped
+(no invented PNGs under `docs/projects-screenshots/`). Existing project
+screenshots from earlier parts remain there.
+
+To verify locally against a real 8k endpoint:
+
+1. Point an OpenAI-compatible endpoint at your llama.cpp server with
+   `contextWindow: 8192` (Settings).
+2. Create a project, put Primary and a teammate on that endpoint, ask for a
+   plan with a hand-off (`inputs: ["t1"]`), Apply, and wait for both tasks.
+3. Confirm the second result shows **Used** meta and **What it saw** opens to
+   the framed teammate excerpt inside the prompt.
+4. Optionally hit `GET /api/projects/<id>/runs/<runId>` and confirm `input`
+   matches what the disclosure shows.

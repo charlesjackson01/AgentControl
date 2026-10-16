@@ -457,6 +457,16 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return stopWork(store, tasks, id)
   })
 
+  // Part 6: one project task run (for "What it saw"). Chat-only runs and
+  // runs of other projects 404. The AgentRun shape never holds vault keys.
+  app.get('/api/projects/:id/runs/:runId', async (request) => {
+    const { id, runId } = request.params as { id: string; runId: string }
+    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
+    const run = store.runs.find((r) => r.id === runId)
+    if (!run || run.projectId !== id) fail(404, `No run with id "${runId}" in this project`)
+    return run
+  })
+
   app.get('/api/settings', async () => store.settings)
 
   app.get('/api/agents', async () => store.agents)

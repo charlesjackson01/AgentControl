@@ -57,7 +57,7 @@ import {
   type PlanSelection,
   type TextPart,
 } from '../lib/project-chat'
-import type { Agent, Endpoint, Project, ProjectMessage, ProjectUpdate, TaskStatus, TeamPlan } from '../lib/types'
+import type { Agent, AgentRun, Endpoint, Project, ProjectMessage, ProjectUpdate, TaskStatus, TeamPlan } from '../lib/types'
 
 /* ==========================================================================
    Project chat (/projects/:id): the project's own thread (D-P3). The user
@@ -119,6 +119,46 @@ function MentionPicker({ options, index, onPick }: { options: readonly Agent[]; 
         </button>
       ))}
     </div>
+  )
+}
+
+/**
+ * Part 6: collapsed disclosure under a task result. Fetches the project run
+ * once on first open and shows `run.input` (the prompt sent to the assignee,
+ * including framed teammate results).
+ */
+function WhatItSaw({ projectId, runId }: { projectId: string; runId: string }) {
+  const [open, setOpen] = useState(false)
+  const [run, setRun] = useState<AgentRun | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const fetched = useRef(false)
+
+  useEffect(() => {
+    if (!open || fetched.current) return
+    fetched.current = true
+    setLoading(true)
+    setError(null)
+    void api
+      .getProjectRun(projectId, runId)
+      .then((r) => setRun(r))
+      .catch((err: unknown) => {
+        setError(friendlyError(err, 'Could not load what the agent saw.'))
+        fetched.current = false
+      })
+      .finally(() => setLoading(false))
+  }, [open, projectId, runId])
+
+  return (
+    <details
+      className="bubble__saw"
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary>What it saw</summary>
+      {loading && <p className="bubble__saw-status">Loading…</p>}
+      {error && <p className="bubble__saw-status bubble__saw-status--err">{error}</p>}
+      {run && <pre className="bubble__saw-input">{run.input || '(empty prompt)'}</pre>}
+    </details>
   )
 }
 
@@ -1253,6 +1293,7 @@ function ProjectChatPage({ id }: { id: string }) {
               {line}
             </div>
           ))}
+          {result && m.runId ? <WhatItSaw projectId={id} runId={m.runId} /> : null}
         </Bubble>
       )
     }

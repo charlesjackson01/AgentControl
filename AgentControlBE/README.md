@@ -74,10 +74,19 @@ shape of the store.
   `GET/POST /api/projects/:id/messages`. `POST /api/projects/:id/team-plan`
   `{ messageId } | { prompt }` asks the Team Lead for a plan and returns
   `{ plan, replyTo? }` without writing anything; `POST /api/projects/:id/team-plan/apply`
-  `{ plan, replyTo?, add?, create?, tasks? }` validates the plan again and commits
-  the accepted part (reply, team update, task assignments), then runs the tasks one
-  at a time per project; `POST /api/projects/:id/tasks/:messageId/retry` re-queues a
-  failed task.
+  `{ plan, replyTo?, add?, create?, tasks?, round? }` validates the plan again and
+  commits the accepted part (reply, team update, task assignments), then runs the
+  tasks one at a time per project. Apply may carry `round` after a review (at most
+  5 rounds per request; a `verdict` of `done` or `ask` with no tasks closes the
+  request). `POST /api/projects/:id/review` `{ promptId }` asks Primary to review a
+  settled round and returns `{ plan, replyTo, round }` without writing anything
+  (409 when the round is still open or the request is closed). Work controls:
+  `POST .../work/pause`, `/work/resume`, `/work/stop`;
+  `POST .../tasks/:messageId/cancel` (also cancels non-done dependents) and
+  `/retry` (failed or cancelled). `GET /api/projects/:id/runs/:runId` returns one
+  project task `AgentRun` (404 for chat-only runs or another project's run; never
+  exposes vault secrets). User messages may include `mentions` (agent ids); tagging
+  team members (not Primary) queues one direct task per tagged member.
 - `POST /api/prompt-budget` `{ endpointId, skillIds, instructions? }` →
   `{ contextWindow, responseReserve, estimatedTokens, mode, summarizedSkillIds, toolNames }`:
   the prompt plan a run would use (see *Skills that don't fit* below), without

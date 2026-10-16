@@ -60,6 +60,7 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
       content: reply,
       createdAt: replyAt,
       runId: run.id,
+      ...(run.status === 'failed' ? { error: true as const } : {}),
     })
     newest = replyAt
   }
@@ -148,7 +149,21 @@ export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>
           content: m.content,
           createdAt: m.createdAt,
           ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
+          ...(m.error === true ? { error: true as const } : {}),
         }]
       : [],
   )
+}
+
+/** Flag assistant messages from failed runs recorded before `error` existed. Returns whether any changed. */
+export function backfillErrorFlags(state: ConversationState): boolean {
+  const failed = new Set(state.runs.filter((r) => r.status === 'failed').map((r) => r.id))
+  let changed = false
+  for (const m of state.chatMessages) {
+    if (m.role === 'assistant' && m.error !== true && m.runId !== undefined && failed.has(m.runId)) {
+      m.error = true
+      changed = true
+    }
+  }
+  return changed
 }

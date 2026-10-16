@@ -12,7 +12,7 @@ import {
   vendoredSeedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
-import { migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
+import { backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
 import type {
   Agent,
   AgentRun,
@@ -530,6 +530,7 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
   const chatMessages = normalizeChatMessages(raw.chatMessages, new Set(conversations.map((c) => c.id)))
   const conversationState = { agents: agents as Agent[], runs, conversations, chatMessages }
   if (migrateRunsToConversations(conversationState, meta.migrations)) changed = true
+  if (backfillErrorFlags(conversationState)) changed = true
 
   return {
     data: {

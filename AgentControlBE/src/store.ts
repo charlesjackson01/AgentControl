@@ -12,9 +12,13 @@ import {
   vendoredSeedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
+import { migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
 import type {
   Agent,
   AgentRun,
+  ChatMessage,
+  Conversation,
+  UserProfile,
   Endpoint,
   Note,
   Project,
@@ -32,6 +36,12 @@ export interface WorkspaceStore {
   projects: Project[]
   /** Flat project chat log; GET /projects/:id/messages filters + sorts. */
   projectMessages: ProjectMessage[]
+  /** The workspace user's profile (first-run setup). */
+  profile: UserProfile
+  /** Chat-first 1:1 conversations (one DM per agent). */
+  conversations: Conversation[]
+  /** Messages for every conversation; routes filter + sort. */
+  chatMessages: ChatMessage[]
   skills: Skill[]
   endpoints: Endpoint[]
   /** endpoint id -> cached model ids (live GET /v1/models refreshes this). */
@@ -131,6 +141,9 @@ interface Persisted {
   runs: AgentRun[]
   projects: Project[]
   projectMessages: ProjectMessage[]
+  profile: UserProfile
+  conversations: Conversation[]
+  chatMessages: ChatMessage[]
   skills: Skill[]
   endpoints: Endpoint[]
   endpointModels: Record<string, string[]>
@@ -182,7 +195,17 @@ export function slugifyProjectName(name: string): string {
 }
 
 function seed(projectsRoot: string): Persisted {
+  const data = seedData(projectsRoot)
+  const state = { agents: data.agents, runs: data.runs, conversations: data.conversations, chatMessages: data.chatMessages }
+  migrateRunsToConversations(state, data.meta.migrations)
+  return { ...data, conversations: state.conversations, chatMessages: state.chatMessages }
+}
+
+function seedData(projectsRoot: string): Persisted {
   return {
+    profile: { name: '', onboardedAt: null },
+    conversations: [],
+    chatMessages: [],
     agents: structuredClone(seedAgents),
     runs: structuredClone(seedRuns),
     projects: seedProjects(projectsRoot),
@@ -205,6 +228,20 @@ function normalizeMeta(raw: unknown): StoreMeta | null {
     migrations: isStringArray(m.migrations) ? [...m.migrations] : [],
     seededSkillIds: isStringArray(m.seededSkillIds) ? [...m.seededSkillIds] : [],
   }
+}
+
+function normalizeProfile(raw: unknown): UserProfile {
+  const p = (raw && typeof raw === 'object' ? raw : {}) as Partial<UserProfile>
+  const out: UserProfile = {
+    name: typeof p.name === 'string' ? p.name : '',
+    onboardedAt: typeof p.onboardedAt === 'string' ? p.onboardedAt : null,
+  }
+  const a = p.avatar as Record<string, unknown> | undefined
+  if (a?.kind === 'emoji' && typeof a.value === 'string') out.avatar = { kind: 'emoji', value: a.value }
+  else if (a?.kind === 'image' && typeof a.file === 'string' && typeof a.updatedAt === 'string') {
+    out.avatar = { kind: 'image', file: a.file, updatedAt: a.updatedAt }
+  }
+  return out
 }
 
 /** Keep well-formed notes only (model-written data; be strict on load). */
@@ -489,12 +526,20 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
     }
   }
 
+  const conversations = normalizeConversations(raw.conversations, agentIds)
+  const chatMessages = normalizeChatMessages(raw.chatMessages, new Set(conversations.map((c) => c.id)))
+  const conversationState = { agents: agents as Agent[], runs, conversations, chatMessages }
+  if (migrateRunsToConversations(conversationState, meta.migrations)) changed = true
+
   return {
     data: {
       agents: agents as Agent[],
       runs,
       projects,
       projectMessages: normalizeProjectMessages(raw.projectMessages),
+      profile: normalizeProfile(raw.profile),
+      conversations: conversationState.conversations,
+      chatMessages: conversationState.chatMessages,
       skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
@@ -548,6 +593,9 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           runs: store.runs,
           projects: store.projects,
           projectMessages: store.projectMessages,
+          profile: store.profile,
+          conversations: store.conversations,
+          chatMessages: store.chatMessages,
           skills: store.skills,
           endpoints: store.endpoints,
           endpointModels: store.endpointModels,

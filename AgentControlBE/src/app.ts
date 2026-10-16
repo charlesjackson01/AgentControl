@@ -9,6 +9,7 @@ import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, RESPONSE_RESERVE } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
+import { clearAgentConversations, ensureDm, messagesOf, summarize } from './conversations.js'
 import {
   appendProjectMessage,
   applyTeamPlan,
@@ -22,6 +23,9 @@ import {
   stopWork,
 } from './projects.js'
 import {
+  CONVERSATION_PAGE_SIZE,
+  MAX_CONVERSATION_PAGE_SIZE,
+  MAX_USER_NAME_CHARS,
   DEFAULT_ENDPOINT_BASE_URL,
   MAX_AGENT_RULE_CHARS,
   MAX_AGENT_RULES,
@@ -29,6 +33,8 @@ import {
   OPENROUTER_DEFAULT_BASE_URL,
   type Agent,
   type AgentInput,
+  type UserProfile,
+  type Conversation,
   type Endpoint,
   type EndpointInput,
   type EndpointKind,
@@ -253,6 +259,13 @@ function avatarPath(store: WorkspaceStore, file: string): string | null {
 function removeAvatarFile(store: WorkspaceStore, agent: Agent): void {
   if (agent.avatar?.kind !== 'image') return
   const path = avatarPath(store, agent.avatar.file)
+  if (path) rmSync(path, { force: true })
+}
+
+function removeProfileAvatarFile(store: WorkspaceStore): void {
+  const avatar = store.profile.avatar
+  if (avatar?.kind !== 'image') return
+  const path = avatarPath(store, avatar.file)
   if (path) rmSync(path, { force: true })
 }
 
@@ -562,6 +575,21 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
   app.get('/api/settings', async () => store.settings)
 
+  // Partial update; only known boolean fields.
+  app.patch('/api/settings', async (request) => {
+    const body = (request.body ?? {}) as Record<string, unknown>
+    if (typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object.')
+    const next = { ...store.settings }
+    for (const key of ['autoRun', 'notify', 'telemetry'] as const) {
+      if (body[key] === undefined) continue
+      if (typeof body[key] !== 'boolean') fail(400, `${key} must be a boolean`)
+      next[key] = body[key] as boolean
+    }
+    store.settings = next
+    store.save()
+    return store.settings
+  })
+
   app.get('/api/agents', async () => store.agents)
 
   app.get('/api/agents/:id', async (request) => {
@@ -640,12 +668,85 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       .slice(0, RUNS_PER_SCOPE)
   })
 
+  // Chat-first conversations. Every agent has a DM; it is created on first list.
+  const conversationOr404 = (id: string) => {
+    const conversation = store.conversations.find((c) => c.id === id)
+    if (!conversation) fail(404, `No conversation with id "${id}"`)
+    return conversation as Conversation
+  }
+
+  app.get('/api/conversations', async () => {
+    let created = false
+    for (const agent of store.agents) {
+      if (!store.conversations.some((c) => c.agentId === agent.id)) {
+        ensureDm(store, agent.id)
+        created = true
+      }
+    }
+    if (created) store.save()
+    return store.conversations
+      .map((c) => summarize(store, c))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+  })
+
+  app.get('/api/conversations/:id/messages', async (request) => {
+    const { id } = request.params as { id: string }
+    const conversation = conversationOr404(id)
+    const query = request.query as { before?: unknown; limit?: unknown }
+    let limit = CONVERSATION_PAGE_SIZE
+    if (query.limit !== undefined) {
+      const n = Number(query.limit)
+      if (!Number.isInteger(n) || n < 1 || n > MAX_CONVERSATION_PAGE_SIZE) {
+        fail(400, `limit must be an integer from 1 to ${MAX_CONVERSATION_PAGE_SIZE}`)
+      }
+      limit = n
+    }
+    let messages = messagesOf(store, conversation.id)
+    if (query.before !== undefined) {
+      if (typeof query.before !== 'string' || Number.isNaN(Date.parse(query.before))) {
+        fail(400, 'before must be an ISO timestamp')
+      }
+      const before = query.before as string
+      messages = messages.filter((m) => m.createdAt < before)
+    }
+    return { conversation, messages: messages.slice(-limit), hasMore: messages.length > limit }
+  })
+
+  // Send in a DM: runs the agent (same as POST /api/agents/:id/runs) and
+  // returns the turn's messages. A failed run still returns its user message
+  // and, when there is one, the error as the assistant message.
+  app.post('/api/conversations/:id/messages', async (request) => {
+    const { id } = request.params as { id: string }
+    const conversation = conversationOr404(id)
+    const agent = store.agents.find((a) => a.id === conversation.agentId)
+    if (!agent) fail(404, `No agent for conversation "${id}"`)
+    const body = (request.body ?? {}) as { text?: unknown }
+    const text = typeof body.text === 'string' ? body.text.trim() : ''
+    if (!text) fail(400, 'Provide a "text" string.')
+    const run = await runAgent(store, agent as Agent, text)
+    const messages = messagesOf(store, conversation.id).filter((m) => m.runId === run.id)
+    return { conversation: summarize(store, conversation), messages, run: { id: run.id, status: run.status, error: run.error } }
+  })
+
+  app.post('/api/conversations/:id/read', async (request) => {
+    const { id } = request.params as { id: string }
+    const conversation = conversationOr404(id)
+    const newest = messagesOf(store, conversation.id).at(-1)?.createdAt
+    const now = new Date().toISOString()
+    // Never move backwards, and cover messages stamped slightly in the future.
+    const readAt = newest && newest > now ? newest : now
+    if (conversation.lastReadAt === null || readAt > conversation.lastReadAt) conversation.lastReadAt = readAt
+    store.save()
+    return summarize(store, conversation)
+  })
+
   app.delete('/api/agents/:id/runs', async (request, reply) => {
     const { id } = request.params as { id: string }
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
     // Clears the agent's own chat; its project task runs stay (deleting the agent removes them).
     store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined)
+    clearAgentConversations(store, id, false)
     store.save()
     void reply.status(204)
     return null
@@ -731,6 +832,71 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       store.save()
       return next
     })
+
+    // The user's own image avatar, stored as data/avatars/_profile.<ext> (agent ids never start with _).
+    scope.put('/api/profile/avatar', { bodyLimit: MAX_AVATAR_BYTES }, async (request) => {
+      const type = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
+      const ext = AVATAR_TYPES[type]
+      const body = request.body
+      if (!ext || !Buffer.isBuffer(body)) fail(415, 'Upload a PNG, JPEG, WebP or GIF image.')
+      if (body.length === 0) fail(400, 'The image is empty.')
+      mkdirSync(store.avatarsDir, { recursive: true })
+      const file = `_profile.${ext}`
+      const temporary = join(store.avatarsDir, `.${file}.${process.pid}.tmp`)
+      writeFileSync(temporary, body, { mode: 0o600 })
+      renameSync(temporary, join(store.avatarsDir, file))
+      const current = store.profile.avatar
+      if (current?.kind === 'image' && current.file !== file) removeProfileAvatarFile(store)
+      store.profile = { ...store.profile, avatar: { kind: 'image', file, updatedAt: new Date().toISOString() } }
+      store.save()
+      return store.profile
+    })
+  })
+
+  // User profile. Saving a name for the first time completes onboarding.
+  app.get('/api/profile', async () => store.profile)
+
+  app.put('/api/profile', async (request) => {
+    const raw = (request.body ?? {}) as Record<string, unknown>
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    if (!name) fail(400, '"name" is required.')
+    if (name.length > MAX_USER_NAME_CHARS) fail(400, `"name" is at most ${MAX_USER_NAME_CHARS} characters.`)
+    const next: UserProfile = { ...store.profile, name, onboardedAt: store.profile.onboardedAt ?? new Date().toISOString() }
+    if (raw.avatar !== undefined) {
+      if (raw.avatar === null) {
+        removeProfileAvatarFile(store)
+        delete next.avatar
+      } else {
+        const a = raw.avatar as Record<string, unknown>
+        const value = typeof a?.value === 'string' ? a.value.trim() : ''
+        if (a?.kind !== 'emoji' || !value || value.length > MAX_EMOJI_CHARS || /[\s<>]/.test(value)) {
+          fail(400, '"avatar" must be { kind: "emoji", value: "<one emoji>" } or null. Upload images with PUT /api/profile/avatar.')
+        }
+        removeProfileAvatarFile(store)
+        next.avatar = { kind: 'emoji', value }
+      }
+    }
+    store.profile = next
+    store.save()
+    return store.profile
+  })
+
+  app.get('/api/profile/avatar', async (_request, reply) => {
+    const avatar = store.profile.avatar
+    const path = avatar?.kind === 'image' ? avatarPath(store, avatar.file) : null
+    if (!avatar || avatar.kind !== 'image' || !path || !existsSync(path)) fail(404, 'The profile has no image avatar.')
+    const ext = avatar.file.slice(avatar.file.lastIndexOf('.') + 1)
+    const type = Object.entries(AVATAR_TYPES).find(([, e]) => e === ext)?.[0] ?? 'application/octet-stream'
+    void reply.header('content-type', type).header('cache-control', 'private, no-cache')
+    return reply.send(readFileSync(path))
+  })
+
+  app.delete('/api/profile/avatar', async () => {
+    removeProfileAvatarFile(store)
+    const { avatar: _dropped, ...next } = store.profile
+    store.profile = next
+    store.save()
+    return store.profile
   })
 
   app.get('/api/agents/:id/avatar', async (request, reply) => {
@@ -768,6 +934,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
     removeAvatarFile(store, agent)
+    clearAgentConversations(store, id, true)
     // It leaves every project team too, so a team PATCH never trips on a stale id.
     store.projects = store.projects.map((p) =>
       p.teamAgentIds.includes(id) ? { ...p, teamAgentIds: p.teamAgentIds.filter((x) => x !== id) } : p,

@@ -133,7 +133,7 @@ describe('seed-skill-upgrade-v2', () => {
     const upgraded = createStore(path)
     // v2 and then v3 bring every v1 copy to the current seed; the new seeds are appended.
     expect(upgraded.skills).toEqual(seedSkills)
-    expect(upgraded.meta.migrations).toEqual([V1, V2, V3])
+    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
     expect(upgraded.meta.seededSkillIds).toEqual(seedSkills.map((s) => s.id))
     expect(createStore(path).skills).toEqual(upgraded.skills)
   })
@@ -190,7 +190,7 @@ describe('seed-skill-upgrade-v3', () => {
     // Unchanged seeds stay as they were; the two new seeds are appended in seed order.
     expect(upgraded.skills).toEqual(seedSkills)
     expect(upgraded.skills.slice(-2).map((s) => s.id)).toEqual(NEW_IN_V3)
-    expect(upgraded.meta.migrations).toEqual([V1, V2, V3])
+    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
     expect(upgraded.meta.seededSkillIds).toEqual(seedSkills.map((s) => s.id))
     // The upgrade was saved: a reload reads it back without migrating again.
     expect(storedSkills(path)).toEqual(seedSkills)
@@ -222,7 +222,7 @@ describe('seed-skill-upgrade-v3', () => {
     for (const id of UPGRADED_V3.filter((id) => !edited.includes(id))) {
       expect(loaded.skills.find((s) => s.id === id), id).toEqual(seedOf(id))
     }
-    expect(loaded.meta.migrations).toEqual([V1, V2, V3])
+    expect(loaded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
   })
 
   it('runs once: a vendored seed whose tools the user clears after the upgrade stays cleared', () => {
@@ -237,7 +237,7 @@ describe('seed-skill-upgrade-v3', () => {
     expect(upgraded.save()).toBe(true)
     const reopened = createStore(path)
     expect(reopened.skills.find((s) => s.id === 'code-review')?.tools).toEqual([])
-    expect(reopened.meta.migrations).toEqual([V1, V2, V3])
+    expect(reopened.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
   })
 
   it('does not resurrect a changed seed or a new seed the user deleted', () => {
@@ -272,13 +272,13 @@ describe('seed-skill-upgrade-v3', () => {
     writeFileSync(path, JSON.stringify({ skills: vendoredSeedSkills.map((s) => ({ ...structuredClone(s), tools: [] })) }))
     const loaded = createStore(path)
     expect(loaded.skills).toEqual(seedSkills)
-    expect(loaded.meta.migrations).toEqual([V1, V2, V3])
+    expect(loaded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
   })
 
   it('fresh stores are born with v3 applied and never run it', () => {
     const path = join(dir, 'fresh.json')
     const fresh = createStore(path)
-    expect(fresh.meta.migrations).toEqual([V1, V2, V3])
+    expect(fresh.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
     expect(fresh.skills).toEqual(seedSkills)
     // Revert two seeds to their v2 definitions: a fresh store must not re-upgrade them.
     fresh.skills = fresh.skills.map((s) => (s.id === 'summarization' || s.id === 'text-comparison' ? v2Skill(s.id) : s))
@@ -286,6 +286,6 @@ describe('seed-skill-upgrade-v3', () => {
     const reopened = createStore(path)
     expect(reopened.skills.find((s) => s.id === 'summarization')).toEqual(v2Skill('summarization'))
     expect(reopened.skills.find((s) => s.id === 'text-comparison')).toEqual(v2Skill('text-comparison'))
-    expect(reopened.meta.migrations).toEqual([V1, V2, V3])
+    expect(reopened.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
   })
 })

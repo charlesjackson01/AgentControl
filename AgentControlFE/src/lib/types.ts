@@ -85,6 +85,8 @@ export type Endpoint = {
   status: EndpointStatus
   lastCheckedAt: string | null
   createdAt: string
+  /** Optional HTTP(S) proxy for every upstream call, e.g. http://localhost:1055. */
+  proxyUrl?: string
 }
 
 /** One model served by an endpoint (GET /api/endpoints/:id/models). */
@@ -153,6 +155,8 @@ export type EndpointInput = {
   contextWindow: number
   /** Write-only. Omit to keep the stored key on update, "" to clear it. Never returned on read. */
   apiKey?: string
+  /** Optional http(s) proxy URL. Omit to keep on update; "" or null clears it. */
+  proxyUrl?: string | null
 }
 
 export type AgentRun = {

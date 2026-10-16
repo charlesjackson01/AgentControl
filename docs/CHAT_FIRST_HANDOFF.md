@@ -1,6 +1,6 @@
 # Chat-first AgentControl — implementation handoff (draft)
 
-Status: DRAFT, awaiting owner approval of D-C1…D-C6.
+Status: APPROVED FOR IMPLEMENTATION (2026-10-16). D-C1…D-C6 confirmed as recommended.
 Base: master at a64b0f2 (orchestration Parts 1–6 complete).
 
 ## Goal

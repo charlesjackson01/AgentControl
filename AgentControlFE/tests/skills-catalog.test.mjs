@@ -46,6 +46,15 @@ describe('grouping (03c)', () => {
     assert.equal(g[3].meta, 'Built in')
     assert.equal(g[2].meta, '', 'no licence/commit known')
   })
+
+  it('keeps the order it opened with when a skill is toggled (no row jumps)', () => {
+    const opened = ['superpowers/brainstorming']
+    const before = groupSkills(be6, sources, opened, '', opened)[0].skills.map((s) => s.id)
+    const later = groupSkills(be6, sources, [...opened, before.at(-1)], '', opened)
+    assert.deepEqual(later[0].skills.map((s) => s.id), before)
+    assert.equal(later[0].enabled, 2, 'counts still follow the live ids')
+    assert.notEqual(groupSkills(be6, sources, [before.at(-1)])[0].skills[0].id, before[0], 'default orders by the live ids')
+  })
   it('search filters rows and drops empty groups', () => {
     const g = groupSkills(be6, sources, [], 'DEBUG')
     assert.deepEqual(g.map((x) => [x.id, x.skills.map((s) => s.name)]), [['superpowers', ['systematic-debugging']]])

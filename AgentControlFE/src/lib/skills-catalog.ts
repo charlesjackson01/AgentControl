@@ -84,9 +84,15 @@ export function groupSkills(
   sources: readonly SkillSource[],
   enabledIds: readonly string[],
   query = '',
+  /**
+   * Which skills sort first ("on first, then by name"). Pass the ids the tab
+   * opened with so a row doesn't jump under the cursor when it's toggled.
+   */
+  orderIds: readonly string[] = enabledIds,
 ): SkillGroup[] {
   const q = query.trim().toLowerCase()
   const on = new Set(enabledIds)
+  const upFront = new Set(orderIds)
   const byId = new Map<string, SkillSummary[]>()
   for (const s of skills) {
     const id = skillSourceId(s)
@@ -108,7 +114,7 @@ export function groupSkills(
       const matching = list
         .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.id.toLowerCase().includes(q))
         // Enabled first, then by name, so the collapsed view shows what's on.
-        .sort((a, b) => Number(on.has(b.id)) - Number(on.has(a.id)) || a.name.localeCompare(b.name))
+        .sort((a, b) => Number(upFront.has(b.id)) - Number(upFront.has(a.id)) || a.name.localeCompare(b.name))
       return {
         id,
         title: SOURCE_TITLES[id] ?? src?.repo ?? first?.sourceRepo ?? id,

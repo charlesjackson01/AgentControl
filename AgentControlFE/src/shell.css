@@ -287,8 +287,8 @@
 .cf-skills__grp { padding: 0; }
 .cf-skills__hd { width: 100%; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .cf-skills__caret { font-size: 10px; color: var(--c-text-2); width: 10px; }
-.cf-skills__title { font-weight: 600; font-size: 13px; }
-.cf-skills__meta { font-size: 11px; color: var(--c-text-3); }
+.cf-skills__title { font-weight: 600; font-size: 13px; white-space: nowrap; }
+.cf-skills__meta { font-size: 11px; color: var(--c-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; }
 .cf-skills__count { font-size: 10.5px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--c-border-strong); color: var(--c-text-2); white-space: nowrap; }
 .cf-skills__list { list-style: none; margin: 0; padding: 0 12px 4px; }
 .cf-skills__row { display: flex; align-items: center; gap: 12px; padding: 6px 0; border-top: 1px solid var(--c-border); }
@@ -302,6 +302,8 @@
 @media (max-width: 759px) { .cf-kv { grid-template-columns: 1fr; } .cf-meter { width: 90px; } }
 .cf-tag--muted { background: var(--c-bg-sunk); color: var(--c-text-2); }
 .cf-skills__row { align-items: flex-start; }
+/* 300+ rows once ECC is expanded: skip layout/paint for rows off screen. */
+.cf-skills__row:not(:has(.cf-skills__detail)) { content-visibility: auto; contain-intrinsic-size: auto 46px; }
 .cf-skills__row .cf-toggle { margin-top: 2px; }
 .cf-skills__open { border: 0; background: none; padding: 0; font: inherit; font-weight: 600; color: inherit; cursor: pointer; }
 .cf-skills__open:hover { text-decoration: underline; }

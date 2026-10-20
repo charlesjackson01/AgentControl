@@ -105,6 +105,7 @@ describe('dialog focus: wiring', () => {
     assert.match(src, /dialogStack\.top\(\)/)
     assert.match(src, /tabIndex=\{-1\}/)
     assert.match(src, /if \(open\) setOpener\(activeElement\(\)\)/, 'opener is captured in the render that opens the dialog')
+    assert.match(src, /e\.preventDefault\(\)\s*\n\s*onClose\(\)/, 'a backdrop press must not blur to <body> after focus was restored')
   })
   it('the endpoint dialog focuses Name (edit/new) and Cancel (delete)', () => {
     const src = readFileSync(new URL('../src/pages/Settings.tsx', import.meta.url), 'utf8')

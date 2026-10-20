@@ -104,7 +104,10 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
     <div
       className="dialog-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target !== e.currentTarget) return
+        // Don't let the press blur to <body> after close restored focus to the opener.
+        e.preventDefault()
+        onClose()
       }}
     >
       <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef} tabIndex={-1}>

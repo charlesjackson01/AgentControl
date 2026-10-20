@@ -2,10 +2,17 @@
 import type { Agent, ChatMessage, ConversationSummary } from './types.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
-type Summary = Pick<ConversationSummary, 'id' | 'agentId' | 'updatedAt'>
+/** DMs carry `agentId`; groups (BE-5) carry `kind: 'group'` and no agentId. */
+type Summary = Pick<ConversationSummary, 'id' | 'updatedAt'> & { kind?: 'dm' | 'group'; agentId?: string }
+
+/** The DM's agent id; undefined for a group. */
+export function dmAgentId(c: { kind?: 'dm' | 'group'; agentId?: string }): string | undefined {
+  return c.kind === 'group' ? undefined : c.agentId
+}
 
 function rank(c: Summary, agents: Map<string, AgentLike>): number {
-  const agent = agents.get(c.agentId)
+  const id = dmAgentId(c)
+  const agent = id ? agents.get(id) : undefined
   if (agent?.isPrimary) return 0
   if (agent?.pinned) return 1
   return 2
@@ -19,11 +26,13 @@ export function sortConversations<T extends Summary>(list: readonly T[], agents:
   )
 }
 
-/** Drops DMs with hidden agents unless `showHidden`, and DMs whose agent no longer exists. */
+/** Drops DMs with hidden agents unless `showHidden`, and DMs whose agent no longer exists. Groups always stay. */
 export function visibleConversations<T extends Summary>(list: readonly T[], agents: readonly AgentLike[], showHidden = false): T[] {
   const byId = new Map(agents.map((a) => [a.id, a]))
   return list.filter((c) => {
-    const agent = byId.get(c.agentId)
+    if (c.kind === 'group') return true
+    const id = dmAgentId(c)
+    const agent = id ? byId.get(id) : undefined
     return Boolean(agent) && (showHidden || !agent?.hidden)
   })
 }
@@ -35,7 +44,7 @@ export function hiddenCount(list: readonly Summary[], agents: readonly AgentLike
 /** The Primary agent's DM. */
 export function primaryConversation<T extends Summary>(list: readonly T[], agents: readonly AgentLike[]): T | undefined {
   const primary = agents.find((a) => a.isPrimary)
-  return primary ? list.find((c) => c.agentId === primary.id) : undefined
+  return primary ? list.find((c) => dmAgentId(c) === primary.id) : undefined
 }
 
 /** True when the preview is a failed reply (assistant message with `error: true`). */

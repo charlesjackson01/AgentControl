@@ -16,6 +16,8 @@ type ProfilePanelProps = {
   onSaved?: () => void
   /** After chat history is cleared so the thread empties. */
   onCleared?: () => void
+  /** After the agent is deleted (before navigating home). */
+  onDeleted?: () => void
 }
 
 function friendly(err: unknown, fallback: string): string {
@@ -26,7 +28,7 @@ function friendly(err: unknown, fallback: string): string {
 }
 
 /** The agent profile panel (chat-first Part 1): replaces the old settings drawer. */
-export function ProfilePanel({ open, agent, endpoints, skills, onClose, onSaved, onCleared }: ProfilePanelProps) {
+export function ProfilePanel({ open, agent, endpoints, skills, onClose, onSaved, onCleared, onDeleted }: ProfilePanelProps) {
   const navigate = useNavigate()
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
@@ -41,12 +43,13 @@ export function ProfilePanel({ open, agent, endpoints, skills, onClose, onSaved,
     setDeleting(true)
     try {
       await api.deleteAgent(agent.id)
-      navigate('/agents', { replace: true })
+      onDeleted?.()
+      navigate('/', { replace: true })
     } catch (err) {
       setDeleteError(friendly(err, 'Could not delete this agent.'))
       setDeleting(false)
     }
-  }, [agent, deleting, navigate])
+  }, [agent, deleting, navigate, onDeleted])
 
   const handleClearChat = useCallback(async () => {
     if (!agent || clearing) return

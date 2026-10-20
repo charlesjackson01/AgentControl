@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  countUnread, hiddenCount, markReadLocally, mergeMessages, olderCursor, previewText, primaryConversation,
+  countUnread, dmAgentId, hiddenCount, markReadLocally, mergeMessages, olderCursor, previewText, primaryConversation,
   relativeTime, sortConversations, totalUnread, unreadLabel, upsertConversation, visibleConversations,
 } from '../src/lib/conversations.ts'
 
@@ -123,5 +123,16 @@ describe('previewText error replies', () => {
     assert.equal(isErrorPreview({ role: 'assistant', content: 'ok' }), false)
     assert.equal(isErrorPreview({ role: 'user', content: 'x', error: true }), false)
     assert.equal(previewText({ role: 'assistant', content: '', error: true }), 'Failed: The run failed.')
+  })
+})
+
+describe('groups in the DM helpers (BE-5)', () => {
+  const g = { id: 'g', kind: 'group', name: 'G', memberAgentIds: ['p', 'b'], leadAgentId: 'p', createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-17T00:00:00Z', lastReadAt: null, lastMessage: null, unreadCount: 0 }
+  it('groups stay visible, have no DM agent, and never count as Primary\'s DM', () => {
+    assert.equal(dmAgentId(g), undefined)
+    assert.equal(dmAgentId(conv('cp', 'p')), 'p')
+    assert.deepEqual(visibleConversations([g, conv('cp', 'p')], agents).map((c) => c.id), ['g', 'cp'])
+    assert.equal(primaryConversation([g], agents), undefined)
+    assert.deepEqual(sortConversations([g, conv('cp', 'p')], agents).map((c) => c.id), ['cp', 'g'])
   })
 })

@@ -5,7 +5,7 @@ type DialogProps = {
   open: boolean
   title: string
   subtitle?: string
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
   onClose: () => void
   footer?: ReactNode
   children: ReactNode
@@ -61,7 +61,7 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className={`dialog${size === 'sm' ? ' dialog--sm' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef}>
+      <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef}>
         <div className="dialog__head">
           <div>
             <p className="dialog__title">{title}</p>

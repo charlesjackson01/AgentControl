@@ -112,21 +112,6 @@ export type ToolInfo = SkillTool & {
   effect: 'read' | 'write'
 }
 
-export type Note = {
-  id: string
-  title: string
-  body: string
-  tags: string[]
-  authorAgentId: string
-  authorName: string | null
-  updatedByAgentId: string
-  runId: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type NoteSummary = Omit<Note, 'body'> & { snippet: string; chars: number }
-
 export type Skill = {
   id: string
   name: string
@@ -277,6 +262,11 @@ export type Agent = {
   /** Chat-first: sidebar pinning / hiding (Part 2 uses these). */
   pinned?: boolean
   hidden?: boolean
+  /** Chat-first Phase 1 (BE-1): immutable folder name; 'primary' for Primary. Optional until BE-1 lands. */
+  slug?: string
+  internetPolicy?: InternetPolicy
+  /** "Learn from chat" toggle (BE-1/BE-4); default true. */
+  memoryLearn?: boolean
 }
 
 /** Everything the create/edit form owns. */
@@ -301,179 +291,26 @@ export type AgentInput = {
   avatar?: { kind: 'emoji'; value: string } | null
 }
 
-/** A project: a folder owned by AgentControl plus its team of library agents. */
-export type Project = {
-  id: string
-  name: string
-  desc: string
-  /** Absolute path created by the BE under the projects root. */
-  folder: string
-  /** Library agents on this project's team. Empty is allowed. */
-  teamAgentIds: string[]
-  createdAt: string
-  updatedAt: string
-  /** D-O5 (orchestration Part 2): set while the user has paused this project's work. */
-  paused?: boolean
-}
-
-/** Body for POST /api/projects/:id/messages. */
-export type ProjectMessageInput = {
-  author: string
-  text: string
-  /** D-O11: agent ids the user picked with @ (Primary or team members). Tagging only team members also queues one task each. */
-  mentions?: string[]
-}
-
-/**
- * One message in a project's chat (handoff kinds). `author` is 'user' or an
- * agent id.
- * - 'message': plain text from the user or an agent. Primary's reply to a
- *   plan the user applied, and each task's result (author = the assignee,
- *   with `taskId`), are messages too.
- * - 'team-update': who joined the team or was created when a plan applied.
- * - 'task-assignment': one task for `assigneeId`, with its `taskStatus`.
- */
-export type ProjectMessage = {
-  id: string
-  projectId: string
-  author: string
-  text: string
-  kind: ProjectMessageKind
-  createdAt: string
-  /** Set when the BE changes the message after creation (task status). */
-  updatedAt?: string
-  /** Messages written when a plan applies: the user message the plan answered. */
-  replyTo?: string
-  /** task-assignment: who does the task. */
-  assigneeId?: string
-  /**
-   * task-assignment: queued → running → done | failed (the task now).
-   * A task's result message: 'done' or 'failed', the outcome of that attempt.
-   */
-  taskStatus?: TaskStatus
-  /** A task's result message: the task-assignment it answers. */
-  taskId?: string
-  /** A task's result message: the agent run that produced it. */
-  runId?: string
-  /**
-   * D-O11: agents tagged in `text` as @Name, as ids in order of first tag,
-   * deduped. The BE fills it on every write: from the ids the user picked
-   * (user messages) or by parsing the text (everything else).
-   */
-  mentions?: string[]
-  /** task-assignment: its label within its plan ("t2"). Orchestration Part 3. */
-  label?: string
-  /** task-assignment: earlier task-assignment ids whose results it receives (at most 3). Part 3. */
-  inputs?: string[]
-  /** Written by an apply: the round of its request (absent = 1). Part 5. */
-  round?: number
-  /** Primary's reply that closes a request: a final summary or a question for the user. Part 5. */
-  verdict?: 'done' | 'ask'
-  /** A task's result message: the inputs it received and how much of each was sent. Part 3. */
-  used?: { taskId: string; chars: number; sentChars: number }[]
-}
-
-/** 'progress': a status line the runner writes without a model call (Parts 2–3). */
-export type ProjectMessageKind = 'message' | 'team-update' | 'task-assignment' | 'progress'
-/** 'cancelled': the user cancelled or stopped the task; it can be retried (Part 2). */
-export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-
-/** A library agent Primary proposes to add to the team. */
-export type TeamPlanAdd = {
-  agentId: string
-  reason: string
-}
-
-/** A project-scoped specialist Primary proposes to create (D-P2: a library agent tagged with projectId). */
-export type TeamPlanCreate = {
-  name: string
-  role: string
-  instructions: string
-  /** Library skill ids to attach (unknown ids are dropped while validating). */
-  skillIds: string[]
-  reason: string
-}
-
-/** A task for a team member: `agent` is an agent id, or the name of an agent in `create`. */
-export type TeamPlanTask = {
-  agent: string
-  task: string
-  /** Hand-offs (Part 3): "t1" (an earlier task of this plan) or an earlier done task-assignment id; at most 3. */
-  inputs?: string[]
-}
-
-/** Primary's validated answer to a project prompt. */
-export type TeamPlan = {
-  /** What Primary tells the user (always shown). */
-  reply: string
-  add: TeamPlanAdd[]
-  create: TeamPlanCreate[]
-  tasks: TeamPlanTask[]
-  /** Entries the BE dropped while validating, in plain words. */
-  warnings: string[]
-  /** Review rounds (Part 5): keep going, finish with a summary, or ask the user. */
-  verdict?: 'continue' | 'done' | 'ask'
-}
-
-/**
- * Body for POST /api/projects/:id/team-plan. `messageId` names the user's
- * message in this project's chat that Primary answers (its text is the
- * prompt); `prompt` alone asks without one. At least one is required.
- */
-export type TeamPlanRequest = {
-  messageId?: string
-  prompt?: string
-}
-
-/** Response of POST /api/projects/:id/team-plan: a PLAN only; nothing is written (D-P1). */
-export type TeamPlanResult = {
-  plan: TeamPlan
-  /** The user message the plan answers, when the request named one. */
-  replyTo?: string
-}
-
-/**
- * Body for POST /api/projects/:id/team-plan/apply: the plan the user
- * confirmed (validated again, as untrusted input) and what to accept. Each
- * list selects agent ids from plan.add or indexes into plan.create /
- * plan.tasks; an omitted list accepts everything. Tasks for an agent whose
- * addition or creation was not accepted are dropped.
- */
-export type TeamPlanApply = {
-  plan: TeamPlan
-  replyTo?: string
-  add?: string[]
-  create?: number[]
-  tasks?: number[]
-  /** Review rounds (Part 5): the round this apply starts; the BE checks it is the next one. */
-  round?: number
-}
-
-/** Response of the review route (Part 5): Primary's next-round plan for a request; nothing is written. */
-export type ReviewResult = {
-  plan: TeamPlan
-  replyTo: string
-  round: number
-}
-
-/** Response of the apply and task-retry routes. */
-export type ProjectUpdate = {
-  project: Project
-  /** Messages created or changed by the call, oldest first. */
-  messages: ProjectMessage[]
-}
-
-/** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
-export type ProjectInput = {
-  name: string
-  desc?: string
-  teamAgentIds?: string[]
-}
-
 /* ==========================================================================
    Chat-first Part 2: conversations. Mirrors BE shared/types.ts @ 8a9acd3
    (feat/chat-first-p2-be). One DM per agent, auto-created by GET /api/conversations.
    ========================================================================== */
+
+/* Chat-first Phase 1 shared contracts (phase1-tickets.md, BE shared/types.ts).
+   Fields a current BE does not send yet are optional here and the UI copes
+   without them; tighten them once BE-1/BE-5/BE-9 land. */
+
+export type InternetPolicy = 'ask' | 'always' | 'never'
+
+/** A file attached to a chat message (BE-9). Paths are relative, e.g. 'shared/x.png'. */
+export type Attachment = { root: 'agent' | 'group'; path: string; name: string; size: number; mime: string }
+
+/** What a run did (BE-3/BE-7); rendered by FE-7. */
+export type MessageActivity = {
+  skills: { id: string; name: string; source: string }[]
+  steps: { tool: string; summary: string; ok: boolean; path?: string }[]
+  filesChanged: { path: string; change: 'added' | 'modified' }[]
+}
 
 /** One message in a chat-first conversation (independent of run pruning). */
 export type ChatMessage = {
@@ -486,13 +323,16 @@ export type ChatMessage = {
   runId?: string
   /** Assistant message stored for a failed run; `content` is the error text (BE fix/chat-error-flag). */
   error?: true
+  /** 'system' = "You created Harbor team…" lines (BE-5). */
+  kind?: 'message' | 'system'
+  /** Set on assistant messages (required in groups, BE-5). */
+  authorAgentId?: string
+  attachments?: Attachment[]
+  activity?: MessageActivity
 }
 
-/** A 1:1 chat with one agent. One per agent, created lazily. */
-export type Conversation = {
+type ConversationBase = {
   id: string
-  kind: 'dm'
-  agentId: string
   createdAt: string
   /** Time of the newest message (or creation). */
   updatedAt: string
@@ -500,9 +340,27 @@ export type Conversation = {
   lastReadAt: string | null
 }
 
+/** A 1:1 chat with one agent. One per agent, created lazily. */
+export type DmConversation = ConversationBase & { kind: 'dm'; agentId: string }
+
+/** A group chat (BE-5). Primary is always a member and the lead. */
+export type GroupConversation = ConversationBase & {
+  kind: 'group'
+  name: string
+  slug: string
+  /** Includes the lead; 2-8 agents. */
+  memberAgentIds: string[]
+  leadAgentId: string
+  memoryLearn: boolean
+}
+
+export type Conversation = DmConversation | GroupConversation
+
 export type ConversationSummary = Conversation & {
   lastMessage: ChatMessage | null
   unreadCount: number
+  /** Agent currently producing a reply. Optional until BE-5 sends it. */
+  typingAgentId?: string | null
 }
 
 export const CONVERSATION_PAGE_SIZE = 50

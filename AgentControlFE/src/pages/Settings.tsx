@@ -1,5 +1,4 @@
 import { useState, type FormEvent } from 'react'
-import PageShell from '../components/PageShell'
 import Dialog from '../components/Dialog'
 import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { useTheme, type Theme } from '../hooks/useTheme'
@@ -396,14 +395,23 @@ function EndpointsSection() {
   )
 }
 
-export default function Settings() {
+/** "Profile & endpoints" from the account menu (FE-1): today's Settings, as a modal. */
+export default function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} title="Profile & endpoints" subtitle="Your profile, model endpoints, and appearance." size="lg" onClose={onClose}>
+      {open && <SettingsContent />}
+    </Dialog>
+  )
+}
+
+function SettingsContent() {
   const { theme, setTheme } = useTheme()
   const [autoRun, setAutoRun] = useState(true)
   const [notify, setNotify] = useState(true)
   const [telemetry, setTelemetry] = useState(false)
 
   return (
-    <PageShell eyebrow="Workspace" title="Settings" subtitle="Workspace defaults, appearance, and runtime behavior.">
+    <div className="cf-settings">
       <ProfileSection />
       <EndpointsSection />
 
@@ -488,7 +496,7 @@ export default function Settings() {
           <div className="row">
             <div className="row__text">
               <p className="row__label">Reset workspace</p>
-              <p className="row__hint">Removes all agents, projects, and skills. This cannot be undone.</p>
+              <p className="row__hint">Removes all bots, chats, and skills. This cannot be undone.</p>
             </div>
             <div className="row__control">
               <button type="button" className="btn btn--danger">
@@ -498,6 +506,6 @@ export default function Settings() {
           </div>
         </div>
       </section>
-    </PageShell>
+    </div>
   )
 }

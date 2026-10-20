@@ -1,6 +1,6 @@
 import { MAX_AVATAR_BYTES } from './types'
 import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, ReviewResult, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
+import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -220,18 +220,6 @@ export const api = {
     return request<ToolInfo[]>('/api/tools')
   },
 
-  async listNotes(): Promise<NoteSummary[]> {
-    return request<NoteSummary[]>('/api/notes')
-  },
-
-  async getNote(id: string): Promise<Note> {
-    return request<Note>(`/api/notes/${encodeURIComponent(id)}`)
-  },
-
-  async deleteNote(id: string): Promise<void> {
-    return request<void>(`/api/notes/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  },
-
   async createSkill(input: SkillInput): Promise<Skill> {
     return request<Skill>('/api/skills', { method: 'POST', body: JSON.stringify(input) })
   },
@@ -324,139 +312,6 @@ export const api = {
       `/api/endpoints/${encodeURIComponent(id)}/models`,
     )
     return body.models
-  },
-
-  /* -- Projects: a project owns a folder under the BE projects root and a team
-     of library agents. Rename never moves the folder; delete leaves it on disk. */
-
-  async listProjects(): Promise<Project[]> {
-    return request<Project[]>('/api/projects')
-  },
-
-  /** There is no GET /api/projects/:id: read the list and pick the project (404 when it is gone). */
-  async getProject(id: string): Promise<Project> {
-    const project = (await request<Project[]>('/api/projects')).find((p) => p.id === id)
-    if (!project) throw new ApiError(`No project with id "${id}"`, 404)
-    return project
-  },
-
-  async createProject(input: ProjectInput): Promise<Project> {
-    return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) })
-  },
-
-  async updateProject(id: string, patch: Partial<ProjectInput>): Promise<Project> {
-    return request<Project>(`/api/projects/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    })
-  },
-
-  /** 204; the folder stays on disk. */
-  async deleteProject(id: string): Promise<void> {
-    await request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  },
-
-  async listProjectMessages(id: string): Promise<ProjectMessage[]> {
-    return request<ProjectMessage[]>(`/api/projects/${encodeURIComponent(id)}/messages`)
-  },
-
-  /** D-O11: answers with the project and every message the write created
-     (the message plus any direct tasks the user's @tags queued). */
-  async postProjectMessage(id: string, input: ProjectMessageInput): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(id)}/messages`, {
-      method: 'POST',
-      body: JSON.stringify(input),
-    })
-  },
-
-  /* -- Project team plans and tasks (D-P1). POST team-plan only returns
-     Primary's plan; nothing is stored until the user applies it, so Cancel is
-     local. Apply and retry answer with the project and the messages they
-     created or changed. */
-
-  /**
-   * Ask Primary for a plan: `messageId` names the user's message it answers,
-   * or `prompt` asks without one. 400 when the message is not a user message
-   * of this project, 409 without a Team Lead, 413 when the prompt cannot fit,
-   * 502 when Primary's answer is unusable. Writes nothing.
-   */
-  async requestTeamPlan(projectId: string, body: TeamPlanRequest): Promise<TeamPlanResult> {
-    return request<TeamPlanResult>(`/api/projects/${encodeURIComponent(projectId)}/team-plan`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  },
-
-  /**
-   * Commit a plan the user confirmed: the BE validates `plan` again against
-   * the current library and team, creates and adds the accepted agents, then
-   * queues the accepted tasks. 400 for a bad selection, 409 when a new
-   * specialist's name is taken. Pass `round` when applying a review (Part 5).
-   */
-  async applyTeamPlan(projectId: string, body: TeamPlanApply): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/team-plan/apply`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  },
-
-  /**
-   * Ask Primary to review a settled round (Part 5). Writes nothing; returns
-   * the next-round plan (or a closing summary/question). 409 when there is no
-   * Primary, the round is still open, or the request is closed.
-   */
-  async requestReview(projectId: string, body: { promptId: string }): Promise<ReviewResult> {
-    return request<ReviewResult>(`/api/projects/${encodeURIComponent(projectId)}/review`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  },
-
-  /**
-   * One project task run (Part 6 "What it saw"). 404 when the run is missing,
-   * belongs to another project, or is a chat-only run (no projectId).
-   */
-  async getProjectRun(projectId: string, runId: string): Promise<AgentRun> {
-    return request<AgentRun>(
-      `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`,
-    )
-  },
-
-  /** 409 unless the task failed or was cancelled; re-queues it. */
-  async retryProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(
-      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/retry`,
-      { method: 'POST' },
-    )
-  },
-
-  /** Cancel a task and its non-done dependents. 409 when the task is already done. */
-  async cancelProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(
-      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/cancel`,
-      { method: 'POST' },
-    )
-  },
-
-  /** Pause: start nothing new; the in-flight call keeps going. */
-  async pauseProjectWork(projectId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/pause`, {
-      method: 'POST',
-    })
-  },
-
-  /** Resume: clear pause and kick the queue. */
-  async resumeProjectWork(projectId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/resume`, {
-      method: 'POST',
-    })
-  },
-
-  /** Stop: abort the in-flight call and cancel every queued/running task. */
-  async stopProjectWork(projectId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/stop`, {
-      method: 'POST',
-    })
   },
 
   async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {

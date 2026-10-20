@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentRun, AgentStatus, ChatMessage, Conversation, ConversationSummary, DmConversation } from './shared/types.js'
+import type { AgentRun, AgentStatus, Attachment, ChatMessage, Conversation, ConversationSummary, DmConversation, MessageActivity } from './shared/types.js'
 
 /** The slice of the store this module touches (keeps it unit-testable). */
 export interface ConversationState {
@@ -145,6 +145,35 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
   return out
 }
 
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const strs = (o: Record<string, unknown>, keys: string[]) => keys.every((k) => typeof o[k] === 'string')
+
+/** Stored attachments with a relative path and the expected fields; absent when none survive. */
+function withAttachments(raw: unknown): { attachments?: Attachment[] } {
+  if (!Array.isArray(raw)) return {}
+  const list = raw.flatMap((a): Attachment[] =>
+    isObj(a) && (a.root === 'agent' || a.root === 'group') && strs(a, ['path', 'name', 'mime']) &&
+    typeof a.size === 'number' && !(a.path as string).startsWith('/') && !(a.path as string).split('/').includes('..')
+      ? [{ root: a.root, path: a.path as string, name: a.name as string, size: a.size, mime: a.mime as string }]
+      : [])
+  return list.length > 0 ? { attachments: list } : {}
+}
+
+/** Stored run activity (skill chips, steps, files changed), dropping malformed entries. */
+function withActivity(raw: unknown): { activity?: MessageActivity } {
+  if (!isObj(raw)) return {}
+  const arr = (v: unknown) => (Array.isArray(v) ? v.filter(isObj) : [])
+  const skills = arr(raw.skills).filter((x) => strs(x, ['id', 'name', 'source']))
+    .map((x) => ({ id: x.id as string, name: x.name as string, source: x.source as string }))
+  const steps = arr(raw.steps).filter((x) => strs(x, ['tool', 'summary']) && typeof x.ok === 'boolean')
+    .slice(0, 20)
+    .map((x) => ({ tool: x.tool as string, summary: x.summary as string, ok: x.ok as boolean, ...(typeof x.path === 'string' ? { path: x.path } : {}) }))
+  const filesChanged = arr(raw.filesChanged).filter((x) => typeof x.path === 'string' && (x.change === 'added' || x.change === 'modified'))
+    .map((x) => ({ path: x.path as string, change: x.change as 'added' | 'modified' }))
+  if (skills.length + steps.length + filesChanged.length === 0) return {}
+  return { activity: { skills, steps, filesChanged } }
+}
+
 export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>): ChatMessage[] {
   if (!Array.isArray(raw)) return []
   return (raw as Partial<ChatMessage>[]).flatMap((m) =>
@@ -165,6 +194,8 @@ export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>
           ...(m.error === true ? { error: true as const } : {}),
           ...(m.kind === 'system' || m.kind === 'message' ? { kind: m.kind } : {}),
           ...(typeof m.authorAgentId === 'string' ? { authorAgentId: m.authorAgentId } : {}),
+          ...withAttachments(m.attachments),
+          ...withActivity(m.activity),
         }]
       : [],
   )

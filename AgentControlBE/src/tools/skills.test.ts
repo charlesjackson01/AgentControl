@@ -111,6 +111,16 @@ describe('activate_skill', () => {
   })
 })
 
+describe('get_skill', () => {
+  it('reads a skill as a record without marking it activated', async () => {
+    addSkill({ id: 'ecc/demo', sourceId: 'ecc', content: 'Body.' })
+    const read = await call('get_skill', { skill: 'ecc/demo' })
+    expect(read.ok, read.content).toBe(true)
+    expect(read.content).toContain('Body.')
+    expect(ctx.activatedSkills?.size).toBe(0)
+  })
+})
+
 describe('read_skill_file', () => {
   beforeEach(() => {
     writeFileSync(join(vendor, 'ecc', 'demo', 'references', 'a.md'), `# A\n${'ref '.repeat(2000)}`)

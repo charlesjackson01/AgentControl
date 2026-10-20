@@ -233,3 +233,45 @@ describe('stored skillSnapshot modes across BE-7', () => {
     }
   })
 })
+
+describe('stored chat message activity across a reopen', () => {
+  it('keeps activity and attachments, drops malformed entries, and survives a second save', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentcontrol-activity-'))
+    try {
+      const path = join(dir, 'store.json')
+      const first = createStore(path)
+      first.agents.push({ id: 'agt_chips', name: 'Chips', slug: 'chips', isPrimary: false, description: '', instructions: '', modelId: 'm', endpointId: 'ep', skillIds: [], status: 'idle', createdAt: '2026-10-01T00:00:00.000Z' } as unknown as Agent)
+      const t = '2026-10-01T00:00:00.000Z'
+      first.conversations.push({ id: 'conv-chips', kind: 'dm', agentId: 'agt_chips', createdAt: t, updatedAt: t, lastReadAt: null } as never)
+      const activity = {
+        skills: [{ id: 'superpowers/systematic-debugging', name: 'systematic-debugging', source: 'superpowers' }, { id: 7 }],
+        steps: [{ tool: 'read_file', summary: 'Read notes.md', ok: true, path: 'notes.md' }, { tool: 'x' }],
+        filesChanged: [{ path: 'out.md', change: 'added' }, { path: 'bad.md', change: 'deleted' }],
+      }
+      const attachments = [
+        { root: 'agent', path: 'docs/a.md', name: 'a.md', size: 12, mime: 'text/markdown' },
+        { root: 'agent', path: '/etc/passwd', name: 'passwd', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '../x', name: 'x', size: 1, mime: 'text/plain' },
+      ]
+      first.chatMessages.push(
+        { id: 'm1', conversationId: 'conv-chips', role: 'assistant', content: 'done', createdAt: t, activity, attachments } as never,
+        { id: 'm2', conversationId: 'conv-chips', role: 'assistant', content: 'plain', createdAt: t },
+      )
+      expect(first.save()).toBe(true)
+      const expected = {
+        skills: [{ id: 'superpowers/systematic-debugging', name: 'systematic-debugging', source: 'superpowers' }],
+        steps: [{ tool: 'read_file', summary: 'Read notes.md', ok: true, path: 'notes.md' }],
+        filesChanged: [{ path: 'out.md', change: 'added' }],
+      }
+      const second = createStore(path)
+      const m1 = second.chatMessages.find((m) => m.id === 'm1')
+      expect(m1?.activity).toEqual(expected)
+      expect(m1?.attachments).toEqual([attachments[0]])
+      expect(second.chatMessages.find((m) => m.id === 'm2')).not.toHaveProperty('activity')
+      expect(second.save()).toBe(true)
+      expect(createStore(path).chatMessages.find((m) => m.id === 'm1')?.activity).toEqual(expected)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

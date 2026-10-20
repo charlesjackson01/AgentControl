@@ -1769,8 +1769,15 @@ describe('seed data integrity', () => {
 describe('endpoint proxyUrl field', () => {
   it('stores, keeps, validates and clears proxyUrl', async () => {
     const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
-    const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'socks5://x:1' })
-    expect(bad.statusCode).toBe(400)
+    for (const proxyUrl of ['ftp://x:1', 'socks4://x:1', 'socks://x:1', 'not a url']) {
+      const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl })
+      expect(bad.statusCode, proxyUrl).toBe(400)
+    }
+    for (const proxyUrl of ['socks5://localhost:1055', 'socks5h://localhost:1055', 'https://proxy.example:443']) {
+      const ok = await inject('POST', '/api/endpoints', { ...base, proxyUrl })
+      expect(ok.statusCode, proxyUrl).toBe(201)
+      expect((ok.json() as Endpoint).proxyUrl).toBe(proxyUrl)
+    }
     const res = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'http://localhost:1055/' })
     expect(res.statusCode).toBe(201)
     const ep = res.json() as Endpoint

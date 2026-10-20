@@ -189,7 +189,7 @@ export function budgetMeter(b: PromptBudget): BudgetMeter {
   return {
     label: `Prompt ≈${compactTokens(b.estimatedTokens)} of ${compactTokens(usable)} tokens`,
     fraction,
-    tone: b.mode === 'too-large' ? 'bad' : b.mode === 'summary' || fraction > 0.8 ? 'warn' : 'ok',
+    tone: b.mode === 'too-large' ? 'bad' : fraction > 0.8 ? 'warn' : 'ok',
   }
 }
 

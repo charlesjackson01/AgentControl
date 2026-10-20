@@ -1,6 +1,8 @@
 import { MAX_AVATAR_BYTES } from './types'
 import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
+import { normalizeSkillsResponse, skillPath, type SkillsResponse } from './skills-catalog'
 import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
+import type { SkillSummary } from './types'
 import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
@@ -206,8 +208,18 @@ export const api = {
     return request<Agent>(`/api/agents/${encodeURIComponent(id)}`)
   },
 
-  async listSkills(): Promise<Skill[]> {
-    return request<Skill[]>('/api/skills')
+  async listSkills(): Promise<SkillSummary[]> {
+    return normalizeSkillsResponse(await request<unknown>('/api/skills')).skills
+  },
+
+  /** One skill with its `content` (BE-6 list rows leave it out). Ids like `core/x` are encoded. */
+  async getSkill(id: string): Promise<Skill> {
+    return request<Skill>(skillPath(id))
+  },
+
+  /** Today's Skill[] or BE-6's { skills, sources }; `legacy` marks the former. */
+  async listSkillCatalog(): Promise<SkillsResponse> {
+    return normalizeSkillsResponse(await request<unknown>('/api/skills'))
   },
 
   async listTools(): Promise<ToolInfo[]> {

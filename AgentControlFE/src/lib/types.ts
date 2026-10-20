@@ -123,7 +123,26 @@ export type Skill = {
   tools: SkillTool[]
   /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
   source?: string
+  /* BE-6 additions; optional until it lands. */
+  sourceId?: SkillSourceId
+  sourceRepo?: string
+  sourceCommit?: string
+  license?: string
+  compatibility?: string
+  metadata?: Record<string, string>
+  allowedTools?: string[]
+  hasScripts?: boolean
+  files?: string[]
+  defaultOn?: boolean
 }
+
+export type SkillSourceId = 'core' | 'superpowers' | 'anthropics' | 'ecc' | 'custom'
+
+/** BE-6 `GET /api/skills` rows: a Skill without its body; fetch `/api/skills/:id` for `content`. */
+export type SkillSummary = Omit<Skill, 'content'> & { content?: string }
+
+/** BE-6 `GET /api/skills` source row. */
+export type SkillSource = { id: string; repo?: string; commit?: string; license?: string; count: number }
 
 /** Body for POST /api/skills; PATCH /api/skills/:id takes a partial of it. */
 export type SkillInput = {
@@ -186,7 +205,7 @@ export type SkillPromptMode = 'full' | 'summary'
  * skills as summaries (read in full with get_skill), or over budget even then
  * (runs are rejected).
  */
-export type PromptBudgetMode = 'full' | 'summary' | 'too-large'
+export type PromptBudgetMode = 'full' | 'summary' | 'too-large' | 'catalog'
 
 /** Body for POST /api/prompt-budget. Unknown skill ids are ignored. */
 export type PromptBudgetInput = {
@@ -211,6 +230,8 @@ export type PromptBudget = {
   toolNames: string[]
   /** Estimated tokens for the Rules section (header included); 0 when there are no rules. */
   rulesTokens?: number
+  /** BE-7: tokens for the one-line-per-skill catalog ("Skills (call activate_skill…)"). */
+  catalogTokens?: number
 }
 
 /** Body for POST /api/agents/:id/runs. */
@@ -289,6 +310,9 @@ export type AgentInput = {
   hidden?: boolean
   /** Emoji only; images go through PUT /api/agents/:id/avatar. null clears it. */
   avatar?: { kind: 'emoji'; value: string } | null
+  /** BE-1: omitted keeps the stored value. */
+  internetPolicy?: InternetPolicy
+  memoryLearn?: boolean
 }
 
 /* ==========================================================================
@@ -397,3 +421,18 @@ export type UserProfileInput = {
   name?: string
   avatar?: { kind: 'emoji'; value: string } | null
 }
+
+/* BE-4 memory (phase1-tickets.md shared contracts). */
+export type MemoryCategory = 'about-you' | 'preferences' | 'work' | 'other'
+export type MemoryItem = {
+  id: string
+  scope: { kind: 'agent'; agentId: string } | { kind: 'group'; groupId: string }
+  /** 1-500 chars. */
+  text: string
+  category: MemoryCategory
+  source: { kind: 'user' } | { kind: 'chat'; conversationId: string; runId: string; agentId: string }
+  createdAt: string
+  updatedAt: string
+}
+/** GET /api/agents/:id/memory */
+export type MemoryPage = { items: MemoryItem[]; total: number; promptTokens: number }

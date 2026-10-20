@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import Avatar from '../components/Avatar'
 import ChatHeader from '../components/shell/ChatHeader'
-import { ProfilePanel } from '../components/ProfilePanel'
+import BotSettingsPanel from '../components/settings/BotSettingsPanel'
+import { settingsOpen, settingsTab, withSettingsTab, withoutPanel } from '../lib/settings-tabs'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
@@ -76,14 +77,12 @@ export default function ConversationChat() {
   const [attempt, setAttempt] = useState(0)
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
-  const [profileOpen, setProfileOpen] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [shownFor, setShownFor] = useState(conversationId)
   const shell = useShell()
   // Deep links: `?m=<messageId>` (palette → message) and `?panel=settings[&tab=…]` (FE-3 picks the tab).
   const [params, setParams] = useSearchParams()
   const jumpId = params.get('m')
-  const panelParam = params.get('panel')
   const [slashActive, setSlashActive] = useState(0)
   const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
   const [cmdNotice, setCmdNotice] = useState<string | null>(null)
@@ -103,7 +102,6 @@ export default function ConversationChat() {
   }
 
   const endpoints = useAsync(api.listEndpoints, [])
-  const skills = useAsync(api.listSkills, [])
 
   // First page.
   useEffect(() => {
@@ -251,16 +249,11 @@ export default function ConversationChat() {
     )
   }
 
-  const closeProfile = () => {
-    setProfileOpen(false)
-    if (panelParam)
-      setParams((p) => {
-        p.delete('panel')
-        p.delete('tab')
-        p.delete('path')
-        return p
-      }, { replace: true })
-  }
+  // Bot settings (FE-3) live in the URL: ?panel=settings[&tab=…]. Closing drops panel/tab/path.
+  const panelOpen = settingsOpen(params)
+  const panelTab = settingsTab(params)
+  const openSettings = () => setParams((p) => withSettingsTab(p, 'profile'))
+  const closeProfile = () => setParams((p) => withoutPanel(p), { replace: true })
 
   // Slash autocomplete: open while the draft is `/` + letters, until Esc for that draft.
   const slash = slashPrefix(draft)
@@ -303,7 +296,7 @@ export default function ConversationChat() {
 
   return (
     <>
-      <ChatHeader conversation={conversation} agent={agent} sending={sending} onInfo={agent ? () => setProfileOpen(true) : undefined} />
+      <ChatHeader conversation={conversation} agent={agent} sending={sending} onInfo={agent ? openSettings : undefined} />
       <main className="cf-main">
         <section className="cf-thread" aria-label="Conversation" ref={threadRef}>
           <div className="cf-thread__inner">
@@ -466,12 +459,12 @@ export default function ConversationChat() {
         </div>
       </main>
 
-      {agent && (
-        <ProfilePanel
-          open={profileOpen || panelParam === 'settings'}
+      {agent && panelOpen && (
+        <BotSettingsPanel
           agent={agent}
           endpoints={endpoints.data ?? []}
-          skills={skills.data ?? []}
+          tab={panelTab}
+          onTab={(t) => setParams((p) => withSettingsTab(p, t), { replace: true })}
           onClose={closeProfile}
           onSaved={reloadSidebar}
           onDeleted={reloadSidebar}

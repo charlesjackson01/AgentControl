@@ -27,19 +27,21 @@ export type CommandDef = {
 }
 
 const later = (reason: string) => () => reason
+/** Bot settings tabs need an open DM; groups get their own panel in FE-6. */
+const needsDm = (ctx: CommandContext) =>
+  !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? 'Group settings arrive with FE-6.' : null
 
 export const COMMANDS: readonly CommandDef[] = [
   { name: 'new', label: 'New bot', hint: 'Create a bot', unavailable: () => null },
   { name: 'group', label: 'New group', hint: 'Start a group chat', unavailable: later('Group chats arrive with BE-5 / FE-6.') },
   { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: later('Bot folders arrive with BE-2 / FE-4.'), tab: 'files' },
-  { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: later('The Skills tab arrives with FE-3.'), tab: 'skills' },
-  { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: later('Memory arrives with BE-4 / FE-3.'), tab: 'memory' },
+  { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: needsDm, tab: 'skills' },
+  { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: needsDm, tab: 'memory' },
   {
     name: 'settings',
     label: 'Settings',
     hint: "This bot's settings",
-    unavailable: (ctx) =>
-      !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? 'Group settings arrive with FE-6.' : null,
+    unavailable: needsDm,
   },
   { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab arrives with BE-8 / FE-4.'), tab: 'sandbox' },
 ]

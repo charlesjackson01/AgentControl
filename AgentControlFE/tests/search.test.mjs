@@ -105,7 +105,8 @@ describe('palette: sections (02b)', () => {
     assert.deepEqual(paletteOrder(s).map((i) => i.type), ['command', 'command', 'command', 'command'])
     const byName = Object.fromEntries(s.commands.map((i) => [i.command.name, i.reason]))
     assert.equal(byName.settings, null)
-    assert.match(byName.skills, /FE-3/)
+    assert.equal(byName.skills, null, 'FE-3: /skills runs in a DM')
+    assert.match(byName.sandbox, /FE-4/)
   })
   it('a server error for this query is surfaced', () => {
     const s = sections('pier', { status: 'error', query: 'pier', message: 'boom' })

@@ -17,7 +17,7 @@ import {
   rulesTokenCost,
   updateRule,
 } from '../lib/agent-profile'
-import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, Skill } from '../lib/types'
+import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, SkillSummary } from '../lib/types'
 import { describePromptBudget, grantedToolNames } from '../lib/prompt-budget'
 import { matchesSkillQuery } from '../lib/skill-search'
 import { useAsync } from '../hooks/useAsync'
@@ -70,7 +70,8 @@ type FormProps = {
   initial: Agent | null
   isEdit: boolean
   endpoints: Endpoint[]
-  skills: Skill[]
+  /** List rows; BE-6 leaves `content` out, and the form never needs it. */
+  skills: SkillSummary[]
   /** The Team Lead's endpoint — preselected (and labeled) for new agents. */
   defaultEndpointId?: string | null
   /** Bootstrap mode: creates the workspace's first agent with isPrimary: true. */
@@ -83,6 +84,11 @@ type FormProps = {
   onSaved?: (saved: Agent) => void
   /** Cancel handler; when omitted the form navigates to backTo. */
   onCancel?: () => void
+  /**
+   * FE-3 bot settings Profile tab: Memory and Skills have their own tabs, so their
+   * sections are hidden and saving keeps the agent's current `skillIds`.
+   */
+  inPanel?: boolean
 }
 
 export default function AgentProfile({
@@ -96,6 +102,7 @@ export default function AgentProfile({
   noCancel = false,
   onSaved,
   onCancel,
+  inPanel = false,
 }: FormProps) {
   const navigate = useNavigate()
   const baseline = initial
@@ -253,6 +260,8 @@ export default function AgentProfile({
         modelId: effectiveModelId.trim(),
         rules: normalizeRules(rules),
         ...(isBootstrap ? { isPrimary: true } : {}),
+        // The Skills tab saves skills; never send this form's (possibly stale) copy.
+        ...(inPanel && initial ? { skillIds: [...initial.skillIds] } : {}),
       }
       // Emoji rides in the agent body; images go through the avatar routes.
       const plan = avatarSavePlan(avatarDraft, initial?.avatar)
@@ -448,11 +457,13 @@ export default function AgentProfile({
               </div>
             </div>
 
+            {!inPanel && (
             <div className="formsection">
               <h2 className="formsection__title">Memory</h2>
               <p className="formsection__hint">Facts this agent remembers about you and its work.</p>
               <p className="memorystub">Coming in Part 3: memory facts the agent saves, and ones you add or remove here.</p>
             </div>
+            )}
 
             <details
               className="formsection formsection--advanced"
@@ -461,7 +472,7 @@ export default function AgentProfile({
             >
               <summary>
                 <h2 className="formsection__title">Advanced</h2>
-                <p className="formsection__hint">Endpoint, model, skills and parameters.</p>
+                <p className="formsection__hint">{inPanel ? 'Endpoint, model and parameters.' : 'Endpoint, model, skills and parameters.'}</p>
               </summary>
             <div className="formsection">
               <h2 className="formsection__title">Endpoint & model</h2>
@@ -568,6 +579,7 @@ export default function AgentProfile({
               )}
             </div>
 
+            {!inPanel && (
             <div className="formsection">
               <div className="formsection__bar">
                 <div>
@@ -643,6 +655,7 @@ export default function AgentProfile({
                 )}
               </div>
             </div>
+            )}
 
             <div className="formsection">
               <h2 className="formsection__title">Parameters</h2>

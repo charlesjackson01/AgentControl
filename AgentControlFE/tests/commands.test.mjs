@@ -6,18 +6,19 @@ describe('slash commands: catalogue', () => {
   it('lists the seven FE-2 commands in ticket order', () => {
     assert.deepEqual(COMMANDS.map((c) => c.name), ['new', 'group', 'files', 'skills', 'memory', 'settings', 'sandbox'])
   })
-  it('only /new and /settings (in a DM) have a backing today; the rest say which ticket brings them', () => {
+  it('FE-3: /new, /skills, /memory and /settings run in a DM; the rest say which ticket brings them', () => {
     const dm = { conversationId: 'c1', isGroup: false }
     const live = COMMANDS.filter((c) => c.unavailable(dm) === null).map((c) => c.name)
-    assert.deepEqual(live, ['new', 'settings'])
+    assert.deepEqual(live, ['new', 'skills', 'memory', 'settings'])
     assert.match(findCommand('group').unavailable(dm), /BE-5|FE-6/)
     assert.match(findCommand('files').unavailable(dm), /FE-4/)
-    assert.match(findCommand('memory').unavailable(dm), /FE-3/)
     assert.match(findCommand('sandbox').unavailable(dm), /FE-4/)
   })
-  it('/settings needs an open DM', () => {
-    assert.match(findCommand('settings').unavailable({}), /Open a chat/)
-    assert.match(findCommand('settings').unavailable({ conversationId: 'g', isGroup: true }), /FE-6/)
+  it('settings-tab commands need an open DM', () => {
+    for (const name of ['settings', 'skills', 'memory']) {
+      assert.match(findCommand(name).unavailable({}), /Open a chat/)
+      assert.match(findCommand(name).unavailable({ conversationId: 'g', isGroup: true }), /FE-6/)
+    }
   })
 })
 
@@ -59,8 +60,12 @@ describe('slash commands: dispatch', () => {
       files: 'files', skills: 'skills', memory: 'memory', sandbox: 'sandbox',
     })
   })
+  it('/skills and /memory open their settings tab', () => {
+    assert.deepEqual(commandAction('skills', dm), { kind: 'navigate', to: '/c/c%201?panel=settings&tab=skills' })
+    assert.deepEqual(commandAction('memory', dm), { kind: 'navigate', to: '/c/c%201?panel=settings&tab=memory' })
+  })
   it('unbacked commands return their reason instead of faking it', () => {
-    for (const name of ['group', 'files', 'skills', 'memory', 'sandbox']) assert.equal(commandAction(name, dm).kind, 'unavailable')
+    for (const name of ['group', 'files', 'sandbox']) assert.equal(commandAction(name, dm).kind, 'unavailable')
     assert.equal(commandAction('settings', { conversationId: 'g', isGroup: true }).kind, 'unavailable')
   })
   it('deep links', () => {

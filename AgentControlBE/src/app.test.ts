@@ -1791,6 +1791,42 @@ describe('endpoint proxyUrl field', () => {
     const cleared = await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: '' })
     expect((cleared.json() as Endpoint).proxyUrl).toBeUndefined()
   })
+
+  it('rejects a proxy with no host', async () => {
+    const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
+    for (const proxyUrl of ['socks5h://', 'socks5://', 'socks5h:', 'http://']) {
+      const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl })
+      expect(bad.statusCode, proxyUrl).toBe(400)
+    }
+  })
+
+  it('masks the proxy password and keeps the stored one when the mask comes back', async () => {
+    const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
+    const res = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'socks5h://cole:s3cret@localhost:1055' })
+    expect(res.statusCode).toBe(201)
+    const ep = res.json() as Endpoint
+    expect(ep.proxyUrl).toBe('socks5h://cole:***@localhost:1055')
+    const listed = ((await inject('GET', '/api/endpoints')).json() as Endpoint[]).find((e) => e.id === ep.id)!
+    expect(listed.proxyUrl).toBe('socks5h://cole:***@localhost:1055')
+    expect(JSON.stringify((await inject('GET', '/api/endpoints')).json())).not.toContain('s3cret')
+    const stored = () => store.endpoints.find((e) => e.id === ep.id)!.proxyUrl
+    expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
+
+    // Sending the mask back (e.g. a form re-save) keeps the stored password.
+    const resent = await inject('PATCH', `/api/endpoints/${ep.id}`, { name: 'Again', proxyUrl: listed.proxyUrl })
+    expect(resent.statusCode).toBe(200)
+    expect((resent.json() as Endpoint).proxyUrl).toBe('socks5h://cole:***@localhost:1055')
+    expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
+    // Moving host with the mask keeps the password too; a new password replaces it.
+    await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: 'socks5h://cole:***@127.0.0.1:1055' })
+    expect(stored()).toBe('socks5h://cole:s3cret@127.0.0.1:1055')
+    await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: 'socks5h://cole:n3w@127.0.0.1:1055' })
+    expect(stored()).toBe('socks5h://cole:n3w@127.0.0.1:1055')
+    // No stored proxy to take the password from: the mask is refused.
+    const fresh = await inject('POST', '/api/endpoints', { ...base, name: 'Fresh' })
+    const masked = await inject('PATCH', `/api/endpoints/${(fresh.json() as Endpoint).id}`, { proxyUrl: 'socks5h://cole:***@localhost:1055' })
+    expect(masked.statusCode).toBe(400)
+  })
 })
 
 describe('chat-first Part 1: agent profile fields', () => {

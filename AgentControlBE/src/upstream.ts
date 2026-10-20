@@ -33,6 +33,26 @@ export interface ModelsResult {
   error?: string
 }
 
+/**
+ * A network error with its real cause: undici reports most failures as a bare
+ * "fetch failed" and puts ECONNREFUSED, ENOTFOUND, SOCKS errors and the like
+ * in `cause`.
+ */
+export function describeFetchError(err: unknown): string {
+  if (!(err instanceof Error)) return 'Request failed'
+  const parts: string[] = [err.message]
+  let cause = (err as { cause?: unknown }).cause
+  for (let depth = 0; cause && depth < 3; depth++) {
+    const c = cause as { code?: unknown; message?: unknown; cause?: unknown }
+    const code = typeof c.code === 'string' ? c.code : ''
+    const message = typeof c.message === 'string' ? c.message : ''
+    const text = code && message && !message.includes(code) ? `${code}: ${message}` : message || code
+    if (text && !parts.includes(text)) parts.push(text)
+    cause = c.cause
+  }
+  return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join('; ')})` : parts[0]!
+}
+
 /** Proxy schemes an endpoint may use (BE-11). */
 export const PROXY_PROTOCOLS = ['http:', 'https:', 'socks5:', 'socks5h:'] as const
 
@@ -106,7 +126,7 @@ export async function fetchModels(baseUrl: string, apiKey?: string, proxyUrl?: s
       ok: false,
       models: [],
       latencyMs: Date.now() - started,
-      error: err instanceof Error ? err.message : 'Request failed',
+      error: describeFetchError(err),
     }
   } finally {
     clearTimeout(timer)
@@ -292,9 +312,7 @@ export async function chatCompletion(
         ? STOPPED_BY_YOU
         : aborted
           ? `Upstream timed out after ${timeoutMs}ms`
-          : err instanceof Error
-            ? err.message
-            : 'Request failed',
+          : describeFetchError(err),
     }
   }
 }

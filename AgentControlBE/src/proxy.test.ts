@@ -83,6 +83,17 @@ describe('endpoint proxyUrl', () => {
     const chat = await chatCompletion(upstream, undefined, 'm1', [{ role: 'user', content: 'hi' }], 3000,
       undefined, undefined, undefined, undefined, 'http://127.0.0.1:9')
     expect(chat.ok).toBe(false)
+    expect(chat.error).toContain('ECONNREFUSED')
+  })
+
+  it('names the cause when the upstream itself refuses, with no proxy', async () => {
+    // A port that was just free (port 9 is on fetch's blocked list).
+    const probe = createNetServer()
+    await new Promise<void>((r) => probe.listen(0, '127.0.0.1', r))
+    const port = (probe.address() as AddressInfo).port
+    await new Promise((r) => probe.close(r))
+    const chat = await chatCompletion(`http://127.0.0.1:${port}`, undefined, 'm1', [{ role: 'user', content: 'hi' }], 3000)
+    expect(chat.error).toMatch(/^fetch failed \(.*ECONNREFUSED/)
   })
 })
 
@@ -173,6 +184,11 @@ describe('endpoint SOCKS5 proxy (BE-11)', () => {
       const models = await app.inject({ method: 'GET', url: `/api/endpoints/${id}/models` })
       expect(models.statusCode).toBe(200)
       expect(seen.length).toBeGreaterThanOrEqual(2)
+      // A failing endpoint test reports why.
+      await app.inject({ method: 'PATCH', url: `/api/endpoints/${id}`, payload: { proxyUrl: 'socks5h://127.0.0.1:9' } })
+      const failed = (await app.inject({ method: 'POST', url: `/api/endpoints/${id}/test` })).json() as { ok: boolean; error?: string }
+      expect(failed.ok).toBe(false)
+      expect(failed.error).toContain('ECONNREFUSED')
     } finally {
       await app.close()
       rmSync(dir, { recursive: true, force: true })
@@ -185,5 +201,9 @@ describe('endpoint SOCKS5 proxy (BE-11)', () => {
     const chat = await chatCompletion(upstream, undefined, 'm1', [{ role: 'user', content: 'hi' }], 3000,
       undefined, undefined, undefined, undefined, 'socks5h://127.0.0.1:9')
     expect(chat.ok).toBe(false)
+    // The real cause, not a bare "fetch failed".
+    expect(chat.error).toContain('ECONNREFUSED')
+    const models = await fetchModels(upstream, undefined, 'socks5h://127.0.0.1:9')
+    expect(models.error).toContain('ECONNREFUSED')
   })
 })

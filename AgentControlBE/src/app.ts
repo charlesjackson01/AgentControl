@@ -106,6 +106,31 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
     if (!(PROXY_PROTOCOLS as readonly string[]).includes(proxy.protocol)) {
       fail(400, 'Proxy must start with http://, https://, socks5:// or socks5h://.')
     }
+    if (!proxy.hostname) fail(400, 'Proxy needs a host, e.g. socks5h://localhost:1055.')
+  }
+}
+
+/** Shown in place of a proxy password; sending it back keeps the stored one. */
+export const PROXY_PASSWORD_MASK = '***'
+
+/** The proxy URL with its password replaced by the mask (BE-11). */
+export function maskProxyUrl(proxyUrl: string): string {
+  try {
+    const url = new URL(proxyUrl)
+    if (!url.password) return proxyUrl
+    url.password = PROXY_PASSWORD_MASK
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return proxyUrl
+  }
+}
+
+/** An endpoint as the API returns it: key flag set, proxy password masked. */
+function publicEndpoint(store: WorkspaceStore, endpoint: Endpoint): Endpoint {
+  return {
+    ...endpoint,
+    apiKeySet: Boolean(store.endpointKeys[endpoint.id]),
+    ...(endpoint.proxyUrl ? { proxyUrl: maskProxyUrl(endpoint.proxyUrl) } : {}),
   }
 }
 
@@ -113,7 +138,19 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
 function resolveProxy(raw: unknown, current: string | undefined): string | undefined {
   if (raw === undefined) return current
   if (raw === null || raw === '') return undefined
-  return String(raw).trim().replace(/\/+$/, '')
+  const next = String(raw).trim().replace(/\/+$/, '')
+  // The client sent the masked URL back: keep the stored password.
+  try {
+    const url = new URL(next)
+    if (url.password === PROXY_PASSWORD_MASK) {
+      if (!current) fail(400, 'Send the proxy password itself, not the mask.')
+      url.password = new URL(current).password
+      return url.toString().replace(/\/+$/, '')
+    }
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode) throw err
+  }
+  return next
 }
 
 function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
@@ -802,9 +839,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return null
   })
 
-  app.get('/api/endpoints', async () =>
-    store.endpoints.map((e) => ({ ...e, apiKeySet: Boolean(store.endpointKeys[e.id]) })),
-  )
+  app.get('/api/endpoints', async () => store.endpoints.map((e) => publicEndpoint(store, e)))
 
   app.post('/api/endpoints', async (request, reply) => {
     const raw = (request.body ?? {}) as Partial<EndpointInput>
@@ -845,7 +880,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     store.endpointModels[id] = [endpoint.defaultModel]
     store.save()
     void reply.status(201)
-    return endpoint
+    return publicEndpoint(store, endpoint)
   })
 
   app.patch('/api/endpoints/:id', async (request) => {
@@ -895,7 +930,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const models = store.endpointModels[id] ?? []
     if (!models.includes(next.defaultModel)) store.endpointModels[id] = [...models, next.defaultModel]
     store.save()
-    return next
+    return publicEndpoint(store, next)
   })
 
   app.delete('/api/endpoints/:id', async (request) => {
@@ -958,7 +993,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     endpoint.lastCheckedAt = new Date().toISOString()
     if (live.ok) store.endpointModels[id] = live.models
     store.save()
-    return { ok: live.ok, models: live.ok ? live.models : [], latencyMs: live.latencyMs }
+    return { ok: live.ok, models: live.ok ? live.models : [], latencyMs: live.latencyMs, ...(live.error ? { error: live.error } : {}) }
   })
 
   app.get('/api/skills/:id', async (request) => {

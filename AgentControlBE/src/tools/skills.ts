@@ -88,7 +88,7 @@ function pageHeader(p: Page, tool: string, args: Record<string, unknown>): strin
 }
 
 /** Where a vendored skill's folder is on disk, or null (core and custom skills have no folder). */
-function skillFolder(skill: Skill): string | null {
+export function skillFolder(skill: Skill): string | null {
   const slash = skill.id.indexOf('/')
   if (!skill.sourceId || skill.sourceId === 'core' || skill.sourceId === 'custom' || slash < 0) return null
   const dir = vendoredLibrary().dir

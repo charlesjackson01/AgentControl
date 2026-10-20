@@ -252,6 +252,11 @@ describe('stored chat message activity across a reopen', () => {
         { root: 'agent', path: 'docs/a.md', name: 'a.md', size: 12, mime: 'text/markdown' },
         { root: 'agent', path: '/etc/passwd', name: 'passwd', size: 1, mime: 'text/plain' },
         { root: 'agent', path: '../x', name: 'x', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '..\\x', name: 'x', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: 'docs\\a.md', name: 'a.md', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '', name: 'empty', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '  ', name: 'blank', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: 'C:/x', name: 'x', size: 1, mime: 'text/plain' },
       ]
       first.chatMessages.push(
         { id: 'm1', conversationId: 'conv-chips', role: 'assistant', content: 'done', createdAt: t, activity, attachments } as never,

@@ -148,12 +148,18 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const strs = (o: Record<string, unknown>, keys: string[]) => keys.every((k) => typeof o[k] === 'string')
 
+/** Relative, forward-slash, non-empty, no '.', '..' or empty segments, no NUL or backslash. */
+function safeAttachmentPath(p: string): boolean {
+  return p.trim() !== '' && !p.startsWith('/') && !p.includes('\\') && !p.includes('\0') && !/^[A-Za-z]:/.test(p) &&
+    !p.split('/').some((s) => s === '' || s === '.' || s === '..')
+}
+
 /** Stored attachments with a relative path and the expected fields; absent when none survive. */
 function withAttachments(raw: unknown): { attachments?: Attachment[] } {
   if (!Array.isArray(raw)) return {}
   const list = raw.flatMap((a): Attachment[] =>
     isObj(a) && (a.root === 'agent' || a.root === 'group') && strs(a, ['path', 'name', 'mime']) &&
-    typeof a.size === 'number' && !(a.path as string).startsWith('/') && !(a.path as string).split('/').includes('..')
+    typeof a.size === 'number' && safeAttachmentPath(a.path as string)
       ? [{ root: a.root, path: a.path as string, name: a.name as string, size: a.size, mime: a.mime as string }]
       : [])
   return list.length > 0 ? { attachments: list } : {}

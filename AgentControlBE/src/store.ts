@@ -54,6 +54,8 @@ export interface WorkspaceStore {
   memories: MemoryItem[]
   /** Folder holding uploaded agent avatars (data/avatars beside the store). */
   avatarsDir: string
+  /** The data folder holding store.json (bots/, archive/ and avatars/ live here). */
+  dataDir: string
   /** Migration bookkeeping. Persisted, never served by any route. */
   meta: StoreMeta
   /** Persist to disk; returns false (and logs) when the write fails. */
@@ -705,6 +707,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
   const store: WorkspaceStore = {
     ...data,
     avatarsDir: join(dir, 'avatars'),
+    dataDir: dir,
     endpointKeys,
     save() {
       const temporary = `${path}.${randomUUID()}.tmp`

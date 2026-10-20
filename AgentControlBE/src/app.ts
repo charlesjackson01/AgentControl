@@ -9,6 +9,7 @@ import { fetchModels, PROXY_PROTOCOLS } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
+import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent } from './files.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize } from './conversations.js'
 import {
@@ -695,6 +696,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     )
     store.agents = [agent, ...store.agents]
     store.save()
+    try {
+      ensureBotFolder(store, agent)
+    } catch (err) {
+      request.log.warn(`[files] could not create the folder for ${agent.slug}: ${err instanceof Error ? err.message : String(err)}`)
+    }
     void reply.status(201)
     return agent
   })
@@ -860,11 +866,93 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (agent.isPrimary) {
       fail(409, 'Move the Team Lead role to another agent before deleting it.')
     }
+    // BE-2: the folder is archived (never removed) before the bot goes away.
+    archiveBotFolder(store, agent)
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
     removeAvatarFile(store, agent)
     clearAgentConversations(store, id, true)
     store.save()
+    void reply.status(204)
+    return null
+  })
+
+  // --- BE-2: per-bot folders + Files API -------------------------------------
+  const fileAgent = (id: string): Agent => {
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    return agent
+  }
+
+  app.get('/api/agents/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    return listFolder(store, fileAgent(id), path)
+  })
+
+  app.get('/api/agents/:id/files/shared', async (request) => {
+    const { id } = request.params as { id: string }
+    return listShared(store, fileAgent(id))
+  })
+
+  app.get('/api/agents/:id/files/content', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path, download } = (request.query ?? {}) as { path?: unknown; download?: unknown }
+    const file = await readContent(store, fileAgent(id), path)
+    const ascii = file.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+    void reply
+      .header('Content-Type', file.mime.startsWith('text/') ? `${file.mime}; charset=utf-8` : file.mime)
+      .header('Content-Length', String(file.size))
+      .header('X-Content-Type-Options', 'nosniff')
+      // Served files never run in the app's origin (HTML, SVG).
+      .header('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'")
+      .header('Cache-Control', 'no-store')
+    if (download === '1' || download === 'true') {
+      void reply.header('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    } else {
+      void reply.header('Content-Disposition', `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    }
+    return reply.send(file.body)
+  })
+
+  // Raw uploads (any content type, up to 25 MiB) are parsed only in this scope.
+  app.register(async (scope) => {
+    scope.removeAllContentTypeParsers()
+    scope.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BYTES }, (_req, body, done) => done(null, body))
+    scope.put('/api/agents/:id/files/content', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const { path, overwrite } = (request.query ?? {}) as { path?: unknown; overwrite?: unknown }
+      const agent = fileAgent(id)
+      if (path === undefined || path === '') fail(400, '"path" is required.')
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
+      const entry = writeContent(store, agent, path, body, overwrite === '1' || overwrite === 'true')
+      void reply.status(201)
+      return entry
+    })
+  })
+
+  app.post('/api/agents/:id/files/folders', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { path?: unknown }
+    const agent = fileAgent(id)
+    if (typeof body.path !== 'string' || body.path.trim() === '') fail(400, '"path" is required.')
+    const entry = makeFolder(store, agent, body.path)
+    void reply.status(201)
+    return entry
+  })
+
+  app.patch('/api/agents/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { from?: unknown; to?: unknown }
+    return movePath(store, fileAgent(id), body.from, body.to)
+  })
+
+  app.delete('/api/agents/:id/files', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    const agent = fileAgent(id)
+    if (path === undefined || path === '') fail(400, '"path" is required.')
+    trashPath(store, agent, path)
     void reply.status(204)
     return null
   })
@@ -1135,6 +1223,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     void reply.status(204)
     return null
   })
+
+  // BE-2: every existing bot gets its folder on boot.
+  ensureAllBotFolders(store, (msg) => app.log.warn(msg))
 
   return app
 }

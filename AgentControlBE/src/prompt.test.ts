@@ -48,6 +48,10 @@ function skill(id: string, contentChars: number, extra: Partial<Skill> = {}): Sk
     tag: '',
     content: `${id}:`.padEnd(contentChars, 'x'),
     tools: [],
+    sourceId: 'custom',
+    hasScripts: false,
+    files: [],
+    defaultOn: false,
     ...extra,
   }
 }
@@ -68,12 +72,12 @@ describe('planPrompt full mode', () => {
   const toolA = skill('tool-a', 900, { tools: stored('list_agents', 'calculate') })
   const toolB = skill('tool-b', 700, { tools: stored('calculate', 'read_note', 'not_a_registry_tool') })
   const declaresGetSkill = skill('reader', 400, { tools: stored('get_skill', 'list_skills') })
-  const leadSkills = ['deep-research', 'summarization', 'multi-agent-orchestration'].map(seed)
+  const leadSkills = ['core/deep-research', 'core/summarization', 'core/multi-agent-orchestration'].map(seed)
 
   const cases: [string, string, Skill[]][] = [
     ['no skills', 'Only instructions.', []],
     ['no skills, no instructions', '', []],
-    ['one seed skill', 'Be brief.', [seed('summarization')]],
+    ['one seed skill', 'Be brief.', [seed('core/summarization')]],
     ['the Team Lead starter skills', 'You are the Team Lead.', leadSkills],
     ['every seed skill', 'All of them.', seedSkills],
     ['overlapping and unknown tool names', 'Tools.', [toolA, toolB]],
@@ -210,7 +214,7 @@ describe('planPrompt summary mode', () => {
   })
 
   it('fits the fresh-install Team Lead on the seeded 8192-token endpoint', () => {
-    const leadSkills = ['deep-research', 'summarization', 'multi-agent-orchestration'].map(seed)
+    const leadSkills = ['core/deep-research', 'core/summarization', 'core/multi-agent-orchestration'].map(seed)
     const instructions =
       'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
     // Premise: the full prompt alone overflows 8192 with the reply reserve (the old 413).

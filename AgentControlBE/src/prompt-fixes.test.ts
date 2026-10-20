@@ -23,7 +23,7 @@ let store: WorkspaceStore
 
 const LEAD_INSTRUCTIONS =
   'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
-const LEAD_SKILL_IDS = ['deep-research', 'summarization', 'multi-agent-orchestration']
+const LEAD_SKILL_IDS = ['core/deep-research', 'core/summarization', 'core/multi-agent-orchestration']
 
 async function inject(method: 'GET' | 'POST', url: string, payload?: unknown) {
   return app.inject({ method, url, payload: payload as object | undefined, headers: { 'content-type': 'application/json' } })
@@ -78,7 +78,7 @@ async function createEndpoint(contextWindow: number): Promise<string> {
 }
 
 function addSkill(id: string, contentChars: number, extra: Partial<Skill> = {}): Skill {
-  const skill: Skill = { id, name: id, description: `The ${id} procedure.`, tag: '', content: `# ${id}\n${'Step. '.repeat(contentChars)}`.slice(0, contentChars), tools: [], ...extra }
+  const skill: Skill = { id, name: id, description: `The ${id} procedure.`, tag: '', content: `# ${id}\n${'Step. '.repeat(contentChars)}`.slice(0, contentChars), tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false, ...extra }
   store.skills.push(skill)
   return skill
 }
@@ -111,7 +111,7 @@ afterEach(async () => {
 describe('planPrompt keeps prompts that fit', () => {
   it('sends a small skill in full when the prompt fits the hard limit, even without headroom', () => {
     // Review repro: long instructions + one small skill. Master accepted this run.
-    const skill: Skill = { id: 'house-style', name: 'house-style', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(599), tools: [] }
+    const skill: Skill = { id: 'house-style', name: 'house-style', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(599), tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false }
     const instructions = 'i'.repeat(4076 * 4 - 700)
     const plan = planPrompt({ instructions, skills: [skill], input: '', contextWindow: 8192 })
     expect(plan.estimatedTokens + RESPONSE_RESERVE).toBeLessThanOrEqual(8192)
@@ -122,7 +122,7 @@ describe('planPrompt keeps prompts that fit', () => {
 
   it('never sends a summary plan that is not smaller than the full one', () => {
     // The summary saves less than the get_skill schema costs.
-    const skill: Skill = { id: 'tiny', name: 'tiny', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(500), tools: [] }
+    const skill: Skill = { id: 'tiny', name: 'tiny', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(500), tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false }
     expect(summaryBlock(skill).length).toBeLessThan(`## tiny\n${skill.content}`.length)
     const instructions = 'i'.repeat(20_000)
     const plan = planPrompt({ instructions, skills: [skill], input: '', contextWindow: 8192 })
@@ -133,7 +133,7 @@ describe('planPrompt keeps prompts that fit', () => {
   })
 
   it('keeps a single seed skill with its tools in full on the seeded 8192 endpoint', () => {
-    const debugging = store.skills.find((s) => s.id === 'debugging') as Skill
+    const debugging = store.skills.find((s) => s.id === 'core/debugging') as Skill
     const plan = planPrompt({ instructions: 'You help debug failing services. Be concrete.', skills: [debugging], input: 'Why does it crash?', contextWindow: 8192 })
     expect(plan.mode).toBe('full')
     expect(plan.system).toContain(debugging.content)
@@ -149,7 +149,7 @@ describe('paged reads fit the room the run has left', () => {
   const call = (name: string, args: object, ctx: ToolContext) => executeToolCall({ id: 'c', name, arguments: JSON.stringify(args) }, ctx)
 
   it('get_skill shrinks its page to resultMaxChars and still chains nextOffset exactly', async () => {
-    const skill = store.skills.find((s) => s.id === 'deep-research') as Skill
+    const skill = store.skills.find((s) => s.id === 'core/deep-research') as Skill
     let offset: number | null = 0
     let text = ''
     for (let i = 0; offset !== null && i < 50; i++) {
@@ -173,11 +173,11 @@ describe('paged reads fit the room the run has left', () => {
   })
 
   it('says the run is out of room instead of returning a sliver', async () => {
-    const out = await call('get_skill', { skill: 'deep-research' }, ctxFor(400))
+    const out = await call('get_skill', { skill: 'core/deep-research' }, ctxFor(400))
     expect(out.ok).toBe(false)
     expect(out.content).toContain('Not enough room left')
     // Unset means the normal cap.
-    const full = await call('get_skill', { skill: 'deep-research' }, ctxFor())
+    const full = await call('get_skill', { skill: 'core/deep-research' }, ctxFor())
     expect(full.ok).toBe(true)
     expect(full.content.length).toBeLessThanOrEqual(RESULT_MAX_CHARS)
   })
@@ -185,9 +185,9 @@ describe('paged reads fit the room the run has left', () => {
   it('a fresh Team Lead reads two summarized skills and pages on without any JSON cut mid-way', async () => {
     const agent = await createAgent({ name: 'Team Lead', instructions: LEAD_INSTRUCTIONS, skillIds: LEAD_SKILL_IDS, isPrimary: true })
     const mock = mockChatSequence([
-      toolCalls(['get_skill', { skill: 'deep-research' }]),
-      toolCalls(['get_skill', { skill: 'summarization' }]),
-      toolCalls(['get_skill', { skill: 'deep-research', offset: 2000 }]),
+      toolCalls(['get_skill', { skill: 'core/deep-research' }]),
+      toolCalls(['get_skill', { skill: 'core/summarization' }]),
+      toolCalls(['get_skill', { skill: 'core/deep-research', offset: 2000 }]),
       answer('Plan ready.'),
     ])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Plan the research.' })
@@ -212,7 +212,7 @@ describe('a planner-offered get_skill reads only the agent\'s own skills', () =>
     addSkill('big-two', 8000)
     const agent = await createAgent({ skillIds: ['big-one', 'big-two'] }, endpointId)
     const mock = mockChatSequence([
-      toolCalls(['get_skill', { skill: 'code-review' }], ['get_skill', { skill: 'big-two' }]),
+      toolCalls(['get_skill', { skill: 'core/code-review' }], ['get_skill', { skill: 'big-two' }]),
       answer('ok'),
     ])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
@@ -221,7 +221,7 @@ describe('a planner-offered get_skill reads only the agent\'s own skills', () =>
     expect(run.skillSnapshot?.some((s) => s.mode === 'summary')).toBe(true)
     const [other, own] = expectNoCutJson(lastRequest(mock))
     expect(run.toolCalls?.map((c) => c.ok)).toEqual([false, true])
-    expect(other?.content).toContain('No skill "code-review"')
+    expect(other?.content).toContain('No skill "core/code-review"')
     expect(other?.content).not.toContain('Code Review')
     expect(JSON.parse(own?.content ?? '{}')).toMatchObject({ id: 'big-two' })
   })
@@ -233,9 +233,9 @@ describe('a planner-offered get_skill reads only the agent\'s own skills', () =>
     addSkill('big-one', 9000, { tools: [decl] })
     addSkill('big-two', 8000)
     const agent = await createAgent({ skillIds: ['big-one', 'big-two'] }, endpointId)
-    const mock = mockChatSequence([toolCalls(['get_skill', { skill: 'code-review' }]), answer('ok')])
+    const mock = mockChatSequence([toolCalls(['get_skill', { skill: 'core/code-review' }]), answer('ok')])
     const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })).json() as AgentRun
     expect(run.toolCalls?.[0]?.ok).toBe(true)
-    expect(JSON.parse(expectNoCutJson(lastRequest(mock))[0]?.content ?? '{}')).toMatchObject({ id: 'code-review' })
+    expect(JSON.parse(expectNoCutJson(lastRequest(mock))[0]?.content ?? '{}')).toMatchObject({ id: 'core/code-review' })
   })
 })

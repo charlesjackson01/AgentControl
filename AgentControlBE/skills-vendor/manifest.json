@@ -1,0 +1,13 @@
+{
+  "sources": [
+    { "id": "superpowers", "repo": "obra/superpowers", "commit": "bb92a77741419a4ab5f06e711a283343f1ada0c3", "dir": "skills", "license": "MIT", "include": "*" },
+    { "id": "anthropics", "repo": "anthropics/skills", "commit": "dbd4588f9e1033efb41dad4bef2f7947c8993d44", "dir": "skills", "license": "Apache-2.0 (per skill)", "exclude": ["docx", "pdf", "pptx", "xlsx"] },
+    { "id": "ecc", "repo": "affaan-m/ECC", "commit": "35f57c80e6b7573755fd63136338ca0dc7a0bdb7", "dir": "skills", "license": "MIT", "include": "*" }
+  ],
+  "defaults": {
+    "superpowers": "*",
+    "anthropics": ["doc-coauthoring", "frontend-design", "internal-comms", "brand-guidelines", "theme-factory", "canvas-design", "discernment-nudge", "skill-creator"],
+    "ecc": ["search-first", "coding-standards", "api-design", "error-handling", "git-workflow", "security-review", "documentation-lookup", "codebase-onboarding", "architecture-decision-records", "verification-loop", "article-writing", "market-research"],
+    "core": ["summarization", "deep-research", "technical-writing", "csv-analysis", "meeting-notes", "multi-agent-orchestration"]
+  }
+}

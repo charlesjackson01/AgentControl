@@ -81,6 +81,45 @@ export interface Skill {
   tools: SkillTool[]
   /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
   source?: string
+  /** Where the skill comes from. Ids of core and vendored skills are `<sourceId>/<name>`. */
+  sourceId: SkillSourceId
+  /** Vendored skills: the upstream repo and pinned commit. */
+  sourceRepo?: string
+  sourceCommit?: string
+  license?: string
+  compatibility?: string
+  metadata?: Record<string, string>
+  /** The spec's `allowed-tools` (informational; never grants a tool). */
+  allowedTools?: string[]
+  /** True when the skill folder ships scripts. */
+  hasScripts: boolean
+  /** Paths relative to the skill folder, SKILL.md included; [] for store-only skills. */
+  files: string[]
+  /** On by default for new bots (BE-7 uses it). */
+  defaultOn: boolean
+}
+
+export type SkillSourceId = 'core' | 'superpowers' | 'anthropics' | 'ecc' | 'custom'
+export const SKILL_SOURCE_IDS: readonly SkillSourceId[] = ['core', 'superpowers', 'anthropics', 'ecc', 'custom']
+/** Sources whose skills are vendored on disk and read-only. */
+export const VENDORED_SKILL_SOURCES: readonly SkillSourceId[] = ['superpowers', 'anthropics', 'ecc']
+
+/** GET /api/skills list item: a skill without its body. */
+export type SkillSummary = Omit<Skill, 'content'>
+
+/** GET /api/skills `sources` entry. */
+export interface SkillSourceInfo {
+  id: SkillSourceId
+  repo: string | null
+  commit: string | null
+  license: string | null
+  count: number
+}
+
+/** GET /api/skills response. */
+export interface SkillListResponse {
+  skills: SkillSummary[]
+  sources: SkillSourceInfo[]
 }
 
 export interface SkillInput {

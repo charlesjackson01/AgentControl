@@ -143,7 +143,7 @@ async function makeRunner() {
     instructions: 'Be brief.',
     modelId: 'test-model',
     endpointId: endpoint.id,
-    skillIds: ['summarization'],
+    skillIds: ['core/summarization'],
   })
   expect(ag.statusCode).toBe(201)
   return { endpoint, agent: ag.json() as Agent }
@@ -193,7 +193,7 @@ describe('agents CRUD', () => {
       instructions: 'i',
       modelId: 'crud-model',
       endpointId: endpoint.id,
-      skillIds: ['summarization'],
+      skillIds: ['core/summarization'],
     })
     expect(create.statusCode).toBe(201)
     const agent = create.json() as Agent
@@ -214,7 +214,7 @@ describe('agents CRUD', () => {
       instructions: 'i2',
       modelId: 'crud-model',
       endpointId: endpoint.id,
-      skillIds: ['summarization', 'debugging'],
+      skillIds: ['core/summarization', 'core/debugging'],
     })
     expect(upd.statusCode).toBe(200)
     expect((upd.json() as Agent).name).toBe('Crud Agent v2')
@@ -299,7 +299,7 @@ describe('POST /api/agents/:id/runs', () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner() // attached: the real "summarization" seed
     // The seed now declares tools; with them cleared it is a content-only skill.
-    store.skills.find((s) => s.id === 'summarization')!.tools = []
+    store.skills.find((s) => s.id === 'core/summarization')!.tools = []
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
     expect(res.statusCode).toBe(200)
 
@@ -320,12 +320,12 @@ describe('run audit fields', () => {
     expect(res.statusCode).toBe(200)
 
     const run = res.json() as AgentRun
-    const skill = store.skills.find((s) => s.id === 'summarization') as Skill
+    const skill = store.skills.find((s) => s.id === 'core/summarization') as Skill
     expect(run.systemPrompt).toContain('Be brief.')
     expect(run.systemPrompt).toContain('## summarization')
     expect(run.systemPrompt).toContain(skill.content.slice(0, 120))
     expect(run.skillSnapshot).toEqual([
-      { id: 'summarization', name: 'summarization', contentChars: skill.content.length, mode: 'full' },
+      { id: 'core/summarization', name: 'summarization', contentChars: skill.content.length, mode: 'full' },
     ])
 
     // Byte-identical to what went upstream.
@@ -583,7 +583,7 @@ describe('tool execution loop', () => {
     const toolMsg = req.messages?.find((m) => m.role === 'tool')
     expect(toolMsg?.tool_call_id).toBe('call_1')
     const listed = JSON.parse(toolMsg?.content ?? '[]') as { id: string }[]
-    expect(listed.some((s) => s.id === 'summarization')).toBe(true)
+    expect(listed.some((s) => s.id === 'core/summarization')).toBe(true)
 
     expect(run.toolCalls).toEqual([
       { name: 'list_skills', arguments: '{}', resultChars: expect.any(Number), ok: true },
@@ -633,7 +633,7 @@ describe('tool execution loop', () => {
   it('omits the tools key when no attached skill declares tools', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner()
-    store.skills.find((s) => s.id === 'summarization')!.tools = [] // the attached seed, tools cleared
+    store.skills.find((s) => s.id === 'core/summarization')!.tools = [] // the attached seed, tools cleared
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
     expect(lastRequest(mock)).not.toHaveProperty('tools')
   })
@@ -834,7 +834,7 @@ describe('fresh install', () => {
     expect(agents.statusCode).toBe(200)
     expect(agents.json()).toEqual([])
     expect((await inject('GET', '/api/endpoints')).json()).toHaveLength(2)
-    expect(((await inject('GET', '/api/skills')).json() as unknown[]).length).toBeGreaterThan(0)
+    expect(((await inject('GET', '/api/skills')).json() as { skills: unknown[] }).skills.length).toBeGreaterThan(0)
   })
 
   it('seeds the placeholder default endpoint first (OpenAI-compatible)', async () => {
@@ -852,8 +852,10 @@ describe('fresh install', () => {
 
 describe('skill seeds', () => {
   it('preserves the six vendored skills alongside the twelve authored skills', async () => {
-    const skills = (await inject('GET', '/api/skills')).json() as Skill[]
-    expect(skills).toHaveLength(18)
+    const listed = (await inject('GET', '/api/skills')).json() as { skills: Skill[] }
+    expect(listed.skills).toHaveLength(18)
+    const skills = await Promise.all(listed.skills.map(async (s) =>
+      (await inject('GET', `/api/skills/${encodeURIComponent(s.id)}`)).json() as Skill))
     const vendored = skills.filter((s) => s.source === 'seb1n/awesome-ai-agent-skills')
     const vendoredTools: Record<string, string[]> = {
       'code-review': ['diff_text', 'process_lines', 'extract_entities'],
@@ -864,19 +866,19 @@ describe('skill seeds', () => {
       'technical-writing': ['text_stats', 'diff_text', 'read_note', 'save_note'],
     }
     expect(vendored.map((s) => s.id)).toEqual([
-      'code-review',
-      'debugging',
-      'deep-research',
-      'multi-agent-orchestration',
-      'summarization',
-      'technical-writing',
+      'core/code-review',
+      'core/debugging',
+      'core/deep-research',
+      'core/multi-agent-orchestration',
+      'core/summarization',
+      'core/technical-writing',
     ])
     for (const s of vendored) {
       expect(s.content.length).toBeGreaterThan(100)
       expect(s.content).not.toMatch(/^---/)
       expect(s.source).toBe('seb1n/awesome-ai-agent-skills')
       // Bodies stay vendored; each declares its tools in frontmatter only.
-      expect(s.tools.map((t) => t.name)).toEqual(vendoredTools[s.id])
+      expect(s.tools.map((t) => t.name)).toEqual(vendoredTools[s.name])
     }
   })
 })
@@ -901,7 +903,7 @@ describe('skills CRUD', () => {
     expect((got.json() as Skill).name).toBe('Frobnicate')
 
     const list = await inject('GET', '/api/skills')
-    expect((list.json() as Skill[]).some((s) => s.id === skill.id)).toBe(true)
+    expect((list.json() as { skills: Skill[] }).skills.some((s) => s.id === skill.id)).toBe(true)
 
     const patch = await inject('PATCH', `/api/skills/${skill.id}`, { tag: 'Advanced', content: 'v2 content' })
     expect(patch.statusCode).toBe(200)
@@ -974,7 +976,7 @@ describe('DELETE /api/skills/:id detaches from agents', () => {
       instructions: '',
       modelId: 'llama-3-8b',
       endpointId: 'ep_local_llama',
-      skillIds: [skillId, 'debugging'],
+      skillIds: [skillId, 'core/debugging'],
     })
     const leadId = (lead.json() as Agent).id
 
@@ -982,8 +984,8 @@ describe('DELETE /api/skills/:id detaches from agents', () => {
     expect(res.statusCode).toBe(204)
 
     const got = await inject('GET', `/api/agents/${leadId}`)
-    expect((got.json() as Agent).skillIds).toEqual(['debugging'])
-    expect(store.agents.find((a) => a.id === leadId)?.skillIds).toEqual(['debugging'])
+    expect((got.json() as Agent).skillIds).toEqual(['core/debugging'])
+    expect(store.agents.find((a) => a.id === leadId)?.skillIds).toEqual(['core/debugging'])
   })
 })
 
@@ -1191,12 +1193,12 @@ describe('seed skill merge', () => {
 
     const merged = createStore(oldPath)
     expect(merged.skills.some((s) => s.id === 'web-research')).toBe(true)
-    expect(merged.skills.some((s) => s.id === 'summarization')).toBe(true)
-    expect(merged.skills.some((s) => s.id === 'multi-agent-orchestration')).toBe(true)
+    expect(merged.skills.some((s) => s.id === 'core/summarization')).toBe(true)
+    expect(merged.skills.some((s) => s.id === 'core/multi-agent-orchestration')).toBe(true)
 
     // The merge is persisted, so a reload sees the upgraded catalog too.
     const reloaded = JSON.parse(readFileSync(oldPath, 'utf8')) as { skills: { id: string }[] }
-    expect(reloaded.skills.some((s) => s.id === 'deep-research')).toBe(true)
+    expect(reloaded.skills.some((s) => s.id === 'core/deep-research')).toBe(true)
     expect(reloaded.skills.some((s) => s.id === 'web-research')).toBe(true)
 
     rmSync(oldDir, { recursive: true, force: true })
@@ -1229,7 +1231,9 @@ describe('legacy skills', () => {
     // And the API serves it in the shape the FE expects.
     const legacyApp = buildApp(loaded)
     const res = await legacyApp.inject({ method: 'GET', url: '/api/skills' })
-    for (const skill of res.json() as Skill[]) {
+    for (const summary of (res.json() as { skills: Skill[] }).skills) {
+      expect(summary).not.toHaveProperty('content')
+      const skill = (await legacyApp.inject({ method: 'GET', url: `/api/skills/${encodeURIComponent(summary.id)}` })).json() as Skill
       expect(typeof skill.content).toBe('string')
       expect(Array.isArray(skill.tools)).toBe(true)
     }
@@ -1484,7 +1488,7 @@ describe('tool plumbing', () => {
   it('executes nothing when the model calls tools no skill offered', async () => {
     const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
     const { agent } = await makeRunner()
-    store.skills.find((s) => s.id === 'summarization')!.tools = [] // the attached seed, tools cleared
+    store.skills.find((s) => s.id === 'core/summarization')!.tools = [] // the attached seed, tools cleared
     await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
     expect(toolMessages(mock)[0]?.content).toContain('Available: none')
   })
@@ -1676,7 +1680,7 @@ describe('tools and notes routes', () => {
     expect(body.tools.map((t) => t.name)).toEqual(['list_skills'])
     expect(body.tools[0]).toEqual(toolDeclaration('list_skills'))
     expect(body.ignoredTools).toEqual(['Read'])
-    const stored = ((await inject('GET', '/api/skills')).json() as Skill[]).find((s) => s.id === body.id)
+    const stored = ((await inject('GET', '/api/skills')).json() as { skills: Skill[] }).skills.find((s) => s.id === body.id)
     expect(stored).not.toHaveProperty('ignoredTools')
   })
 
@@ -1709,13 +1713,13 @@ describe('store meta migrations', () => {
   it('does not resurrect a seed skill the user deleted', () => {
     const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
     const path = join(d, 'store.json')
-    const kept = seedSkills.filter((s) => s.id !== 'debugging')
+    const kept = seedSkills.filter((s) => s.id !== 'core/debugging')
     writeFileSync(
       path,
       legacy({ skills: kept, meta: { migrations: ['seed-skill-tools-v1'], seededSkillIds: seedSkills.map((s) => s.id) } }),
       'utf8',
     )
-    expect(createStore(path).skills.some((s) => s.id === 'debugging')).toBe(false)
+    expect(createStore(path).skills.some((s) => s.id === 'core/debugging')).toBe(false)
     rmSync(d, { recursive: true, force: true })
   })
 
@@ -1739,12 +1743,12 @@ describe('store meta migrations', () => {
 describe('seed data integrity', () => {
   it('pins the vendored seed bodies (the tools migration compares content)', () => {
     const pinned: Record<string, string> = {
-      'code-review': '306c451504e224af7b2b02839e71c5c72ec9b7eb1734980e29a7b73c5db88af0',
-      debugging: 'e4163cedaecee9abf765750fe8813fea8569d969819eab30abd1e2a5800552c2',
-      'deep-research': 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67',
-      'multi-agent-orchestration': '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5',
-      summarization: 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a',
-      'technical-writing': '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229',
+      'core/code-review': '306c451504e224af7b2b02839e71c5c72ec9b7eb1734980e29a7b73c5db88af0',
+      'core/debugging': 'e4163cedaecee9abf765750fe8813fea8569d969819eab30abd1e2a5800552c2',
+      'core/deep-research': 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67',
+      'core/multi-agent-orchestration': '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5',
+      'core/summarization': 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a',
+      'core/technical-writing': '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229',
     }
     const actual = Object.fromEntries(
       vendoredSeedSkills.map((s) => [s.id, createHash('sha256').update(s.content).digest('hex')]),
@@ -1844,7 +1848,7 @@ describe('chat-first Part 1: agent profile fields', () => {
 
     await inject('PUT', `/api/agents/${agent.id}`, {
       name: 'Runner', description: '', instructions: 'Be brief.', modelId: 'test-model',
-      endpointId: endpoint.id, skillIds: ['summarization'], rules: ['Answer in English.'],
+      endpointId: endpoint.id, skillIds: ['core/summarization'], rules: ['Answer in English.'],
     })
     await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
     const after = lastRequest(mock).messages?.[0]?.content ?? ''

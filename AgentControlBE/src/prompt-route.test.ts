@@ -22,7 +22,7 @@ let store: WorkspaceStore
 // Exactly what onboarding (AgentControlFE AgentForm bootstrap) creates.
 const LEAD_INSTRUCTIONS =
   'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
-const LEAD_SKILL_IDS = ['deep-research', 'summarization', 'multi-agent-orchestration']
+const LEAD_SKILL_IDS = ['core/deep-research', 'core/summarization', 'core/multi-agent-orchestration']
 
 async function inject(method: 'GET' | 'POST', url: string, payload?: unknown) {
   return app.inject({
@@ -373,10 +373,10 @@ describe('POST /api/prompt-budget', () => {
       'ep_local_llama',
       { skillIds: [] },
       { endpointId: 42, skillIds: [] },
-      { endpointId: 'ep_local_llama', skillIds: 'summarization' },
-      { endpointId: 'ep_local_llama', skillIds: ['summarization', 7] },
+      { endpointId: 'ep_local_llama', skillIds: 'core/summarization' },
+      { endpointId: 'ep_local_llama', skillIds: ['core/summarization', 7] },
       { endpointId: 'ep_local_llama', skillIds: [], instructions: 5 },
-      { endpointId: 'ep_local_llama', skillIds: Array.from({ length: 501 }, () => 'summarization') },
+      { endpointId: 'ep_local_llama', skillIds: Array.from({ length: 501 }, () => 'core/summarization') },
     ]
     for (const payload of bad) {
       const res = await app.inject({

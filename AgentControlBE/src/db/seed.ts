@@ -46,16 +46,27 @@ const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
 
 const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')
 
+/** Core skills on by default for new bots (also listed in skills-vendor/manifest.json). */
+export const CORE_DEFAULT_SKILLS = ['summarization', 'deep-research', 'technical-writing', 'csv-analysis', 'meeting-notes', 'multi-agent-orchestration']
+
+/** `core/<name>`: core skill ids since vendor-skills-v1. */
+export const coreSkillId = (name: string): string => `core/${name}`
+
 export const seedSkills: Skill[] = SEED_SKILL_MANIFEST.map(({ file, tag, source }) => {
-  const parsed = parseSkillMarkdown(readFileSync(join(SEED_SKILLS_DIR, `${file}.md`), 'utf8'))
+  const parsed = parseSkillMarkdown(readFileSync(join(SEED_SKILLS_DIR, `${file}.md`), 'utf8'), { folder: file })
   return {
-    id: parsed.name,
+    id: coreSkillId(parsed.name),
     name: parsed.name,
     description: parsed.description,
     tag,
     content: parsed.content,
     tools: resolveToolDeclarations(parsed.tools, { strict: true }).tools,
     source,
+    sourceId: 'core',
+    ...(source === VENDORED_SOURCE ? { sourceRepo: VENDORED_SOURCE, license: 'MIT' } : {}),
+    hasScripts: false,
+    files: [],
+    defaultOn: CORE_DEFAULT_SKILLS.includes(parsed.name),
   }
 })
 

@@ -7,13 +7,16 @@ import {
   seedEndpoints,
   seedRuns,
   seedSettings,
+  CORE_DEFAULT_SKILLS,
+  coreSkillId,
   seedSkills,
   vendoredSeedSkills,
 } from './db/seed.js'
+import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
 import { createVault } from './vault.js'
 import { ARCHIVE_MIGRATION, writeProjectArchive, type ProjectArchive } from './archive.js'
 import { backfillAuthors, backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
-import { AGENT_SLUG, INTERNET_POLICIES, MAX_MEMORY_TEXT_CHARS, MEMORY_CATEGORIES } from './shared/types.js'
+import { AGENT_SLUG, INTERNET_POLICIES, MAX_MEMORY_TEXT_CHARS, MEMORY_CATEGORIES, SKILL_SOURCE_IDS } from './shared/types.js'
 import type {
   Agent,
   AgentRun,
@@ -69,7 +72,8 @@ export interface StoreMeta {
 }
 
 /** Every one-shot migration; fresh stores are born with all of them applied. */
-const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3', ARCHIVE_MIGRATION] as const
+export const VENDOR_SKILLS_MIGRATION = 'vendor-skills-v1'
+const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3', ARCHIVE_MIGRATION, VENDOR_SKILLS_MIGRATION] as const
 
 /** A seed exactly as an earlier release shipped it: body sha256 and tool names in order. */
 interface SeedUpgrade {
@@ -236,20 +240,45 @@ function seed(): Persisted {
   return { ...data, conversations: state.conversations, chatMessages: state.chatMessages }
 }
 
+/** Core seeds plus every vendored skill (bodies loaded from skills-vendor/). */
+function librarySkills(): Skill[] {
+  return [...structuredClone(seedSkills), ...structuredClone(vendoredLibrary().skills)]
+}
+
+/**
+ * Fills in the BE-6 skill fields on a stored skill. Core and vendored ids
+ * carry their source; anything else is a user skill (`custom`).
+ */
+function normalizeSkillSource(skill: Skill): { skill: Skill; changed: boolean } {
+  const prefix = skill.id.includes('/') ? skill.id.slice(0, skill.id.indexOf('/')) : ''
+  const sourceId = (SKILL_SOURCE_IDS as readonly string[]).includes(prefix) && prefix !== 'custom' ? (prefix as Skill['sourceId']) : 'custom'
+  const next = { ...skill }
+  let changed = false
+  if (next.sourceId !== sourceId) { next.sourceId = sourceId; changed = true }
+  if (typeof next.hasScripts !== 'boolean') { next.hasScripts = false; changed = true }
+  if (!Array.isArray(next.files) || !next.files.every((f) => typeof f === 'string')) { next.files = []; changed = true }
+  if (typeof next.defaultOn !== 'boolean') {
+    next.defaultOn = sourceId === 'core' && CORE_DEFAULT_SKILLS.includes(skill.id.slice('core/'.length))
+    changed = true
+  }
+  return { skill: next, changed }
+}
+
 function seedData(): Persisted {
+  const skills = librarySkills()
   return {
     profile: { name: '', onboardedAt: null },
     conversations: [],
     chatMessages: [],
     agents: structuredClone(seedAgents),
     runs: structuredClone(seedRuns),
-    skills: structuredClone(seedSkills),
+    skills,
     endpoints: structuredClone(seedEndpoints),
     endpointModels: structuredClone(seedEndpointModels),
     settings: structuredClone(seedSettings),
     notes: [],
     memories: [],
-    meta: { migrations: [...MIGRATIONS], seededSkillIds: seedSkills.map((s) => s.id), archive: [] },
+    meta: { migrations: [...MIGRATIONS], seededSkillIds: skills.map((s) => s.id), archive: [] },
   }
 }
 
@@ -444,7 +473,8 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
   if (!meta.migrations.includes('seed-skill-tools-v1')) {
     for (let i = 0; i < savedSkills.length; i++) {
       const saved = savedSkills[i] as Skill
-      const seed = vendoredSeedSkills.find((v) => v.id === saved.id)
+      // Stores this old still use bare seed ids; vendor-skills-v1 renames them below.
+      const seed = vendoredSeedSkills.find((v) => v.id === saved.id || v.id === coreSkillId(saved.id))
       if (seed && seed.tools.length > 0 && saved.tools.length === 0 && saved.content === seed.content) {
         savedSkills[i] = { ...saved, tools: structuredClone(seed.tools) }
       }
@@ -458,8 +488,8 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
   for (const { migration, skills } of SEED_UPGRADES) {
     if (meta.migrations.includes(migration)) continue
     for (const upgrade of skills) {
-      const i = savedSkills.findIndex((s) => s.id === upgrade.id)
-      const seed = base.skills.find((s) => s.id === upgrade.id)
+      const i = savedSkills.findIndex((s) => s.id === upgrade.id || s.id === coreSkillId(upgrade.id))
+      const seed = base.skills.find((s) => s.id === coreSkillId(upgrade.id))
       const saved = savedSkills[i]
       if (saved && seed && isUntouchedSeed(saved, upgrade)) {
         savedSkills[i] = { ...saved, description: seed.description, content: seed.content, tools: structuredClone(seed.tools) }
@@ -467,6 +497,43 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
     }
     meta.migrations.push(migration)
     changed = true
+  }
+
+  // vendor-skills-v1: core seeds move to `core/<name>` ids (a same-named user
+  // skill, which has no seed source, keeps its id), every agent's skillIds
+  // and the offered-seed list follow, and vendored skills are offered below
+  // like any never-offered seed.
+  if (!meta.migrations.includes(VENDOR_SKILLS_MIGRATION)) {
+    const renamed = new Map<string, string>()
+    for (let i = 0; i < savedSkills.length; i++) {
+      const saved = savedSkills[i] as Skill
+      if (saved.id.includes('/')) continue
+      const seed = seedSkills.find((s) => s.id === coreSkillId(saved.id))
+      if (seed && saved.source === seed.source && !savedSkills.some((s) => s.id === seed.id)) {
+        renamed.set(saved.id, seed.id)
+        savedSkills[i] = { ...saved, id: seed.id }
+      }
+    }
+    for (const agent of agents as Agent[]) {
+      if (Array.isArray(agent.skillIds) && agent.skillIds.some((id) => renamed.has(id))) {
+        agent.skillIds = [...new Set(agent.skillIds.map((id) => renamed.get(id) ?? id))]
+      }
+    }
+    meta.seededSkillIds = [...new Set(meta.seededSkillIds.map((id) =>
+      !id.includes('/') && seedSkills.some((s) => s.id === coreSkillId(id)) ? coreSkillId(id) : id,
+    ))]
+    meta.migrations.push(VENDOR_SKILLS_MIGRATION)
+    changed = true
+  }
+
+  // BE-6 fields on every stored skill; vendored skills are read-only, so
+  // their stored metadata is refreshed from disk along with the body.
+  const library = vendoredLibrary()
+  for (let i = 0; i < savedSkills.length; i++) {
+    const normalized = normalizeSkillSource(savedSkills[i] as Skill)
+    if (normalized.changed) changed = true
+    const disk = isVendoredSkillId(normalized.skill.id) ? library.skills.find((s) => s.id === normalized.skill.id) : undefined
+    savedSkills[i] = disk ? structuredClone(disk) : normalized.skill
   }
 
   // Append seed skills that are missing and were never offered before; a seed
@@ -649,7 +716,8 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           profile: store.profile,
           conversations: store.conversations,
           chatMessages: store.chatMessages,
-          skills: store.skills,
+          // Vendored bodies live in skills-vendor/; store.json keeps their metadata only.
+          skills: store.skills.map((s) => (isVendoredSkillId(s.id) ? { ...s, content: '' } : s)),
           endpoints: store.endpoints,
           endpointModels: store.endpointModels,
           settings: store.settings,

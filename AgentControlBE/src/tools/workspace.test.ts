@@ -102,7 +102,7 @@ function makeAgent(partial: Partial<Agent> & { id: string; name: string }): Agen
 }
 
 function makeSkill(partial: Partial<Skill> & { id: string; name: string }): Skill {
-  return { description: '', tag: 'Ops', content: '', tools: [], ...partial }
+  return { description: '', tag: 'Ops', content: '', tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false, ...partial }
 }
 
 const toolDecl = (name: string) => ({ name, description: `${name} tool`, parameters: {} })

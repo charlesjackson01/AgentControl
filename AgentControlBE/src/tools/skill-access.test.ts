@@ -49,7 +49,7 @@ function expectNoKey(text: string, label = ''): void {
 }
 
 function makeSkill(partial: Partial<Skill> & { id: string; name: string }): Skill {
-  return { description: '', tag: 'Ops', content: '', tools: [], ...partial }
+  return { description: '', tag: 'Ops', content: '', tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false, ...partial }
 }
 
 const toolDecl = (name: string) => ({ name, description: `${name} tool`, parameters: {} })
@@ -104,13 +104,13 @@ beforeEach(() => {
     slug: 'author', internetPolicy: 'ask', memoryLearn: true })
   store.skills = [
     makeSkill({
-      id: 'code-review',
+      id: 'core/code-review',
       name: 'Code Review',
       description: 'Review a diff for bugs.',
       content: 'Read the diff. Report bugs first.',
       tools: [toolDecl('list_notes'), toolDecl('read_note'), toolDecl('list_notes')],
     }),
-    makeSkill({ id: 'summarization', name: 'Summarization', content: 'Summarize.' }),
+    makeSkill({ id: 'core/summarization', name: 'Summarization', content: 'Summarize.' }),
   ]
   store.notes = []
   store.endpointKeys.ep_local_llama = KEY
@@ -209,7 +209,7 @@ describe('get_skill', () => {
 
   it('reads a skill by id, by name (any case) and by every alias small models send', async () => {
     const expected = {
-      id: 'code-review',
+      id: 'core/code-review',
       name: 'Code Review',
       description: 'Review a diff for bugs.',
       tools: ['list_notes', 'read_note'],
@@ -218,13 +218,15 @@ describe('get_skill', () => {
       content: 'Read the diff. Report bugs first.',
       nextOffset: null,
     }
-    expect(await ok('get_skill', { skill: 'code-review' })).toEqual(expected)
+    expect(await ok('get_skill', { skill: 'core/code-review' })).toEqual(expected)
     expect(await ok('get_skill', { skill: ' code review ' })).toEqual(expected)
     for (const key of ['skillId', 'skill_id', 'id', 'name']) {
       expect(await ok('get_skill', { [key]: 'Code Review' }), key).toEqual(expected)
     }
     // A blank "skill" falls through to the alias.
-    expect((await ok('get_skill', { skill: ' ', name: 'summarization' })).id).toBe('summarization')
+    expect((await ok('get_skill', { skill: ' ', name: 'summarization' })).id).toBe('core/summarization')
+    // A bare BE-6 name resolves to its <source>/<name> id.
+    expect(await ok('get_skill', { skill: 'code-review' })).toEqual(expected)
   })
 
   it('walks long content exactly, through emoji and heavy JSON escapes', async () => {
@@ -232,18 +234,18 @@ describe('get_skill', () => {
     let content = ''
     for (let i = 0; content.length < 12_000; i++) content += parts[i % parts.length]
     ctx.store.skills[0]!.content = content
-    const pages = await walk('get_skill', { skill: 'code-review' }, 'content')
+    const pages = await walk('get_skill', { skill: 'core/code-review' }, 'content')
     expect(pages.map((p) => p.content).join('')).toBe(content)
     expect(pages.every((p) => p.totalChars === content.length)).toBe(true)
     // Escapes shrink pages below 2,500 chars, so more pages than the plain count.
     expect(pages.length).toBeGreaterThan(Math.ceil(content.length / 2500))
 
     ctx.store.skills[0]!.content = '"\\\n\u0001'.repeat(3000)
-    const escaped = await walk('get_skill', { skill: 'code-review' }, 'content')
+    const escaped = await walk('get_skill', { skill: 'core/code-review' }, 'content')
     expect(escaped.map((p) => p.content).join('')).toBe(ctx.store.skills[0]!.content)
 
     ctx.store.skills[0]!.content = '😀'.repeat(5000)
-    const emoji = await walk('get_skill', { skill: 'code-review' }, 'content')
+    const emoji = await walk('get_skill', { skill: 'core/code-review' }, 'content')
     expect(emoji.map((p) => p.content).join('')).toBe(ctx.store.skills[0]!.content)
     expect(emoji[0]!.content).toHaveLength(2500)
   })
@@ -262,22 +264,22 @@ describe('get_skill', () => {
 
   it('accepts a lenient offset and starts mid-pair at the pair', async () => {
     ctx.store.skills[0]!.content = '😀'.repeat(3000)
-    const page = await ok('get_skill', { skill: 'code-review', offset: '2501' })
+    const page = await ok('get_skill', { skill: 'core/code-review', offset: '2501' })
     expect(page.offset).toBe(2500)
     expect(page.nextOffset).toBe(5000)
-    expect((await ok('get_skill', { skill: 'code-review', offset: 2500.9 })).offset).toBe(2500)
+    expect((await ok('get_skill', { skill: 'core/code-review', offset: 2500.9 })).offset).toBe(2500)
   })
 
   it('rejects an offset past the end or below zero with a usable example', async () => {
     const past = await failure('get_skill', { skill: 'Code Review', offset: 33 })
     expect(past).toContain('Offset 33 is past the end of the text (33 chars)')
-    expect(exampleOf(past)).toEqual({ skill: 'code-review', offset: 0 })
-    expect(await failure('get_skill', { skill: 'code-review', offset: 1e308 })).toContain('past the end')
-    expect(await failure('get_skill', { skill: 'code-review', offset: -1 })).toContain('"offset" must be at least 0')
-    expect(await failure('get_skill', { skill: 'code-review', offset: 'soon' })).toContain('"offset" must be a number')
+    expect(exampleOf(past)).toEqual({ skill: 'core/code-review', offset: 0 })
+    expect(await failure('get_skill', { skill: 'core/code-review', offset: 1e308 })).toContain('past the end')
+    expect(await failure('get_skill', { skill: 'core/code-review', offset: -1 })).toContain('"offset" must be at least 0')
+    expect(await failure('get_skill', { skill: 'core/code-review', offset: 'soon' })).toContain('"offset" must be a number')
     // Offset 0 of empty content is a valid (empty, last) page.
     ctx.store.skills[1]!.content = ''
-    expect(await ok('get_skill', { skill: 'summarization' })).toMatchObject({ content: '', nextOffset: null, totalChars: 0 })
+    expect(await ok('get_skill', { skill: 'core/summarization' })).toMatchObject({ content: '', nextOffset: null, totalChars: 0 })
   })
 
   it('names a bounded list of known skills when the skill is unknown or missing', async () => {
@@ -308,7 +310,7 @@ describe('get_skill', () => {
     skill.content = `${'.'.repeat(2490)}${KEY}${'.'.repeat(2480)}${KEY}${'-'.repeat(2470)}${KEY}`
     skill.description = `${'.'.repeat(295)}${KEY}`
     skill.name = `Name ${KEY}`
-    const pages = await walk('get_skill', { skill: 'code-review' }, 'content')
+    const pages = await walk('get_skill', { skill: 'core/code-review' }, 'content')
     const redacted = redactSecrets(skill.content, ctx.store)
     expect(pages.map((p) => p.content).join('')).toBe(redacted)
     expect(redacted.split(REDACTED)).toHaveLength(4)
@@ -318,16 +320,16 @@ describe('get_skill', () => {
 
     // Every start offset, including ones a page never returned, stays clean.
     for (let offset = 2480; offset < 2530; offset++) {
-      expectNoKey((await call('get_skill', { skill: 'code-review', offset })).content, `offset ${offset}`)
+      expectNoKey((await call('get_skill', { skill: 'core/code-review', offset })).content, `offset ${offset}`)
     }
   })
 
   it('pages 1 MB of content quickly', async () => {
     ctx.store.skills[0]!.content = `${KEY} ${'word '.repeat(200_000)}${KEY}`
     const started = performance.now()
-    const first = await ok('get_skill', { skill: 'code-review' })
+    const first = await ok('get_skill', { skill: 'core/code-review' })
     const total = first.totalChars as number
-    const last = await ok('get_skill', { skill: 'code-review', offset: total - 10 })
+    const last = await ok('get_skill', { skill: 'core/code-review', offset: total - 10 })
     expect(performance.now() - started).toBeLessThan(1_000)
     expect(last.nextOffset).toBeNull()
     expect(last.content).toBe(REDACTED)
@@ -343,7 +345,7 @@ describe('list_skills redaction', () => {
     expectNoKey(out.content)
     const rows = JSON.parse(out.content) as { id: string; description: string }[]
     expect(rows[0]!.description).toBe(`${'.'.repeat(95)}[red…`)
-    expect(rows.map((r) => r.id)).toEqual(['code-review', 'summarization'])
+    expect(rows.map((r) => r.id)).toEqual(['core/code-review', 'core/summarization'])
   })
 
   it('redacts names and ids before fitJson can clip them', async () => {

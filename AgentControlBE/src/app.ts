@@ -32,8 +32,17 @@ import {
   type InternetPolicy,
   type Skill,
   type SkillInput,
+  type SkillListResponse,
+  type SkillSourceId,
+  type SkillSourceInfo,
   type SkillTool,
+  SKILL_SOURCE_IDS,
 } from './shared/types.js'
+import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
+
+/** BE-6 fields for a skill the user creates or imports. */
+const CUSTOM_SKILL_FIELDS = { sourceId: 'custom', hasScripts: false, files: [] as string[], defaultOn: false } as const
+const VENDORED_READ_ONLY = 'Vendored skills are read-only.'
 
 function trimBase(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
@@ -340,7 +349,36 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   }
 
   app.get('/health', async () => ({ status: 'ok' }))
-  app.get('/api/skills', async () => store.skills)
+  // BE-6: summaries (no bodies) with optional filters, plus one entry per source.
+  app.get('/api/skills', async (request): Promise<SkillListResponse> => {
+    const query = (request.query ?? {}) as { source?: unknown; q?: unknown; defaultOn?: unknown }
+    let source: SkillSourceId | undefined
+    if (query.source !== undefined && query.source !== '') {
+      if (typeof query.source !== 'string' || !(SKILL_SOURCE_IDS as readonly string[]).includes(query.source)) {
+        fail(400, `"source" must be one of: ${SKILL_SOURCE_IDS.join(', ')}.`)
+      }
+      source = query.source as SkillSourceId
+    }
+    let defaultOn: boolean | undefined
+    if (query.defaultOn !== undefined && query.defaultOn !== '') {
+      if (query.defaultOn !== 'true' && query.defaultOn !== 'false') fail(400, '"defaultOn" must be true or false.')
+      defaultOn = query.defaultOn === 'true'
+    }
+    const q = typeof query.q === 'string' ? query.q.trim().toLowerCase() : ''
+    const skills = store.skills
+      .filter((s) => source === undefined || s.sourceId === source)
+      .filter((s) => defaultOn === undefined || s.defaultOn === defaultOn)
+      .filter((s) => !q || [s.id, s.name, s.description, s.tag].some((v) => v.toLowerCase().includes(q)))
+      .map(({ content: _content, ...summary }) => summary)
+    const vendored = vendoredLibrary().sources
+    const count = (id: SkillSourceId): number => store.skills.filter((s) => s.sourceId === id).length
+    const sources: SkillSourceInfo[] = [
+      { id: 'core', repo: null, commit: null, license: null, count: count('core') },
+      ...vendored.map((v) => ({ ...v, count: count(v.id) })),
+      { id: 'custom', repo: null, commit: null, license: null, count: count('custom') },
+    ]
+    return { skills, sources }
+  })
   app.get('/api/tools', async () => listToolInfo())
 
   // Notes: shared memory written by agents' notes tools. Users read and delete here.
@@ -934,6 +972,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       id: uid('skl'),
       ...input,
       tools: input.tools ?? [],
+      ...CUSTOM_SKILL_FIELDS,
     }
     store.skills = [...store.skills, skill]
     store.save()
@@ -967,6 +1006,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       tag: parsed.tag,
       content: parsed.content,
       tools,
+      ...(parsed.license ? { license: parsed.license } : {}),
+      ...(parsed.compatibility ? { compatibility: parsed.compatibility } : {}),
+      ...(parsed.metadata ? { metadata: parsed.metadata } : {}),
+      ...(parsed.allowedTools ? { allowedTools: parsed.allowedTools } : {}),
+      ...CUSTOM_SKILL_FIELDS,
     }
     store.skills = [...store.skills, skill]
     store.save()
@@ -979,6 +1023,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const index = store.skills.findIndex((s) => s.id === id)
     if (index === -1) fail(404, `No skill with id "${id}"`)
     const current = store.skills[index] as Skill
+    if (isVendoredSkillId(current.id)) fail(403, VENDORED_READ_ONLY)
     const raw = (request.body ?? {}) as Record<string, unknown>
     const next: Skill = { ...current }
     if (raw.name !== undefined) {
@@ -1015,6 +1060,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const skill = store.skills.find((s) => s.id === id)
     if (!skill) fail(404, `No skill with id "${id}"`)
+    if (isVendoredSkillId(id)) fail(403, VENDORED_READ_ONLY)
     // Same-transaction detach: strip the id from every agent before removal.
     store.detachSkill(id)
     store.skills = store.skills.filter((s) => s.id !== id)

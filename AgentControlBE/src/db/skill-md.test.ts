@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SkillMarkdownError, parseSkillMarkdown } from './skill-md.js'
+import { SkillMarkdownError, parseSkillMarkdown, skillNameViolations } from './skill-md.js'
 
 const withFrontmatter = (extra: string) => `---\nname: s\ndescription: d\n${extra}\n---\nbody`
 
@@ -51,7 +51,57 @@ describe('parseSkillMarkdown tools', () => {
   it('preserves hashes inside quoted values and tokens', () => {
     const parsed = parseSkillMarkdown('---\nname: hash#name\ndescription: "Keep # literal" # comment\ntools: ["a#b", read_note] # end\n---\nbody')
     expect(parsed.name).toBe('hash#name')
-    expect(parsed.description).toBe('"Keep # literal"')
+    expect(parsed.description).toBe('Keep # literal') // YAML unquotes it
     expect(parsed.tools).toEqual(['a#b', 'read_note'])
+  })
+})
+
+describe('BE-6 Agent Skills spec fields', () => {
+  const doc = (front: string, body = 'Body.') => `---\n${front}\n---\n${body}`
+
+  it('reads license, compatibility, metadata and allowed-tools', () => {
+    const parsed = parseSkillMarkdown(doc([
+      'name: pdf-tools',
+      'description: "Work with PDFs: split, merge."',
+      'license: Apache-2.0',
+      'compatibility: Needs python3',
+      'metadata:',
+      '  author: someone',
+      '  version: 2',
+      'allowed-tools: Bash(git:*) Read, Grep',
+    ].join('\n')))
+    expect(parsed).toMatchObject({
+      name: 'pdf-tools',
+      description: 'Work with PDFs: split, merge.',
+      license: 'Apache-2.0',
+      compatibility: 'Needs python3',
+      metadata: { author: 'someone', version: '2' },
+      allowedTools: ['Bash(git:*)', 'Read', 'Grep'],
+      warnings: [],
+    })
+  })
+
+  it('enforces the name rules only when the folder is known', () => {
+    expect(skillNameViolations('good-name', 'good-name')).toEqual([])
+    for (const bad of ['Bad', '-lead', 'trail-', 'dou--ble', 'a'.repeat(65), 'has space']) {
+      expect(skillNameViolations(bad).length, bad).toBeGreaterThan(0)
+    }
+    expect(skillNameViolations('one', 'two').length).toBeGreaterThan(0)
+    expect(() => parseSkillMarkdown(doc('name: one\ndescription: d'), { folder: 'two' })).toThrow(SkillMarkdownError)
+    expect(parseSkillMarkdown(doc('name: Loose Name\ndescription: d')).name).toBe('Loose Name')
+  })
+
+  it('warns, but still parses, on over-long description, compatibility or body', () => {
+    const parsed = parseSkillMarkdown(doc(
+      `name: big\ndescription: ${'d'.repeat(1025)}\ncompatibility: ${'c'.repeat(501)}`,
+      Array.from({ length: 501 }, (_, i) => `line ${i}`).join('\n'),
+    ))
+    expect(parsed.warnings).toHaveLength(3)
+  })
+
+  it('falls back to the line reader when the YAML is invalid', () => {
+    const parsed = parseSkillMarkdown(doc('name: odd\ndescription: a: b: [unclosed'))
+    expect(parsed.name).toBe('odd')
+    expect(parsed.warnings.length).toBeGreaterThan(0)
   })
 })

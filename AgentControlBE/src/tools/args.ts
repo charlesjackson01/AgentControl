@@ -142,7 +142,12 @@ export function findSkill(store: WorkspaceStore, ref: string): Skill | undefined
 
 /** findSkill over a given list (e.g. the skills a run may read). */
 export function findSkillIn(skills: readonly Skill[], ref: string): Skill | undefined {
-  return skills.find((s) => s.id === ref) ?? skills.find((s) => fold(s.name) === fold(ref))
+  const exact = skills.find((s) => s.id === ref) ?? skills.find((s) => fold(s.name) === fold(ref))
+  if (exact || ref.includes('/')) return exact
+  // BE-6 ids are <source>/<name>; a bare name a model copies resolves when only one source has it.
+  const suffix = `/${fold(ref)}`
+  const matches = skills.filter((s) => s.id.toLowerCase().endsWith(suffix))
+  return matches.length === 1 ? matches[0] : undefined
 }
 
 /** Note by id or case-insensitive title. */

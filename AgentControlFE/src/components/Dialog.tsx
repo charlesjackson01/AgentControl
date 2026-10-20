@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { dialogStack } from '../lib/dialog-stack'
 
 type DialogProps = {
   open: boolean
@@ -13,13 +14,24 @@ type DialogProps = {
 
 export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
+  // Identity for the dialog stack; onClose via a ref so a new callback each render
+  // doesn't re-register this dialog (which would move it back to the top).
+  const [token] = useState(() => ({}))
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  })
 
   useEffect(() => {
     if (!open) return
+    dialogStack.open(token)
 
     const onKey = (e: KeyboardEvent) => {
+      // A dialog opened on top of this one owns the keyboard.
+      if (!dialogStack.isTop(token)) return
       if (e.key === 'Escape') {
-        onClose()
+        e.stopPropagation()
+        onCloseRef.current()
         return
       }
       // Keep Tab inside the dialog.
@@ -47,10 +59,11 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
     target?.focus()
 
     return () => {
+      dialogStack.close(token)
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previousOverflow
     }
-  }, [open, onClose])
+  }, [open, token])
 
   if (!open) return null
 

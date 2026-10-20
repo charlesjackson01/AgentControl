@@ -1,4 +1,6 @@
-import { fetch as undiciFetch, ProxyAgent } from 'undici'
+import { lookup } from 'node:dns/promises'
+import { isIP } from 'node:net'
+import { fetch as undiciFetch, ProxyAgent, Socks5ProxyAgent, type Dispatcher } from 'undici'
 /**
  * Server-side upstream calls for saved endpoints. The browser never calls
  * `baseUrl` directly (CORS/LAN), and the bearer key never leaves the server.
@@ -31,18 +33,49 @@ export interface ModelsResult {
   error?: string
 }
 
-const proxyAgents = new Map<string, ProxyAgent>()
+/** Proxy schemes an endpoint may use (BE-11). */
+export const PROXY_PROTOCOLS = ['http:', 'https:', 'socks5:', 'socks5h:'] as const
 
 /**
- * Global fetch, or undici's fetch through a cached ProxyAgent when the
- * endpoint has a proxy (Node's fetch ignores HTTP_PROXY). Without a proxy the
- * call is exactly the global fetch call it was before.
+ * socks5:// resolves the target name here and sends the proxy an IP; undici's
+ * agent always sends the name (socks5h:// behaviour), so resolve first.
+ */
+class LocalResolveSocks5Agent extends Socks5ProxyAgent {
+  async createSocks5Connection(targetHost: string, targetPort: number): Promise<unknown> {
+    const host = targetHost.replace(/^\[|\]$/g, '')
+    const address = isIP(host) ? host : (await lookup(host)).address
+    const parent = Socks5ProxyAgent.prototype as unknown as {
+      createSocks5Connection(this: Socks5ProxyAgent, host: string, port: number): Promise<unknown>
+    }
+    return parent.createSocks5Connection.call(this, address, targetPort)
+  }
+}
+
+/** The dispatcher for a proxy URL: HTTP CONNECT for http(s), SOCKS5 for socks5(h). */
+export function proxyDispatcher(proxyUrl: string): Dispatcher {
+  const url = new URL(proxyUrl)
+  if (url.protocol === 'http:' || url.protocol === 'https:') return new ProxyAgent(proxyUrl)
+  if (url.protocol === 'socks5:' || url.protocol === 'socks5h:') {
+    const socks = new URL(proxyUrl)
+    socks.protocol = 'socks5:'
+    return url.protocol === 'socks5h:' ? new Socks5ProxyAgent(socks) : new LocalResolveSocks5Agent(socks)
+  }
+  throw new Error(`Unsupported proxy scheme "${url.protocol}"`)
+}
+
+const proxyAgents = new Map<string, Dispatcher>()
+
+/**
+ * Global fetch, or undici's fetch through a cached proxy dispatcher when the
+ * endpoint has a proxy (Node's fetch ignores HTTP_PROXY). Model listing, chat
+ * and the endpoint test all come through here. Without a proxy the call is
+ * exactly the global fetch call it was before.
  */
 function upstreamFetch(url: string, init: RequestInit, proxyUrl?: string): Promise<Response> {
   if (!proxyUrl) return fetch(url, init)
   let dispatcher = proxyAgents.get(proxyUrl)
   if (!dispatcher) {
-    dispatcher = new ProxyAgent(proxyUrl)
+    dispatcher = proxyDispatcher(proxyUrl)
     proxyAgents.set(proxyUrl, dispatcher)
   }
   return undiciFetch(url, { ...(init as object), dispatcher } as Parameters<typeof undiciFetch>[1]) as unknown as Promise<Response>

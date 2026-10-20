@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
 import { PROJECTS_RETIRED } from './archive.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
-import { fetchModels } from './upstream.js'
+import { fetchModels, PROXY_PROTOCOLS } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
@@ -101,9 +101,11 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
     try {
       proxy = new URL(String(input.proxyUrl))
     } catch {
-      fail(400, 'Proxy must be a valid http(s) URL, e.g. http://localhost:1055.')
+      fail(400, 'Proxy must be a valid URL, e.g. socks5://localhost:1055 or http://localhost:8080.')
     }
-    if (proxy.protocol !== 'http:' && proxy.protocol !== 'https:') fail(400, 'Proxy must start with http:// or https://.')
+    if (!(PROXY_PROTOCOLS as readonly string[]).includes(proxy.protocol)) {
+      fail(400, 'Proxy must start with http://, https://, socks5:// or socks5h://.')
+    }
   }
 }
 

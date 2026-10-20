@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { MEMORY_SCOPE_LIMIT, dropMemory, memoryApi, memorySourceLine, memoryView, upsertMemory, validateMemoryText } from '../src/lib/memory.ts'
+import { MEMORY_SCOPE_LIMIT, dropMemory, memoryApi, memoryFooter, memorySourceLine, memoryView, upsertMemory, validateMemoryText } from '../src/lib/memory.ts'
 
 const item = (id, category, text, updatedAt, source = { kind: 'user' }) => ({
   id, scope: { kind: 'agent', agentId: 'p' }, text, category, source, createdAt: updatedAt, updatedAt,
@@ -88,5 +88,24 @@ describe('memory view (03b)', () => {
     assert.equal(upsertMemory(items, edited)[1].text, 'edited')
     assert.equal(upsertMemory(items, edited).length, 4)
     assert.deepEqual(dropMemory(items, 'm2').map((m) => m.id), ['m1', 'm3', 'm4'])
+  })
+})
+
+describe('memory: BE-4 totals, tokens and the 200-item 409', () => {
+  it('footer: "Showing X of total" (03b) plus prompt tokens (GAP-M1)', () => {
+    assert.equal(memoryFooter(6, 12, 0), 'Showing 6 of 12 · Group chats keep their own memory, separate from this')
+    assert.equal(memoryFooter(3, 3, 1234), 'Showing 3 of 3 · Group chats keep their own memory, separate from this · ≈1,234 tokens in the prompt')
+  })
+  it('list asks for limit=200 (the scope cap) and keeps total and promptTokens', async () => {
+    const calls = []
+    const api = memoryApi(async (path) => (calls.push(path), { items: [{ id: 'm1' }], total: 1, promptTokens: 21 }))
+    assert.deepEqual(await api.list('agt 1'), { status: 'ok', page: { items: [{ id: 'm1' }], total: 1, promptTokens: 21 } })
+    assert.deepEqual(calls, ['/api/agents/agt%201/memory?limit=200'])
+    assert.equal(MEMORY_SCOPE_LIMIT, 200)
+  })
+  it('a 409 at 200 items rejects with the server message for the editor', async () => {
+    const full = Object.assign(new Error('Memory is full (200 items). Delete something first.'), { status: 409 })
+    const api = memoryApi(async () => { throw full })
+    await assert.rejects(api.create('a', { text: 'x', category: 'other' }), { status: 409, message: 'Memory is full (200 items). Delete something first.' })
   })
 })

@@ -52,3 +52,16 @@ export function grantedToolNames(
   }
   return [...names]
 }
+
+/**
+ * BE-4 memory fields for POST /api/prompt-budget, so the meter matches what a run sends.
+ * Saved bot: `agentId` (memory block, recall, its own memoryLearn), plus `memoryLearn`
+ * only when the form changed it from the saved value. New bot: `memoryLearn` (default on).
+ */
+export function budgetMemoryFields(o: { agentId?: string | null; savedLearn?: boolean; formLearn?: boolean }): { agentId?: string; memoryLearn?: boolean } {
+  if (o.agentId) {
+    const saved = o.savedLearn ?? true
+    return { agentId: o.agentId, ...(o.formLearn !== undefined && o.formLearn !== saved ? { memoryLearn: o.formLearn } : {}) }
+  }
+  return { memoryLearn: o.formLearn ?? true }
+}

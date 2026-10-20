@@ -5,6 +5,7 @@ import { api } from '../../lib/api'
 import { agentPutBody } from '../../lib/agent-put'
 import { friendlyError as friendly } from '../../lib/chat-format'
 import { normalizeRules } from '../../lib/agent-profile'
+import { budgetMemoryFields } from '../../lib/prompt-budget'
 import { budgetMeter, groupSkills, skillDetailLine, skillWriteError, toggleSkillId, visibleSkills, withImportedSkill, type SkillsResponse } from '../../lib/skills-catalog'
 import type { Agent, PromptBudget, Skill, SkillSummary } from '../../lib/types'
 
@@ -60,14 +61,21 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
     }
   }, [attempt])
 
-  // Token meter (POST /api/prompt-budget), debounced on the enabled set.
-  const budgetKey = JSON.stringify([agent.endpointId, ids])
+  // Token meter (POST /api/prompt-budget), debounced on the enabled set. BE-4: a saved
+  // bot sends agentId, so its memory block, recall and own memoryLearn are counted.
+  const budgetKey = JSON.stringify([agent.id, agent.endpointId, ids, agent.memoryLearn ?? true])
   useEffect(() => {
     const controller = new AbortController()
     const timer = setTimeout(() => {
       api
         .getPromptBudget(
-          { endpointId: agent.endpointId, skillIds: ids, instructions: agent.instructions, rules: normalizeRules(agent.rules ?? []) },
+          {
+            endpointId: agent.endpointId,
+            skillIds: ids,
+            instructions: agent.instructions,
+            rules: normalizeRules(agent.rules ?? []),
+            ...budgetMemoryFields({ agentId: agent.id, savedLearn: agent.memoryLearn }),
+          },
           { signal: controller.signal },
         )
         .then(

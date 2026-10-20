@@ -19,7 +19,8 @@ import {
   updateRule,
 } from '../lib/agent-profile'
 import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, SkillSummary } from '../lib/types'
-import { describePromptBudget, grantedToolNames } from '../lib/prompt-budget'
+import { budgetMemoryFields, describePromptBudget, grantedToolNames } from '../lib/prompt-budget'
+import { createLearnField } from '../lib/agent-patch'
 import { matchesSkillQuery } from '../lib/skill-search'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
@@ -158,9 +159,16 @@ export default function AgentProfile({
     if (isBootstrap || !draft.endpointId) return null
     const savedRules = normalizeRules(draft.rules ?? [])
     if (draft.skillIds.length === 0 && !draft.instructions.trim() && savedRules.length === 0) return null
-    return { endpointId: draft.endpointId, skillIds: draft.skillIds, instructions: draft.instructions, rules: savedRules }
+    return {
+      endpointId: draft.endpointId,
+      skillIds: draft.skillIds,
+      instructions: draft.instructions,
+      rules: savedRules,
+      // BE-4: saved bot -> agentId (+ memoryLearn only if changed); new bot -> memoryLearn.
+      ...budgetMemoryFields({ agentId: initial?.id, savedLearn: initial?.memoryLearn, formLearn: draft.memoryLearn }),
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the normalized rules text
-  }, [isBootstrap, draft.endpointId, draft.skillIds, draft.instructions, normalizeRules(draft.rules ?? []).join('\n')])
+  }, [isBootstrap, initial?.id, initial?.memoryLearn, draft.endpointId, draft.skillIds, draft.instructions, draft.memoryLearn, normalizeRules(draft.rules ?? []).join('\n')])
   const [budget, setBudget] = useState<{ request: PromptBudgetInput; value: PromptBudget; rulesCost: number | null } | null>(null)
   useEffect(() => {
     if (!budgetRequest) return
@@ -265,8 +273,9 @@ export default function AgentProfile({
       let saved: Agent
       if (initial) saved = await api.updateAgent(initial.id, payload)
       else {
-        const { skillIds: selected, ...rest } = payload
-        saved = await api.createAgent({ ...rest, ...createSkillIds({ selected, touched: skillsTouched, lead: isBootstrap }) })
+        // memoryLearn only when the user turned it off, so the BE's default-on applies otherwise.
+        const { skillIds: selected, memoryLearn, ...rest } = payload
+        saved = await api.createAgent({ ...rest, ...createLearnField(memoryLearn), ...createSkillIds({ selected, touched: skillsTouched, lead: isBootstrap }) })
       }
       if (plan.upload && avatarDraft.file) saved = await api.uploadAgentAvatar(saved.id, avatarDraft.file)
       if (onSaved) onSaved(saved)

@@ -14,8 +14,23 @@ export const MEMORY_CATEGORIES: readonly { id: MemoryCategory; label: string }[]
   { id: 'other', label: 'Other' },
 ]
 export const MEMORY_MAX_CHARS = 500
-/** BE-4 keeps at most 200 items per scope, so one page holds the whole scope. */
+/** BE-4 keeps at most 200 items per scope (a 201st add is a 409), so one page (limit=200) holds the whole scope. */
 export const MEMORY_SCOPE_LIMIT = 200
+
+/*
+ * Mockup gaps (03b shows neither; neutral versions):
+ *   GAP-M1 promptTokens: "≈N tokens in the prompt" appended to the footer line.
+ *   GAP-M2 full scope (200 items, 409): the server's message under the editor; Add stays enabled.
+ *   GAP-M3 add / edit: inline editor card (textarea, category select, n/500, Cancel / Add|Save).
+ *   GAP-M4 delete: inline "Delete this memory? Delete / Keep" under the row.
+ *   GAP-M5 empty scope: one muted line (with or without Learn from chat).
+ */
+
+/** 03b footer: "Showing 6 of 12 · Group chats keep their own memory, separate from this" (+ GAP-M1 tokens). */
+export function memoryFooter(shown: number, total: number, promptTokens: number): string {
+  const tokens = promptTokens > 0 ? ` · ≈${promptTokens.toLocaleString('en-US')} tokens in the prompt` : ''
+  return `Showing ${shown} of ${total} · Group chats keep their own memory, separate from this${tokens}`
+}
 
 export function categoryLabel(c: MemoryCategory): string {
   return MEMORY_CATEGORIES.find((x) => x.id === c)?.label ?? 'Other'

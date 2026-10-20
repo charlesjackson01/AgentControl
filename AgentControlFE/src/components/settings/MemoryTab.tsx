@@ -5,7 +5,7 @@ import { agentChatFirstFields, botFolder } from '../../lib/agent-put'
 import type { AgentChange } from '../../lib/agent-patch'
 import { friendlyError as friendly } from '../../lib/chat-format'
 import {
-  MEMORY_CATEGORIES, MEMORY_MAX_CHARS, categoryLabel, dropMemory, memorySourceLine, memoryView, upsertMemory, validateMemoryText,
+  MEMORY_CATEGORIES, MEMORY_MAX_CHARS, categoryLabel, dropMemory, memoryFooter, memorySourceLine, memoryView, upsertMemory, validateMemoryText,
   type MemoryFilter, type MemoryLoad, type memoryApi,
 } from '../../lib/memory'
 import type { Agent, MemoryCategory, MemoryItem } from '../../lib/types'
@@ -14,10 +14,11 @@ type Props = {
   agent: Agent
   load: MemoryLoad | null
   api: ReturnType<typeof memoryApi>
+  /** Re-list (Retry, and after every change so total and promptTokens follow the server). */
   onRetry: () => void
   onItems: (items: MemoryItem[]) => void
   onAgentSaved: (a: Agent) => void
-  /** PATCH /api/agents/:id (BE-4), PUT fallback before it lands. */
+  /** PATCH /api/agents/:id (BE-4); no PUT fallback. */
   saveChange: (agent: Agent, change: AgentChange) => Promise<{ agent: Agent }>
 }
 
@@ -65,7 +66,9 @@ export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentS
       const saved = editing.id ? await api.update(agent.id, editing.id, body) : await api.create(agent.id, body)
       onItems(upsertMemory(items, saved))
       setEditing(null)
+      onRetry()
     } catch (err) {
+      // GAP-M2: a full scope is a 409 with the server's "Memory is full (200 items)…" message.
       setEditing({ ...editing, saving: false, error: friendly(err, 'Could not save this memory.') })
     }
   }
@@ -76,6 +79,7 @@ export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentS
       await api.remove(agent.id, id)
       onItems(dropMemory(items, id))
       setConfirmDelete(null)
+      onRetry()
     } catch (err) {
       setRowError({ id, message: friendly(err, 'Could not delete this memory.') })
     }
@@ -238,10 +242,7 @@ export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentS
             <p className="cf-set__muted">No memories match.</p>
           ) : null}
           {items.length > 0 && (
-            <p className="cf-set__foot">
-              Showing {view.shown.length} of {items.length} · Group chats keep their own memory, separate from this
-              {load.page.promptTokens ? ` · ≈${load.page.promptTokens.toLocaleString()} tokens in the prompt` : ''}
-            </p>
+            <p className="cf-set__foot">{memoryFooter(view.shown.length, Math.max(load.page.total, items.length), load.page.promptTokens)}</p>
           )}
         </>
       )}

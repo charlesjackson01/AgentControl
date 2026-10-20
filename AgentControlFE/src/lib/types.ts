@@ -108,7 +108,7 @@ export type SkillTool = {
 }
 
 export type ToolInfo = SkillTool & {
-  category: 'workspace' | 'notes' | 'time' | 'math' | 'text' | 'data'
+  category: 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data'
   effect: 'read' | 'write'
 }
 
@@ -223,6 +223,13 @@ export type PromptBudgetInput = {
   instructions?: string
   /** Chat-first Part 1: counted as the Rules prompt section (BE route accepts it). */
   rules?: string[]
+  /**
+   * BE-4 (4c35e03): a saved bot. The estimate adds its memory block and `recall`, and
+   * `memoryLearn` defaults to the bot's own setting. Left out for a new bot.
+   */
+  agentId?: string
+  /** BE-4: offers `remember` when on. Default: the saved bot's setting, else true. */
+  memoryLearn?: boolean
 }
 
 /** POST /api/prompt-budget response: the plan a run would use, with an empty message. */

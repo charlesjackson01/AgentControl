@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { describePromptBudget, grantedToolNames, skillPromptModeLabel } from '../src/lib/prompt-budget.ts'
+import { budgetMemoryFields, describePromptBudget, grantedToolNames, skillPromptModeLabel } from '../src/lib/prompt-budget.ts'
 
 const budget = (overrides) => ({
   contextWindow: 8192,
@@ -50,12 +50,29 @@ describe('past-run skill modes', () => {
 
 describe('tools granted by the selected skills', () => {
   const skills = [
-    { id: 'a', tools: [{ name: 'csv_summary' }, { name: 'read_note' }] },
-    { id: 'b', tools: [{ name: 'read_note' }, { name: 'save_note' }] },
+    { id: 'a', tools: [{ name: 'csv_summary' }, { name: 'recall' }] },
+    { id: 'b', tools: [{ name: 'recall' }, { name: 'remember' }] },
     { id: 'legacy' },
   ]
   it('dedupes in attachment order and skips unknown or tool-less skills', () => {
-    assert.deepEqual(grantedToolNames(skills, ['b', 'a', 'missing', 'legacy']), ['read_note', 'save_note', 'csv_summary'])
+    assert.deepEqual(grantedToolNames(skills, ['b', 'a', 'missing', 'legacy']), ['recall', 'remember', 'csv_summary'])
     assert.deepEqual(grantedToolNames(skills, []), [])
+  })
+})
+
+describe('prompt budget: BE-4 memory fields (4c35e03)', () => {
+  it('saved bot: agentId only, so the BE uses its memory block, recall and saved memoryLearn', () => {
+    assert.deepEqual(budgetMemoryFields({ agentId: 'agt_1', savedLearn: true }), { agentId: 'agt_1' })
+    assert.deepEqual(budgetMemoryFields({ agentId: 'agt_1', savedLearn: false, formLearn: false }), { agentId: 'agt_1' })
+    assert.deepEqual(budgetMemoryFields({ agentId: 'agt_1', formLearn: true }), { agentId: 'agt_1' }, 'saved default is on')
+  })
+  it('saved bot: memoryLearn added only when the form changed it from the saved value', () => {
+    assert.deepEqual(budgetMemoryFields({ agentId: 'agt_1', savedLearn: true, formLearn: false }), { agentId: 'agt_1', memoryLearn: false })
+    assert.deepEqual(budgetMemoryFields({ agentId: 'agt_1', savedLearn: false, formLearn: true }), { agentId: 'agt_1', memoryLearn: true })
+  })
+  it('new bot: no agentId, memoryLearn as the form has it (default on)', () => {
+    assert.deepEqual(budgetMemoryFields({}), { memoryLearn: true })
+    assert.deepEqual(budgetMemoryFields({ agentId: null, formLearn: false }), { memoryLearn: false })
+    assert.deepEqual(budgetMemoryFields({ agentId: '', formLearn: true }), { memoryLearn: true })
   })
 })

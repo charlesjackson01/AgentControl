@@ -74,9 +74,9 @@ const VERBS: Record<string, string> = {
   run_command: 'Ran',
   web_search: 'Searched the web',
   fetch_url: 'Fetched',
-  read_note: 'Read note',
-  save_note: 'Saved note',
-  list_notes: 'Listed notes',
+  // BE-4: the notes tools were retired; memory tools replace them.
+  remember: 'Remembered',
+  recall: 'Recalled',
   compare_text: 'Compared',
   diff_text: 'Compared',
 }

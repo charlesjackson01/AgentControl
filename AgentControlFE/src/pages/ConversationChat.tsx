@@ -353,7 +353,7 @@ export default function ConversationChat() {
                       mid={m.id}
                       hit={m.id === jumpId}
                       before={act && <ActivityCard view={act} />}
-                      after={act && <FileCards files={act.files} />}
+                      after={act && <FileCards files={act.files} conversationId={conversationId} />}
                     >
                       {view.text}
                       {view.kind === 'error' && retryText !== undefined && item.index === lastIdx && canSend && (

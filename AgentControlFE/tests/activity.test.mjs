@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { readFileSync } from 'node:fs'
-import { MAX_STEPS, activityLabel, activityView, stepVerb } from '../src/lib/activity.ts'
+import { MAX_STEPS, activityLabel, activityView, fileOpenPath, stepVerb } from '../src/lib/activity.ts'
 
 const mockup04 = {
   skills: [{ id: 'obra/systematic-debugging', name: 'systematic-debugging', source: 'obra/superpowers' }],
@@ -155,9 +155,19 @@ describe('activity card: component wiring', () => {
     const css = readFileSync(new URL('../src/shell.css', import.meta.url), 'utf8')
     assert.match(css, /\.cf-act__body\[hidden\] \{ display: none; \}/, 'display:flex must not override hidden')
   })
-  it('Open is disabled (not faked) and there is no Download yet', () => {
-    assert.match(src, /cf-fcard__open" disabled/)
-    assert.doesNotMatch(src, /Download<\/button>|href=/)
+  it('Open links to the Files panel at the file (GAP-7 resolved); still no Download', () => {
+    assert.match(src, /<Link className="cf-btn cf-fcard__open" to=\{fileOpenPath\(conversationId, f\.path\)\}/)
+    assert.doesNotMatch(src, /cf-fcard__open" disabled/)
+    assert.doesNotMatch(src, />\s*Download\s*</, "no Download action")
+    const chat = readFileSync(new URL('../src/pages/ConversationChat.tsx', import.meta.url), 'utf8')
+    assert.match(chat, /<FileCards files=\{act\.files\} conversationId=\{conversationId\} \/>/)
+  })
+  it('fileOpenPath opens this chat with ?panel=files&path=<file>', () => {
+    assert.equal(fileOpenPath('conv-1', 'workspace/briefs/lindmere-harbor.md'), '/c/conv-1?panel=files&path=workspace%2Fbriefs%2Flindmere-harbor.md')
+    assert.equal(fileOpenPath('c 2', 'shared/a b.txt'), '/c/c%202?panel=files&path=shared%2Fa+b.txt')
+    const qs = new URLSearchParams(fileOpenPath('x', 'shared/site-photos/p.png').split('?')[1])
+    assert.equal(qs.get('panel'), 'files')
+    assert.equal(qs.get('path'), 'shared/site-photos/p.png')
   })
   it('ConversationChat puts the card above the bubble and file cards below it', () => {
     const chat = readFileSync(new URL('../src/pages/ConversationChat.tsx', import.meta.url), 'utf8')

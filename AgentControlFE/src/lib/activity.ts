@@ -8,6 +8,7 @@
  */
 import type { ActivatedSkill, MessageActivity } from './types'
 import { humanSize, relativeTime } from './file-format.ts'
+import { chatPanelPath } from './commands.ts'
 
 export const MAX_STEPS = 20
 
@@ -25,7 +26,7 @@ export type ActivityFile = { path: string; name: string; dir: string; change: 'a
  *   GAP-5 several skills: names joined in the header; sources listed in the body.
  *   GAP-6 file cards: resolved by BE-3 (`bytes`, `modifiedAt`): "folder · 2.4 KB · updated just now"
  *         as in mockup 04. Until BE-3 lands, entries without them keep "folder · modified".
- *   GAP-7 Open disabled (stock disabled button); Download left out.
+ *   GAP-7 resolved (FE-4): Open links to the Files panel at the file's path (fileOpenPath); Download left out.
  *   GAP-8 20-step cap: rows simply stop at 20, no "more" line.
  *   GAP-9 a message with only files: file cards, no skill card.
  */
@@ -152,4 +153,9 @@ export function activityLabel(v: ActivityView): string {
     v.count || null,
     v.failed > 0 ? `${v.failed} failed` : null,
   ].filter(Boolean).join(', ')
+}
+
+/** FE-7 file card Open (GAP-7 resolved): this chat's Files panel, picking out `path` in its folder. */
+export function fileOpenPath(conversationId: string, path: string): string {
+  return chatPanelPath(conversationId, 'files', { path })
 }

@@ -1,5 +1,6 @@
 import { useId, useState } from 'react'
-import { activityLabel, type ActivityView } from '../../lib/activity'
+import { Link } from 'react-router-dom'
+import { activityLabel, fileOpenPath, type ActivityView } from '../../lib/activity'
 
 /**
  * FE-7: the skill/steps card above an assistant bubble (mockups 04, 05b).
@@ -82,10 +83,10 @@ export function ActivityCard({ view }: { view: ActivityView }) {
 
 /**
  * FE-7: one card per file the run added or changed (mockup 04, below the bubble).
- * TODO(FE-4, BE-2): Open → Files tab at this path (`?panel=files&path=…`) and a
- * Download action once the Files API exists. Until then Open is disabled, not faked.
+ * GAP-7 resolved (FE-4): Open is a link to this chat's Files panel at the file's path
+ * (`?panel=files&path=…`), which picks the file out in its folder. Download: not in v3, left out.
  */
-export function FileCards({ files }: { files: ActivityView['files'] }) {
+export function FileCards({ files, conversationId }: { files: ActivityView['files']; conversationId: string }) {
   if (files.length === 0) return null
   return (
     <ul className="cf-fcards" aria-label="Files changed">
@@ -99,10 +100,10 @@ export function FileCards({ files }: { files: ActivityView['files'] }) {
               {f.meta}
             </span>
           </span>
-          {/* GAP-7: Open is enabled in mockup 04; disabled with the stock style until FE-4. Download: not in v3, left out. */}
-          <button type="button" className="cf-btn cf-fcard__open" disabled title="Opening files arrives with the Files tab">
+          {/* Mockup 04: Open (GAP-7 resolved). Download: not in v3, left out. */}
+          <Link className="cf-btn cf-fcard__open" to={fileOpenPath(conversationId, f.path)} aria-label={`Open ${f.name} in Files`}>
             Open
-          </button>
+          </Link>
         </li>
       ))}
     </ul>

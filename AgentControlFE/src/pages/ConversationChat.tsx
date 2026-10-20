@@ -16,6 +16,8 @@ import { useShell } from '../state/shell-context'
 import { matchCommands, parseSlash, slashPrefix, type CommandDef } from '../lib/commands'
 import { moveActive } from '../lib/search'
 import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
+import { activityView } from '../lib/activity'
+import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
@@ -35,14 +37,17 @@ function TypingDots() {
 /** One assistant row: avatar at the bubble's foot, bubble, then its time. */
 type RowProps = { meta?: string; mid?: string; hit?: boolean; children: React.ReactNode }
 
-function BotRow({ author, meta, error, mid, hit, children }: RowProps & { author?: Agent; error?: boolean }) {
+/** `before` / `after` sit above and below the bubble (FE-7 activity card, file cards). */
+function BotRow({ author, meta, error, mid, hit, before, after, children }: RowProps & { author?: Agent; error?: boolean; before?: React.ReactNode; after?: React.ReactNode }) {
   return (
     <div className={`cf-row${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
       <span className="cf-row__av">
         <Avatar name={author?.name ?? 'Bot'} agentId={author?.id} avatar={author?.avatar} color={author?.color} size="md" decorative />
       </span>
       <div className="cf-grp">
+        {before}
         <div className={`cf-bub cf-bub--a${error ? ' cf-bub--error' : ''}`}>{children}</div>
+        {after}
         {meta && <div className="cf-bt">{meta}</div>}
       </div>
     </div>
@@ -336,8 +341,18 @@ export default function ConversationChat() {
                       </UserRow>
                     )
                   const retryText = view.kind === 'error' ? retryTextBefore(messages, item.index) : undefined
+                  const act = activityView(m.activity)
                   return (
-                    <BotRow key={item.key} author={authorOf(m)} meta={item.meta} error={view.kind === 'error'} mid={m.id} hit={m.id === jumpId}>
+                    <BotRow
+                      key={item.key}
+                      author={authorOf(m)}
+                      meta={item.meta}
+                      error={view.kind === 'error'}
+                      mid={m.id}
+                      hit={m.id === jumpId}
+                      before={act && <ActivityCard view={act} />}
+                      after={act && <FileCards files={act.files} />}
+                    >
                       {view.text}
                       {view.kind === 'error' && retryText !== undefined && item.index === lastIdx && canSend && (
                         <button type="button" className="chat__retry" onClick={() => void send(retryText)} disabled={sending}>

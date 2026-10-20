@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { dialogStack } from '../lib/dialog-stack'
-import { FOCUSABLE_SELECTOR, initialFocus, restoreTarget, shouldRestore, tabTarget } from '../lib/dialog-focus'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 
 type DialogProps = {
   open: boolean
@@ -13,90 +12,9 @@ type DialogProps = {
   children: ReactNode
 }
 
-/** What each <Dialog> puts on the stack, so a closing nested dialog can find the panel below it. */
-type DialogToken = { panel: () => HTMLElement | null }
-
-/** Tab-able elements in the panel, in DOM order, skipping hidden and tabindex=-1 ones. */
-function focusableIn(panel: HTMLElement): HTMLElement[] {
-  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
-  )
-}
-
-function activeElement(): HTMLElement | null {
-  const a = document.activeElement
-  return a instanceof HTMLElement ? a : null
-}
-
 export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
-  // Identity for the dialog stack; onClose via a ref so a new callback each render
-  // doesn't re-register this dialog (which would move it back to the top).
-  const [token] = useState<DialogToken>(() => ({ panel: () => panelRef.current }))
-  // The element focused before this dialog opened, captured during the render that
-  // opens it: before React's autoFocus or our effect moves focus into the panel.
-  const [opener, setOpener] = useState<HTMLElement | null>(() => (open ? activeElement() : null))
-  const [wasOpen, setWasOpen] = useState(open)
-  if (open !== wasOpen) {
-    setWasOpen(open)
-    if (open) setOpener(activeElement())
-  }
-  const onCloseRef = useRef(onClose)
-  useEffect(() => {
-    onCloseRef.current = onClose
-  })
-
-  useEffect(() => {
-    if (!open) return
-    dialogStack.open(token)
-
-    const onKey = (e: KeyboardEvent) => {
-      // A dialog opened on top of this one owns the keyboard.
-      if (!dialogStack.isTop(token)) return
-      if (e.key === 'Escape') {
-        e.stopPropagation()
-        onCloseRef.current()
-        return
-      }
-      // Keep Tab inside the dialog, and pull it back in if focus got out.
-      const panel = panelRef.current
-      if (e.key !== 'Tab' || !panel) return
-      const active = activeElement()
-      const target = tabTarget(focusableIn(panel), active, active !== null && panel.contains(active), e.shiftKey, panel)
-      if (target) {
-        e.preventDefault()
-        target.focus()
-      }
-    }
-
-    document.addEventListener('keydown', onKey)
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-
-    // Move focus into the panel, unless an autoFocus child already put it there.
-    const panel = panelRef.current
-    if (panel) {
-      const active = activeElement()
-      if (!active || !panel.contains(active)) {
-        initialFocus(panel.querySelector<HTMLElement>('[data-autofocus]'), focusableIn(panel), panel).focus()
-      }
-    }
-
-    return () => {
-      const wasTop = dialogStack.isTop(token)
-      dialogStack.close(token)
-      // By now React has removed the panel, so focus is usually on <body>.
-      const active = document.activeElement
-      const activeIsBody = !active || active === document.body
-      const activeInside = !!panel && !!active && panel.contains(active)
-      if (shouldRestore(activeIsBody, activeInside, wasTop)) {
-        const below = dialogStack.top() as DialogToken | undefined
-        restoreTarget(opener, !!opener?.isConnected, below?.panel())?.focus()
-      }
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previousOverflow
-    }
-  }, [open, token, opener])
+  useDialogFocus(open, panelRef, onClose)
 
   if (!open) return null
 

@@ -34,8 +34,8 @@ describe('dialog stack (Esc goes to the topmost dialog)', () => {
     s.close(c)
     assert.equal(s.isTop(a), true)
   })
-  it('Dialog.tsx only acts on keys when it is the top dialog', () => {
-    const src = readFileSync(new URL('../src/components/Dialog.tsx', import.meta.url), 'utf8')
+  it('useDialogFocus (Dialog and ConfirmDialog) only acts on keys when it is the top dialog', () => {
+    const src = readFileSync(new URL('../src/hooks/useDialogFocus.ts', import.meta.url), 'utf8')
     assert.match(src, /if \(!dialogStack\.isTop\(token\)\) return/)
     assert.match(src, /dialogStack\.open\(token\)/)
     assert.match(src, /dialogStack\.close\(token\)/)

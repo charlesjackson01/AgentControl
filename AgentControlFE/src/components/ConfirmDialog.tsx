@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 
 type ConfirmDialogProps = {
   open: boolean
@@ -24,25 +25,8 @@ export default function ConfirmDialog({
   children,
 }: ConfirmDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel()
-    }
-
-    document.addEventListener('keydown', onKey)
-    document.body.style.overflow = 'hidden'
-
-    const target = panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')
-    target?.focus()
-
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = 'auto'
-    }
-  }, [open, onCancel])
+  // Same stack, focus and Esc rules as <Dialog>: nested in Settings, Esc closes only this.
+  useDialogFocus(open, panelRef, onCancel)
 
   if (!open) return null
 
@@ -50,7 +34,10 @@ export default function ConfirmDialog({
     <div
       className="dialog-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel()
+        if (e.target !== e.currentTarget) return
+        // Don't let the press blur to <body> after close restored focus to the opener.
+        e.preventDefault()
+        onCancel()
       }}
     >
       <div
@@ -59,7 +46,7 @@ export default function ConfirmDialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        data-autofocus
+        tabIndex={-1}
       >
         <div className="dialog__head">
           <div>
@@ -84,6 +71,7 @@ export default function ConfirmDialog({
           <button
             type="button"
             className="btn"
+            data-autofocus
             onClick={onCancel}
             disabled={loading}
           >

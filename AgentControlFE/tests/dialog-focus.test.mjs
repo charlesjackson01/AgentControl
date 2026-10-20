@@ -97,15 +97,34 @@ describe('dialog focus: wiring', () => {
       assert.ok(FOCUSABLE_SELECTOR.includes(sel), sel)
     }
   })
-  it('Dialog.tsx uses the helpers, makes the panel focusable and restores on close', () => {
-    const src = readFileSync(new URL('../src/components/Dialog.tsx', import.meta.url), 'utf8')
+  it('useDialogFocus uses the helpers and restores on close', () => {
+    const src = readFileSync(new URL('../src/hooks/useDialogFocus.ts', import.meta.url), 'utf8')
     assert.match(src, /initialFocus\(/)
     assert.match(src, /tabTarget\(/)
     assert.match(src, /restoreTarget\(/)
     assert.match(src, /dialogStack\.top\(\)/)
-    assert.match(src, /tabIndex=\{-1\}/)
     assert.match(src, /if \(open\) setOpener\(activeElement\(\)\)/, 'opener is captured in the render that opens the dialog')
-    assert.match(src, /e\.preventDefault\(\)\s*\n\s*onClose\(\)/, 'a backdrop press must not blur to <body> after focus was restored')
+    assert.match(src, /e\.stopPropagation\(\)\s*\n\s*onCloseRef\.current\(\)/, 'Esc stops at the top dialog')
+  })
+  for (const file of ['Dialog.tsx', 'ConfirmDialog.tsx']) {
+    it(`${file} uses useDialogFocus, a focusable panel and a backdrop that does not blur`, () => {
+      const src = readFileSync(new URL(`../src/components/${file}`, import.meta.url), 'utf8')
+      assert.match(src, /useDialogFocus\(open, panelRef, /)
+      assert.match(src, /tabIndex=\{-1\}/)
+      assert.match(src, /e\.preventDefault\(\)\s*\n\s*on(Close|Cancel)\(\)/, 'a backdrop press must not blur to <body> after focus was restored')
+      assert.doesNotMatch(src, /addEventListener\('keydown'/, 'no separate Esc/Tab handler outside the stack')
+      assert.doesNotMatch(src, /\.focus\(\)/, 'no separate focus code')
+      assert.doesNotMatch(src, /body\.style\.overflow/, 'scroll lock lives in the hook')
+    })
+  }
+  it('ConfirmDialog autofocuses Cancel, not the panel', () => {
+    const src = readFileSync(new URL('../src/components/ConfirmDialog.tsx', import.meta.url), 'utf8')
+    assert.match(src, /className="btn"\s*\n\s*data-autofocus\s*\n\s*onClick=\{onCancel\}/)
+    assert.equal((src.match(/data-autofocus/g) || []).length, 1)
+  })
+  it('the bot settings slide-over ignores Esc while a dialog is open', () => {
+    const src = readFileSync(new URL('../src/components/settings/BotSettingsPanel.tsx', import.meta.url), 'utf8')
+    assert.match(src, /e\.key === 'Escape' && !e\.defaultPrevented && !document\.querySelector\('\.dialog-backdrop/)
   })
   it('the endpoint dialog focuses Name (edit/new) and Cancel (delete)', () => {
     const src = readFileSync(new URL('../src/pages/Settings.tsx', import.meta.url), 'utf8')

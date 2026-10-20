@@ -3,7 +3,8 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
-import { PROJECTS_RETIRED } from './archive.js'
+import { NOTES_RETIRED, PROJECTS_RETIRED } from './archive.js'
+import { addMemory, deleteMemory, listMemory, parseCategory, parseText, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels, PROXY_PROTOCOLS } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
@@ -161,7 +162,7 @@ function resolveProxy(raw: unknown, current: string | undefined): string | undef
   return next
 }
 
-function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
+function parseAgentInput(store: WorkspaceStore, body: unknown, opts: { checkModel?: boolean } = {}): AgentInput {
   const raw = (body ?? {}) as Record<string, unknown>
   const name = typeof raw.name === 'string' ? raw.name.trim() : ''
   if (!name) fail(400, 'Give the agent a name.')
@@ -175,7 +176,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
   const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : ''
   if (!modelId) fail(400, 'Pick a model to run this agent on.')
   const served = store.endpointModels[endpoint.id] ?? []
-  if (served.length > 0 && !served.includes(modelId) && modelId !== endpoint.defaultModel) {
+  if (opts.checkModel !== false && served.length > 0 && !served.includes(modelId) && modelId !== endpoint.defaultModel) {
     fail(400, `Model "${modelId}" is not served by this endpoint.`)
   }
 
@@ -433,40 +434,37 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   })
   app.get('/api/tools', async () => listToolInfo())
 
-  // Notes: shared memory written by agents' notes tools. Users read and delete here.
-  const authorName = (agentId: string): string | null => store.agents.find((a) => a.id === agentId)?.name ?? null
-  app.get('/api/notes', async () =>
-    [...store.notes]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((n) => ({
-        id: n.id,
-        title: n.title,
-        tags: n.tags,
-        authorAgentId: n.authorAgentId,
-        authorName: authorName(n.authorAgentId),
-        updatedByAgentId: n.updatedByAgentId,
-        runId: n.runId,
-        createdAt: n.createdAt,
-        updatedAt: n.updatedAt,
-        chars: n.body.length,
-        snippet: n.body.length > 160 ? `${n.body.slice(0, 159)}…` : n.body,
-      })),
-  )
-  app.get('/api/notes/:id', async (request) => {
+  // Notes were folded into memory (BE-4, migration notes-to-memory-v1).
+  for (const url of ['/api/notes', '/api/notes/*']) {
+    app.all(url, async (_request, reply) =>
+      reply.status(410).send({ statusCode: 410, error: 'Request Error', message: NOTES_RETIRED }))
+  }
+
+  // BE-4 memory. Group routes reuse these handlers once groups load (BE-5).
+  const agentScope = (id: string): MemoryScope => {
+    if (!store.agents.some((a) => a.id === id)) fail(404, `No agent with id "${id}"`)
+    return { kind: 'agent', agentId: id }
+  }
+  app.get('/api/agents/:id/memory', async (request) => {
     const { id } = request.params as { id: string }
-    const note = store.notes.find((n) => n.id === id)
-    if (!note) fail(404, `No note with id "${id}"`)
-    return { ...note, authorName: authorName(note.authorAgentId) }
+    return listMemory(store, agentScope(id), request.query as MemoryQuery)
   })
-  app.delete('/api/notes/:id', async (request, reply) => {
+  app.post('/api/agents/:id/memory', async (request, reply) => {
     const { id } = request.params as { id: string }
-    if (!store.notes.some((n) => n.id === id)) fail(404, `No note with id "${id}"`)
-    const previous = store.notes
-    store.notes = store.notes.filter((n) => n.id !== id)
-    if (!store.save()) {
-      store.notes = previous
-      fail(500, 'The note could not be deleted from storage. Please retry.')
-    }
+    const scope = agentScope(id)
+    const raw = (request.body ?? {}) as Record<string, unknown>
+    if (typeof raw !== 'object' || Array.isArray(raw)) fail(400, 'Send { text, category }.')
+    const text = parseText(raw.text, true)!
+    const category = parseCategory(raw.category, 'other')!
+    return reply.status(201).send(addMemory(store, scope, text, category, { kind: 'user' }))
+  })
+  app.patch('/api/agents/:id/memory/:memoryId', async (request) => {
+    const { id, memoryId } = request.params as { id: string; memoryId: string }
+    return updateMemory(store, agentScope(id), memoryId, request.body)
+  })
+  app.delete('/api/agents/:id/memory/:memoryId', async (request, reply) => {
+    const { id, memoryId } = request.params as { id: string; memoryId: string }
+    deleteMemory(store, agentScope(id), memoryId)
     return reply.status(204).send()
   })
   // Projects were retired (BE-1): every old route answers 410. The data is in
@@ -534,6 +532,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (raw.instructions !== undefined && typeof raw.instructions !== 'string') {
       fail(400, '"instructions" must be a string.')
     }
+    if (raw.memoryLearn !== undefined && typeof raw.memoryLearn !== 'boolean') {
+      fail(400, '"memoryLearn" must be true or false.')
+    }
     const endpoint = store.endpoints.find((e) => e.id === endpointId)
     if (!endpoint) fail(400, `No endpoint with id "${endpointId.slice(0, 100)}". Pick an existing endpoint.`)
 
@@ -546,6 +547,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const plan = planPrompt({
       instructions: withRules,
       skills: attachedSkills(store.skills, skillIds),
+      // BE-4: a draft has no memories yet; remember is offered like a run's (memoryLearn defaults on).
+      memoryTools: raw.memoryLearn === false ? [] : ['remember'],
       input: '',
       contextWindow: endpoint.contextWindow,
       responseReserve: replyReserve(endpoint),
@@ -719,12 +722,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return agent
   })
 
-  app.put('/api/agents/:id', async (request) => {
-    const { id } = request.params as { id: string }
-    const index = store.agents.findIndex((a) => a.id === id)
-    if (index === -1) fail(404, `No agent with id "${id}"`)
+  const applyAgentUpdate = (index: number, input: AgentInput): Agent => {
     const current = store.agents[index] as Agent
-    const input = parseAgentInput(store, request.body)
     const transferPrimary = input.isPrimary === true
     // The primary flag never flips off here; transfer by promoting another agent.
     const next: Agent = { ...mergeAgent(current, input), isPrimary: transferPrimary || current.isPrimary }
@@ -736,7 +735,34 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       store.agents = store.agents.map((a, i) => (i === index ? next : a))
     }
     store.save()
+    try { ensureBotFolder(store, next) } catch { /* BOT.md catches up on the next change or boot */ }
     return next
+  }
+
+  app.put('/api/agents/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const index = store.agents.findIndex((a) => a.id === id)
+    if (index === -1) fail(404, `No agent with id "${id}"`)
+    return applyAgentUpdate(index, parseAgentInput(store, request.body))
+  })
+
+  // BE-4: any subset of the PUT fields, same rules; omitted fields keep their
+  // stored value. The model is re-checked only when modelId or endpointId changes.
+  app.patch('/api/agents/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const index = store.agents.findIndex((a) => a.id === id)
+    if (index === -1) fail(404, `No agent with id "${id}"`)
+    const body = request.body ?? {}
+    if (typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object with the fields to change.')
+    const patch = body as Record<string, unknown>
+    const current = store.agents[index] as Agent
+    const base: Record<string, unknown> = {
+      name: current.name, description: current.description, instructions: current.instructions,
+      modelId: current.modelId, endpointId: current.endpointId, role: current.role,
+      skillIds: current.skillIds, ...(current.temperature !== undefined ? { temperature: current.temperature } : {}),
+    }
+    const checkModel = 'modelId' in patch || 'endpointId' in patch
+    return applyAgentUpdate(index, parseAgentInput(store, { ...base, ...patch }, { checkModel }))
   })
 
   // Image avatars: raw image body, stored as data/avatars/<agentId>.<ext>.
@@ -870,6 +896,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     archiveBotFolder(store, agent)
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
+    // BE-4: the bot's private memory goes with it (memory/MEMORY.md is in the archived folder).
+    store.memories = store.memories.filter((m) => !(m.scope.kind === 'agent' && m.scope.agentId === id))
     removeAvatarFile(store, agent)
     clearAgentConversations(store, id, true)
     store.save()

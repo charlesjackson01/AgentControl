@@ -1,7 +1,7 @@
 ---
 name: json-inspection
 description: Inspect supplied JSON, map its structure, and retrieve fields with the local JSON query tool. Use to understand payloads, check expected values, collect a field across a list, or locate nested data.
-tools: json_query, read_note
+tools: json_query
 ---
 
 # JSON Inspection
@@ -10,7 +10,7 @@ Inspect only the JSON the user supplies, preserving value types and distinguishi
 
 ## Workflow
 
-1. Identify a literal JSON string, `@input`, or `@note:<id>`. If the run input mixes instructions and JSON, pass just the JSON as a literal string.
+1. Identify a literal JSON string or `@input`. If the run input mixes instructions and JSON, pass just the JSON as a literal string.
 2. For an unfamiliar or large document, call `json_query` with `"shape":true` (optionally at a `path`) to see keys, types and array lengths without the values.
 3. For a targeted lookup, provide a path: `a.b`, `[0]`, `[-1]` for the last item, `["odd key"]` for keys with dots or spaces, or a JSON Pointer such as `/a/b`. Use `[*]` to collect a field from every item (at most two per path); the result lists `count` and `values`, and `missing` counts items without that field.
 4. If parsing fails, describe the returned error. Do not silently repair the payload and present the repaired result as if it were the original.
@@ -21,8 +21,6 @@ Inspect only the JSON the user supplies, preserving value types and distinguishi
 Call `json_query` with `{"json":"{\"project\":{\"name\":\"Atlas\",\"active\":true}}","path":"project.name"}` to retrieve the project name.
 
 To list every order total, use `{"json":"@input","path":"orders[*].total"}` and report the returned `count`, and `missing` if some orders have no total.
-
-For JSON saved in a workspace note, use `{"json":"@note:note_123","path":"project.name"}`; `read_note` must be enabled for the note reference.
 
 ## Limits
 

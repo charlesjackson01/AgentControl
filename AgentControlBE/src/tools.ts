@@ -8,7 +8,7 @@ import type { SkillTool } from './shared/types.js'
 import type { ToolCall } from './upstream.js'
 import { dataTools } from './tools/data.js'
 import { mathTools } from './tools/math.js'
-import { notesTools } from './tools/notes.js'
+import { memoryTools } from './tools/memory.js'
 import { resolveContentRefs } from './tools/refs.js'
 import { redactSecrets } from './tools/redact.js'
 import { clipText, RESULT_MAX_CHARS } from './tools/limits.js'
@@ -32,7 +32,7 @@ export const MAX_TOOL_ARGUMENT_CHARS = 64_000
 
 export const builtinTools: ReadonlyMap<string, ToolEntry> = (() => {
   const map = new Map<string, ToolEntry>()
-  for (const entry of [...workspaceTools, ...notesTools, ...timeTools, ...mathTools, ...textTools, ...dataTools, ...skillTools]) {
+  for (const entry of [...workspaceTools, ...memoryTools, ...timeTools, ...mathTools, ...textTools, ...dataTools, ...skillTools]) {
     if (map.has(entry.name)) throw new Error(`Duplicate built-in tool "${entry.name}"`)
     map.set(entry.name, entry)
   }

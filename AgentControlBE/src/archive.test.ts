@@ -56,7 +56,8 @@ function legacyFixture() {
   }
 }
 
-const archiveFiles = () => (existsSync(join(dir, 'archive')) ? readdirSync(join(dir, 'archive')) : [])
+/** The projects archive files (BE-4's notes-to-memory-v1 writes its own notes-*.json beside them). */
+const archiveFiles = () => (existsSync(join(dir, 'archive')) ? readdirSync(join(dir, 'archive')).filter((f) => f.startsWith('projects-')) : [])
 
 describe('chat-first-archive-v1', () => {
   it('archives the project data exactly, then drops it from the live store', () => {
@@ -86,8 +87,10 @@ describe('chat-first-archive-v1', () => {
     expect(r1.projectId).toBeUndefined()
     expect(r1.hidden).toBe(true)
     expect(store.runs.find((r) => r.id === 'run_task')?.projectId).toBe('proj_1')
-    expect(store.notes).toHaveLength(1)
-    expect(store.memories).toEqual([])
+    // notes-to-memory-v1 then moves the archived note into its author's memory.
+    expect(store.notes).toHaveLength(0)
+    expect(store.memories).toHaveLength(1)
+    expect(store.memories[0]).toMatchObject({ category: 'work', scope: { kind: 'agent' } })
 
     const saved = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
     expect('projects' in saved).toBe(false)

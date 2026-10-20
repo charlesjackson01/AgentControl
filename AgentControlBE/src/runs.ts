@@ -6,6 +6,8 @@
  */
 import { recordRunMessages } from './conversations.js'
 import { fail, uid } from './http.js'
+import { dmOf } from './conversations.js'
+import { memoryPromptBlock, sameScope, type MemoryScope } from './memory.js'
 import { agentInstructions, attachedSkills, planPrompt, replyReserve } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
@@ -24,6 +26,13 @@ export interface RunOptions {
    * and keeps any toolCalls already recorded.
    */
   signal?: AbortSignal
+  /**
+   * BE-4 (wired by BE-5): set for a group run. Memory then comes from the
+   * group's scope and the bot's private memory is not injected.
+   */
+  group?: { id: string; memoryLearn: boolean }
+  /** Conversation the run belongs to (memory source); defaults to the agent's DM. */
+  conversationId?: string
 }
 
 /** Runs kept per agent and scope (its own chat, or one project). */
@@ -97,7 +106,15 @@ async function executeRunInner(
   // registry tools the skills declare plus the skill tools; only these may
   // execute. Empty => no `tools` key upstream.
   const injectedSkills = attachedSkills(store.skills, agent.skillIds)
+  // BE-4: a DM run uses the bot's memory; a group run only the group's.
+  const memoryScope: MemoryScope = opts.group ? { kind: 'group', groupId: opts.group.id } : { kind: 'agent', agentId: agent.id }
+  const memoryLearn = opts.group ? opts.group.memoryLearn : agent.memoryLearn
+  const conversationId = opts.conversationId ?? (opts.group ? opts.group.id : dmOf(store, agent.id)?.id)
+  const memory = memoryPromptBlock(store, memoryScope)
+  const hasMemory = store.memories.some((m) => sameScope(m.scope, memoryScope))
   const plan = planPrompt({
+    memory,
+    memoryTools: [...(memoryLearn ? ['remember'] : []), ...(hasMemory ? ['recall'] : [])],
     instructions: agentInstructions(agent.instructions, agent.rules),
     skills: injectedSkills,
     input,
@@ -180,6 +197,10 @@ async function executeRunInner(
     writes: { count: 0 },
     catalogSkillIds: new Set(plan.catalogSkillIds),
     activatedSkills: activated,
+    memoryScope,
+    memoryLearn,
+    ...(conversationId !== undefined ? { conversationId } : {}),
+    memoryWrites: { count: 0 },
   }
 
   const signal = opts.signal

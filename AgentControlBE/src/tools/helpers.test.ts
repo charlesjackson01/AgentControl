@@ -41,17 +41,6 @@ describe('redaction of configured secrets', () => {
     expect(redactSecrets(JSON.stringify({ v: 'q"uote\\d' }), ctx.store)).toBe(`{"v":"${REDACTED}"}`)
   })
 
-  it('redacts "@note:" content before the handler, so counts cannot probe a stored secret', async () => {
-    ctx.store.endpointKeys.ep_local_llama = 'hunter2-long-secret'
-    expect((await call('save_note', { title: 'Sensitive', body: 'db password: hunter2-long-secret\nother line' })).ok).toBe(true)
-    // Output redaction alone would hide the line but still report it matched;
-    // the count must not reveal that the note contains the secret.
-    const probe = await call('process_lines', { text: '@note:Sensitive', operation: 'filter', match: 'hunter2' })
-    expect(probe.ok).toBe(true)
-    expect((JSON.parse(probe.content) as { matched: number }).matched).toBe(0)
-    const control = await call('process_lines', { text: '@note:Sensitive', operation: 'filter', match: 'other' })
-    expect((JSON.parse(control.content) as { matched: number }).matched).toBe(1)
-  })
 })
 
 describe('clipText', () => {

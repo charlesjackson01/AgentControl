@@ -14,7 +14,7 @@ import {
 } from './db/seed.js'
 import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
 import { createVault } from './vault.js'
-import { ARCHIVE_MIGRATION, writeProjectArchive, type ProjectArchive } from './archive.js'
+import { ARCHIVE_MIGRATION, migrateNotesToMemory, NOTES_MIGRATION, writeProjectArchive, type ProjectArchive } from './archive.js'
 import { backfillAuthors, backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
 import { AGENT_SLUG, INTERNET_POLICIES, MAX_MEMORY_TEXT_CHARS, MEMORY_CATEGORIES, SKILL_SOURCE_IDS } from './shared/types.js'
 import type {
@@ -75,7 +75,7 @@ export interface StoreMeta {
 
 /** Every one-shot migration; fresh stores are born with all of them applied. */
 export const VENDOR_SKILLS_MIGRATION = 'vendor-skills-v1'
-const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3', ARCHIVE_MIGRATION, VENDOR_SKILLS_MIGRATION] as const
+const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3', ARCHIVE_MIGRATION, VENDOR_SKILLS_MIGRATION, NOTES_MIGRATION, 'seed-skill-upgrade-v4'] as const
 
 /** A seed exactly as an earlier release shipped it: body sha256 and tool names in order. */
 interface SeedUpgrade {
@@ -121,6 +121,24 @@ const SEED_UPGRADES: readonly { migration: (typeof MIGRATIONS)[number]; skills: 
       { id: 'json-inspection', fromContentSha256: '0554323d8f540b857f8c2b9076619cac60af54f73af958b5cf66834b7538fca7', fromTools: ['json_query', 'read_note'] },
       { id: 'csv-analysis', fromContentSha256: '63ad70fea13c2bb21d3327b93904827b2c92b1897caae988482f55b45fcccb7b', fromTools: ['csv_summary', 'read_note'] },
       { id: 'workspace-audit', fromContentSha256: '60ac72c694861e4f9361c4452db690107426df2634e6b28b73f8f6c3768b7ccd', fromTools: ['list_agents', 'list_skills', 'read_run_log', 'get_agent', 'workspace_overview'] },
+    ],
+  },
+  {
+    // v4 (BE-4): the notes tools were retired; seeds drop list_notes,
+    // read_note, save_note and @note refs, and notes-organizer uses memory.
+    migration: 'seed-skill-upgrade-v4',
+    skills: [
+      { id: 'csv-analysis', fromContentSha256: 'ac68384c1e1ed62991f09ba17710f7bd2a3ab15da74fbc6c2510c3dfe6b34869', fromTools: ['csv_summary', 'calculate', 'read_note'] },
+      { id: 'deep-research', fromContentSha256: 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67', fromTools: ['list_notes', 'read_note', 'save_note', 'extract_entities'] },
+      { id: 'encoding-and-hashing', fromContentSha256: '5c87dcdcbc4ce42d402dd3f273718f2fc6ce00dfb9590b55fcff09b9df7e42bc', fromTools: ['encode_text', 'read_note', 'save_note'] },
+      { id: 'json-inspection', fromContentSha256: '33d5d2e6041248f3459ff43102c4a503b231410cf1c7096a4eb2bd09fd9e16a5', fromTools: ['json_query', 'read_note'] },
+      { id: 'meeting-notes', fromContentSha256: 'a3032ab5d77bdc96779a49d125a8235fd50c2b9f81b8d011270ffdf76b7c7819', fromTools: ['list_notes', 'read_note', 'save_note'] },
+      { id: 'notes-organizer', fromContentSha256: 'd45264a1958a9532e9e8ebf9913f3aafd6432e0667622c86e948b9061b362bb3', fromTools: ['list_notes', 'read_note', 'save_note'] },
+      { id: 'release-notes', fromContentSha256: '52748d62decafefd83482325d1fe684031ae893cfc86433013caa0cc45df2722', fromTools: ['diff_text', 'extract_entities', 'read_note', 'save_note'] },
+      { id: 'summarization', fromContentSha256: 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a', fromTools: ['text_stats', 'read_note', 'save_note'] },
+      { id: 'technical-writing', fromContentSha256: '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229', fromTools: ['text_stats', 'diff_text', 'read_note', 'save_note'] },
+      { id: 'text-cleanup', fromContentSha256: '4e40a7184e63dcc4cd6709db178d6b25f9b60ec0218c25062b5e7132394109e6', fromTools: ['text_stats', 'transform_text', 'read_note', 'process_lines', 'extract_entities'] },
+      { id: 'text-comparison', fromContentSha256: '21c6fdfd11c44d1f38c724a10637d796ccd1c5b1deee2c5f302e62bfba0ce636', fromTools: ['diff_text', 'compare_text', 'read_note'] },
     ],
   },
 ]
@@ -696,6 +714,20 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
       migrated = true
     } else {
       archiveFailed = true
+    }
+  }
+  // notes-to-memory-v1 (BE-4), after the projects archive so that copy keeps its notes.
+  if (!pending && !data.meta.migrations.includes(NOTES_MIGRATION)) {
+    try {
+      const { items, result } = migrateNotesToMemory(dir, data.notes, data.agents,
+        (agentId) => data.conversations.find((c) => c.kind === 'dm' && c.agentId === agentId)?.id, new Date())
+      data.memories = [...data.memories, ...items]
+      data.notes = []
+      data.meta.migrations.push(NOTES_MIGRATION)
+      migrated = true
+      if (result.archived > 0) console.log(`[store] ${NOTES_MIGRATION}: archived ${result.archived} notes to ${result.file}, migrated ${result.migrated}`)
+    } catch (err) {
+      console.error(`[store] ${NOTES_MIGRATION} aborted, notes left in place: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
   // One-time migration: move any plaintext keys into the encrypted vault.

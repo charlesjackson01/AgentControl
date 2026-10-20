@@ -131,14 +131,6 @@ describe('paged reads fit the room the run has left', () => {
     expect(text).toBe(skill.content)
   })
 
-  it('read_note shrinks its page the same way', async () => {
-    store.notes.push({ id: 'n1', title: 'Long', body: 'x'.repeat(9000), tags: [], authorAgentId: 'a', createdAt: '', updatedAt: '' } as never)
-    const out = await call('read_note', { note: 'Long' }, ctxFor(900))
-    expect(out.ok).toBe(true)
-    expect(out.content.length).toBeLessThanOrEqual(900)
-    expect((JSON.parse(out.content) as { nextOffset: number }).nextOffset).toBeGreaterThan(0)
-  })
-
   it('says the run is out of room instead of returning a sliver', async () => {
     const out = await call('get_skill', { skill: 'core/deep-research' }, ctxFor(400))
     expect(out.ok).toBe(false)

@@ -360,61 +360,7 @@ describe('list_skills redaction', () => {
   })
 })
 
-describe('read_note paging and redaction', () => {
-  it('pages a 20,000-char note exactly, keeping the other fields and the untrusted flag', async () => {
-    let body = ''
-    for (let i = 0; body.length < 20_000; i++) body += `Line ${i}: "quoted" \\ value 😀\n`
-    body = body.slice(0, 20_000)
-    if (/[\ud800-\udbff]$/.test(body)) body = `${body.slice(0, -1)}.`
-    ctx.store.notes = [makeNote({ title: 'Long', body, tags: ['ops', 'big'] })]
-    const pages = await walk('read_note', { note: 'long' }, 'body')
-    expect(pages.map((p) => p.body).join('')).toBe(body)
-    expect(pages.length).toBeGreaterThanOrEqual(8)
-    for (const page of pages) {
-      expect(page).toMatchObject({ id: 'note_long', title: 'Long', tags: ['ops', 'big'], authorAgentId: 'a1',
-        updatedByAgentId: 'a1', runId: 'r0', totalChars: 20_000, untrusted: true })
-    }
-    const past = await failure('read_note', { note: 'Long', offset: 20_000 })
-    expect(past).toContain('past the end')
-    expect(exampleOf(past)).toEqual({ note: 'note_long', offset: 0 })
-  })
-
-  it('returns a short note whole, as before', async () => {
-    ctx.store.notes = [makeNote({ title: 'Decision', body: 'Use the stable API.' })]
-    expect(await ok('read_note', { note: 'decision' })).toMatchObject({
-      title: 'Decision', body: 'Use the stable API.', offset: 0, nextOffset: null, totalChars: 19, untrusted: true,
-    })
-  })
-
-  it('redacts a key at the old fitJson clip edge, across page edges, and in title and tags', async () => {
-    const body = `${'.'.repeat(2495)}${KEY}${'.'.repeat(5000)}${KEY}${'.'.repeat(10_000)}`
-    // An explicit id: the default one is derived from the title, which holds the key.
-    ctx.store.notes = [makeNote({ id: 'note_secret', title: `${'T'.repeat(150)}${KEY}`, body, tags: [`t-${KEY}`] })]
-    const pages = await walk('read_note', { note: 'note_secret' }, 'body')
-    expect(pages.map((p) => p.body).join('')).toBe(redactSecrets(body, ctx.store))
-    for (const page of pages) expectNoKey(JSON.stringify(page), `page at ${page.offset}`)
-    expect(pages[0]!.title).toBe(`${'T'.repeat(150)}${REDACTED}`)
-    expect(pages[0]!.tags).toEqual([`t-${REDACTED}`])
-    for (let offset = 2485; offset < 2525; offset++) {
-      expectNoKey((await call('read_note', { note: 'note_secret', offset })).content, `offset ${offset}`)
-    }
-  })
-})
-
 describe('list_notes and read_run_log redaction', () => {
-  it('does not let a list_notes query probe a secret stored in a note', async () => {
-    ctx.store.notes = [makeNote({ title: 'Creds', body: `db key: ${KEY}\nother line` })]
-    expect((await ok('list_notes', { query: KEY.slice(0, 8) })).total).toBe(0)
-    expect((await ok('list_notes', { query: 'other line' })).total).toBe(1)
-  })
-
-  it('redacts note titles and tags in list_notes', async () => {
-    ctx.store.notes = [makeNote({ id: 'note_k', title: `${'x'.repeat(150)}${KEY}`, body: 'b', tags: [`k${KEY}`] })]
-    const out = await call('list_notes')
-    expect(out.ok).toBe(true)
-    expectNoKey(out.content)
-  })
-
   it('redacts a key at the old 500-char read_run_log clip edge', async () => {
     const run: AgentRun = { id: 'run1', agentId: 'a1', startedAt: '2026-10-12T05:00:00.000Z', status: 'failed',
       durationMs: 1, steps: 1, input: `${'.'.repeat(496)}${KEY}`, output: `${'.'.repeat(490)}${KEY}`, error: null }

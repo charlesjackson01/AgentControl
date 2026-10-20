@@ -109,9 +109,9 @@ const leadSkills = (): Skill[] => LEAD_SKILL_IDS.map((id) => store.skills.find((
 /** BE-7: what every run sends: instructions, then the catalog of the attached skills. */
 const catalogSystem = (skills: Skill[]): string => `${LEAD_INSTRUCTIONS}\n\n${skillCatalog(skills)}`
 
-/** Tools the attached skills declare, deduped in order, then activate_skill. */
+/** Tools the attached skills declare, deduped in order, then activate_skill, then remember (BE-4; memoryLearn defaults on). */
 const offeredTools = (skills: Skill[]): string[] => [
-  ...new Set([...skills.flatMap((s) => s.tools.map((t) => t.name)).filter((name) => toolDeclaration(name)), 'activate_skill']),
+  ...new Set([...skills.flatMap((s) => s.tools.map((t) => t.name)).filter((name) => toolDeclaration(name)), 'activate_skill', 'remember']),
 ]
 
 beforeEach(() => {
@@ -255,7 +255,7 @@ describe('POST /api/prompt-budget', () => {
     expect(noisy.statusCode).toBe(200)
     expect(noisy.json()).toEqual(plain)
 
-    const none = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', skillIds: [] })).json()
+    const none = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', skillIds: [], memoryLearn: false })).json()
     expect(none).toEqual({
       contextWindow: 8192,
       responseReserve: RESPONSE_RESERVE,
@@ -266,6 +266,12 @@ describe('POST /api/prompt-budget', () => {
       summarizedSkillIds: [],
       toolNames: [],
     })
+    // BE-4: memoryLearn defaults on, so a skill-less draft still offers remember.
+    const learning = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', skillIds: [] })).json() as PromptBudget
+    expect(learning.toolNames).toEqual(['remember'])
+    expect(learning.estimatedTokens).toBe(Math.ceil(JSON.stringify([toolDeclaration('remember')]).length / 4))
+    const bad = await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', memoryLearn: 'yes' })
+    expect(bad.statusCode).toBe(400)
   })
 
   it('400s for an unknown endpoint or a malformed body', async () => {

@@ -1,7 +1,7 @@
 ---
 name: text-cleanup
 description: Clean supplied text, normalize whitespace, sort, deduplicate, count or filter lines, and pull out URLs, emails, dates and numbers with local text tools. Use for deterministic edits and list work with visible before/after effects.
-tools: text_stats, transform_text, read_note, process_lines, extract_entities
+tools: text_stats, transform_text, process_lines, extract_entities
 ---
 
 # Text Cleanup
@@ -10,7 +10,7 @@ Apply only the requested transformations and preserve meaning, identifiers, and 
 
 ## Workflow
 
-1. Identify the source text and requested edits. Use `@input` for the entire current input or `@note:<id>` for a saved note; use a literal excerpt if the input also contains instructions.
+1. Identify the source text and requested edits. Use `@input` for the entire current input; use a literal excerpt if the input also contains instructions.
 2. For list work, call `process_lines` with one `operation`: `sort` (natural: 2 before 10), `sort_desc`, `dedupe`, `count` (frequency table), `filter` (needs `match`), or `sample`. `match` narrows any operation; `limit` caps rows.
 3. To pull out links, addresses, dates or numbers, call `extract_entities` with `kinds` such as `["emails","urls"]`.
 4. For whole-text edits, call `transform_text` with `trim`, `lowercase`, `uppercase`, `collapse_whitespace` or a literal `replace`. Use `text_stats` when size or line counts help verify the edit.

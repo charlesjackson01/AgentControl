@@ -13,25 +13,25 @@ import { coreSkillId, seedSkills, vendoredSeedSkills } from './seed.js'
 const expectedVendoredTools: Record<string, string[]> = {
   'code-review': ['diff_text', 'process_lines', 'extract_entities'],
   debugging: ['process_lines', 'extract_entities', 'diff_text', 'read_run_log'],
-  'deep-research': ['list_notes', 'read_note', 'save_note', 'extract_entities'],
+  'deep-research': ['extract_entities'],
   'multi-agent-orchestration': ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log', 'get_skill'],
-  summarization: ['text_stats', 'read_note', 'save_note'],
-  'technical-writing': ['text_stats', 'diff_text', 'read_note', 'save_note'],
+  summarization: ['text_stats'],
+  'technical-writing': ['text_stats', 'diff_text'],
 }
 
 const expectedTools: Record<string, string[]> = {
   'calculation-checker': ['calculate'],
   'unit-conversion': ['convert_units', 'calculate'],
   'date-arithmetic': ['current_time', 'date_difference', 'add_date', 'resolve_date'],
-  'text-cleanup': ['text_stats', 'transform_text', 'read_note', 'process_lines', 'extract_entities'],
-  'text-comparison': ['diff_text', 'compare_text', 'read_note'],
-  'json-inspection': ['json_query', 'read_note'],
-  'csv-analysis': ['csv_summary', 'calculate', 'read_note'],
-  'notes-organizer': ['list_notes', 'read_note', 'save_note'],
-  'meeting-notes': ['list_notes', 'read_note', 'save_note'],
+  'text-cleanup': ['text_stats', 'transform_text', 'process_lines', 'extract_entities'],
+  'text-comparison': ['diff_text', 'compare_text'],
+  'json-inspection': ['json_query'],
+  'csv-analysis': ['csv_summary', 'calculate'],
+  'notes-organizer': [],
+  'meeting-notes': [],
   'workspace-audit': ['list_agents', 'list_skills', 'read_run_log', 'get_agent', 'workspace_overview', 'get_skill'],
-  'encoding-and-hashing': ['encode_text', 'read_note', 'save_note'],
-  'release-notes': ['diff_text', 'extract_entities', 'read_note', 'save_note'],
+  'encoding-and-hashing': ['encode_text'],
+  'release-notes': ['diff_text', 'extract_entities'],
 }
 
 const authored = seedSkills.filter((skill) => skill.source === 'AgentControl')
@@ -70,7 +70,8 @@ describe('authored seed library', () => {
   })
 
   it('declares every registry tool an authored body tells the model to call', () => {
-    const registry = listToolInfo().map((tool) => tool.name)
+    // remember/recall are offered by the run itself (BE-4: memoryLearn and the scope decide), never by a skill.
+    const registry = listToolInfo().map((tool) => tool.name).filter((name) => name !== 'remember' && name !== 'recall')
     for (const skill of authored) {
       const mentioned = registry.filter((name) => skill.content.includes(`\`${name}\``) || skill.content.includes(`${name}(`))
       const declared = skill.tools.map((tool) => tool.name)

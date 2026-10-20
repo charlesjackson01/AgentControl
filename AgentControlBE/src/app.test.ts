@@ -311,7 +311,7 @@ describe('POST /api/agents/:id/runs', () => {
     expect(system).toContain('Skills (call activate_skill to use one):\n- core/summarization: ')
     expect(system).toContain(catalogLine(skill))
     expect(system).not.toContain(skill.content.slice(0, 120))
-    expect((req as { tools?: { function: { name: string } }[] }).tools?.map((t) => t.function.name)).toEqual(['activate_skill'])
+    expect((req as { tools?: { function: { name: string } }[] }).tools?.map((t) => t.function.name)).toEqual(['activate_skill', 'remember'])
   })
 })
 
@@ -504,7 +504,10 @@ describe('context budget before upstream', () => {
       endpointId,
       skillIds: [],
     })
-    return (ag.json() as Agent).id
+    const id = (ag.json() as Agent).id
+    // Budget arithmetic only: keep the remember tool out of the prompt.
+    store.agents.find((a) => a.id === id)!.memoryLearn = false
+    return id
   }
 
   it('drops oldest history turns and keeps the newest', async () => {
@@ -582,6 +585,10 @@ describe('tool execution loop', () => {
         type: 'function',
         function: { name: 'activate_skill', description: activate?.description, parameters: activate?.parameters },
       },
+      {
+        type: 'function',
+        function: { name: 'remember', description: toolDeclaration('remember')?.description, parameters: toolDeclaration('remember')?.parameters },
+      },
     ])
 
     // Call 2 carries the assistant tool_calls turn and the matching tool result.
@@ -638,12 +645,23 @@ describe('tool execution loop', () => {
     ])
   })
 
-  it('omits the tools key when the agent has no skills', async () => {
+  it('omits the tools key when the agent has no skills and memory learning is off', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner()
+    const stored = store.agents.find((a) => a.id === agent.id)!
+    stored.skillIds = []
+    stored.memoryLearn = false
+    expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
+    expect(lastRequest(mock)).not.toHaveProperty('tools')
+  })
+
+  it('offers only remember when the agent has no skills but memory learning is on', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner()
     store.agents.find((a) => a.id === agent.id)!.skillIds = []
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
-    expect(lastRequest(mock)).not.toHaveProperty('tools')
+    const tools = (lastRequest(mock) as { tools?: { function: { name: string } }[] }).tools
+    expect(tools?.map((t) => t.function.name)).toEqual(['remember'])
   })
 
   it('truncates tool results at 4,000 chars with a marker', async () => {
@@ -868,10 +886,10 @@ describe('skill seeds', () => {
     const vendoredTools: Record<string, string[]> = {
       'code-review': ['diff_text', 'process_lines', 'extract_entities'],
       debugging: ['process_lines', 'extract_entities', 'diff_text', 'read_run_log'],
-      'deep-research': ['list_notes', 'read_note', 'save_note', 'extract_entities'],
+      'deep-research': ['extract_entities'],
       'multi-agent-orchestration': ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log', 'get_skill'],
-      summarization: ['text_stats', 'read_note', 'save_note'],
-      'technical-writing': ['text_stats', 'diff_text', 'read_note', 'save_note'],
+      summarization: ['text_stats'],
+      'technical-writing': ['text_stats', 'diff_text'],
     }
     expect(vendored.map((s) => s.id)).toEqual([
       'core/code-review',
@@ -1595,6 +1613,7 @@ describe('tool plumbing', () => {
       name: 'Tiny agent', description: '', instructions: '', modelId: 'm',
       endpointId: (ep.json() as Endpoint).id, skillIds: [(sk.json() as Skill).id],
     })).json() as Agent
+    store.agents.find((a) => a.id === agent.id)!.memoryLearn = false
     const padded = JSON.stringify({ pad: 'x'.repeat(1200) })
     const mock = mockChatSequence([toolCallResponse('list_skills', padded), contentResponse('never sent')])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
@@ -1609,42 +1628,23 @@ describe('tool plumbing', () => {
 })
 
 describe('tools and notes routes', () => {
-  it('runs the new tools with canonical schemas and persists notes through an agent run', async () => {
+  it('runs the new tools with canonical schemas and saves a memory through an agent run', async () => {
     const mock = mockChatSequence([
       toolCallResponse('calculate', '{"expression":"2 + 2"}', 'math'),
-      toolCallResponse('save_note', '{"title":"Verified answer","body":"4"}', 'note'),
-      contentResponse('Saved the verified answer.'),
+      toolCallResponse('remember', '{"text":"2 + 2 is 4.","category":"work"}', 'mem'),
+      contentResponse('Remembered the verified answer.'),
     ])
-    const { agent } = await makeToolRunner(['calculate', 'save_note'])
-    const response = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Calculate and save 2 + 2.' })
+    const { agent } = await makeToolRunner(['calculate'])
+    const response = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Calculate and remember 2 + 2.' })
     const run = response.json() as AgentRun
     expect(response.statusCode).toBe(200)
     expect(run.status).toBe('succeeded')
-    expect(run.toolCalls?.map((t) => [t.name, t.ok])).toEqual([['calculate', true], ['save_note', true]])
-    expect(store.notes[0]).toMatchObject({ title: 'Verified answer', body: '4', authorAgentId: agent.id, runId: run.id })
+    expect(run.toolCalls?.map((t) => [t.name, t.ok])).toEqual([['calculate', true], ['remember', true]])
+    expect(store.memories[0]).toMatchObject({ text: '2 + 2 is 4.', category: 'work', scope: { kind: 'agent', agentId: agent.id }, source: { kind: 'chat', runId: run.id, agentId: agent.id } })
     const sent = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}')
     expect(sent.tools[0].function).toEqual(toolDeclaration('calculate'))
-    expect((await inject('GET', '/api/notes')).json()[0]).toMatchObject({ title: 'Verified answer', authorName: agent.name })
-    expect(createStore(join(dir, 'store.json')).notes[0]?.body).toBe('4')
-  })
-
-  it('reports a failed note deletion and preserves the note for retry', async () => {
-    const { agent } = await makeToolRunner(['save_note'])
-    mockChatSequence([toolCallResponse('save_note', '{"title":"Keep me","body":"Saved"}'), contentResponse('ok')])
-    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Save note' })
-    const id = store.notes[0]!.id
-    const save = vi.spyOn(store, 'save').mockReturnValue(false)
-    expect((await inject('DELETE', `/api/notes/${id}`)).statusCode).toBe(500)
-    expect((await inject('GET', `/api/notes/${id}`)).statusCode).toBe(200)
-    save.mockRestore()
-    expect((await inject('DELETE', `/api/notes/${id}`)).statusCode).toBe(204)
-    expect(createStore(join(dir, 'store.json')).notes).toEqual([])
-  })
-
-  const note = (over: Partial<Note> = {}): Note => ({
-    id: 'note_1', title: 'Findings', body: 'b'.repeat(300), tags: ['research'], authorAgentId: 'agt_x',
-    updatedByAgentId: 'agt_x', runId: 'run_1', createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-02T00:00:00.000Z', ...over,
+    expect((await inject('GET', `/api/agents/${agent.id}/memory`)).json().items[0]).toMatchObject({ text: '2 + 2 is 4.' })
+    expect(createStore(join(dir, 'store.json')).memories[0]?.text).toBe('2 + 2 is 4.')
   })
 
   it('serves the registry with categories and effects', async () => {
@@ -1653,27 +1653,14 @@ describe('tools and notes routes', () => {
     expect(tools.every((t) => t.category && t.effect)).toBe(true)
   })
 
-  it('lists note previews newest first, reads one, deletes one', async () => {
-    store.notes = [note(), note({ id: 'note_2', title: 'Newer', updatedAt: '2026-02-01T00:00:00.000Z' })]
-    const list = (await inject('GET', '/api/notes')).json() as { id: string; snippet: string; chars: number }[]
-    expect(list.map((n) => n.id)).toEqual(['note_2', 'note_1'])
-    expect(list[0]?.snippet.length).toBeLessThanOrEqual(160)
-    expect(list[0]?.chars).toBe(300)
-    const one = (await inject('GET', '/api/notes/note_1')).json() as Note
-    expect(one.body).toHaveLength(300)
-    expect((await inject('DELETE', '/api/notes/note_1')).statusCode).toBe(204)
-    expect((await inject('GET', '/api/notes/note_1')).statusCode).toBe(404)
-    expect((await inject('DELETE', '/api/notes/note_1')).statusCode).toBe(404)
-  })
-
   it('gates the new routes behind the bearer token', async () => {
     process.env.AGENTCONTROL_AUTH_TOKEN = 'tok-123'
     const gated = buildApp(createStore(join(dir, 'store.json')))
     try {
-      for (const url of ['/api/tools', '/api/notes', '/api/notes/x']) {
+      for (const url of ['/api/tools', '/api/agents/x/memory', '/api/notes']) {
         expect((await gated.inject({ method: 'GET', url })).statusCode).toBe(401)
       }
-      expect((await gated.inject({ method: 'DELETE', url: '/api/notes/x' })).statusCode).toBe(401)
+      expect((await gated.inject({ method: 'DELETE', url: '/api/agents/x/memory/y' })).statusCode).toBe(401)
     } finally {
       await gated.close()
       delete process.env.AGENTCONTROL_AUTH_TOKEN
@@ -1731,13 +1718,13 @@ describe('store meta migrations', () => {
     rmSync(d, { recursive: true, force: true })
   })
 
-  it('drops malformed notes on load and keeps good ones', () => {
+  it('drops malformed notes on load and migrates the good ones into memory', () => {
     const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
     const path = join(d, 'store.json')
     writeFileSync(path, legacy({ skills: [], notes: [{ id: 'n1', title: 't', body: 'b' }, { title: 'no id' }, 'junk'] }), 'utf8')
     const loaded = createStore(path)
-    expect(loaded.notes.map((n) => n.id)).toEqual(['n1'])
-    expect(loaded.notes[0]).toMatchObject({ tags: [], authorAgentId: '', runId: '' })
+    expect(loaded.notes).toEqual([])
+    expect(loaded.memories.map((m) => m.text)).toEqual(['t: b'])
     rmSync(d, { recursive: true, force: true })
   })
 

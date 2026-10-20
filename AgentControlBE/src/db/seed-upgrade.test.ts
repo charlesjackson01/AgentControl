@@ -12,6 +12,7 @@ import { parseSkillMarkdown } from './skill-md.js'
 const V1 = 'seed-skill-tools-v1'
 const V2 = 'seed-skill-upgrade-v2'
 const V3 = 'seed-skill-upgrade-v3'
+const V4 = 'seed-skill-upgrade-v4'
 
 /** The skills whose definition changed in seed-skill-upgrade-v2 (fixtures/v1 holds the version before). */
 const UPGRADED = ['core/workspace-audit', 'core/date-arithmetic', 'core/text-cleanup', 'core/multi-agent-orchestration']
@@ -19,6 +20,11 @@ const UPGRADED = ['core/workspace-audit', 'core/date-arithmetic', 'core/text-cle
 const UPGRADED_V3 = [
   'core/code-review', 'core/debugging', 'core/deep-research', 'core/multi-agent-orchestration', 'core/summarization', 'core/technical-writing',
   'core/calculation-checker', 'core/unit-conversion', 'core/text-comparison', 'core/json-inspection', 'core/csv-analysis', 'core/workspace-audit',
+]
+/** The skills whose definition changed in seed-skill-upgrade-v4 (fixtures/v3 holds the version before): the notes tools were retired. */
+const UPGRADED_V4 = [
+  'core/csv-analysis', 'core/deep-research', 'core/encoding-and-hashing', 'core/json-inspection', 'core/meeting-notes', 'core/notes-organizer',
+  'core/release-notes', 'core/summarization', 'core/technical-writing', 'core/text-cleanup', 'core/text-comparison',
 ]
 /** Seeds first shipped with v3; older stores never offered them. */
 const NEW_IN_V3 = ['core/encoding-and-hashing', 'core/release-notes']
@@ -28,13 +34,14 @@ const OLD_IDS = seedSkills.map((s) => s.id).filter((id) => !NEW_IN_V3.includes(i
 const seedOf = (id: string): Skill => seedSkills.find((s) => s.id === id)!
 
 /** A seed skill exactly as a fixture file shipped it (tool names resolved against the registry). */
-function fixtureSkill(version: 'v1' | 'v2', id: string): Skill {
+function fixtureSkill(version: 'v1' | 'v2' | 'v3', id: string): Skill {
   const parsed = parseSkillMarkdown(readFileSync(new URL(`./seed-upgrade-fixtures/${version}/${id.replace(/^core\//, '')}.md`, import.meta.url), 'utf8'))
   return {
     ...structuredClone(seedOf(id)),
     description: parsed.description,
     content: parsed.content,
-    tools: parsed.tools.map((name) => toolDeclaration(name)!),
+    // Retired tools (BE-4's notes tools) keep their name; the upgrade compares names only.
+    tools: parsed.tools.map((name) => toolDeclaration(name) ?? { name, description: '', parameters: { type: 'object', properties: {} } }),
   }
 }
 
@@ -45,12 +52,17 @@ function v1Skill(id: string): Skill {
   if (UPGRADED.includes(id)) return fixtureSkill('v1', id)
   // Every other seed v3 changed was the same in v1 and v2.
   if (UPGRADED_V3.includes(id)) return fixtureSkill('v2', id)
-  return structuredClone(seedOf(id))
+  return v3Skill(id)
 }
 
 /** A seed skill exactly as v2 (master before v3) shipped it. */
 function v2Skill(id: string): Skill {
-  return UPGRADED_V3.includes(id) ? fixtureSkill('v2', id) : structuredClone(seedOf(id))
+  return UPGRADED_V3.includes(id) ? fixtureSkill('v2', id) : v3Skill(id)
+}
+
+/** A seed skill exactly as v3 (master before BE-4) shipped it. */
+function v3Skill(id: string): Skill {
+  return UPGRADED_V4.includes(id) ? fixtureSkill('v3', id) : structuredClone(seedOf(id))
 }
 
 let dir: string
@@ -109,6 +121,15 @@ describe('seed upgrade fixtures', () => {
     }
   })
 
+  it('the v3 fixtures differ from the current seeds and declare a retired notes tool', () => {
+    for (const id of UPGRADED_V4) {
+      const old = fixtureSkill('v3', id)
+      expect(old.tools.some((t) => ['list_notes', 'read_note', 'save_note'].includes(t.name)), id).toBe(true)
+      expect(seedOf(id).tools.some((t) => ['list_notes', 'read_note', 'save_note'].includes(t.name)), id).toBe(false)
+      expect(seedOf(id).content, id).not.toMatch(/save_note|read_note|list_notes|@note:/)
+    }
+  })
+
   it('pins the seeds v3 leaves unchanged: editing one needs a new upgrade batch', () => {
     // sha256 of [description, content, tool names] as v2 shipped them.
     const pinned: Record<string, string> = {
@@ -119,7 +140,7 @@ describe('seed upgrade fixtures', () => {
     }
     expect(Object.keys(pinned)).toEqual(OLD_IDS.filter((id) => !UPGRADED_V3.includes(id)))
     for (const [id, sha] of Object.entries(pinned)) {
-      const s = seedOf(id)
+      const s = v3Skill(id)
       const key = JSON.stringify([s.description, s.content, s.tools.map((t) => t.name)])
       expect(createHash('sha256').update(key).digest('hex'), id).toBe(sha)
     }
@@ -133,7 +154,7 @@ describe('seed-skill-upgrade-v2', () => {
     const upgraded = createStore(path)
     // v2 and then v3 bring every v1 copy to the current seed; the new seeds are appended.
     expect(upgraded.skills).toEqual(seedSkills)
-    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
     expect(upgraded.meta.seededSkillIds).toEqual(seedSkills.map((s) => s.id))
     expect(createStore(path).skills).toEqual(upgraded.skills)
   })
@@ -190,7 +211,7 @@ describe('seed-skill-upgrade-v3', () => {
     // Unchanged seeds stay as they were; the two new seeds are appended in seed order.
     expect(upgraded.skills).toEqual(seedSkills)
     expect(upgraded.skills.slice(-2).map((s) => s.id)).toEqual(NEW_IN_V3)
-    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
     expect(upgraded.meta.seededSkillIds).toEqual(seedSkills.map((s) => s.id))
     // The upgrade was saved: a reload reads it back without migrating again.
     expect(storedSkills(path)).toEqual(seedSkills)
@@ -222,7 +243,7 @@ describe('seed-skill-upgrade-v3', () => {
     for (const id of UPGRADED_V3.filter((id) => !edited.includes(id))) {
       expect(loaded.skills.find((s) => s.id === id), id).toEqual(seedOf(id))
     }
-    expect(loaded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(loaded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
   })
 
   it('runs once: a vendored seed whose tools the user clears after the upgrade stays cleared', () => {
@@ -237,7 +258,7 @@ describe('seed-skill-upgrade-v3', () => {
     expect(upgraded.save()).toBe(true)
     const reopened = createStore(path)
     expect(reopened.skills.find((s) => s.id === 'core/code-review')?.tools).toEqual([])
-    expect(reopened.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(reopened.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
   })
 
   it('does not resurrect a changed seed or a new seed the user deleted', () => {
@@ -272,13 +293,13 @@ describe('seed-skill-upgrade-v3', () => {
     writeFileSync(path, JSON.stringify({ skills: vendoredSeedSkills.map((s) => ({ ...structuredClone(s), tools: [] })) }))
     const loaded = createStore(path)
     expect(loaded.skills).toEqual(seedSkills)
-    expect(loaded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(loaded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
   })
 
   it('fresh stores are born with v3 applied and never run it', () => {
     const path = join(dir, 'fresh.json')
     const fresh = createStore(path)
-    expect(fresh.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(fresh.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
     expect(fresh.skills).toEqual(seedSkills)
     // Revert two seeds to their v2 definitions: a fresh store must not re-upgrade them.
     fresh.skills = fresh.skills.map((s) => (s.id === 'core/summarization' || s.id === 'core/text-comparison' ? v2Skill(s.id) : s))
@@ -286,6 +307,34 @@ describe('seed-skill-upgrade-v3', () => {
     const reopened = createStore(path)
     expect(reopened.skills.find((s) => s.id === 'core/summarization')).toEqual(v2Skill('core/summarization'))
     expect(reopened.skills.find((s) => s.id === 'core/text-comparison')).toEqual(v2Skill('core/text-comparison'))
-    expect(reopened.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3])
+    expect(reopened.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
+  })
+})
+
+describe('seed-skill-upgrade-v4', () => {
+  /** A store as a v3 install wrote it: every v3 seed offered, v1 to v3 applied. */
+  function writeV3Store(path: string, override: (skills: Skill[]) => Skill[] = (s) => s): void {
+    writeStore(path, override(seedSkills.map((s) => v3Skill(s.id))), [V1, V2, V3], seedSkills.map((s) => s.id))
+  }
+
+  it('upgrades every untouched v3 copy off the notes tools, once', () => {
+    const path = join(dir, 'store.json')
+    writeV3Store(path)
+    const upgraded = createStore(path)
+    expect(upgraded.skills).toEqual(seedSkills)
+    expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
+    expect(storedSkills(path)).toEqual(seedSkills)
+  })
+
+  it('leaves an edited copy alone; its retired tools are simply never offered', () => {
+    const path = join(dir, 'store.json')
+    writeV3Store(path, (skills) => skills.map((s) => (s.id === 'core/notes-organizer' ? { ...s, content: `${s.content}\n\nTag by quarter.` } : s)))
+    const before = storedSkills(path).find((s) => s.id === 'core/notes-organizer')
+    const loaded = createStore(path)
+    expect(loaded.skills.find((s) => s.id === 'core/notes-organizer')).toEqual(before)
+    for (const id of UPGRADED_V4.filter((id) => id !== 'core/notes-organizer')) {
+      expect(loaded.skills.find((s) => s.id === id), id).toEqual(seedOf(id))
+    }
+    for (const name of ['list_notes', 'read_note', 'save_note']) expect(toolDeclaration(name), name).toBeUndefined()
   })
 })

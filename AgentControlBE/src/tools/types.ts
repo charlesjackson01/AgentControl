@@ -3,9 +3,10 @@
  * import store/app/upstream types only (`import type`) so the registry can be
  * loaded first without cycles (seed.ts resolves declarations at module load).
  */
+import type { MemoryItem } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
 
-export type ToolCategory = 'workspace' | 'notes' | 'time' | 'math' | 'text' | 'data'
+export type ToolCategory = 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data'
 export type ToolEffect = 'read' | 'write'
 
 export interface ToolContext {
@@ -48,6 +49,14 @@ export interface ToolContext {
   catalogSkillIds?: ReadonlySet<string>
   /** BE-7: skills activate_skill loaded this run, in first-use order (keyed by id). */
   activatedSkills?: Map<string, { id: string; name: string; source: string }>
+  /** BE-4: memory this run reads and writes (DM: the bot's; group: the group's). Unset: no memory tools. */
+  memoryScope?: MemoryItem['scope']
+  /** BE-4: memoryLearn for that scope; remember is offered only when true. */
+  memoryLearn?: boolean
+  /** BE-4: conversation the run belongs to (recorded as the memory source). */
+  conversationId?: string
+  /** BE-4: remember calls this run (capped per run). */
+  memoryWrites?: { count: number }
 }
 
 /**

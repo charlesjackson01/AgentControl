@@ -41,6 +41,10 @@ export interface PromptPlanInput {
   contextWindow: number
   /** Tokens kept free for the reply (replyReserve(endpoint)); defaults to RESPONSE_RESERVE. */
   responseReserve?: number
+  /** BE-4: the run scope's memory section (memoryPromptBlock); '' or unset when empty. */
+  memory?: string
+  /** BE-4: memory tools offered in this run (remember only when memoryLearn is on). */
+  memoryTools?: readonly string[]
 }
 
 export interface PromptPlan {
@@ -112,7 +116,7 @@ export function agentInstructions(instructions: string, rules?: readonly string[
  * (stored copies are display-only), then activate_skill (and read_skill_file
  * when a skill has files). Only these may execute.
  */
-function offeredTools(skills: readonly Skill[]): ToolDeclaration[] {
+function offeredTools(skills: readonly Skill[], extra: readonly string[] = []): ToolDeclaration[] {
   const declarations: ToolDeclaration[] = []
   const seen = new Set<string>()
   const add = (name: string): void => {
@@ -124,6 +128,7 @@ function offeredTools(skills: readonly Skill[]): ToolDeclaration[] {
   for (const s of skills) for (const t of s.tools ?? []) add(t.name)
   if (skills.length > 0) add(ACTIVATE_SKILL)
   if (skills.some((s) => (s.files ?? []).length > 0)) add(READ_SKILL_FILE)
+  for (const name of extra) add(name)
   return declarations
 }
 
@@ -132,10 +137,10 @@ function offeredTools(skills: readonly Skill[]): ToolDeclaration[] {
  * the catalog is over CATALOG_WINDOW_SHARE of the window, or the whole plan
  * plus the reply reserve does not fit (the run route rejects that with 413).
  */
-export function planPrompt({ instructions, skills, input, contextWindow, responseReserve = RESPONSE_RESERVE }: PromptPlanInput): PromptPlan {
+export function planPrompt({ instructions, skills, input, contextWindow, responseReserve = RESPONSE_RESERVE, memory = '', memoryTools = [] }: PromptPlanInput): PromptPlan {
   const catalog = skillCatalog(skills)
-  const system = [instructions, catalog].filter(Boolean).join(BLOCK_SEPARATOR)
-  const toolDeclarations = offeredTools(skills)
+  const system = [instructions, memory, catalog].filter(Boolean).join(BLOCK_SEPARATOR)
+  const toolDeclarations = offeredTools(skills, memoryTools)
   const schema = toolDeclarations.length > 0 ? JSON.stringify(toolDeclarations).length : 0
   const estimatedTokens = estimateTokens(system.length + input.length + schema)
   const catalogTokens = estimateTokens(catalog.length)

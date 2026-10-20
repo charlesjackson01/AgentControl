@@ -1,7 +1,7 @@
 ---
 name: csv-analysis
 description: Summarize supplied CSV structure, column statistics and per-group totals with a local parser. Use for row counts, column inspection, totals by category, and initial data-quality checks.
-tools: csv_summary, calculate, read_note
+tools: csv_summary, calculate
 ---
 
 # CSV Analysis
@@ -11,7 +11,7 @@ Inspect a supplied CSV excerpt or saved note and describe what the available row
 ## Workflow
 
 1. Establish the delimiter and whether the first row is a header. Pass those options explicitly when known; clarify ambiguous formats.
-2. Pass the CSV as a literal string, `@input`, or `@note:<id>` to `csv_summary`. Use a literal excerpt when the run input includes explanatory prose.
+2. Pass the CSV as a literal string or `@input` to `csv_summary`. Use a literal excerpt when the run input includes explanatory prose.
 3. Review the returned row and column information: blank, numeric and nonnumeric counts, `distinct` values, the most frequent `top_values` (omitted when every value is unique), min, max, mean and median for numbers, and any parse errors. Base conclusions on fields actually returned by the tool.
 4. For totals by category, set `group_by` to a column name (or 1-based position) and `sum_column` to a numeric column. Groups come back sorted by row count with their sums, at most 20, with the rest combined under `other`; `sum_skipped` counts blank or nonnumeric cells. `sum_column` alone returns `sum_total`.
 5. For shares, ratios or differences between returned numbers, call `calculate` instead of computing mentally.

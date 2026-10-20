@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { markReadLocally, upsertConversation } from '../lib/conversations'
+import { noteTyping } from '../lib/thread'
 import type { Agent, ConversationSummary } from '../lib/types'
 import { ConversationsContext, type ConversationsState } from './conversations-context'
 
@@ -14,6 +15,8 @@ export default function ConversationsProvider({ children }: { children: ReactNod
   const [error, setError] = useState<Error | undefined>(undefined)
   const [loaded, setLoaded] = useState(false)
   const [tick, setTick] = useState(0)
+  const [typingSince, setTypingSince] = useState<Record<string, string>>({})
+  const typingIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     let active = true
@@ -25,6 +28,9 @@ export default function ConversationsProvider({ children }: { children: ReactNod
       if (!active) return
       if (ags) setAgents(ags)
       if (convs.ok) {
+        const seen = noteTyping(convs.v, typingIds.current, new Date().toISOString())
+        typingIds.current = seen.typing
+        if (seen.started.length) setTypingSince((prev) => ({ ...prev, ...Object.fromEntries(seen.started.map((id) => [id, seen.at])) }))
         setConversations(convs.v)
         setError(undefined)
       } else {
@@ -59,8 +65,8 @@ export default function ConversationsProvider({ children }: { children: ReactNod
   }, [])
 
   const value = useMemo<ConversationsState>(
-    () => ({ conversations, agents, error, loaded, reload, markRead, upsert }),
-    [conversations, agents, error, loaded, reload, markRead, upsert],
+    () => ({ conversations, agents, error, loaded, reload, markRead, upsert, typingSince }),
+    [conversations, agents, error, loaded, reload, markRead, upsert, typingSince],
   )
   return <ConversationsContext.Provider value={value}>{children}</ConversationsContext.Provider>
 }

@@ -7,7 +7,7 @@ import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
 import { dmAgentId, mergeMessages, olderCursor } from '../lib/conversations'
-import { clockTime, threadItems } from '../lib/thread'
+import { clockTime, threadItems, typingSeenFor } from '../lib/thread'
 import type { Agent, ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
@@ -57,7 +57,7 @@ function UserRow({ meta, children }: { meta?: string; children: React.ReactNode 
 /** FE-1 thread for one conversation: bottom-anchored, day separators, a time under each bubble. */
 export default function ConversationChat() {
   const { conversationId = '' } = useParams()
-  const { conversations, agents, loaded, markRead, upsert, reload: reloadSidebar } = useConversations()
+  const { conversations, agents, loaded, markRead, upsert, reload: reloadSidebar, typingSince } = useConversations()
   const conversation = conversations?.find((c) => c.id === conversationId)
   const agentId = conversation ? dmAgentId(conversation) : undefined
   const agent = agentId ? agents.find((a) => a.id === agentId) : undefined
@@ -196,6 +196,9 @@ export default function ConversationChat() {
     !pending && conversation?.typingAgentId ? agents.find((a) => a.id === conversation.typingAgentId) : undefined
   const canSend = Boolean(conversation) && !isGroup
 
+  // "Read" before a reply exists: when typing was first seen for this chat (held by the provider).
+  const typingSeen = messages && !pending ? typingSeenFor(messages, typingSince[conversationId]) : null
+
   if (loaded && conversations && !conversation) {
     return (
       <>
@@ -212,7 +215,7 @@ export default function ConversationChat() {
     )
   }
 
-  const items = messages ? threadItems(messages, { lastReadAt: pending ? null : conversation?.lastReadAt }) : []
+  const items = messages ? threadItems(messages, { typingSeen }) : []
   const lastIdx = (messages?.length ?? 0) - 1
 
   return (

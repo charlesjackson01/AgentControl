@@ -160,3 +160,40 @@ describe('skillWriteError', async () => {
     assert.equal(skillWriteError(null, 'fallback'), 'fallback')
   })
 })
+
+describe('Imported (custom) group', async () => {
+  const { withImportedSkill } = await import('../src/lib/skills-catalog.ts')
+  const real = [...sources, { id: 'core', repo: null, commit: null, license: null, count: 18 }, { id: 'custom', repo: null, commit: null, license: null, count: 0 }]
+  const imp = sk('harbor-brief', { sourceId: 'custom', license: 'MIT', defaultOn: false })
+  const custom = (skills, srcs) => groupSkills(skills, srcs, []).find((g) => g.id === 'custom')
+
+  it('shows no licence for imports', () => {
+    const g = custom([...be6, imp], real)
+    assert.equal(g.title, 'Imported')
+    assert.equal(g.meta, '')
+    assert.equal(g.readOnly, false)
+  })
+
+  it('updates "of N" after an import (count bumped, or entry added)', () => {
+    const c0 = { skills: be6, sources: real, legacy: false }
+    const c1 = withImportedSkill(c0, imp)
+    assert.equal(c1.sources.find((s) => s.id === 'custom').count, 1)
+    assert.equal(custom(c1.skills, c1.sources).total, 1)
+    const c2 = withImportedSkill(c1, sk('second', { sourceId: 'custom' }))
+    assert.equal(custom(c2.skills, c2.sources).total, 2)
+    assert.equal(withImportedSkill(c2, { ...imp, description: 'new' }).sources.find((s) => s.id === 'custom').count, 2, 're-import of the same id')
+    const noEntry = withImportedSkill({ skills: be6, sources, legacy: false }, imp)
+    assert.deepEqual(noEntry.sources.at(-1), { id: 'custom', repo: null, commit: null, license: null, count: 1 })
+    assert.equal(c0.sources.find((s) => s.id === 'custom').count, 0, 'input untouched')
+  })
+
+  it('total is never below the rows loaded, even with a stale count', () => {
+    assert.equal(custom([...be6, imp], real).total, 1)
+  })
+
+  it('anthropics carries the 03c proprietary-licence note', () => {
+    const g = groupSkills(be6, sources, []).find((x) => x.id === 'anthropics')
+    assert.equal(g.note, 'docx, pdf, pptx, xlsx not included (proprietary licence)')
+    assert.equal(groupSkills(be6, sources, []).find((x) => x.id === 'superpowers').note, undefined)
+  })
+})

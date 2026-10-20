@@ -344,3 +344,10 @@
 .cf-prof__actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .cf-prof__actions .field__err, .cf-prof__actions .cf-set__ok { margin: 0; }
 @media (max-width: 560px) { .cf-prof__top { grid-template-columns: 1fr; } .cf-prof__grid { grid-template-columns: 1fr; } }
+
+/* 03c: switches that are on are green; one-line descriptions; vendored-copy note */
+.cf-toggle.switch--on { background: #4a7a5e; }
+.cf-skills__row .cf-skills__desc { -webkit-line-clamp: 1; line-clamp: 1; }
+.cf-skills__foot { padding: 6px 0 4px; border-top: 1px solid var(--c-border); font-size: 11.5px; color: var(--c-text-3); }
+.cf-skills__foot .cf-skills__more { padding: 0; border: 0; width: auto; }
+.cf-skills__note { color: var(--c-text-3); }

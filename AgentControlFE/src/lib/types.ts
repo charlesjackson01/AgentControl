@@ -142,7 +142,8 @@ export type SkillSourceId = 'core' | 'superpowers' | 'anthropics' | 'ecc' | 'cus
 export type SkillSummary = Omit<Skill, 'content'> & { content?: string }
 
 /** BE-6 `GET /api/skills` source row. */
-export type SkillSource = { id: string; repo?: string; commit?: string; license?: string; count: number }
+/** GET /api/skills `sources` entry (BE-6 sends null for unknown repo/commit/licence). */
+export type SkillSource = { id: string; repo?: string | null; commit?: string | null; license?: string | null; count: number }
 
 /** Body for POST /api/skills; PATCH /api/skills/:id takes a partial of it. */
 export type SkillInput = {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { LEAD_SKILL_IDS, starterSkillIds } from '../lib/starter-skills'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
 import { agentAvatarUrl, api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
@@ -34,7 +35,6 @@ const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '
 const LEAD_INSTRUCTIONS =
   'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
 // The three starter skills the BE seeds in the Skill Library.
-const LEAD_SKILL_IDS = ['deep-research', 'summarization', 'multi-agent-orchestration']
 
 function toInput(agent: Agent): AgentInput {
   return {
@@ -111,7 +111,7 @@ export default function AgentProfile({
           instructions: LEAD_INSTRUCTIONS,
           temperature: 0.7,
           // Pre-check the starter skills that exist in this workspace.
-          skillIds: LEAD_SKILL_IDS.filter((id) => skills.some((s) => s.id === id)),
+          skillIds: starterSkillIds(LEAD_SKILL_IDS, skills),
         }
       : { ...EMPTY, endpointId: defaultEndpointId ?? '' }
 

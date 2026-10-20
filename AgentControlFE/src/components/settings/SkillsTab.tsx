@@ -5,7 +5,7 @@ import { api } from '../../lib/api'
 import { agentPutBody } from '../../lib/agent-put'
 import { friendlyError as friendly } from '../../lib/chat-format'
 import { normalizeRules } from '../../lib/agent-profile'
-import { budgetMeter, groupSkills, skillDetailLine, skillWriteError, toggleSkillId, visibleSkills, type SkillsResponse } from '../../lib/skills-catalog'
+import { budgetMeter, groupSkills, skillDetailLine, skillWriteError, toggleSkillId, visibleSkills, withImportedSkill, type SkillsResponse } from '../../lib/skills-catalog'
 import type { Agent, PromptBudget, Skill, SkillSummary } from '../../lib/types'
 
 /** Characters of a skill body shown in the detail view. */
@@ -129,7 +129,7 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
       const skill = await api.importSkill(await file.text())
       // Imports are custom skills: editable, off by default. The user turns it on here.
       const row = { sourceId: 'custom' as const, defaultOn: false, ...skill }
-      setCatalog((c) => (c ? { ...c, skills: [...c.skills.filter((s) => s.id !== row.id), row] } : c))
+      setCatalog((c) => (c ? withImportedSkill(c, row) : c))
       setQuery(row.name)
       setImportNote({ tone: 'ok', text: `Imported ${row.name}. Switch it on below to give it to ${agent.name}.` })
     } catch (err) {
@@ -168,7 +168,7 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
       <section className="cf-card cf-skills__info">
         <span className="cf-skills__spark" aria-hidden="true">✦</span>
         <p>
-          <b>Loaded on demand.</b> {agent.name} reads a skill in full only when a task needs it.
+          <b>Loaded on demand.</b> {agent.name} reads a skill in full only when a task needs it. Skill scripts run in {agent.name}&apos;s sandbox VM; internet needs your OK.
           {catalog?.legacy ? ' (This server still sends full skills in the prompt until BE-7.)' : ''}
         </p>
         <div className={`cf-meter cf-meter--${meter?.tone ?? 'ok'}`} role="status" aria-live="polite">
@@ -230,11 +230,14 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
                     onOpen={onOpen}
                   />
                 ))}
-                {more > 0 && (
-                  <li>
-                    <button type="button" className="cf-skills__more" onClick={() => startTransition(() => setExpanded((x) => ({ ...x, [g.id]: true })))}>
-                      ＋ {more} more
-                    </button>
+                {(more > 0 || g.note) && (
+                  <li className="cf-skills__foot">
+                    {more > 0 && (
+                      <button type="button" className="cf-skills__more" onClick={() => startTransition(() => setExpanded((x) => ({ ...x, [g.id]: true })))}>
+                        ＋ {more} more
+                      </button>
+                    )}
+                    {g.note && <span className="cf-skills__note">{more > 0 ? ' · ' : ''}{g.note}</span>}
                   </li>
                 )}
               </ul>

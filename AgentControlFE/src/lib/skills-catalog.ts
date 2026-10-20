@@ -26,6 +26,11 @@ const SOURCE_TITLES: Record<string, string> = {
   core: 'AgentControl core',
   custom: 'Imported',
 }
+/** 03c: what a vendored copy leaves out. */
+const GROUP_NOTES: Record<string, string> = {
+  anthropics: 'docx, pdf, pptx, xlsx not included (proprietary licence)',
+}
+
 /** 03c order: vendored repos, then core, then the user's own imports. */
 const SOURCE_ORDER = ['superpowers', 'anthropics', 'ecc', 'core', 'custom']
 
@@ -63,6 +68,8 @@ export type SkillGroup = {
   skills: SkillSummary[]
   enabled: number
   total: number
+  /** Fixed note after the group's rows (03c). */
+  note?: string
 }
 
 /**
@@ -110,7 +117,8 @@ export function groupSkills(
       const first = list[0]
       const license = src?.license ?? first?.license
       const commit = shortCommit(src?.commit ?? first?.sourceCommit)
-      const meta = id === 'core' ? 'Built in' : [license, commit ? `pinned @ ${commit}` : ''].filter(Boolean).join(' · ')
+      // Core is 'Built in'; imports carry their own per-skill licences, so the group shows none.
+      const meta = id === 'core' ? 'Built in' : id === 'custom' ? '' : [license, commit ? `pinned @ ${commit}` : ''].filter(Boolean).join(' · ')
       const matching = list
         .filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q) || s.id.toLowerCase().includes(q))
         // Enabled first, then by name, so the collapsed view shows what's on.
@@ -122,7 +130,9 @@ export function groupSkills(
         meta,
         skills: matching,
         enabled: list.filter((s) => on.has(s.id)).length,
-        total: src?.count ?? list.length,
+        // The source count covers skills not loaded; never less than what's here (e.g. right after an import).
+        total: Math.max(src?.count ?? 0, list.length),
+        note: GROUP_NOTES[id],
       }
     })
     .filter((g) => !q || g.skills.length > 0)
@@ -196,4 +206,20 @@ export function skillWriteError(err: unknown, fallback: string): string {
       : 'Vendored skills are read-only: they come from a pinned upstream copy. Import your own SKILL.md to change one.'
   }
   return msg || fallback
+}
+
+/**
+ * Catalog after an import: the skill replaces any row with its id, and its
+ * source's count follows (an entry is added if the server had none yet).
+ */
+export function withImportedSkill(c: SkillsResponse, skill: SkillSummary): SkillsResponse {
+  const had = c.skills.some((s) => s.id === skill.id)
+  const sid = skillSourceId(skill)
+  const skills = [...c.skills.filter((s) => s.id !== skill.id), skill]
+  if (had || c.legacy) return { ...c, skills }
+  const found = c.sources.some((s) => s.id === sid)
+  const sources = found
+    ? c.sources.map((s) => (s.id === sid ? { ...s, count: s.count + 1 } : s))
+    : [...c.sources, { id: sid, repo: null, commit: null, license: null, count: 1 }]
+  return { ...c, skills, sources }
 }

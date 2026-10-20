@@ -207,6 +207,26 @@ function parseAgentInput(store: WorkspaceStore, body: unknown, opts: { checkMode
   }
 }
 
+const PATCH_STRING_FIELDS = ['name', 'description', 'instructions', 'modelId', 'endpointId', 'role'] as const
+
+/**
+ * PATCH is strict about types: PUT's parser coerces a wrong-typed field to its
+ * empty value (kept for existing PUT clients), which on a partial update would
+ * silently wipe it. Values are still validated by parseAgentInput afterwards.
+ */
+function checkPatchTypes(patch: Record<string, unknown>): void {
+  for (const key of PATCH_STRING_FIELDS) {
+    if (key in patch && typeof patch[key] !== 'string') fail(400, `"${key}" must be a string.`)
+  }
+  if ('skillIds' in patch && (!Array.isArray(patch.skillIds) || !patch.skillIds.every((s) => typeof s === 'string'))) {
+    fail(400, '"skillIds" must be a list of skill id strings.')
+  }
+  if ('isPrimary' in patch && typeof patch.isPrimary !== 'boolean') fail(400, '"isPrimary" must be true or false.')
+  if ('temperature' in patch && patch.temperature !== null && typeof patch.temperature !== 'number') {
+    fail(400, 'Temperature must be a number between 0 and 2.')
+  }
+}
+
 const HEX_COLOR = /^#[0-9a-fA-F]{6}$/
 const MAX_EMOJI_CHARS = 16
 
@@ -763,6 +783,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const body = request.body ?? {}
     if (typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object with the fields to change.')
     const patch = body as Record<string, unknown>
+    checkPatchTypes(patch)
     const current = store.agents[index] as Agent
     const base: Record<string, unknown> = {
       name: current.name, description: current.description, instructions: current.instructions,

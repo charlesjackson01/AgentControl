@@ -198,6 +198,26 @@ describe('PATCH /api/agents/:id', () => {
     expect((await inject('PATCH', '/api/agents/nope', { name: 'x' })).statusCode).toBe(404)
     expect(store.agents.find((x) => x.id === a.id)?.name).toBe('Writer')
   })
+
+  it('rejects wrong-typed fields with 400 instead of coercing them, and leaves the agent untouched', async () => {
+    const a = await makeAgent('Writer')
+    await inject('PATCH', `/api/agents/${a.id}`, { role: 'Drafts docs', skillIds: ['nope/nope'] })
+    const before = structuredClone(store.agents.find((x) => x.id === a.id))
+    const bad: Record<string, unknown>[] = [
+      { skillIds: 'x' }, { skillIds: [1] }, { skillIds: null }, { role: 123 }, { role: null },
+      { name: 5 }, { description: [] }, { instructions: {} }, { modelId: 1 }, { endpointId: false },
+      { isPrimary: 'yes' }, { temperature: '1' }, { pinned: 'no' }, { rules: 'one' }, { internetPolicy: 1 },
+    ]
+    for (const patch of bad) {
+      const res = await inject('PATCH', `/api/agents/${a.id}`, patch)
+      expect(res.statusCode, JSON.stringify(patch)).toBe(400)
+      expect(res.json()).toMatchObject({ statusCode: 400, error: 'Request Error' })
+    }
+    expect(store.agents.find((x) => x.id === a.id)).toEqual(before)
+    // Unknown skill ids are still stored (decided earlier); null clears temperature.
+    expect((await inject('PATCH', `/api/agents/${a.id}`, { temperature: 0.5 })).json()).toMatchObject({ temperature: 0.5, role: 'Drafts docs', skillIds: ['nope/nope'] })
+    expect((await inject('PATCH', `/api/agents/${a.id}`, { temperature: null })).statusCode).toBe(200)
+  })
 })
 
 describe('notes retirement', () => {

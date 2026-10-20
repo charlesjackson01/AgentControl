@@ -261,7 +261,8 @@ export const api = {
     })
   },
 
-  async createAgent(input: AgentInput): Promise<Agent> {
+  /** Leave `skillIds` out to get the backend's defaults (BE-7: every defaultOn skill). */
+  async createAgent(input: Omit<AgentInput, 'skillIds'> & { skillIds?: string[] }): Promise<Agent> {
     return request<Agent>('/api/agents', { method: 'POST', body: JSON.stringify(input) })
   },
 

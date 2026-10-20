@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { describePromptBudget, grantedToolNames } from '../src/lib/prompt-budget.ts'
+import { describePromptBudget, grantedToolNames, skillPromptModeLabel } from '../src/lib/prompt-budget.ts'
 
 const budget = (overrides) => ({
   contextWindow: 8192,
@@ -11,45 +11,40 @@ const budget = (overrides) => ({
   toolNames: [],
   ...overrides,
 })
-const names = new Map([
-  ['code-review', 'code-review'],
-  ['deep-research', 'Deep Research'],
-  ['summarization', 'Summarization'],
-])
-
 describe('prompt budget line', () => {
-  it('reports a full prompt within the window', () => {
-    assert.deepEqual(describePromptBudget(budget()), {
+  it('BE-7 catalog: fits, with the catalog size', () => {
+    assert.deepEqual(describePromptBudget(budget({ mode: 'catalog', contextWindow: 32768, estimatedTokens: 4289, catalogTokens: 2625 })), {
       tone: 'ok',
-      text: 'About 1,234 tokens of instructions and skills, within the 8,192-token window (4,096 kept for replies).',
+      text:
+        'About 4,289 tokens of instructions and skills, within the 32,768-token window (4,096 kept for replies). ' +
+        'Skills are listed in a 2,625-token catalog and loaded only when a task needs them.',
     })
+    assert.doesNotMatch(describePromptBudget(budget({ mode: 'catalog', catalogTokens: 0 })).text, /catalog/, 'no skills, no catalog note')
   })
 
-  it('names the summarized skills and how the agent reads them', () => {
-    assert.deepEqual(describePromptBudget(budget({ mode: 'summary', estimatedTokens: 2900, summarizedSkillIds: ['deep-research'] }), names), {
-      tone: 'info',
-      text:
-        'About 2,900 tokens of instructions and skills, within the 8,192-token window (4,096 kept for replies). ' +
-        'To fit, Deep Research is sent as a short summary; the agent reads its full text with get_skill when needed.',
-    })
-    const many = describePromptBudget(budget({ mode: 'summary', summarizedSkillIds: ['deep-research', 'gone-skill', 'summarization'] }), names)
-    assert.match(many.text, /To fit, Deep Research, gone-skill and Summarization are sent as short summaries; the agent reads their full text with get_skill when needed\.$/)
-    const ids = Array.from({ length: 8 }, (_, i) => `s${i}`)
-    assert.match(describePromptBudget(budget({ mode: 'summary', summarizedSkillIds: ids })).text, /To fit, s0, s1, s2, s3, s4 and 3 more are sent/)
+  it("older backends' full and summary both read as fitting (no summary wording)", () => {
+    const fits = 'About 1,234 tokens of instructions and skills, within the 8,192-token window (4,096 kept for replies).'
+    assert.deepEqual(describePromptBudget(budget()), { tone: 'ok', text: fits })
+    assert.deepEqual(describePromptBudget(budget({ mode: 'summary', summarizedSkillIds: ['deep-research'] })), { tone: 'ok', text: fits })
   })
 
   it('warns that runs will be rejected and how to fix it', () => {
-    const message = describePromptBudget(
-      budget({ mode: 'too-large', contextWindow: 4096, estimatedTokens: 15_000, summarizedSkillIds: ['code-review'] }),
-      names,
-    )
+    const message = describePromptBudget(budget({ mode: 'too-large', contextWindow: 4096, estimatedTokens: 15_000, catalogTokens: 9000 }))
     assert.equal(message.tone, 'warn')
     assert.equal(
       message.text,
       'Runs will be rejected: about 15,000 tokens of instructions and skills, plus 4,096 kept for replies, ' +
-        "do not fit the 4,096-token window even with skills sent as summaries. Detach skills, shorten the instructions, or raise the endpoint's context window in Settings.",
+        "do not fit the 4,096-token window. Detach skills, shorten the instructions, or raise the endpoint's context window in Settings.",
     )
-    assert.doesNotMatch(describePromptBudget(budget({ mode: 'too-large' })).text, /even with/)
+  })
+})
+
+describe('past-run skill modes', () => {
+  it("labels BE-7 'catalog' and the older 'full' / 'summary'", () => {
+    assert.equal(skillPromptModeLabel('catalog'), 'Catalog (loaded on demand)')
+    assert.equal(skillPromptModeLabel('summary'), 'Summary')
+    assert.equal(skillPromptModeLabel('full'), 'Full text')
+    assert.equal(skillPromptModeLabel(undefined), 'Full text', 'runs from before modes existed')
   })
 })
 

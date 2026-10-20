@@ -187,26 +187,34 @@ export type AgentRun = {
   /** Exact system message the run sent upstream; absent on pre-audit runs/BEs. */
   systemPrompt?: string
   /**
-   * Skills injected into that prompt (content itself is never sent). `mode`
-   * 'summary' means only a short summary went in (the agent reads the full
-   * text with get_skill); absent on runs recorded before summaries existed.
+   * Skills attached to that prompt (content itself is never sent). `mode`: see
+   * SkillPromptMode; absent on runs recorded before modes existed.
    */
   skillSnapshot?: { id: string; name: string; contentChars: number; mode?: SkillPromptMode }[]
+  /** BE-7: skills the model loaded with activate_skill, in first-use order. */
+  activatedSkills?: ActivatedSkill[]
   /** Tool calls executed during the run; absent on pre-tool-execution runs/BEs. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
   /** Set on runs made for a project task; the agent's own chat leaves them out. */
   projectId?: string
 }
 
-/** How one attached skill went into a run's system prompt. */
-export type SkillPromptMode = 'full' | 'summary'
+/**
+ * How one attached skill went into a run's system prompt. 'catalog' (BE-7): one
+ * catalog line, body loaded on demand with activate_skill. 'full' (whole body)
+ * and 'summary' (short summary, read with get_skill) only on runs from before BE-7.
+ */
+export type SkillPromptMode = 'full' | 'summary' | 'catalog'
+
+/** A skill a run activated (BE-7 `activatedSkills`, message `activity.skills`). */
+export type ActivatedSkill = { id: string; name: string; source: string }
 
 /**
- * How a draft's prompt fits its endpoint: every skill in full, the largest
- * skills as summaries (read in full with get_skill), or over budget even then
- * (runs are rejected).
+ * How a draft's prompt fits its endpoint. BE-7: 'catalog' (skills listed one line
+ * each, loaded on demand) or 'too-large' (runs are rejected). 'full' and 'summary'
+ * only come from older backends.
  */
-export type PromptBudgetMode = 'full' | 'summary' | 'too-large' | 'catalog'
+export type PromptBudgetMode = 'catalog' | 'too-large' | 'full' | 'summary'
 
 /** Body for POST /api/prompt-budget. Unknown skill ids are ignored. */
 export type PromptBudgetInput = {
@@ -225,7 +233,7 @@ export type PromptBudget = {
   /** chars/4 estimate of the system prompt + tool schemas. */
   estimatedTokens: number
   mode: PromptBudgetMode
-  /** Skills sent as summaries, in attachment order. */
+  /** @deprecated Always [] since BE-7; older backends listed skills sent as summaries. */
   summarizedSkillIds: string[]
   /** Tools a run would offer, in the order sent upstream. */
   toolNames: string[]
@@ -330,9 +338,9 @@ export type InternetPolicy = 'ask' | 'always' | 'never'
 /** A file attached to a chat message (BE-9). Paths are relative, e.g. 'shared/x.png'. */
 export type Attachment = { root: 'agent' | 'group'; path: string; name: string; size: number; mime: string }
 
-/** What a run did (BE-3/BE-7); rendered by FE-7. */
+/** What a run did (BE-3/BE-7); rendered by FE-7. BE-7 fills `skills`; `steps` and `filesChanged` are [] until BE-3. */
 export type MessageActivity = {
-  skills: { id: string; name: string; source: string }[]
+  skills: ActivatedSkill[]
   steps: { tool: string; summary: string; ok: boolean; path?: string }[]
   filesChanged: { path: string; change: 'added' | 'modified' }[]
 }

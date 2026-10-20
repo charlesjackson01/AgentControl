@@ -98,7 +98,8 @@ describe('token meter', () => {
   })
   it("pre BE-7: today's whole-prompt estimate", () => {
     assert.equal(budgetMeter({ ...base, mode: 'full' }).label, 'Prompt ≈9k of 16k tokens')
-    assert.equal(budgetMeter({ ...base, mode: 'summary' }).tone, 'warn')
+    assert.equal(budgetMeter({ ...base, mode: 'summary' }).tone, 'ok', 'old summary mode no longer warns by itself')
+    assert.equal(budgetMeter({ ...base, mode: 'summary', estimatedTokens: 15000 }).tone, 'warn', 'only the 80% line warns')
     assert.equal(budgetMeter({ ...base, estimatedTokens: 99999, mode: 'too-large' }).fraction, 1)
   })
   it('compactTokens', () => {
@@ -195,5 +196,13 @@ describe('Imported (custom) group', async () => {
     const g = groupSkills(be6, sources, []).find((x) => x.id === 'anthropics')
     assert.equal(g.note, 'docx, pdf, pptx, xlsx not included (proprietary licence)')
     assert.equal(groupSkills(be6, sources, []).find((x) => x.id === 'superpowers').note, undefined)
+  })
+})
+
+describe('BE-7 meter figures', () => {
+  it('41 defaults on a 32k window read "Catalog 2.6k of 29k tokens", ok', () => {
+    const m = budgetMeter({ contextWindow: 32768, responseReserve: 4096, estimatedTokens: 4289, mode: 'catalog', catalogTokens: 2625, summarizedSkillIds: [], toolNames: [] })
+    assert.equal(m.label, 'Catalog 2.6k of 29k tokens')
+    assert.equal(m.tone, 'ok')
   })
 })

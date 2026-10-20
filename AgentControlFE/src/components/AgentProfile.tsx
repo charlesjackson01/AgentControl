@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
-import { LEAD_SKILL_IDS, starterSkillIds } from '../lib/starter-skills'
+import { createSkillIds, newBotSkillIds } from '../lib/starter-skills'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
 import { agentAvatarUrl, api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
@@ -111,9 +111,10 @@ export default function AgentProfile({
           instructions: LEAD_INSTRUCTIONS,
           temperature: 0.7,
           // Pre-check the starter skills that exist in this workspace.
-          skillIds: starterSkillIds(LEAD_SKILL_IDS, skills),
+          // BE-7 defaults + the Team Lead's starters (core/deep-research, …), sent explicitly.
+          skillIds: newBotSkillIds(skills, true),
         }
-      : { ...EMPTY, endpointId: defaultEndpointId ?? '' }
+      : { ...EMPTY, endpointId: defaultEndpointId ?? '', skillIds: newBotSkillIds(skills, false) }
 
   const [draft, setDraft] = useState<AgentInput>(baseline)
   const [errors, setErrors] = useState<Partial<Record<'name' | 'modelId' | 'endpointId' | 'temperature', string>>>({})
@@ -135,7 +136,10 @@ export default function AgentProfile({
     setErrors((e) => ({ ...e, [key]: undefined }))
   }
 
+  // Untouched on create: the backend picks the skills (BE-7 defaults); see createSkillIds.
+  const [skillsTouched, setSkillsTouched] = useState(false)
   const toggleSkill = (id: string) => {
+    setSkillsTouched(true)
     setDraft((d) => ({
       ...d,
       skillIds: d.skillIds.includes(id) ? d.skillIds.filter((s) => s !== id) : [...d.skillIds, id],
@@ -146,7 +150,6 @@ export default function AgentProfile({
 
   // Tools the selected skills declare, derived locally so the chips follow every toggle.
   const grantedTools = useMemo(() => grantedToolNames(skills, draft.skillIds), [skills, draft.skillIds])
-  const skillNames = useMemo(() => new Map(skills.map((s) => [s.id, s.name])), [skills])
 
   // Prompt-size preview (POST /api/prompt-budget), debounced. Only the current
   // request's response lands (superseded ones are aborted and ignored); a
@@ -184,8 +187,8 @@ export default function AgentProfile({
   const shownBudget = budgetRequest ? budget : null
   const budgetStale = shownBudget !== null && shownBudget.request !== budgetRequest
   const budgetMessage = useMemo(
-    () => (shownBudget ? describePromptBudget(shownBudget.value, skillNames) : null),
-    [shownBudget, skillNames],
+    () => (shownBudget ? describePromptBudget(shownBudget.value) : null),
+    [shownBudget],
   )
 
   const selectedEndpoint = endpoints.find((e) => e.id === draft.endpointId) ?? null
@@ -259,7 +262,12 @@ export default function AgentProfile({
       const plan = avatarSavePlan(avatarDraft, initial?.avatar)
       if (plan.avatar !== undefined) payload.avatar = plan.avatar
       if (initial && plan.deleteImage) await api.deleteAgentAvatar(initial.id)
-      let saved = initial ? await api.updateAgent(initial.id, payload) : await api.createAgent(payload)
+      let saved: Agent
+      if (initial) saved = await api.updateAgent(initial.id, payload)
+      else {
+        const { skillIds: selected, ...rest } = payload
+        saved = await api.createAgent({ ...rest, ...createSkillIds({ selected, touched: skillsTouched, lead: isBootstrap }) })
+      }
       if (plan.upload && avatarDraft.file) saved = await api.uploadAgentAvatar(saved.id, avatarDraft.file)
       if (onSaved) onSaved(saved)
       else navigate(isEdit && initial ? `/agents/${initial.id}` : `/agents/${saved.id}`, { replace: true })

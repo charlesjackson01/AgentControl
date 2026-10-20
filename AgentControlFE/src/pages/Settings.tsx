@@ -121,7 +121,7 @@ function EndpointForm({
         <label className="field__label" htmlFor="ep-name">
           Name
         </label>
-        <input id="ep-name" className={`input${errors.name ? ' input--invalid' : ''}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="Local llama.cpp" />
+        <input id="ep-name" data-autofocus className={`input${errors.name ? ' input--invalid' : ''}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="Local llama.cpp" />
         {errors.name ? <p className="field__err">{errors.name}</p> : <p className="field__hint">Shown in the agent form picker.</p>}
       </div>
       <div className="field">
@@ -363,7 +363,7 @@ function EndpointsSection() {
               </p>
             )}
             <div className="dialog__foot">
-              <button type="button" className="btn" onClick={() => setDialog(null)} disabled={deletingId === dialog.endpoint.id}>
+              <button type="button" className="btn" data-autofocus onClick={() => setDialog(null)} disabled={deletingId === dialog.endpoint.id}>
                 Cancel
               </button>
               <button type="button" className="btn btn--danger" onClick={() => void remove(dialog.endpoint)} disabled={deletingId === dialog.endpoint.id || isTeamLeadEndpoint(dialog.endpoint)}>

@@ -1470,6 +1470,11 @@ ul {
   animation: dialog-in var(--t-base) var(--ease-spring);
 }
 
+/* Focus falls back to the panel (tabindex=-1) when it has nothing focusable. */
+.dialog:focus {
+  outline: none;
+}
+
 .dialog--sm {
   max-width: 420px;
 }

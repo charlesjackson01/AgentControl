@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { dialogStack } from '../lib/dialog-stack'
+import { FOCUSABLE_SELECTOR, initialFocus, restoreTarget, shouldRestore, tabTarget } from '../lib/dialog-focus'
 
 type DialogProps = {
   open: boolean
@@ -12,11 +13,34 @@ type DialogProps = {
   children: ReactNode
 }
 
+/** What each <Dialog> puts on the stack, so a closing nested dialog can find the panel below it. */
+type DialogToken = { panel: () => HTMLElement | null }
+
+/** Tab-able elements in the panel, in DOM order, skipping hidden and tabindex=-1 ones. */
+function focusableIn(panel: HTMLElement): HTMLElement[] {
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (el) => el.tabIndex >= 0 && el.getClientRects().length > 0,
+  )
+}
+
+function activeElement(): HTMLElement | null {
+  const a = document.activeElement
+  return a instanceof HTMLElement ? a : null
+}
+
 export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   // Identity for the dialog stack; onClose via a ref so a new callback each render
   // doesn't re-register this dialog (which would move it back to the top).
-  const [token] = useState(() => ({}))
+  const [token] = useState<DialogToken>(() => ({ panel: () => panelRef.current }))
+  // The element focused before this dialog opened, captured during the render that
+  // opens it: before React's autoFocus or our effect moves focus into the panel.
+  const [opener, setOpener] = useState<HTMLElement | null>(() => (open ? activeElement() : null))
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setOpener(activeElement())
+  }
   const onCloseRef = useRef(onClose)
   useEffect(() => {
     onCloseRef.current = onClose
@@ -34,20 +58,14 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
         onCloseRef.current()
         return
       }
-      // Keep Tab inside the dialog.
-      if (e.key !== 'Tab' || !panelRef.current) return
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
+      // Keep Tab inside the dialog, and pull it back in if focus got out.
+      const panel = panelRef.current
+      if (e.key !== 'Tab' || !panel) return
+      const active = activeElement()
+      const target = tabTarget(focusableIn(panel), active, active !== null && panel.contains(active), e.shiftKey, panel)
+      if (target) {
         e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
+        target.focus()
       }
     }
 
@@ -55,15 +73,30 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
-    const target = panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')
-    target?.focus()
+    // Move focus into the panel, unless an autoFocus child already put it there.
+    const panel = panelRef.current
+    if (panel) {
+      const active = activeElement()
+      if (!active || !panel.contains(active)) {
+        initialFocus(panel.querySelector<HTMLElement>('[data-autofocus]'), focusableIn(panel), panel).focus()
+      }
+    }
 
     return () => {
+      const wasTop = dialogStack.isTop(token)
       dialogStack.close(token)
+      // By now React has removed the panel, so focus is usually on <body>.
+      const active = document.activeElement
+      const activeIsBody = !active || active === document.body
+      const activeInside = !!panel && !!active && panel.contains(active)
+      if (shouldRestore(activeIsBody, activeInside, wasTop)) {
+        const below = dialogStack.top() as DialogToken | undefined
+        restoreTarget(opener, !!opener?.isConnected, below?.panel())?.focus()
+      }
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previousOverflow
     }
-  }, [open, token])
+  }, [open, token, opener])
 
   if (!open) return null
 
@@ -74,7 +107,7 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
         if (e.target === e.currentTarget) onClose()
       }}
     >
-      <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef}>
+      <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef} tabIndex={-1}>
         <div className="dialog__head">
           <div>
             <p className="dialog__title">{title}</p>

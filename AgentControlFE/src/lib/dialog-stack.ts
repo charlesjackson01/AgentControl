@@ -7,6 +7,8 @@ export type DialogStack = {
   open: (token: object) => void
   close: (token: object) => void
   isTop: (token: object) => boolean
+  /** The topmost open dialog, if any (where focus goes when a nested one closes). */
+  top: () => object | undefined
   size: () => number
 }
 
@@ -23,6 +25,7 @@ export function createDialogStack(): DialogStack {
     isTop(token) {
       return stack.length > 0 && stack[stack.length - 1] === token
     },
+    top: () => stack[stack.length - 1],
     size: () => stack.length,
   }
 }

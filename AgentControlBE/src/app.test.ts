@@ -1817,9 +1817,18 @@ describe('endpoint proxyUrl field', () => {
     expect(resent.statusCode).toBe(200)
     expect((resent.json() as Endpoint).proxyUrl).toBe('socks5h://cole:***@localhost:1055')
     expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
-    // Moving host with the mask keeps the password too; a new password replaces it.
-    await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: 'socks5h://cole:***@127.0.0.1:1055' })
-    expect(stored()).toBe('socks5h://cole:s3cret@127.0.0.1:1055')
+    // The mask with any other scheme, host, port or user is refused, so the
+    // saved password never goes to a proxy it wasn't saved for.
+    for (const proxyUrl of [
+      'socks5h://cole:***@127.0.0.1:1055', 'socks5h://cole:***@localhost:1056',
+      'socks5://cole:***@localhost:1055', 'http://cole:***@localhost:1055', 'socks5h://other:***@localhost:1055',
+    ]) {
+      const moved = await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl })
+      expect(moved.statusCode, proxyUrl).toBe(400)
+      expect(moved.json()).toMatchObject({ message: 'Re-enter the proxy password for the new host' })
+      expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
+    }
+    // A new host with a real password is fine.
     await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: 'socks5h://cole:n3w@127.0.0.1:1055' })
     expect(stored()).toBe('socks5h://cole:n3w@127.0.0.1:1055')
     // No stored proxy to take the password from: the mask is refused.

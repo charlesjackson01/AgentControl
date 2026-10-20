@@ -139,12 +139,19 @@ function resolveProxy(raw: unknown, current: string | undefined): string | undef
   if (raw === undefined) return current
   if (raw === null || raw === '') return undefined
   const next = String(raw).trim().replace(/\/+$/, '')
-  // The client sent the masked URL back: keep the stored password.
+  // The client sent the masked URL back: keep the stored password, but only
+  // for the same scheme, host, port and user, so the credential never goes to
+  // a proxy it wasn't saved for.
   try {
     const url = new URL(next)
     if (url.password === PROXY_PASSWORD_MASK) {
       if (!current) fail(400, 'Send the proxy password itself, not the mask.')
-      url.password = new URL(current).password
+      const saved = new URL(current)
+      if (saved.protocol !== url.protocol || saved.hostname !== url.hostname || saved.port !== url.port ||
+        saved.username !== url.username || !saved.password) {
+        fail(400, 'Re-enter the proxy password for the new host')
+      }
+      url.password = saved.password
       return url.toString().replace(/\/+$/, '')
     }
   } catch (err) {

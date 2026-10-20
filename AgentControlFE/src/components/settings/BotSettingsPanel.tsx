@@ -4,7 +4,7 @@ import ProfileTab from './ProfileTab'
 import MemoryTab from './MemoryTab'
 import SkillsTab from './SkillsTab'
 import PlaceholderTab from './PlaceholderTab'
-import { api } from '../../lib/api'
+import { saveAgentChange } from '../../lib/agent-patch'
 import { memoryApi, type MemoryLoad } from '../../lib/memory'
 import { SETTINGS_TABS } from '../../lib/settings-tabs'
 import { botFolder } from '../../lib/agent-put'
@@ -115,7 +115,7 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
                 setMem((m) => (m?.status === 'ok' ? { status: 'ok', page: { ...m.page, items, total: items.length } } : m))
               }
               onAgentSaved={didSave}
-              updateAgent={api.updateAgent}
+              saveChange={(a, change) => saveAgentChange(request, a, change)}
             />
           )}
           {tab === 'skills' && <SkillsTab key={agent.id} agent={agent} onAgentSaved={didSave} />}

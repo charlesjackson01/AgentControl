@@ -137,3 +137,17 @@ describe('BE-6 list rows (no content) vs legacy rows', () => {
     assert.equal(skillDetailLine(mine), 'Imported · 1 file')
   })
 })
+
+describe('skillWriteError', async () => {
+  const { skillWriteError } = await import('../src/lib/skills-catalog.ts')
+  const e = (status, message) => Object.assign(new Error(message), { status })
+  it('explains a vendored 403 when the server text is generic', () => {
+    assert.match(skillWriteError(e(403, 'Forbidden'), 'x'), /^Vendored skills are read-only/)
+    assert.match(skillWriteError(e(403, ''), 'x'), /^Vendored skills are read-only/)
+  })
+  it('keeps a specific server reason, and other errors', () => {
+    assert.equal(skillWriteError(e(403, 'superpowers/brainstorming is vendored and read-only'), 'x'), 'superpowers/brainstorming is vendored and read-only')
+    assert.equal(skillWriteError(e(400, 'SKILL.md needs a name'), 'x'), 'SKILL.md needs a name')
+    assert.equal(skillWriteError(null, 'fallback'), 'fallback')
+  })
+})

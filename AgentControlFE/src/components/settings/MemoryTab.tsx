@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import Toggle from './Toggle'
 import { SearchIcon } from '../icons'
-import { agentChatFirstFields, agentPutBody, botFolder } from '../../lib/agent-put'
+import { agentChatFirstFields, botFolder } from '../../lib/agent-put'
+import type { AgentChange } from '../../lib/agent-patch'
 import { friendlyError as friendly } from '../../lib/chat-format'
 import {
   MEMORY_CATEGORIES, MEMORY_MAX_CHARS, categoryLabel, dropMemory, memorySourceLine, memoryView, upsertMemory, validateMemoryText,
   type MemoryFilter, type MemoryLoad, type memoryApi,
 } from '../../lib/memory'
-import type { Agent, AgentInput, MemoryCategory, MemoryItem } from '../../lib/types'
+import type { Agent, MemoryCategory, MemoryItem } from '../../lib/types'
 
 type Props = {
   agent: Agent
@@ -16,13 +17,14 @@ type Props = {
   onRetry: () => void
   onItems: (items: MemoryItem[]) => void
   onAgentSaved: (a: Agent) => void
-  updateAgent: (id: string, body: AgentInput) => Promise<Agent>
+  /** PATCH /api/agents/:id (BE-4), PUT fallback before it lands. */
+  saveChange: (agent: Agent, change: AgentChange) => Promise<{ agent: Agent }>
 }
 
 type Editing = { id: string | null; text: string; category: MemoryCategory; error: string | null; saving: boolean }
 
 /** 03b: what this bot remembers (BE-4), plus "Learn from chat" (BE-1 `memoryLearn`). */
-export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentSaved, updateAgent }: Props) {
+export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentSaved, saveChange }: Props) {
   const { slug, memoryLearn } = agentChatFirstFields(agent)
   const [learn, setLearn] = useState(memoryLearn)
   const [learnSaving, setLearnSaving] = useState(false)
@@ -41,7 +43,7 @@ export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentS
     setLearnSaving(true)
     setLearnError(null)
     try {
-      onAgentSaved(await updateAgent(agent.id, agentPutBody(agent, { memoryLearn: on })))
+      onAgentSaved((await saveChange(agent, { memoryLearn: on })).agent)
     } catch (err) {
       setLearn(!on)
       setLearnError(friendly(err, 'Could not save the setting.'))

@@ -176,3 +176,18 @@ export function budgetMeter(b: PromptBudget): BudgetMeter {
     tone: b.mode === 'too-large' ? 'bad' : b.mode === 'summary' || fraction > 0.8 ? 'warn' : 'ok',
   }
 }
+
+/**
+ * Error text for a skill write (PATCH/DELETE/import). Vendored skills answer 403;
+ * say so plainly unless the server already gave a specific reason.
+ */
+export function skillWriteError(err: unknown, fallback: string): string {
+  const status = (err as { status?: unknown } | null)?.status
+  const msg = err instanceof Error ? err.message.trim() : ''
+  if (status === 403) {
+    return msg && !/^(forbidden|request (error|failed))$/i.test(msg)
+      ? msg
+      : 'Vendored skills are read-only: they come from a pinned upstream copy. Import your own SKILL.md to change one.'
+  }
+  return msg || fallback
+}

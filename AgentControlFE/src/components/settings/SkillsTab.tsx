@@ -5,7 +5,7 @@ import { api } from '../../lib/api'
 import { agentPutBody } from '../../lib/agent-put'
 import { friendlyError as friendly } from '../../lib/chat-format'
 import { normalizeRules } from '../../lib/agent-profile'
-import { budgetMeter, groupSkills, skillDetailLine, toggleSkillId, visibleSkills, type SkillsResponse } from '../../lib/skills-catalog'
+import { budgetMeter, groupSkills, skillDetailLine, skillWriteError, toggleSkillId, visibleSkills, type SkillsResponse } from '../../lib/skills-catalog'
 import type { Agent, PromptBudget, Skill, SkillSummary } from '../../lib/types'
 
 /** Characters of a skill body shown in the detail view. */
@@ -107,11 +107,13 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
     setImportNote(null)
     try {
       const skill = await api.importSkill(await file.text())
-      setCatalog((c) => (c ? { ...c, skills: [...c.skills.filter((s) => s.id !== skill.id), skill] } : c))
-      await toggle(skill.id, true)
-      setImportNote({ tone: 'ok', text: `Imported ${skill.name} and turned it on for ${agent.name}.` })
+      // Imports are custom skills: editable, off by default. The user turns it on here.
+      const row = { sourceId: 'custom' as const, defaultOn: false, ...skill }
+      setCatalog((c) => (c ? { ...c, skills: [...c.skills.filter((s) => s.id !== row.id), row] } : c))
+      setQuery(row.name)
+      setImportNote({ tone: 'ok', text: `Imported ${row.name}. Switch it on below to give it to ${agent.name}.` })
     } catch (err) {
-      setImportNote({ tone: 'err', text: friendly(err, 'Could not import that SKILL.md.') })
+      setImportNote({ tone: 'err', text: skillWriteError(err, 'Could not import that SKILL.md.') })
     }
   }
 
@@ -207,7 +209,7 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
                             {s.name}
                           </button>
                           {s.hasScripts && <span className="cf-tag">runs scripts</span>}
-                          {s.defaultOn && <span className="cf-tag">default</span>}
+                          {s.defaultOn && <span className="cf-tag" title="On by default for new bots">essentials</span>}
                         </p>
                         <p className="cf-skills__desc">{s.description}</p>
                         {open && detail && (

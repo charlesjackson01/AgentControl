@@ -85,7 +85,7 @@ export type Endpoint = {
   status: EndpointStatus
   lastCheckedAt: string | null
   createdAt: string
-  /** Optional HTTP(S) proxy for every upstream call, e.g. http://localhost:1055. */
+  /** Optional HTTP(S) or SOCKS5 proxy for every upstream call. Read back with the password masked: user:***@host (BE-11). */
   proxyUrl?: string
   /** Sends chat_template_kwargs.enable_thinking=false on every upstream call. */
   disableThinking?: boolean
@@ -164,7 +164,7 @@ export type EndpointInput = {
   contextWindow: number
   /** Write-only. Omit to keep the stored key on update, "" to clear it. Never returned on read. */
   apiKey?: string
-  /** Optional http(s) proxy URL. Omit to keep on update; "" or null clears it. */
+  /** Optional proxy URL. Omit to keep on update; "" or null clears it. A `***` password keeps the stored one. */
   proxyUrl?: string | null
   /** Optional. Omit to keep on update; false clears it. */
   disableThinking?: boolean

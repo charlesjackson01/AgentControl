@@ -1,4 +1,5 @@
 import { MAX_AVATAR_BYTES } from './types'
+import type { EndpointTestResult } from './endpoint-proxy'
 import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
 import { normalizeSkillsResponse, skillPath, type SkillsResponse } from './skills-catalog'
 import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
@@ -320,8 +321,9 @@ export const api = {
     return body.models
   },
 
-  async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {
-    return request<{ ok: boolean; models: string[]; latencyMs: number }>(
+  /** `error` (BE-11) explains a failed test, e.g. "fetch failed (ECONNREFUSED: ...)". */
+  async testEndpoint(id: string): Promise<EndpointTestResult> {
+    return request<EndpointTestResult>(
       `/api/endpoints/${encodeURIComponent(id)}/test`,
       { method: 'POST' },
     )

@@ -7,7 +7,7 @@ import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_L
 import type { Endpoint, EndpointInput, EndpointKind } from '../lib/types'
 import { MAX_OUTPUT_TOKENS_HINT, MAX_OUTPUT_TOKENS_PLACEHOLDER, maxOutputTokensLabel, maxOutputTokensPatch, validateMaxOutputTokens, endpointServerErrorField } from '../lib/max-output-tokens'
 import { DISABLE_THINKING_HINT, disableThinkingPatch } from '../lib/run-reply'
-import { PROXY_URL_HINT, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
+import { MASKED_PROXY_HINT, PROXY_URL_HINT, endpointTestNote, isMaskedProxy, maskedProxyWarning, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
 import UserProfileForm from '../components/UserProfileForm'
 import { useProfile } from '../state/profile-context'
 
@@ -151,7 +151,13 @@ function EndpointForm({
       <div className="field">
         <label className="field__label" htmlFor="ep-proxy">Proxy URL</label>
         <input id="ep-proxy" className={`input${errors.proxyUrl ? ' input--invalid' : ''}`} value={proxyUrl} onChange={(e) => { setProxyUrl(e.target.value); setErrors((er) => ({ ...er, proxyUrl: undefined })) }} placeholder="http://localhost:1055" inputMode="url" aria-invalid={Boolean(errors.proxyUrl)} />
-        {errors.proxyUrl ? <p className="field__err">{errors.proxyUrl}</p> : <p className="field__hint">{PROXY_URL_HINT}</p>}
+        {errors.proxyUrl ? (
+          <p className="field__err">{errors.proxyUrl}</p>
+        ) : maskedProxyWarning(proxyUrl, initial?.proxyUrl) ? (
+          <p className="field__err" role="status">{maskedProxyWarning(proxyUrl, initial?.proxyUrl)}</p>
+        ) : (
+          <p className="field__hint">{isMaskedProxy(proxyUrl) ? MASKED_PROXY_HINT : PROXY_URL_HINT}</p>
+        )}
       </div>
       <div className="field">
         <label className="field__check" htmlFor="ep-disable-thinking">
@@ -224,7 +230,7 @@ function EndpointsSection() {
     setTestingId(id)
     try {
       const res = await api.testEndpoint(id)
-      setTestNote((n) => ({ ...n, [id]: res.ok ? `Reachable · ${res.latencyMs}ms · [${res.models.join(', ')}]` : 'Unreachable' }))
+      setTestNote((n) => ({ ...n, [id]: endpointTestNote(res) }))
       await endpoints.reload()
     } catch (err) {
       setTestNote((n) => ({ ...n, [id]: err instanceof Error ? err.message : 'Test failed' }))

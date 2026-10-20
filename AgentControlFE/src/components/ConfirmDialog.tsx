@@ -12,6 +12,8 @@ type ConfirmDialogProps = {
   onConfirm: () => void
   loading?: boolean
   children?: ReactNode
+  /** Focus target on close when the opener is gone (see useDialogFocus). */
+  returnFocus?: () => HTMLElement | null
 }
 
 export default function ConfirmDialog({
@@ -23,10 +25,11 @@ export default function ConfirmDialog({
   onConfirm,
   loading = false,
   children,
+  returnFocus,
 }: ConfirmDialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   // Same stack, focus and Esc rules as <Dialog>: nested in Settings, Esc closes only this.
-  useDialogFocus(open, panelRef, onCancel)
+  useDialogFocus(open, panelRef, onCancel, returnFocus)
 
   if (!open) return null
 

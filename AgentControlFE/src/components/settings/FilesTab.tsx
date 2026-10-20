@@ -3,6 +3,7 @@ import Dialog from '../Dialog'
 import ConfirmDialog from '../ConfirmDialog'
 import { apiUrl, putRaw, request, serverMessage } from '../../lib/api'
 import { botFolder } from '../../lib/agent-put'
+import { rowFocusTarget } from '../../lib/dialog-focus'
 import {
   ancestorsOf,
   breadcrumb,
@@ -12,6 +13,7 @@ import {
   fileContentPath,
   fileIcon,
   fileSize,
+  fileTarget,
   filesApi,
   fileWhen,
   folderLine,
@@ -49,7 +51,8 @@ const errText = (err: unknown, fallback: string) => (err instanceof Error && err
 /** FE-4 Files tab (mockup 03d) on BE-2. Gaps are listed in lib/files.ts (GAP-F1…). */
 export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Props) {
   const checked = checkPath(rawPath)
-  const path = checked.ok ? checked.path : 'shared'
+  /** ?path= after the guard: a folder, or a file (FE-7 Open: show its folder with the file picked out). */
+  const target = checked.ok ? checked.path : 'shared'
   const [loaded, setLoaded] = useState<Loaded>({})
   const [listError, setListError] = useState<{ path: string; message: string } | null>(null)
   // Tree: shared/ and the open folder's ancestors start expanded; the user can open or close any folder.
@@ -65,6 +68,14 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const loadedRef = useRef<Loaded>({})
+  const paneRef = useRef<HTMLElement>(null)
+  const treeRef = useRef<HTMLElement>(null)
+  /** The row a Rename/Delete dialog was opened from (its ⋯ menu item is gone by close time). */
+  const menuOrigin = useRef<{ path: string; index: number } | null>(null)
+  const [dialogError, setDialogError] = useState<string | null>(null)
+  const fileHit = target !== '' && fileTarget(loaded[parentOf(target)], target)
+  /** The folder on show. */
+  const path = fileHit ? parentOf(target) : target
   const slug = botFolder(agent.slug)?.replace(/^bots\//, '').replace(/\/$/, '') || agent.slug || agent.name
 
   const fetchOne = useCallback(
@@ -103,10 +114,45 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
     [load],
   )
 
-  // `path` is always safe here: a refused ?path= falls back to shared/ and is never requested.
+  // `target` is always safe here: a refused ?path= falls back to shared/ and is never requested.
+  // The parent is listed first, so a file target (FE-7 Open) is never requested as a folder.
   useEffect(() => {
-    void refresh(['shared', 'workspace', ...ancestorsOf(path)])
-  }, [path, refresh])
+    void (async () => {
+      await refresh(['shared', 'workspace', ...ancestorsOf(parentOf(target))])
+      if (target !== '' && !fileTarget(loadedRef.current[parentOf(target)], target)) await load(target)
+    })()
+  }, [target, refresh, load])
+
+  // FE-7 Open: bring the picked-out file into view once its folder is listed.
+  useEffect(() => {
+    if (!fileHit) return
+    paneRef.current?.querySelector(`[data-fpath="${CSS.escape(target)}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [fileHit, target])
+
+  // Narrow (stacked) layout clips the tree: keep the open folder's row visible inside it,
+  // scrolling only the tree list, never the panel.
+  useEffect(() => {
+    const row = treeRef.current?.querySelector<HTMLElement>('.cf-tree__row--on')
+    const list = treeRef.current?.querySelector<HTMLElement>(':scope > .cf-tree')
+    if (!row || !list || list.scrollHeight <= list.clientHeight) return
+    const r = row.getBoundingClientRect(), l = list.getBoundingClientRect()
+    if (r.top < l.top) list.scrollTop -= l.top - r.top
+    else if (r.bottom > l.bottom) list.scrollTop += r.bottom - l.bottom
+  }, [path, loaded])
+
+  /** Focus fallback for Rename/Delete opened from a row's ⋯ menu (lib/dialog-focus rowFocusTarget). */
+  const menuReturnFocus = () => {
+    const pane = paneRef.current
+    const origin = menuOrigin.current
+    if (!pane || !origin) return null
+    const rows = Array.from(pane.querySelectorAll<HTMLElement>('[data-fpath]')).map((el) => ({
+      key: el.dataset.fpath ?? '',
+      el: el.querySelector<HTMLElement>('.cf-fmenu__btn'),
+    }))
+    return rowFocusTarget(rows, origin.path, origin.index, pane)
+  }
+  const rowIndex = (p: string) =>
+    Array.from(paneRef.current?.querySelectorAll<HTMLElement>('[data-fpath]') ?? []).findIndex((el) => el.dataset.fpath === p)
 
   useEffect(() => {
     if (!menu) return
@@ -180,14 +226,17 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
     await refresh([path, parentOf(path)])
   }
 
-  const act = async (label: string, fn: () => Promise<unknown>, reloadDirs: string[]) => {
+  /** Runs a change; its error goes to the panel's alert line, or into the open dialog when `inDialog`. */
+  const act = async (label: string, fn: () => Promise<unknown>, reloadDirs: string[], inDialog = false) => {
     setActionError(null)
+    setDialogError(null)
     setBusy({ text: label })
     try {
       await fn()
       return true
     } catch (err) {
-      setActionError(errText(err, 'That did not work.'))
+      if (inDialog) setDialogError(errText(err, 'That did not work.'))
+      else setActionError(errText(err, 'That did not work.'))
       return false
     } finally {
       setBusy(null)
@@ -230,10 +279,10 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
           )}
           {canModify(e.path) && (
             <>
-              <button type="button" role="menuitem" onClick={() => { setMenu(null); setRenaming(e) }}>
+              <button type="button" role="menuitem" onClick={() => { menuOrigin.current = { path: e.path, index: rowIndex(e.path) }; setMenu(null); setDialogError(null); setRenaming(e) }}>
                 Rename…
               </button>
-              <button type="button" role="menuitem" onClick={() => { setMenu(null); setDeleting(e) }}>
+              <button type="button" role="menuitem" onClick={() => { menuOrigin.current = { path: e.path, index: rowIndex(e.path) }; setMenu(null); setDeleting(e) }}>
                 Delete…
               </button>
             </>
@@ -307,7 +356,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : 'Open shared/ or workspace/ to upload'} onClick={() => inputRef.current?.click()}>
           ⤒ Upload
         </button>
-        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : 'Open shared/ or workspace/ to add a folder'} onClick={() => setNewFolder(true)}>
+        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : 'Open shared/ or workspace/ to add a folder'} onClick={() => { setDialogError(null); setNewFolder(true) }}>
           ＋ Folder
         </button>
         <input
@@ -336,7 +385,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
       {actionError && <p className="field__err cf-files__msg" role="alert">{actionError}</p>}
 
       <div className="cf-files__cols">
-        <nav className="cf-files__tree" aria-label="Bot folder">
+        <nav className="cf-files__tree" aria-label="Bot folder" ref={treeRef}>
           <div className="cf-files__root">{botFolder(agent.slug) ?? `bots/${slug}/`}</div>
           <ul className="cf-tree">{treeRows('', 0)}</ul>
           <div className="cf-tree__sp" />
@@ -351,6 +400,8 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         </nav>
 
         <section
+          ref={paneRef}
+          tabIndex={-1}
           className={`cf-files__pane${dragging ? ' cf-files__pane--drop' : ''}`}
           aria-label="Folder contents"
           onDragOver={(e) => {
@@ -394,7 +445,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
               <div className="cf-files__lbl">Images</div>
               <div className="cf-files__imgs">
                 {view.images.map((e) => (
-                  <div key={e.path} className="cf-files__img">
+                  <div key={e.path} className={`cf-files__img${fileHit && e.path === target ? ' cf-files__hit' : ''}`} data-fpath={e.path}>
                     <a href={contentUrl(e.path)} target="_blank" rel="noopener noreferrer" className="cf-files__thumb" aria-label={`Open ${e.name}`}>
                       <img src={contentUrl(e.path)} alt="" loading="lazy" />
                     </a>
@@ -414,7 +465,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
               <div className="cf-files__lbl">Folders</div>
               <div className="cf-files__dirs">
                 {view.folders.map((e) => (
-                  <div key={e.path} className="cf-files__dir">
+                  <div key={e.path} className="cf-files__dir" data-fpath={e.path}>
                     <button type="button" className="cf-files__dirbtn" onClick={() => go(e.path)}>
                       <span className="cf-files__dirico" aria-hidden="true">🗂</span>
                       <span className="cf-files__dirtxt">
@@ -434,7 +485,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
               <div className="cf-files__lbl">Files</div>
               <ul className="cf-files__list">
                 {view.files.map((e) => (
-                  <li key={e.path} className="cf-files__row">
+                  <li key={e.path} className={`cf-files__row${fileHit && e.path === target ? ' cf-files__hit' : ''}`} data-fpath={e.path} aria-current={fileHit && e.path === target ? 'true' : undefined}>
                     <span className="cf-files__rowico" aria-hidden="true">{fileIcon(e)}</span>
                     <a className="cf-files__rowname" href={contentUrl(e.path)} target="_blank" rel="noopener noreferrer" title={e.name}>
                       {e.name}
@@ -460,9 +511,13 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         action="Create folder"
         initial=""
         onClose={() => setNewFolder(false)}
+        serverError={newFolder ? dialogError : null}
+        onTyping={() => setDialogError(null)}
         onSubmit={async (name) => {
-          const ok = await act(`Creating ${name}…`, () => files.makeFolder(agent.id, joinPath(path, name)), [path])
+          // Errors stay in the dialog (role=alert), with the name still filled in.
+          const ok = await act(`Creating ${name}…`, () => files.makeFolder(agent.id, joinPath(path, name)), [path], true)
           if (ok) setNewFolder(false)
+          return ok
         }}
       />
       <NameDialog
@@ -472,15 +527,22 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         action="Rename"
         initial={renaming?.name ?? ''}
         onClose={() => setRenaming(null)}
+        returnFocus={menuReturnFocus}
+        serverError={renaming ? dialogError : null}
+        onTyping={() => setDialogError(null)}
         onSubmit={async (name) => {
-          if (!renaming) return
+          if (!renaming) return false
           const from = renaming.path
           const to = joinPath(parentOf(from), name)
-          const ok = await act(`Renaming ${renaming.name}…`, () => files.move(agent.id, from, to), [parentOf(from)])
+          // Errors (e.g. a 400 for a symlink name) stay in the dialog with the name still filled in.
+          const ok = await act(`Renaming ${renaming.name}…`, () => files.move(agent.id, from, to), [parentOf(from)], true)
           if (ok) {
+            // Focus returns to the row under its new name (it may have re-sorted).
+            if (menuOrigin.current?.path === from) menuOrigin.current = { ...menuOrigin.current, path: to }
             setRenaming(null)
             if (path === from || path.startsWith(`${from}/`)) go(to + path.slice(from.length))
           }
+          return ok
         }}
       />
       <ConfirmDialog
@@ -490,12 +552,13 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         confirmLabel="Delete"
         loading={!!busy}
         onCancel={() => setDeleting(null)}
+        returnFocus={menuReturnFocus}
         onConfirm={async () => {
           if (!deleting) return
-          const target = deleting
-          const ok = await act(`Deleting ${target.name}…`, () => files.remove(agent.id, target.path), [parentOf(target.path)])
+          const doomed = deleting
+          const ok = await act(`Deleting ${doomed.name}…`, () => files.remove(agent.id, doomed.path), [parentOf(doomed.path)])
           setDeleting(null)
-          if (ok && (path === target.path || path.startsWith(`${target.path}/`))) go(parentOf(target.path))
+          if (ok && (path === doomed.path || path.startsWith(`${doomed.path}/`))) go(parentOf(doomed.path))
         }}
       />
     </div>
@@ -503,18 +566,25 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
 }
 
 /** GAP-F6: one name field for New folder and Rename. */
-function NameDialog({ open, title, label, action, initial, onClose, onSubmit }: {
+function NameDialog({ open, title, label, action, initial, onClose, onSubmit, serverError, onTyping, returnFocus }: {
   open: boolean
   title: string
   label: string
   action: string
   initial: string
   onClose: () => void
-  onSubmit: (name: string) => Promise<void>
+  /** Resolves true when done (the dialog closes), false when it failed and stays open. */
+  onSubmit: (name: string) => Promise<boolean>
+  /** The server's message for a failed submit, shown in the dialog (role=alert). */
+  serverError?: string | null
+  onTyping?: () => void
+  returnFocus?: () => HTMLElement | null
 }) {
   const [name, setName] = useState(initial)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const shown = error ?? serverError ?? null
   const [wasOpen, setWasOpen] = useState(open)
   if (open !== wasOpen) {
     setWasOpen(open)
@@ -524,7 +594,7 @@ function NameDialog({ open, title, label, action, initial, onClose, onSubmit }: 
     }
   }
   return (
-    <Dialog open={open} title={title} size="sm" onClose={onClose}>
+    <Dialog open={open} title={title} size="sm" onClose={onClose} returnFocus={returnFocus}>
       <form
         className="form"
         noValidate
@@ -536,14 +606,25 @@ function NameDialog({ open, title, label, action, initial, onClose, onSubmit }: 
             return
           }
           setSaving(true)
-          await onSubmit(name.trim())
+          const done = await onSubmit(name.trim())
           setSaving(false)
+          // Failed: keep the dialog, the name and the server's message; focus back on the field.
+          if (!done) requestAnimationFrame(() => inputRef.current?.focus())
         }}
       >
         <div className="field">
           <label className="field__label" htmlFor="cf-files-name">{label}</label>
-          <input id="cf-files-name" className={`input${error ? ' input--invalid' : ''}`} value={name} data-autofocus onChange={(e) => { setName(e.target.value); setError(null) }} />
-          {error && <p className="field__err" role="alert">{error}</p>}
+          <input
+            id="cf-files-name"
+            ref={inputRef}
+            className={`input${shown ? ' input--invalid' : ''}`}
+            value={name}
+            data-autofocus
+            aria-invalid={shown ? true : undefined}
+            aria-describedby={shown ? 'cf-files-name-err' : undefined}
+            onChange={(e) => { setName(e.target.value); setError(null); onTyping?.() }}
+          />
+          {shown && <p className="field__err" id="cf-files-name-err" role="alert">{shown}</p>}
         </div>
         <div className="dialog__foot">
           <button type="button" className="btn" onClick={onClose} disabled={saving}>Cancel</button>

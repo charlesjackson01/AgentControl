@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { readFileSync } from 'node:fs'
-import { FOCUSABLE_SELECTOR, initialFocus, restoreTarget, shouldRestore, tabTarget } from '../src/lib/dialog-focus.ts'
+import { FOCUSABLE_SELECTOR, initialFocus, restoreTarget, rowFocusTarget, shouldRestore, tabTarget } from '../src/lib/dialog-focus.ts'
 import { createDialogStack } from '../src/lib/dialog-stack.ts'
 
 const panel = { name: 'panel' }
@@ -64,6 +64,13 @@ describe('dialog focus: on close', () => {
   it('a removed opener (deleted endpoint row) falls back to the dialog underneath', () => {
     assert.equal(restoreTarget(trigger, false, settingsPanel), settingsPanel)
     assert.equal(restoreTarget(null, false, settingsPanel), settingsPanel)
+  })
+  it('a removed opener (⋯ menu item) uses the dialog\'s returnFocus fallback before the panel below', () => {
+    const rowBtn = { name: 'row ⋯' }
+    assert.equal(restoreTarget(trigger, false, settingsPanel, rowBtn), rowBtn)
+    assert.equal(restoreTarget(null, false, null, rowBtn), rowBtn)
+    assert.equal(restoreTarget(trigger, false, settingsPanel, null), settingsPanel, 'no row found: panel below')
+    assert.equal(restoreTarget(trigger, true, settingsPanel, rowBtn), trigger, 'a live opener still wins')
   })
   it('nothing to restore when the opener is gone and no dialog is left', () => {
     assert.equal(restoreTarget(trigger, false, undefined), null)
@@ -130,5 +137,36 @@ describe('dialog focus: wiring', () => {
     const src = readFileSync(new URL('../src/pages/Settings.tsx', import.meta.url), 'utf8')
     assert.match(src, /<input id="ep-name" data-autofocus/)
     assert.match(src, /className="btn" data-autofocus onClick=\{\(\) => setDialog\(null\)\}/)
+  })
+})
+
+describe('dialog focus: back to the row after a ⋯ menu Rename/Delete', () => {
+  const list = { name: 'file list' }
+  const btn = (k) => ({ name: `⋯ ${k}` })
+  const rows = (...keys) => keys.map((key) => ({ key, el: btn(key) }))
+  it('same row (Esc / Cancel): its own ⋯ button', () => {
+    const r = rows('shared/a.txt', 'shared/b.txt', 'shared/c.txt')
+    assert.equal(rowFocusTarget(r, 'shared/b.txt', 1, list), r[1].el)
+  })
+  it('renamed row: found by its new path, wherever the sort put it', () => {
+    const r = rows('shared/a.txt', 'shared/c.txt', 'shared/z-renamed.txt')
+    assert.equal(rowFocusTarget(r, 'shared/z-renamed.txt', 0, list), r[2].el)
+  })
+  it('deleted row: the next row (now at its index), else the previous, else the list', () => {
+    const r = rows('shared/a.txt', 'shared/c.txt')
+    assert.equal(rowFocusTarget(r, 'shared/b.txt', 1, list), r[1].el, 'next row moved into its place')
+    assert.equal(rowFocusTarget(r, 'shared/d.txt', 2, list), r[1].el, 'was last: previous row')
+    assert.equal(rowFocusTarget([], 'shared/a.txt', 0, list), list, 'list now empty')
+    assert.equal(rowFocusTarget([], 'shared/a.txt', 0, null), null)
+  })
+  it('a row without a ⋯ button (read-only) is skipped to the list rather than null', () => {
+    assert.equal(rowFocusTarget([{ key: 'k', el: null }], 'gone', 0, list), list)
+  })
+  it('wired: Dialog/ConfirmDialog take returnFocus; FilesTab passes the row fallback', () => {
+    const hook = readFileSync(new URL('../src/hooks/useDialogFocus.ts', import.meta.url), 'utf8')
+    assert.match(hook, /returnFocusRef\.current\?\.\(\)/)
+    const tab = readFileSync(new URL('../src/components/settings/FilesTab.tsx', import.meta.url), 'utf8')
+    assert.match(tab, /rowFocusTarget\(/)
+    assert.match(tab, /returnFocus=\{menuReturnFocus\}/)
   })
 })

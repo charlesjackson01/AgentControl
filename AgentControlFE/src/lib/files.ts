@@ -168,6 +168,11 @@ export function filesTotal(listing: unknown): number | undefined {
   return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined
 }
 
+/** FE-7 Open (`?panel=files&path=<file>`): true when `path` is a file in its folder's listing. */
+export function fileTarget(parent: Pick<FileListing, 'entries'> | undefined, path: string): boolean {
+  return !!parent?.entries.some((e) => e.path === path && e.kind === 'file')
+}
+
 /* ---------- right pane (03d) ---------- */
 
 export type PaneView = { images: FileEntry[]; folders: FileEntry[]; files: FileEntry[] }

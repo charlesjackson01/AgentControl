@@ -390,7 +390,7 @@ button.cf-act__head:focus-visible { outline: 2px solid var(--c-accent-ring); out
 }
 
 /* FE-4 Files tab (mockup 03d). Gaps: lib/files.ts (GAP-F1…). */
-.cf-files { display: flex; flex-direction: column; font-size: 13px; }
+.cf-files { display: flex; flex-direction: column; font-size: 13px; container: cf-files / inline-size; }
 .cf-files__bar { display: flex; gap: 8px; align-items: center; }
 .cf-files__seg { display: flex; gap: 2px; background: var(--c-bg-sunk); padding: 3px; border-radius: 9px; flex: none; }
 .cf-files__seg button { height: 26px; padding: 0 10px; border: 0; border-radius: var(--r-sm); background: none; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--c-text); cursor: pointer; white-space: nowrap; }
@@ -454,6 +454,24 @@ button.cf-act__head:focus-visible { outline: 2px solid var(--c-accent-ring); out
 .cf-files__rowsize { width: 56px; flex: none; text-align: right; font-size: 11px; color: var(--c-text-3); white-space: nowrap; }
 .cf-files__hint { margin: 10px 0 0; font-size: 11.5px; color: var(--c-text-3); }
 /* GAP-F5: row actions. */
+/* FE-4: picked-out file (FE-7 Open, ?path=<file>) and the pane as a focus target (after a delete). */
+.cf-files__row.cf-files__hit { background: var(--c-accent-soft); }
+.cf-files__img.cf-files__hit .cf-files__thumb { outline: 2px solid var(--c-accent); outline-offset: 2px; }
+.cf-files__pane:focus { outline: none; }
+.cf-files__pane:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 4px; }
+/* FE-4: narrow panels (Files under 600 px: 1024–1100 px windows) stack the tree over the pane.
+   1280 and 1440 keep the side-by-side layout untouched. */
+@container cf-files (max-width: 600px) {
+  .cf-files__bar { flex-wrap: wrap; }
+  .cf-files__bar .cf-search { order: 5; flex: 1 1 100%; }
+  .cf-files__cols { flex-direction: column; min-height: 0; }
+  .cf-files__tree { width: auto; max-height: 300px; }
+  .cf-files__imgs { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+  .cf-files__dirs { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+  .cf-files__crumbs { flex-wrap: wrap; row-gap: 2px; }
+  .cf-files__crumbs > .cf-tree__sp { display: none; }
+  .cf-files__note { flex-basis: 100%; white-space: normal; }
+}
 .cf-fmenu { position: relative; flex: none; display: inline-flex; }
 .cf-fmenu__btn { border: 0; background: none; padding: 0 4px; font: inherit; color: var(--c-text-3); cursor: pointer; border-radius: var(--r-xs); line-height: 1.4; }
 .cf-fmenu__btn:hover, .cf-fmenu__btn[aria-expanded='true'] { background: var(--c-bg-sunk); color: var(--c-text); }

@@ -10,11 +10,13 @@ type DialogProps = {
   onClose: () => void
   footer?: ReactNode
   children: ReactNode
+  /** Focus target on close when the opener is gone (see useDialogFocus). */
+  returnFocus?: () => HTMLElement | null
 }
 
-export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children }: DialogProps) {
+export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children, returnFocus }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
-  useDialogFocus(open, panelRef, onClose)
+  useDialogFocus(open, panelRef, onClose, returnFocus)
 
   if (!open) return null
 

@@ -44,12 +44,26 @@ export function tabTarget<T>(focusable: readonly T[], active: T | null | undefin
 
 /**
  * On close: the element focused before the dialog opened if it is still in the
- * document, else the panel of the dialog now on top (nested Edit inside Settings),
- * else nothing.
+ * document, else the caller's fallback (a dialog opened from a menu item that is
+ * gone by now: FilesTab's row ⋯ button, see rowFocusTarget), else the panel of the
+ * dialog now on top (nested Edit inside Settings), else nothing.
  */
-export function restoreTarget<T>(opener: T | null | undefined, openerConnected: boolean, panelBelow: T | null | undefined): T | null {
+export function restoreTarget<T>(opener: T | null | undefined, openerConnected: boolean, panelBelow: T | null | undefined, fallback?: T | null): T | null {
   if (opener != null && openerConnected) return opener
-  return panelBelow ?? null
+  return fallback ?? panelBelow ?? null
+}
+
+/**
+ * Fallback for a dialog opened from a row's menu (FilesTab Rename/Delete): the row's
+ * own ⋯ button, found by its (new) key; if the row is gone, the next row's button
+ * (the one that moved into its place), then the previous row's, then the list itself.
+ * `rows` are the rows now in the list, in order; `index` is where the row was.
+ */
+export function rowFocusTarget<T>(rows: readonly { key: string; el: T | null }[], key: string, index: number, list: T | null): T | null {
+  const same = rows.find((r) => r.key === key)?.el
+  if (same) return same
+  const at = (i: number) => (i >= 0 && i < rows.length ? rows[i].el : null)
+  return at(index) ?? at(index - 1) ?? list
 }
 
 /**

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
+import { readFileSync } from 'node:fs'
 import {
   MAX_UPLOAD_BYTES, ancestorsOf, baseName, breadcrumb, canModify, canWriteInto, checkPath, fileContentPath, fileIcon,
   fileSize, fileWhen, filesApi, filesErrorMessage, filesPanelOpen, filesPathParam, folderLine, imageLine, isImage,
-  joinPath, nameError, filesTotal, latestSubfolder, paneView, parentOf, treeEntries, treeSize, uploadError, usageView, withFilesPath, zoneBadge, zoneOfPath,
+  fileTarget, joinPath, nameError, filesTotal, latestSubfolder, paneView, parentOf, treeEntries, treeSize, uploadError, usageView, withFilesPath, zoneBadge, zoneOfPath,
 } from '../src/lib/files.ts'
 import { SETTINGS_TABS } from '../src/lib/settings-tabs.ts'
 
@@ -257,5 +258,45 @@ describe('files: GAP-F2 tab count from optional totalFiles', () => {
     for (const bad of [{ entries: [] }, { totalFiles: null }, { totalFiles: '31' }, { totalFiles: -1 }, { totalFiles: 2.5 }, { totalFiles: NaN }, { totalFiles: Infinity }, null, undefined, 31]) {
       assert.equal(filesTotal(bad), undefined, JSON.stringify(bad))
     }
+  })
+})
+
+describe('FE-7 Open target (?path=<file>)', () => {
+  const listing = { entries: [
+    { path: 'workspace/briefs/lindmere-harbor.md', name: 'lindmere-harbor.md', kind: 'file' },
+    { path: 'workspace/briefs/old', name: 'old', kind: 'folder' },
+  ] }
+  it('a file in its folder\'s listing is a file target (open the folder, pick out the file)', () => {
+    assert.equal(fileTarget(listing, 'workspace/briefs/lindmere-harbor.md'), true)
+  })
+  it('a folder, an unknown path or an unlisted parent is not', () => {
+    assert.equal(fileTarget(listing, 'workspace/briefs/old'), false)
+    assert.equal(fileTarget(listing, 'workspace/briefs/nope.md'), false)
+    assert.equal(fileTarget(undefined, 'workspace/briefs/lindmere-harbor.md'), false)
+  })
+  it('FilesTab lists the parent first and only lists ?path itself when it is not a file (no 400)', () => {
+    const tab = readFileSync(new URL('../src/components/settings/FilesTab.tsx', import.meta.url), 'utf8')
+    assert.match(tab, /if \(target !== '' && !fileTarget\(loadedRef\.current\[parentOf\(target\)\], target\)\) await load\(target\)/)
+    assert.match(tab, /const path = fileHit \? parentOf\(target\) : target/)
+  })
+})
+
+describe('FE-4 dialogs: server errors stay in the dialog', () => {
+  const tab = readFileSync(new URL('../src/components/settings/FilesTab.tsx', import.meta.url), 'utf8')
+  it('Rename / New folder route errors into the dialog with role=alert and keep it open', () => {
+    assert.match(tab, /const shown = error \?\? serverError \?\? null/)
+    assert.match(tab, /\{shown && <p className="field__err" id="cf-files-name-err" role="alert">\{shown\}<\/p>\}/)
+    assert.match(tab, /if \(!done\) requestAnimationFrame\(\(\) => inputRef\.current\?\.focus\(\)\)/)
+    assert.equal((tab.match(/, true\)\n/g) ?? []).length >= 2, true, 'both makeFolder and rename act(…, inDialog=true)')
+  })
+})
+
+describe('FE-4 layout: narrow panels reflow, 1280/1440 untouched', () => {
+  const css = readFileSync(new URL('../src/shell.css', import.meta.url), 'utf8')
+  it('container query on the Files tab, below the 1280 width (Files ≈611 px there)', () => {
+    assert.match(css, /\.cf-files \{[^}]*container: cf-files \/ inline-size;/)
+    const m = css.match(/@container cf-files \(max-width: (\d+)px\)/g) ?? []
+    assert.equal(m.length, 1)
+    assert.ok(Number(m[0].match(/(\d+)px/)[1]) < 611)
   })
 })

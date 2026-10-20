@@ -24,7 +24,13 @@ function activeElement(): HTMLElement | null {
  * goes back to the opener on close, or to the dialog underneath if the opener is
  * gone. Pure rules: lib/dialog-focus.ts; tests/dialog-focus.test.mjs.
  */
-export function useDialogFocus(open: boolean, panelRef: RefObject<HTMLElement | null>, onClose: () => void): void {
+export function useDialogFocus(
+  open: boolean,
+  panelRef: RefObject<HTMLElement | null>,
+  onClose: () => void,
+  /** Where focus goes on close when the opener is gone (e.g. a menu item); looked up at close time. */
+  returnFocus?: () => HTMLElement | null,
+): void {
   // Identity for the dialog stack; onClose via a ref so a new callback each render
   // doesn't re-register this dialog (which would move it back to the top).
   const [token] = useState<DialogToken>(() => ({ panel: () => panelRef.current }))
@@ -37,8 +43,10 @@ export function useDialogFocus(open: boolean, panelRef: RefObject<HTMLElement | 
     if (open) setOpener(activeElement())
   }
   const onCloseRef = useRef(onClose)
+  const returnFocusRef = useRef(returnFocus)
   useEffect(() => {
     onCloseRef.current = onClose
+    returnFocusRef.current = returnFocus
   })
 
   useEffect(() => {
@@ -87,7 +95,8 @@ export function useDialogFocus(open: boolean, panelRef: RefObject<HTMLElement | 
       const activeInside = !!panel && !!active && panel.contains(active)
       if (shouldRestore(activeIsBody, activeInside, wasTop)) {
         const below = dialogStack.top() as DialogToken | undefined
-        restoreTarget(opener, !!opener?.isConnected, below?.panel())?.focus()
+        const openerLive = !!opener?.isConnected
+        restoreTarget(opener, openerLive, below?.panel(), openerLive ? null : (returnFocusRef.current?.() ?? null))?.focus()
       }
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = previousOverflow

@@ -4,7 +4,7 @@ import GroupAvatar from './GroupAvatar'
 import Switcher from './Switcher'
 import UserAvatar from './UserAvatar'
 import { SearchIcon } from '../icons'
-import { agentStatusLine } from '../../lib/shell'
+import { agentStatusLine, isAgentTyping } from '../../lib/shell'
 import { unreadLabel } from '../../lib/conversations'
 import { displayName } from '../../lib/profile'
 import type { Agent, ConversationSummary } from '../../lib/types'
@@ -67,15 +67,20 @@ export default function ChatHeader({
   conversation,
   agent,
   onInfo,
+  sending = false,
 }: {
   conversation?: ConversationSummary
   agent?: Agent
   onInfo?: () => void
+  /** Our own DM send is in flight (the reply is being generated). */
+  sending?: boolean
 }) {
   const shell = useShell()
   const { agents } = useConversations()
   const group = conversation?.kind === 'group' ? conversation : undefined
   const badge = unreadLabel(shell.unread)
+  const typing = sending || isAgentTyping(conversation, agent?.id)
+  const subline = agent ? agentStatusLine(agent, { typing }) : ''
 
   return (
     <header className="cf-hdr">
@@ -116,9 +121,9 @@ export default function ChatHeader({
               <span className="cf-switch__nm">
                 {agent?.name ?? 'Chats'} <span className="cf-chev">▾</span>
               </span>
-              {agent && (
-                <span className="cf-switch__rl">
-                  <span className={`cf-presence cf-presence--${agent.status}`}>●</span> {agentStatusLine(agent)}
+              {subline && (
+                <span className={`cf-switch__rl${typing ? ' cf-switch__rl--typing' : ''}`} aria-live="polite">
+                  {typing && <span className="cf-presence">●</span>} {subline}
                 </span>
               )}
             </span>

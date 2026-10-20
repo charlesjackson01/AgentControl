@@ -242,10 +242,17 @@ export function switcherOrder(sections: { bots: SwitcherItem[]; groups: Switcher
   return [...sections.bots, ...sections.groups]
 }
 
-/** Header subline under a bot's name: "Team Lead · online". */
-export function agentStatusLine(agent: Pick<AgentLike, 'role' | 'status'>): string {
-  const word =
-    agent.status === 'running' ? 'replying' : agent.status === 'queued' ? 'queued' : agent.status === 'error' ? 'last run failed' : 'online'
-  const role = agent.role?.trim()
-  return role ? `${role} · ${word}` : word
+/**
+ * Header subline under a bot's name. Only real state: "typing…" while this bot
+ * is producing a reply (typingAgentId or our own in-flight send), otherwise the
+ * role and model it runs on ("Team Lead · qwen3-32b"). No presence is faked.
+ */
+export function agentStatusLine(agent: Pick<AgentLike, 'role'> & { modelId?: string }, options: { typing?: boolean } = {}): string {
+  const parts = [agent.role?.trim(), options.typing ? 'typing…' : agent.modelId?.trim()].filter(Boolean)
+  return parts.join(' · ')
+}
+
+/** True when the chat's summary says this bot is the one typing. */
+export function isAgentTyping(c: { typingAgentId?: string | null } | undefined, agentId: string | undefined): boolean {
+  return Boolean(c?.typingAgentId && agentId && c.typingAgentId === agentId)
 }

@@ -146,7 +146,7 @@ export default function ConversationChat() {
     }
   }, [newestId, messages?.length, pending])
 
-  const loadOlder = useCallback(async () => {
+  const loadOlder = async () => {
     const before = olderCursor(messages ?? [])
     if (!before || loadingOlder) return
     setLoadingOlder(true)
@@ -162,10 +162,10 @@ export default function ConversationChat() {
     } finally {
       setLoadingOlder(false)
     }
-  }, [conversationId, loadingOlder, messages])
+  }
 
   const sending = pending?.status === 'typing'
-  const send = async (raw: string) => {
+  const send = useCallback(async (raw: string) => {
     const text = raw.trim()
     if (!text || sending) return
     setPending({ text, ts: new Date().toISOString(), status: 'typing' })
@@ -187,7 +187,7 @@ export default function ConversationChat() {
     } catch (err) {
       setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
     }
-  }
+  }, [sending, agent, conversationId, upsert])
 
 
   const authorOf = (m: ChatMessage): Agent | undefined =>
@@ -220,7 +220,7 @@ export default function ConversationChat() {
 
   return (
     <>
-      <ChatHeader conversation={conversation} agent={agent} onInfo={agent ? () => setProfileOpen(true) : undefined} />
+      <ChatHeader conversation={conversation} agent={agent} sending={sending} onInfo={agent ? () => setProfileOpen(true) : undefined} />
       <main className="cf-main">
         <section className="cf-thread" aria-label="Conversation" ref={threadRef}>
           <div className="cf-thread__inner">
@@ -336,7 +336,7 @@ export default function ConversationChat() {
               {sending ? <span className="spinner" aria-hidden="true" /> : '↑'}
             </button>
           </div>
-          <p className="cf-hint">Enter to send · Shift+Enter for a new line</p>
+          <p className="cf-hint">Enter to send · / for commands · Files you send are saved in this bot&apos;s folder</p>
         </div>
       </main>
 

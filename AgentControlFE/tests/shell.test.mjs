@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import {
-  CHAT_LIST_KEY, agentDmPath, agentStatusLine, chatListUnread, chatSections, conversationTitle, groupAvatarIds,
+  CHAT_LIST_KEY, agentDmPath, agentStatusLine, chatListUnread, isAgentTyping, chatSections, conversationTitle, groupAvatarIds,
   homeTarget, listTime, previewLine, readChatListOpen, shellShortcut, switcherOrder, switcherSections, writeChatListOpen,
 } from '../src/lib/shell.ts'
 
@@ -183,8 +183,22 @@ describe('small formatters', () => {
     assert.equal(listTime(new Date(2025, 9, 2, 9, 0).toISOString(), now), 'Oct 2, 2025')
     assert.equal(listTime('nope', now), '')
   })
-  it('header status line', () => {
-    assert.equal(agentStatusLine({ role: 'Team Lead', status: 'idle' }), 'Team Lead · online')
-    assert.equal(agentStatusLine({ role: '', status: 'running' }), 'replying')
+  it('header status line: role · model, or "typing…"; never a faked presence', () => {
+    assert.equal(agentStatusLine({ role: 'Team Lead', modelId: 'qwen3-32b' }), 'Team Lead · qwen3-32b')
+    assert.equal(agentStatusLine({ role: 'Team Lead', modelId: 'qwen3-32b' }, { typing: true }), 'Team Lead · typing…')
+    assert.equal(agentStatusLine({ role: '', modelId: 'm' }), 'm')
+    assert.equal(agentStatusLine({ role: '  ', modelId: '' }, { typing: true }), 'typing…')
+    assert.equal(agentStatusLine({ role: '', modelId: '' }), '')
+    for (const status of ['idle', 'running', 'queued', 'error']) {
+      assert.doesNotMatch(agentStatusLine({ role: 'R', modelId: 'm', status }), /online/)
+    }
+  })
+  it('typing only when typingAgentId is this bot', () => {
+    assert.equal(isAgentTyping({ typingAgentId: 'p' }, 'p'), true)
+    assert.equal(isAgentTyping({ typingAgentId: 'cr' }, 'p'), false)
+    assert.equal(isAgentTyping({ typingAgentId: null }, 'p'), false)
+    assert.equal(isAgentTyping({}, 'p'), false)
+    assert.equal(isAgentTyping(undefined, 'p'), false)
+    assert.equal(isAgentTyping({ typingAgentId: 'p' }, undefined), false)
   })
 })

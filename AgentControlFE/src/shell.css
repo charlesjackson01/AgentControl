@@ -82,9 +82,8 @@
 .cf-switch__nm { font-weight: 600; font-size: 14.5px; line-height: 1.1; margin: 0; white-space: nowrap; }
 .cf-switch__rl { font-size: 11.5px; color: var(--c-text-2); margin: 0; white-space: nowrap; }
 .cf-chev { color: var(--c-text-3); font-size: 11px; margin-left: 2px; }
-.cf-presence { color: var(--c-success); }
-.cf-presence--running, .cf-presence--queued { color: var(--c-accent); }
-.cf-presence--error { color: var(--c-danger); }
+.cf-presence { color: var(--c-accent); }
+.cf-switch__rl--typing { color: var(--c-accent); }
 .cf-usermenu { position: relative; margin-left: 4px; }
 .cf-usermenu__btn { padding: 0; border: 0; background: none; cursor: pointer; border-radius: 50%; display: block; }
 .cf-usermenu__btn .avatar { --avatar-size: 30px; font-size: 13px; }

@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentRun, ChatMessage, Conversation, ConversationSummary } from './shared/types.js'
+import type { AgentRun, AgentStatus, ChatMessage, Conversation, ConversationSummary, DmConversation } from './shared/types.js'
 
 /** The slice of the store this module touches (keeps it unit-testable). */
 export interface ConversationState {
-  agents: { id: string }[]
+  agents: { id: string; status?: AgentStatus }[]
   runs: AgentRun[]
   conversations: Conversation[]
   chatMessages: ChatMessage[]
@@ -11,11 +11,15 @@ export interface ConversationState {
 
 export const CONVERSATIONS_MIGRATION = 'conversations-from-runs-v1'
 
+export function dmOf(state: ConversationState, agentId: string): DmConversation | undefined {
+  return state.conversations.find((c): c is DmConversation => c.kind === 'dm' && c.agentId === agentId)
+}
+
 /** The agent's DM, created on first use. */
-export function ensureDm(state: ConversationState, agentId: string, now: string = new Date().toISOString()): Conversation {
-  const existing = state.conversations.find((c) => c.kind === 'dm' && c.agentId === agentId)
+export function ensureDm(state: ConversationState, agentId: string, now: string = new Date().toISOString()): DmConversation {
+  const existing = dmOf(state, agentId)
   if (existing) return existing
-  const conversation: Conversation = {
+  const conversation: DmConversation = {
     id: `conv-${randomUUID()}`,
     kind: 'dm',
     agentId,
@@ -60,6 +64,7 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
       content: reply,
       createdAt: replyAt,
       runId: run.id,
+      authorAgentId: run.agentId,
       ...(run.status === 'failed' ? { error: true as const } : {}),
     })
     newest = replyAt
@@ -82,7 +87,7 @@ export function migrateRunsToConversations(state: ConversationState, migrations:
     if (recordRunMessages(state, run)) touched.add(run.agentId)
   }
   for (const c of state.conversations) {
-    if (touched.has(c.agentId) && c.lastReadAt === null) c.lastReadAt = c.updatedAt
+    if (c.kind === 'dm' && touched.has(c.agentId) && c.lastReadAt === null) c.lastReadAt = c.updatedAt
   }
   migrations.push(CONVERSATIONS_MIGRATION)
   return true
@@ -100,12 +105,15 @@ export function summarize(state: ConversationState, c: Conversation): Conversati
   const unreadCount = messages.filter(
     (m) => m.role === 'assistant' && (c.lastReadAt === null || m.createdAt > c.lastReadAt),
   ).length
-  return { ...c, lastMessage, unreadCount }
+  // A DM is typing while its agent's run is in flight (groups set this in BE-5).
+  const typingAgentId =
+    c.kind === 'dm' && state.agents.some((a) => a.id === c.agentId && a.status === 'running') ? c.agentId : null
+  return { ...c, lastMessage, unreadCount, typingAgentId }
 }
 
 /** Drop a conversation's messages (and, with `dropConversation`, the conversation). */
 export function clearAgentConversations(state: ConversationState, agentId: string, dropConversation: boolean): void {
-  const ids = new Set(state.conversations.filter((c) => c.agentId === agentId).map((c) => c.id))
+  const ids = new Set(state.conversations.filter((c) => c.kind === 'dm' && c.agentId === agentId).map((c) => c.id))
   state.chatMessages = state.chatMessages.filter((m) => !ids.has(m.conversationId))
   if (dropConversation) state.conversations = state.conversations.filter((c) => !ids.has(c.id))
 }
@@ -115,7 +123,9 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
   if (!Array.isArray(raw)) return []
   const seen = new Set<string>()
   const out: Conversation[] = []
-  for (const c of raw as Partial<Conversation>[]) {
+  for (const c of raw as Partial<DmConversation>[]) {
+    // Groups arrive in BE-5; until then only DMs load.
+    if (c && c.kind !== undefined && c.kind !== 'dm') continue
     if (!c || typeof c.id !== 'string' || typeof c.agentId !== 'string' || !agentIds.has(c.agentId)) continue
     if (seen.has(c.agentId)) continue
     seen.add(c.agentId)
@@ -150,6 +160,8 @@ export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>
           createdAt: m.createdAt,
           ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
           ...(m.error === true ? { error: true as const } : {}),
+          ...(m.kind === 'system' || m.kind === 'message' ? { kind: m.kind } : {}),
+          ...(typeof m.authorAgentId === 'string' ? { authorAgentId: m.authorAgentId } : {}),
         }]
       : [],
   )

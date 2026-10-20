@@ -100,7 +100,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'skill-access-'))
   const store = createStore(join(dir, 'store.json'))
   store.agents.push({ id: 'a1', name: 'Author', role: '', description: '', instructions: '', modelId: 'm',
-    endpointId: 'ep_local_llama', skillIds: [], isPrimary: true, status: 'idle', createdAt: '', lastRunAt: null, runCount: 0 })
+    endpointId: 'ep_local_llama', skillIds: [], isPrimary: true, status: 'idle', createdAt: '', lastRunAt: null, runCount: 0,
+    slug: 'author', internetPolicy: 'ask', memoryLearn: true })
   store.skills = [
     makeSkill({
       id: 'code-review',

@@ -157,6 +157,10 @@ export interface AgentRun {
 }
 
 /** Agent picture: one emoji, or an uploaded image stored under data/avatars/. */
+export type InternetPolicy = 'ask' | 'always' | 'never'
+export const INTERNET_POLICIES: readonly InternetPolicy[] = ['ask', 'always', 'never']
+export const AGENT_SLUG = /^[a-z0-9-]{1,40}$/
+
 export type AgentAvatar =
   | { kind: 'emoji'; value: string }
   | { kind: 'image'; file: string; updatedAt: string }
@@ -184,12 +188,12 @@ export interface Agent {
   createdAt: string
   lastRunAt: string | null
   runCount: number
-  /**
-   * D-P2: set on project-scoped specialists (created by Primary for that
-   * project). Still a normal library agent. Set only when a team plan is
-   * applied, kept by agent updates, and cleared when the project is deleted.
-   */
-  projectId?: string
+  /** Immutable folder name, [a-z0-9-]{1,40}, unique; 'primary' for the Primary agent. Set by the server. */
+  slug: string
+  /** Phase 2 sandbox network rule; stored now. Default 'ask'. */
+  internetPolicy: InternetPolicy
+  /** "Learn from chat" toggle. Default true. */
+  memoryLearn: boolean
   /** Chat-first Part 1. Unset means the UI shows initials. */
   avatar?: AgentAvatar
   /** Standing rules, kept apart from `instructions`; sent as a "Rules" prompt section. */
@@ -220,8 +224,13 @@ export interface AgentInput {
   hidden?: boolean
   /** Emoji only; images go through PUT /api/agents/:id/avatar. null clears it. */
   avatar?: { kind: 'emoji'; value: string } | null
+  /** Omitted keeps the stored value (create: 'ask'). */
+  internetPolicy?: InternetPolicy
+  /** Omitted keeps the stored value (create: true). */
+  memoryLearn?: boolean
 }
 
+/** Retired (BE-1): kept only to describe what data/archive/projects-*.json holds. */
 export interface Project {
   id: string
   name: string
@@ -235,15 +244,6 @@ export interface Project {
   /** D-O5 (orchestration Part 2): set while the user has paused this project's work. */
   paused?: boolean
 }
-
-/** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
-export interface ProjectInput {
-  name: string
-  desc?: string
-  teamAgentIds?: string[]
-}
-
-export type ProjectPatch = Partial<ProjectInput>
 
 /**
  * One message in a project's chat (handoff kinds). `author` is 'user' or an
@@ -299,104 +299,6 @@ export type ProjectMessageKind = 'message' | 'team-update' | 'task-assignment' |
 /** 'cancelled': the user cancelled or stopped the task; it can be retried (Part 2). */
 export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
-/** A library agent Primary proposes to add to the team. */
-export interface TeamPlanAdd {
-  agentId: string
-  reason: string
-}
-
-/** A project-scoped specialist Primary proposes to create (D-P2: a library agent tagged with projectId). */
-export interface TeamPlanCreate {
-  name: string
-  role: string
-  instructions: string
-  /** Library skill ids to attach (unknown ids are dropped while validating). */
-  skillIds: string[]
-  reason: string
-}
-
-/** A task for a team member: `agent` is an agent id, or the name of an agent in `create`. */
-export interface TeamPlanTask {
-  agent: string
-  task: string
-  /** Hand-offs (Part 3): "t1" (an earlier task of this plan) or an earlier done task-assignment id; at most 3. */
-  inputs?: string[]
-}
-
-/** Primary's validated answer to a project prompt. */
-export interface TeamPlan {
-  /** What Primary tells the user (always shown). */
-  reply: string
-  add: TeamPlanAdd[]
-  create: TeamPlanCreate[]
-  tasks: TeamPlanTask[]
-  /** Entries the BE dropped while validating, in plain words. */
-  warnings: string[]
-  /** Review rounds (Part 5): keep going, finish with a summary, or ask the user. */
-  verdict?: 'continue' | 'done' | 'ask'
-}
-
-/**
- * Body for POST /api/projects/:id/team-plan. `messageId` names the user's
- * message in this project's chat that Primary answers (its text is the
- * prompt); `prompt` alone asks without one. At least one is required.
- */
-export interface TeamPlanRequest {
-  messageId?: string
-  prompt?: string
-}
-
-/** Response of POST /api/projects/:id/team-plan: a PLAN only; nothing is written (D-P1). */
-export interface TeamPlanResult {
-  plan: TeamPlan
-  /** The user message the plan answers, when the request named one. */
-  replyTo?: string
-}
-
-/**
- * Body for POST /api/projects/:id/team-plan/apply: the plan the user
- * confirmed (validated again, as untrusted input) and what to accept. Each
- * list selects agent ids from plan.add or indexes into plan.create /
- * plan.tasks; an omitted list accepts everything. Tasks for an agent whose
- * addition or creation was not accepted are dropped.
- */
-export interface TeamPlanApply {
-  plan: TeamPlan
-  replyTo?: string
-  add?: string[]
-  create?: number[]
-  tasks?: number[]
-  /** Review rounds (Part 5): the round this apply starts; the BE checks it is the next one. */
-  round?: number
-}
-
-/** Response of the review route (Part 5): Primary's next-round plan for a request; nothing is written. */
-export interface ReviewResult {
-  plan: TeamPlan
-  replyTo: string
-  round: number
-}
-
-/** Response of the apply and task-retry routes. */
-export interface ProjectUpdate {
-  project: Project
-  /** Messages created or changed by the call, oldest first. */
-  messages: ProjectMessage[]
-}
-
-/**
- * Body for POST /api/projects/:id/messages. `mentions` (user messages) are
- * the agent ids the user picked with @ in the composer: Primary or team
- * members. A user message that tags team members and not Primary also
- * queues one task-assignment per tagged member (D-O11); the response is the
- * message, and the tasks appear in the thread.
- */
-export interface ProjectMessageInput {
-  author: string
-  text: string
-  mentions?: string[]
-}
-
 /**
  * Shared workspace memory written by agents through the notes tools. Bodies are
  * model-written: treat them as untrusted when they are fed back into a prompt.
@@ -446,6 +348,23 @@ export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
  */
 export const DEFAULT_ENDPOINT_BASE_URL = 'http://100.79.242.24:8791'
 
+export interface Attachment {
+  root: 'agent' | 'group'
+  /** Relative to the root, forward slashes. */
+  path: string
+  name: string
+  size: number
+  mime: string
+}
+
+export interface MessageActivity {
+  /** Skills activated during the run. */
+  skills: { id: string; name: string; source: string }[]
+  /** At most 20, server-written, redacted. */
+  steps: { tool: string; summary: string; ok: boolean; path?: string }[]
+  filesChanged: { path: string; change: 'added' | 'modified' }[]
+}
+
 /** One message in a chat-first conversation (independent of run pruning). */
 export interface ChatMessage {
   id: string
@@ -457,13 +376,16 @@ export interface ChatMessage {
   runId?: string
   /** Set on an assistant message that is a failed run's error text (content holds the error). */
   error?: true
+  /** 'system' = a server-written line such as "You created Harbor team…". Absent = 'message'. */
+  kind?: 'message' | 'system'
+  /** The agent that wrote an assistant message (required in groups). */
+  authorAgentId?: string
+  attachments?: Attachment[]
+  activity?: MessageActivity
 }
 
-/** A 1:1 chat with one agent. One per agent, created lazily. */
-export interface Conversation {
+interface ConversationBase {
   id: string
-  kind: 'dm'
-  agentId: string
   createdAt: string
   /** Time of the newest message (or creation). */
   updatedAt: string
@@ -471,9 +393,79 @@ export interface Conversation {
   lastReadAt: string | null
 }
 
-export interface ConversationSummary extends Conversation {
+/** A 1:1 chat with one agent. One per agent, created lazily. */
+export interface DmConversation extends ConversationBase {
+  kind: 'dm'
+  agentId: string
+}
+
+/** A group chat (BE-5). */
+export interface GroupConversation extends ConversationBase {
+  kind: 'group'
+  name: string
+  slug: string
+  /** Includes the lead; 2–8 agents. */
+  memberAgentIds: string[]
+  /** Always the Primary agent's id (server-enforced). */
+  leadAgentId: string
+  memoryLearn: boolean
+}
+
+export type Conversation = DmConversation | GroupConversation
+
+export type ConversationSummary = Conversation & {
   lastMessage: ChatMessage | null
   unreadCount: number
+  /** Agent currently producing a reply (groups and DMs), else null. */
+  typingAgentId: string | null
+}
+
+export type FileZone = 'shared' | 'workspace' | 'memory' | 'skills' | 'meta'
+
+export interface FileEntry {
+  path: string
+  name: string
+  kind: 'file' | 'dir'
+  size: number
+  mime?: string
+  modifiedAt: string
+  /** UI badges: workspace "scripts write", memory/meta "managed", skills "read-only". */
+  zone: FileZone
+  /** Files the user sent in chat. */
+  sharedAt?: string
+  sharedInConversationId?: string
+  /** 'user' or an agent id; group folders only. */
+  addedBy?: 'user' | string
+}
+
+export interface FileListing {
+  /** e.g. 'bots/primary/' */
+  root: string
+  path: string
+  entries: FileEntry[]
+  usage: { bytes: number; quotaBytes: number }
+}
+
+export type MemoryCategory = 'about-you' | 'preferences' | 'work' | 'other'
+export const MEMORY_CATEGORIES: readonly MemoryCategory[] = ['about-you', 'preferences', 'work', 'other']
+export const MAX_MEMORY_TEXT_CHARS = 500
+
+export interface MemoryItem {
+  id: string
+  scope: { kind: 'agent'; agentId: string } | { kind: 'group'; groupId: string }
+  /** 1–500 chars. */
+  text: string
+  category: MemoryCategory
+  source: { kind: 'user' } | { kind: 'chat'; conversationId: string; runId: string; agentId: string }
+  createdAt: string
+  updatedAt: string
+}
+
+/** One entry of GET /api/archive/projects. */
+export interface ProjectArchiveFile {
+  name: string
+  createdAt: string
+  projectCount: number
 }
 
 export const CONVERSATION_PAGE_SIZE = 50

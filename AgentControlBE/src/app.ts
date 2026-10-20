@@ -2,26 +2,15 @@ import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js'
+import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
+import { PROJECTS_RETIRED } from './archive.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
-import { clearAgentConversations, ensureDm, messagesOf, summarize } from './conversations.js'
-import {
-  appendProjectMessage,
-  applyTeamPlan,
-  cancelTask,
-  createTaskRunner,
-  pauseWork,
-  requestReview,
-  requestTeamPlan,
-  resumeWork,
-  retryTask,
-  stopWork,
-} from './projects.js'
+import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
   MAX_CONVERSATION_PAGE_SIZE,
@@ -39,9 +28,8 @@ import {
   type EndpointInput,
   type EndpointKind,
   type PromptBudget,
-  type Project,
-  type ProjectInput,
-  type ProjectMessage,
+  INTERNET_POLICIES,
+  type InternetPolicy,
   type Skill,
   type SkillInput,
   type SkillTool,
@@ -117,47 +105,6 @@ function resolveProxy(raw: unknown, current: string | undefined): string | undef
   return String(raw).trim().replace(/\/+$/, '')
 }
 
-/**
- * Validate a project create/patch body. `existing` is the record being
- * patched (name-uniqueness skips it) or null on create. Absent fields on a
- * patch come back as undefined and keep their stored value.
- */
-function parseProjectInput(store: WorkspaceStore, body: unknown, existing: Project | null): ProjectInput {
-  const raw = (body ?? {}) as Record<string, unknown>
-
-  let name: string | undefined
-  if (raw.name !== undefined) {
-    name = typeof raw.name === 'string' ? raw.name.trim() : ''
-    if (!name) fail(400, 'Give the project a name.')
-    if (name.length > 80) fail(400, 'Project name must be 80 characters or fewer.')
-    if (store.projects.some((p) => p.id !== existing?.id && p.name.toLowerCase() === name!.toLowerCase())) {
-      fail(409, `A project named "${name}" already exists.`)
-    }
-  } else if (existing === null) {
-    fail(400, 'Give the project a name.')
-  }
-
-  let desc: string | undefined
-  if (raw.desc !== undefined) {
-    if (typeof raw.desc !== 'string') fail(400, 'Description must be a string.')
-    desc = raw.desc.trim()
-  }
-
-  let teamAgentIds: string[] | undefined
-  if (raw.teamAgentIds !== undefined) {
-    if (!Array.isArray(raw.teamAgentIds) || !raw.teamAgentIds.every((s) => typeof s === 'string')) {
-      fail(400, 'teamAgentIds must be a list of agent ids.')
-    }
-    const ids = [...new Set(raw.teamAgentIds as string[])]
-    for (const id of ids) {
-      if (!store.agents.some((a) => a.id === id)) fail(400, `No agent with id "${id}". Pick agents from the library.`)
-    }
-    teamAgentIds = ids
-  }
-
-  return { ...(name !== undefined ? { name } : {}), ...(desc !== undefined ? { desc } : {}), ...(teamAgentIds !== undefined ? { teamAgentIds } : {}) } as ProjectInput
-}
-
 function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
   const raw = (body ?? {}) as Record<string, unknown>
   const name = typeof raw.name === 'string' ? raw.name.trim() : ''
@@ -226,10 +173,16 @@ function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
     }
     out.color = raw.color === null ? null : (raw.color as string).toLowerCase()
   }
-  for (const key of ['pinned', 'hidden'] as const) {
+  for (const key of ['pinned', 'hidden', 'memoryLearn'] as const) {
     if (raw[key] === undefined) continue
     if (typeof raw[key] !== 'boolean') fail(400, `"${key}" must be true or false.`)
     out[key] = raw[key] as boolean
+  }
+  if (raw.internetPolicy !== undefined) {
+    if (!INTERNET_POLICIES.includes(raw.internetPolicy as InternetPolicy)) {
+      fail(400, '"internetPolicy" must be "ask", "always" or "never".')
+    }
+    out.internetPolicy = raw.internetPolicy as InternetPolicy
   }
   if (raw.avatar !== undefined) {
     if (raw.avatar === null) {
@@ -386,14 +339,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     })
   }
 
-  // Project task queues. Tasks a previous process left queued or running are
-  // failed first (so they can be retried); closing the app waits for the
-  // task runs in flight and starts no new ones.
-  const tasks = createTaskRunner(store, (err) => app.log.error(err))
-  app.addHook('onClose', async () => {
-    await tasks.close()
-  })
-
   app.get('/health', async () => ({ status: 'ok' }))
   app.get('/api/skills', async () => store.skills)
   app.get('/api/tools', async () => listToolInfo())
@@ -434,158 +379,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     return reply.status(204).send()
   })
-  app.get('/api/projects', async () => store.projects)
-
-  app.post('/api/projects', async (request, reply) => {
-    const input = parseProjectInput(store, request.body, null)
-    const id = uid('proj')
-    const now = new Date().toISOString()
-    // Folder name: slug of the project name, suffixed on collision with an
-    // existing project folder or a real directory on disk.
-    let folder = join(store.projectsRoot, slugifyProjectName(input.name))
-    for (let n = 2; store.projects.some((p) => p.folder === folder) || existsSync(folder); n++) {
-      folder = join(store.projectsRoot, `${slugifyProjectName(input.name)}-${n}`)
-    }
-    const project: Project = {
-      id,
-      name: input.name,
-      desc: input.desc ?? '',
-      folder,
-      teamAgentIds: input.teamAgentIds ?? [],
-      createdAt: now,
-      updatedAt: now,
-    }
-    try {
-      mkdirSync(folder, { recursive: true })
-    } catch (err) {
-      fail(500, `Could not create the project folder: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    store.projects = [...store.projects, project]
-    if (!store.save()) {
-      store.projects = store.projects.filter((p) => p.id !== id)
-      fail(500, 'The project could not be saved. Please retry.')
-    }
-    return reply.status(201).send(project)
-  })
-
-  app.patch('/api/projects/:id', async (request) => {
-    const { id } = request.params as { id: string }
-    const existing = store.projects.find((p) => p.id === id)
-    if (!existing) fail(404, `No project with id "${id}"`)
-    const input = parseProjectInput(store, request.body, existing)
-    const updated: Project = {
-      ...existing,
-      name: input.name ?? existing.name,
-      desc: input.desc !== undefined ? input.desc : existing.desc,
-      teamAgentIds: input.teamAgentIds !== undefined ? input.teamAgentIds : existing.teamAgentIds,
-      updatedAt: new Date().toISOString(),
-    }
-    // Rename never moves the folder; the folder is the stable identity on disk.
-    store.projects = store.projects.map((p) => (p.id === id ? updated : p))
-    if (!store.save()) {
-      store.projects = store.projects.map((p) => (p.id === id ? existing : p))
-      fail(500, 'The project could not be saved. Please retry.')
-    }
-    return updated
-  })
-
-  app.delete('/api/projects/:id', async (request, reply) => {
-    const { id } = request.params as { id: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    // The record and its chat go; the folder stays on disk (removal is an
-    // explicit user action, a later milestone). Its specialists stay in the
-    // library, untagged; its task queue starts nothing more.
-    // Its task runs go too: no route lists them once the project is gone, and
-    // agents could otherwise still read them through read_run_log.
-    const previousProjects = store.projects
-    const previousMessages = store.projectMessages
-    const previousRuns = store.runs
-    const tagged = store.agents.filter((a) => a.projectId === id)
-    store.projects = store.projects.filter((p) => p.id !== id)
-    store.projectMessages = store.projectMessages.filter((m) => m.projectId !== id)
-    store.runs = store.runs.filter((r) => r.projectId !== id)
-    for (const agent of tagged) delete agent.projectId
-    if (!store.save()) {
-      store.projects = previousProjects
-      store.projectMessages = previousMessages
-      store.runs = previousRuns
-      for (const agent of tagged) agent.projectId = id
-      fail(500, 'The project could not be deleted from storage. Please retry.')
-    }
-    tasks.stop(id)
-    return reply.status(204).send()
-  })
-
-  app.get('/api/projects/:id/messages', async (request) => {
-    const { id } = request.params as { id: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    return store.projectMessages
-      .filter((m) => m.projectId === id)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-  })
-
-  app.post('/api/projects/:id/messages', async (request, reply) => {
-    const { id } = request.params as { id: string }
-    // D-O11: mentions are resolved by the BE; tagging team members queues
-    // direct tasks (the user's own delegation). See appendProjectMessage.
-    const update = appendProjectMessage(store, id, request.body)
-    return reply.status(201).send(update)
-  })
-
-  // D-P1: team-plan returns Primary's PLAN and writes nothing; the user
-  // confirms it (or a part of it) and apply commits it. Cancel is client-side.
-  app.post('/api/projects/:id/team-plan', async (request) => {
-    const { id } = request.params as { id: string }
-    return requestTeamPlan(store, id, request.body)
-  })
-
-  app.post('/api/projects/:id/team-plan/apply', async (request) => {
-    const { id } = request.params as { id: string }
-    return applyTeamPlan(store, tasks, id, request.body)
-  })
-
-  // Part 5: review a settled round; writes nothing until the user applies.
-  app.post('/api/projects/:id/review', async (request) => {
-    const { id } = request.params as { id: string }
-    return requestReview(store, id, request.body)
-  })
-
-  app.post('/api/projects/:id/tasks/:messageId/retry', async (request) => {
-    const { id, messageId } = request.params as { id: string; messageId: string }
-    return retryTask(store, tasks, id, messageId)
-  })
-
-  app.post('/api/projects/:id/tasks/:messageId/cancel', async (request) => {
-    const { id, messageId } = request.params as { id: string; messageId: string }
-    return cancelTask(store, tasks, id, messageId)
-  })
-
-  // D-O5: pause starts nothing new; resume clears the flag and kicks; stop
-  // aborts the in-flight call and cancels queued tasks (retryable).
-  app.post('/api/projects/:id/work/pause', async (request) => {
-    const { id } = request.params as { id: string }
-    return pauseWork(store, id)
-  })
-
-  app.post('/api/projects/:id/work/resume', async (request) => {
-    const { id } = request.params as { id: string }
-    return resumeWork(store, tasks, id)
-  })
-
-  app.post('/api/projects/:id/work/stop', async (request) => {
-    const { id } = request.params as { id: string }
-    return stopWork(store, tasks, id)
-  })
-
-  // Part 6: one project task run (for "What it saw"). Chat-only runs and
-  // runs of other projects 404. The AgentRun shape never holds vault keys.
-  app.get('/api/projects/:id/runs/:runId', async (request) => {
-    const { id, runId } = request.params as { id: string; runId: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    const run = store.runs.find((r) => r.id === runId)
-    if (!run || run.projectId !== id) fail(404, `No run with id "${runId}" in this project`)
-    return run
-  })
+  // Projects were retired (BE-1): every old route answers 410. The data is in
+  // data/archive/projects-*.json; this lists those files (names only).
+  for (const url of ['/api/projects', '/api/projects/*']) {
+    app.all(url, async (_request, reply) => reply.status(410).send({ error: PROJECTS_RETIRED }))
+  }
+  app.get('/api/archive/projects', async () => ({ files: store.meta.archive }))
 
   app.get('/api/settings', async () => store.settings)
 
@@ -693,7 +492,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.get('/api/conversations', async () => {
     let created = false
     for (const agent of store.agents) {
-      if (!store.conversations.some((c) => c.agentId === agent.id)) {
+      if (!dmOf(store, agent.id)) {
         ensureDm(store, agent.id)
         created = true
       }
@@ -733,7 +532,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.post('/api/conversations/:id/messages', async (request) => {
     const { id } = request.params as { id: string }
     const conversation = conversationOr404(id)
-    const agent = store.agents.find((a) => a.id === conversation.agentId)
+    if (conversation.kind !== 'dm') fail(400, 'Group chats arrive with BE-5.')
+    const agentId = conversation.agentId
+    const agent = store.agents.find((a) => a.id === agentId)
     if (!agent) fail(404, `No agent for conversation "${id}"`)
     const body = (request.body ?? {}) as { text?: unknown }
     const text = typeof body.text === 'string' ? body.text.trim() : ''
@@ -786,6 +587,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         isPrimary,
         role: input.role,
         skillIds: input.skillIds,
+        slug: assignAgentSlug(input.name, isPrimary, new Set(store.agents.map((a) => a.slug))),
+        internetPolicy: 'ask',
+        memoryLearn: true,
         status: 'idle',
         createdAt: new Date().toISOString(),
         lastRunAt: null,
@@ -950,10 +754,6 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     store.runs = store.runs.filter((r) => r.agentId !== id)
     removeAvatarFile(store, agent)
     clearAgentConversations(store, id, true)
-    // It leaves every project team too, so a team PATCH never trips on a stale id.
-    store.projects = store.projects.map((p) =>
-      p.teamAgentIds.includes(id) ? { ...p, teamAgentIds: p.teamAgentIds.filter((x) => x !== id) } : p,
-    )
     store.save()
     void reply.status(204)
     return null

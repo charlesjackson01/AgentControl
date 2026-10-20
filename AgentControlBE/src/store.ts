@@ -5,14 +5,15 @@ import {
   seedAgents,
   seedEndpointModels,
   seedEndpoints,
-  seedProjects,
   seedRuns,
   seedSettings,
   seedSkills,
   vendoredSeedSkills,
 } from './db/seed.js'
 import { createVault } from './vault.js'
+import { ARCHIVE_MIGRATION, writeProjectArchive, type ProjectArchive } from './archive.js'
 import { backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
+import { AGENT_SLUG, INTERNET_POLICIES, MAX_MEMORY_TEXT_CHARS, MEMORY_CATEGORIES } from './shared/types.js'
 import type {
   Agent,
   AgentRun,
@@ -20,12 +21,10 @@ import type {
   Conversation,
   UserProfile,
   Endpoint,
+  MemoryItem,
   Note,
-  Project,
-  ProjectMessage,
-  ProjectMessageKind,
+  ProjectArchiveFile,
   Skill,
-  TaskStatus,
   WorkspaceSettings,
 } from './shared/types.js'
 
@@ -33,9 +32,6 @@ export interface WorkspaceStore {
   agents: Agent[]
   /** All agent runs across the workspace; GET /runs filters + sorts. */
   runs: AgentRun[]
-  projects: Project[]
-  /** Flat project chat log; GET /projects/:id/messages filters + sorts. */
-  projectMessages: ProjectMessage[]
   /** The workspace user's profile (first-run setup). */
   profile: UserProfile
   /** Chat-first 1:1 conversations (one DM per agent). */
@@ -51,8 +47,8 @@ export interface WorkspaceStore {
   settings: WorkspaceSettings
   /** Shared workspace memory written by the notes tools. */
   notes: Note[]
-  /** Absolute root under which project folders are created. */
-  projectsRoot: string
+  /** Agent and group memory (BE-4 fills it). */
+  memories: MemoryItem[]
   /** Folder holding uploaded agent avatars (data/avatars beside the store). */
   avatarsDir: string
   /** Migration bookkeeping. Persisted, never served by any route. */
@@ -68,10 +64,12 @@ export interface StoreMeta {
   migrations: string[]
   /** Seed skill ids ever offered; a seed the user deleted is not re-added. */
   seededSkillIds: string[]
+  /** Archive files written by chat-first-archive-v1, oldest first. */
+  archive: ProjectArchiveFile[]
 }
 
 /** Every one-shot migration; fresh stores are born with all of them applied. */
-const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3'] as const
+const MIGRATIONS = ['seed-skill-tools-v1', 'seed-skill-upgrade-v2', 'seed-skill-upgrade-v3', ARCHIVE_MIGRATION] as const
 
 /** A seed exactly as an earlier release shipped it: body sha256 and tool names in order. */
 interface SeedUpgrade {
@@ -139,8 +137,6 @@ function isUntouchedSeed(saved: Skill, upgrade: SeedUpgrade): boolean {
 interface Persisted {
   agents: Agent[]
   runs: AgentRun[]
-  projects: Project[]
-  projectMessages: ProjectMessage[]
   profile: UserProfile
   conversations: Conversation[]
   chatMessages: ChatMessage[]
@@ -149,15 +145,21 @@ interface Persisted {
   endpointModels: Record<string, string[]>
   settings: WorkspaceSettings
   notes: Note[]
+  memories: MemoryItem[]
   meta: StoreMeta
 }
 
 /** Agents from older installs may lack `role`, `isPrimary`, or have a null `endpointId`. */
-type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary' | 'role'> & {
+type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary' | 'role' | 'slug' | 'internetPolicy' | 'memoryLearn'> & {
   endpointId?: string | null
   isPrimary?: boolean
   role?: string
   recentRuns?: Partial<AgentRun>[]
+  slug?: unknown
+  internetPolicy?: unknown
+  memoryLearn?: unknown
+  /** Retired with Projects (BE-1); cleared once the archive is written. */
+  projectId?: unknown
 }
 
 /**
@@ -168,6 +170,15 @@ type StoredShape = Partial<Persisted> & {
   endpointKeys?: Record<string, string>
   models?: unknown
   agents?: LegacyAgent[]
+  /** Retired (BE-1): archived by chat-first-archive-v1. */
+  projects?: unknown
+  projectMessages?: unknown
+}
+
+/** Project data still waiting to be archived (the archive write failed or has not run). */
+interface PendingArchive {
+  projects: unknown[]
+  projectMessages: unknown[]
 }
 
 /**
@@ -181,41 +192,64 @@ const LEGACY_SEED_ENDPOINT = { id: 'ep_local_llama', name: 'Local llama.cpp', ba
 const DATA_DIR = process.env.AGENTCONTROL_DATA_DIR ?? resolve(process.cwd(), 'data')
 const DEFAULT_PATH = resolve(DATA_DIR, 'store.json')
 
-/**
- * Folder name for a project: lowercase, alphanumerics and dashes. Names that
- * slugify to nothing fall back to `project`.
- */
-export function slugifyProjectName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60) || 'project'
+const MAX_SLUG = 40
+
+/** Slug base for a name: lowercase alphanumerics and dashes; empty names fall back to `bot`. */
+function slugBase(name: string): string {
+  return (
+    name
+      .normalize('NFKD')
+      .replace(/\p{M}+/gu, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, MAX_SLUG)
+      .replace(/-+$/, '') || 'bot'
+  )
 }
 
-function seed(projectsRoot: string): Persisted {
-  const data = seedData(projectsRoot)
+/**
+ * A unique agent slug ([a-z0-9-]{1,40}). The Primary agent gets `primary`
+ * when it is free; `primary` is otherwise never handed out from a name, so a
+ * bot named "Primary" becomes `primary-2`. Collisions get -2, -3, … (the base
+ * is shortened so the suffix still fits). Adds the result to `taken`.
+ */
+export function assignAgentSlug(name: string, isPrimary: boolean, taken: Set<string>): string {
+  if (isPrimary && !taken.has('primary')) {
+    taken.add('primary')
+    return 'primary'
+  }
+  const base = slugBase(name)
+  let slug = base
+  for (let n = 2; taken.has(slug) || slug === 'primary'; n++) {
+    const suffix = `-${n}`
+    slug = `${base.slice(0, MAX_SLUG - suffix.length).replace(/-+$/, '')}${suffix}`
+  }
+  taken.add(slug)
+  return slug
+}
+
+function seed(): Persisted {
+  const data = seedData()
   const state = { agents: data.agents, runs: data.runs, conversations: data.conversations, chatMessages: data.chatMessages }
   migrateRunsToConversations(state, data.meta.migrations)
   return { ...data, conversations: state.conversations, chatMessages: state.chatMessages }
 }
 
-function seedData(projectsRoot: string): Persisted {
+function seedData(): Persisted {
   return {
     profile: { name: '', onboardedAt: null },
     conversations: [],
     chatMessages: [],
     agents: structuredClone(seedAgents),
     runs: structuredClone(seedRuns),
-    projects: seedProjects(projectsRoot),
-    projectMessages: [],
     skills: structuredClone(seedSkills),
     endpoints: structuredClone(seedEndpoints),
     endpointModels: structuredClone(seedEndpointModels),
     settings: structuredClone(seedSettings),
     notes: [],
-    meta: { migrations: [...MIGRATIONS], seededSkillIds: seedSkills.map((s) => s.id) },
+    memories: [],
+    meta: { migrations: [...MIGRATIONS], seededSkillIds: seedSkills.map((s) => s.id), archive: [] },
   }
 }
 
@@ -227,7 +261,47 @@ function normalizeMeta(raw: unknown): StoreMeta | null {
   return {
     migrations: isStringArray(m.migrations) ? [...m.migrations] : [],
     seededSkillIds: isStringArray(m.seededSkillIds) ? [...m.seededSkillIds] : [],
+    archive: Array.isArray(m.archive)
+      ? (m.archive as Partial<ProjectArchiveFile>[]).flatMap((f) =>
+          f && typeof f.name === 'string' && typeof f.createdAt === 'string' && typeof f.projectCount === 'number'
+            ? [{ name: f.name, createdAt: f.createdAt, projectCount: f.projectCount }]
+            : [],
+        )
+      : [],
   }
+}
+
+/** Keep well-formed memory items only (BE-4 writes them). */
+function normalizeMemories(raw: unknown): MemoryItem[] {
+  if (!Array.isArray(raw)) return []
+  const out: MemoryItem[] = []
+  for (const item of raw as Partial<MemoryItem>[]) {
+    if (!item || typeof item.id !== 'string' || typeof item.text !== 'string') continue
+    if (!item.text || item.text.length > MAX_MEMORY_TEXT_CHARS) continue
+    const scope = item.scope as Record<string, unknown> | undefined
+    const validScope =
+      (scope?.kind === 'agent' && typeof scope.agentId === 'string') ||
+      (scope?.kind === 'group' && typeof scope.groupId === 'string')
+    if (!validScope || !MEMORY_CATEGORIES.includes(item.category as MemoryItem['category'])) continue
+    const source = item.source as Record<string, unknown> | undefined
+    const validSource =
+      source?.kind === 'user' ||
+      (source?.kind === 'chat' &&
+        typeof source.conversationId === 'string' &&
+        typeof source.runId === 'string' &&
+        typeof source.agentId === 'string')
+    if (!validSource || typeof item.createdAt !== 'string') continue
+    out.push({
+      id: item.id,
+      scope: structuredClone(item.scope!),
+      text: item.text,
+      category: item.category!,
+      source: structuredClone(item.source!),
+      createdAt: item.createdAt,
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : item.createdAt,
+    })
+  }
+  return out
 }
 
 function normalizeProfile(raw: unknown): UserProfile {
@@ -268,102 +342,6 @@ function normalizeNotes(raw: unknown): Note[] {
   return out
 }
 
-/** Keep well-formed projects; backfill fields added after the first shape. */
-function normalizeProjects(raw: unknown, projectsRoot: string): Project[] {
-  if (!Array.isArray(raw)) return []
-  const out: Project[] = []
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const p = item as Partial<Project>
-    if (typeof p.id !== 'string' || typeof p.name !== 'string') continue
-    const updatedAt = typeof p.updatedAt === 'string' ? p.updatedAt : new Date(0).toISOString()
-    out.push({
-      id: p.id,
-      name: p.name,
-      desc: typeof p.desc === 'string' ? p.desc : '',
-      folder:
-        typeof p.folder === 'string' && p.folder
-          ? p.folder
-          : join(projectsRoot, slugifyProjectName(p.name)),
-      teamAgentIds: isStringArray(p.teamAgentIds) ? [...p.teamAgentIds] : [],
-      ...(p.paused === true ? { paused: true } : {}),
-      createdAt: typeof p.createdAt === 'string' ? p.createdAt : updatedAt,
-      updatedAt,
-    })
-  }
-  return out
-}
-
-const MESSAGE_KINDS: readonly ProjectMessageKind[] = ['message', 'team-update', 'task-assignment', 'progress']
-const TASK_STATUSES: readonly TaskStatus[] = ['queued', 'running', 'done', 'failed', 'cancelled']
-
-/**
- * Keep well-formed project messages and the task fields the contract has.
- * Any other kind loads as a 'message', which covers the pre-handoff kinds a
- * development build wrote: a 'team-plan' (Primary's reply; its stored plan
- * and planStatus are dropped) and a 'task-result' (it keeps taskId, runId
- * and taskStatus, as a task's result message does now). Messages that named
- * their plan by planId reply to that plan's prompt instead, and a plan that
- * was never applied no longer counts as an answer, so its prompt can be
- * asked again.
- */
-function normalizeProjectMessages(raw: unknown): ProjectMessage[] {
-  if (!Array.isArray(raw)) return []
-  type Legacy = Partial<ProjectMessage> & { planId?: unknown; planStatus?: unknown }
-  const planPrompt = new Map<string, string>()
-  for (const item of raw) {
-    const m = item as Legacy | null
-    if (m && m.kind === ('team-plan' as string) && typeof m.id === 'string' && typeof m.replyTo === 'string') {
-      planPrompt.set(m.id, m.replyTo)
-    }
-  }
-  const out: ProjectMessage[] = []
-  for (const item of raw) {
-    if (!item || typeof item !== 'object') continue
-    const m = item as Partial<ProjectMessage>
-    if (typeof m.id !== 'string' || typeof m.projectId !== 'string') continue
-    if (typeof m.text !== 'string') continue
-    const kind = MESSAGE_KINDS.includes(m.kind as ProjectMessageKind) ? (m.kind as ProjectMessageKind) : 'message'
-    const legacy = m as Legacy
-    const unapplied = legacy.kind === ('team-plan' as string) && legacy.planStatus !== undefined && legacy.planStatus !== 'applied'
-    const replyTo = unapplied
-      ? undefined
-      : typeof m.replyTo === 'string'
-        ? m.replyTo
-        : typeof legacy.planId === 'string'
-          ? planPrompt.get(legacy.planId)
-          : undefined
-    out.push({
-      id: m.id,
-      projectId: m.projectId,
-      author: typeof m.author === 'string' ? m.author : 'user',
-      text: m.text,
-      kind,
-      createdAt: typeof m.createdAt === 'string' ? m.createdAt : new Date(0).toISOString(),
-      ...(typeof m.updatedAt === 'string' ? { updatedAt: m.updatedAt } : {}),
-      ...(replyTo !== undefined ? { replyTo } : {}),
-      ...(typeof m.assigneeId === 'string' ? { assigneeId: m.assigneeId } : {}),
-      ...(TASK_STATUSES.includes(m.taskStatus as TaskStatus) ? { taskStatus: m.taskStatus } : {}),
-      ...(typeof m.taskId === 'string' ? { taskId: m.taskId } : {}),
-      ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
-      ...(isStringArray(m.mentions) ? { mentions: [...m.mentions] } : {}),
-      ...(typeof m.label === 'string' ? { label: m.label } : {}),
-      ...(isStringArray(m.inputs) ? { inputs: [...m.inputs] } : {}),
-      ...(typeof m.round === 'number' && Number.isFinite(m.round) ? { round: m.round } : {}),
-      ...(m.verdict === 'done' || m.verdict === 'ask' ? { verdict: m.verdict } : {}),
-      ...(Array.isArray(m.used)
-        ? {
-            used: (m.used as unknown[])
-              .filter((u): u is Record<string, unknown> => Boolean(u) && typeof u === 'object')
-              .filter((u) => typeof u.taskId === 'string' && typeof u.chars === 'number' && typeof u.sentChars === 'number')
-              .map((u) => ({ taskId: u.taskId as string, chars: u.chars as number, sentChars: u.sentChars as number })),
-          }
-        : {}),
-    })
-  }
-  return out
-}
-
 function normalizeRun(r: Partial<AgentRun>): AgentRun {
   return {
     id: r.id ?? `run_${Math.random().toString(36).slice(2, 10)}`,
@@ -384,8 +362,8 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
 }
 
 /** Backfill fields added after a workspace was first written. */
-function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; changed: boolean } {
-  const base = seed(projectsRoot)
+function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive | null; changed: boolean } {
+  const base = seed()
   let changed = false
 
   // Runs used to live on each agent (agent.recentRuns); hoist them to `runs`.
@@ -458,7 +436,7 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
   })
   const storedMeta = normalizeMeta(raw.meta)
   if (!storedMeta) changed = true
-  const meta: StoreMeta = storedMeta ?? { migrations: [], seededSkillIds: [] }
+  const meta: StoreMeta = storedMeta ?? { migrations: [], seededSkillIds: [], archive: [] }
 
   // One-shot: vendored seed skills the user never edited (same content, no
   // tools) gain the tools they now ship with. Runs once, so tools a user
@@ -509,21 +487,42 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
   // Drop the retired model catalog so the next save rewrites store.json without it.
   if (raw.models !== undefined) changed = true
 
-  // Teams and project tags only point at things that exist: a team holding a
-  // deleted agent's id could not be saved again (PATCH rejects unknown ids).
   const agentIds = new Set((agents as Agent[]).map((a) => a.id))
-  const projects = (raw.projects === undefined ? base.projects : normalizeProjects(raw.projects, projectsRoot)).map((p) => {
-    const team = p.teamAgentIds.filter((id) => agentIds.has(id))
-    if (team.length === p.teamAgentIds.length) return p
-    changed = true
-    return { ...p, teamAgentIds: team }
-  })
-  const projectIds = new Set(projects.map((p) => p.id))
-  for (const agent of agents as Agent[]) {
-    if (agent.projectId !== undefined && !projectIds.has(agent.projectId)) {
-      delete agent.projectId
+
+  // Chat-first schema: every agent has an immutable slug (Primary first, so
+  // it gets `primary`), an internet policy and the "learn from chat" flag.
+  const taken = new Set<string>()
+  for (const agent of agents) {
+    if (typeof agent.slug === 'string' && AGENT_SLUG.test(agent.slug) && !taken.has(agent.slug)) taken.add(agent.slug)
+    else delete agent.slug
+  }
+  for (const agent of [...agents].sort((a, b) => Number(b.isPrimary === true) - Number(a.isPrimary === true))) {
+    if (agent.slug === undefined) {
+      agent.slug = assignAgentSlug(agent.name ?? '', agent.isPrimary === true, taken)
       changed = true
     }
+  }
+  for (const agent of agents) {
+    if (!INTERNET_POLICIES.includes(agent.internetPolicy as Agent['internetPolicy'])) {
+      agent.internetPolicy = 'ask'
+      changed = true
+    }
+    if (typeof agent.memoryLearn !== 'boolean') {
+      agent.memoryLearn = true
+      changed = true
+    }
+  }
+
+  // Projects were retired. Until chat-first-archive-v1 has written them to
+  // the archive they are held aside, exactly as stored, and never served.
+  let pending: PendingArchive | null = null
+  if (!meta.migrations.includes(ARCHIVE_MIGRATION)) {
+    pending = {
+      projects: Array.isArray(raw.projects) ? raw.projects : [],
+      projectMessages: Array.isArray(raw.projectMessages) ? raw.projectMessages : [],
+    }
+  } else if (raw.projects !== undefined || raw.projectMessages !== undefined) {
+    changed = true
   }
 
   const conversations = normalizeConversations(raw.conversations, agentIds)
@@ -536,8 +535,6 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
     data: {
       agents: agents as Agent[],
       runs,
-      projects,
-      projectMessages: normalizeProjectMessages(raw.projectMessages),
       profile: normalizeProfile(raw.profile),
       conversations: conversationState.conversations,
       chatMessages: conversationState.chatMessages,
@@ -546,34 +543,85 @@ function reconcile(raw: StoredShape, projectsRoot: string): { data: Persisted; c
       endpointModels: raw.endpointModels ?? base.endpointModels,
       settings: raw.settings ?? base.settings,
       notes,
+      memories: normalizeMemories(raw.memories),
       meta,
     },
+    pending,
     changed,
   }
 }
 
-function read(path: string, projectsRoot: string): { data: Persisted; legacyKeys: Record<string, string>; changed: boolean } {
+interface Loaded {
+  data: Persisted
+  pending: PendingArchive | null
+  legacyKeys: Record<string, string>
+  changed: boolean
+}
+
+function read(path: string): Loaded {
   if (existsSync(path)) {
     try {
       const raw = JSON.parse(readFileSync(path, 'utf8')) as StoredShape
-      const { data, changed } = reconcile(raw, projectsRoot)
-      return { data, legacyKeys: raw.endpointKeys ?? {}, changed }
+      const { data, pending, changed } = reconcile(raw)
+      return { data, pending, legacyKeys: raw.endpointKeys ?? {}, changed }
     } catch {
       // Corrupt or unreadable file falls back to a fresh seed below.
     }
   }
-  return { data: seed(projectsRoot), legacyKeys: {}, changed: false }
+  return { data: seed(), pending: null, legacyKeys: {}, changed: false }
+}
+
+/**
+ * chat-first-archive-v1. Writes the archive (when there is any project data),
+ * then, only after it is on disk, clears agents' project tags and marks the
+ * migration. Returns false when the write failed: nothing was changed.
+ */
+function archiveProjects(dir: string, data: Persisted, pending: PendingArchive, now: Date): boolean {
+  const hasData = pending.projects.length > 0 || pending.projectMessages.length > 0
+  if (hasData) {
+    const archive: ProjectArchive = {
+      version: 1,
+      createdAt: now.toISOString(),
+      projects: pending.projects,
+      projectMessages: pending.projectMessages,
+      projectRuns: data.runs.filter((r) => r.projectId !== undefined),
+      notes: data.notes,
+      folders: pending.projects.flatMap((p) => {
+        const folder = (p as { folder?: unknown } | null)?.folder
+        return typeof folder === 'string' && folder ? [folder] : []
+      }),
+    }
+    try {
+      data.meta.archive.push(writeProjectArchive(dir, archive, now))
+    } catch (err) {
+      console.error(`[store] ${ARCHIVE_MIGRATION} aborted, store left unchanged: ${err instanceof Error ? err.message : String(err)}`)
+      return false
+    }
+  }
+  for (const agent of data.agents as (Agent & { projectId?: unknown })[]) delete agent.projectId
+  data.meta.migrations.push(ARCHIVE_MIGRATION)
+  return true
 }
 
 export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
   const dir = dirname(path)
   const vault = createVault(join(dir, 'vault.enc'), join(dir, 'vault.key'))
-  // Projects live under AGENTCONTROL_PROJECTS_DIR, defaulting beside the store.
-  const projectsRoot = resolve(process.env.AGENTCONTROL_PROJECTS_DIR ?? join(dir, 'projects'))
-  const { data, legacyKeys, changed } = read(path, projectsRoot)
+  const { data, pending: loadedPending, legacyKeys, changed } = read(path)
 
   let endpointKeys = vault.load()
   let migrated = changed
+  // Project data held aside until it is archived; saves keep writing it back
+  // so a failed archive loses nothing and is retried on the next boot.
+  let pending = loadedPending
+  let archiveFailed = false
+  if (pending) {
+    if (archiveProjects(dir, data, pending, new Date())) {
+      pending = null
+      migrated = true
+    } else {
+      archiveFailed = true
+    }
+  }
   // One-time migration: move any plaintext keys into the encrypted vault.
   if (Object.keys(endpointKeys).length === 0 && Object.keys(legacyKeys).length > 0) {
     endpointKeys = { ...legacyKeys }
@@ -582,18 +630,16 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
 
   const store: WorkspaceStore = {
     ...data,
-    projectsRoot,
     avatarsDir: join(dir, 'avatars'),
     endpointKeys,
     save() {
       const temporary = `${path}.${randomUUID()}.tmp`
       try {
         mkdirSync(dir, { recursive: true })
-        const snapshot: Persisted = {
+        const snapshot: Persisted & Partial<PendingArchive> = {
           agents: store.agents,
           runs: store.runs,
-          projects: store.projects,
-          projectMessages: store.projectMessages,
+          ...(pending ? { projects: pending.projects, projectMessages: pending.projectMessages } : {}),
           profile: store.profile,
           conversations: store.conversations,
           chatMessages: store.chatMessages,
@@ -602,6 +648,7 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
           endpointModels: store.endpointModels,
           settings: store.settings,
           notes: store.notes,
+          memories: store.memories,
           meta: store.meta,
         }
         // Finish fallible vault work before publishing the workspace snapshot.
@@ -634,8 +681,9 @@ export function createStore(path: string = DEFAULT_PATH): WorkspaceStore {
     endpoint.apiKeySet = Boolean(store.endpointKeys[endpoint.id])
   }
 
-  // Rewrite store.json without secrets now that the vault holds them.
-  if (migrated) store.save()
+  // Rewrite store.json without secrets now that the vault holds them. A
+  // failed archive leaves store.json exactly as it was until the next boot.
+  if (migrated && !archiveFailed) store.save()
 
   return store
 }

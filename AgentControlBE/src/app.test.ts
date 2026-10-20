@@ -1766,217 +1766,6 @@ describe('seed data integrity', () => {
   })
 })
 
-describe('projects CRUD', () => {
-  async function makeAgent(name: string) {
-    const res = await inject('POST', '/api/agents', {
-      name,
-      description: '',
-      instructions: '',
-      modelId: 'llama-3-8b',
-      endpointId: 'ep_local_llama',
-      skillIds: [],
-    })
-    expect(res.statusCode).toBe(201)
-    return res.json() as { id: string }
-  }
-
-  it('creates a project with a folder on disk and empty team by default', async () => {
-    const res = await inject('POST', '/api/projects', { name: 'Widget Lab' })
-    expect(res.statusCode).toBe(201)
-    const p = res.json() as { id: string; name: string; folder: string; teamAgentIds: string[]; createdAt: string; updatedAt: string }
-    expect(p.name).toBe('Widget Lab')
-    expect(p.teamAgentIds).toEqual([])
-    expect(p.folder).toBe(join(store.projectsRoot, 'widget-lab'))
-    expect(existsSync(p.folder)).toBe(true)
-    expect(p.createdAt).toBe(p.updatedAt)
-
-    const list = await inject('GET', '/api/projects')
-    const projects = list.json() as { id: string }[]
-    expect(projects.some((x) => x.id === p.id)).toBe(true)
-  })
-
-  it('accepts a team at creation and rejects unknown agent ids', async () => {
-    const a = await makeAgent('Coder One')
-    const ok = await inject('POST', '/api/projects', { name: 'Team Project', teamAgentIds: [a.id, a.id] })
-    expect(ok.statusCode).toBe(201)
-    expect((ok.json() as { teamAgentIds: string[] }).teamAgentIds).toEqual([a.id])
-
-    const bad = await inject('POST', '/api/projects', { name: 'Bad Team', teamAgentIds: ['agent_nope'] })
-    expect(bad.statusCode).toBe(400)
-    expect(bad.json().message).toMatch(/agent_nope/)
-  })
-
-  it('requires a name, rejects duplicates case-insensitively, and 409s', async () => {
-    const noName = await inject('POST', '/api/projects', {})
-    expect(noName.statusCode).toBe(400)
-
-    const first = await inject('POST', '/api/projects', { name: 'Dup Check' })
-    expect(first.statusCode).toBe(201)
-    const dup = await inject('POST', '/api/projects', { name: 'dup check' })
-    expect(dup.statusCode).toBe(409)
-  })
-
-  it('suffixes the folder on slug collision and keeps folders distinct', async () => {
-    const a = await inject('POST', '/api/projects', { name: 'Same Name!' })
-    const b = await inject('POST', '/api/projects', { name: 'Same Name?' })
-    expect(a.statusCode).toBe(201)
-    expect(b.statusCode).toBe(201)
-    const fa = (a.json() as { folder: string }).folder
-    const fb = (b.json() as { folder: string }).folder
-    expect(fa).toBe(join(store.projectsRoot, 'same-name'))
-    expect(fb).toBe(join(store.projectsRoot, 'same-name-2'))
-    expect(existsSync(fa) && existsSync(fb)).toBe(true)
-  })
-
-  it('patches name/desc/team, never moves the folder, and 404s on unknown id', async () => {
-    const created = await inject('POST', '/api/projects', { name: 'Rename Me', desc: 'old' })
-    const p = created.json() as { id: string; folder: string; updatedAt: string }
-    const a = await makeAgent('Patcher')
-
-    const patched = await inject('PATCH', `/api/projects/${p.id}`, { name: 'Renamed', desc: 'new', teamAgentIds: [a.id] })
-    expect(patched.statusCode).toBe(200)
-    const got = patched.json() as { name: string; desc: string; folder: string; teamAgentIds: string[]; updatedAt: string }
-    expect(got).toMatchObject({ name: 'Renamed', desc: 'new', folder: p.folder, teamAgentIds: [a.id] })
-    expect(got.updatedAt >= p.updatedAt).toBe(true)
-    // The old slug folder still exists; the folder never moves on rename.
-    expect(existsSync(p.folder)).toBe(true)
-
-    const missing = await inject('PATCH', '/api/projects/proj_nope', { desc: 'x' })
-    expect(missing.statusCode).toBe(404)
-  })
-
-  it('deletes the record but leaves the folder on disk', async () => {
-    const created = await inject('POST', '/api/projects', { name: 'Delete Me' })
-    const p = created.json() as { id: string; folder: string }
-    const del = await inject('DELETE', `/api/projects/${p.id}`)
-    expect(del.statusCode).toBe(204)
-    const list = await inject('GET', '/api/projects')
-    expect((list.json() as { id: string }[]).some((x) => x.id === p.id)).toBe(false)
-    expect(existsSync(p.folder)).toBe(true)
-
-    const again = await inject('DELETE', `/api/projects/${p.id}`)
-    expect(again.statusCode).toBe(404)
-  })
-
-  it('persists created projects across a store reload', async () => {
-    const created = await inject('POST', '/api/projects', { name: 'Persisted Project' })
-    const p = created.json() as { id: string }
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projects.some((x) => x.id === p.id)).toBe(true)
-  })
-
-  it('backfills folder/teamAgentIds/createdAt on legacy project rows', () => {
-    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-oldprojects-'))
-    const oldPath = join(oldDir, 'store.json')
-    writeFileSync(
-      oldPath,
-      JSON.stringify({
-        agents: [],
-        runs: [],
-        projects: [{ id: 'proj-legacy', name: 'Legacy One', desc: 'old shape', updatedAt: '2026-01-01T00:00:00.000Z' }],
-        endpoints: [],
-        endpointModels: {},
-        settings: { autoRun: true, notify: true, telemetry: false },
-        skills: [],
-      }),
-      'utf8',
-    )
-    const loaded = createStore(oldPath)
-    const legacy = loaded.projects.find((x) => x.id === 'proj-legacy')
-    expect(legacy).toMatchObject({
-      folder: join(oldDir, 'projects', 'legacy-one'),
-      teamAgentIds: [],
-      createdAt: '2026-01-01T00:00:00.000Z',
-    })
-    rmSync(oldDir, { recursive: true, force: true })
-  })
-
-  it('drops deleted agents from teams and clears tags of deleted projects on load', () => {
-    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-dangling-'))
-    const path = join(d, 'store.json')
-    const s = createStore(path)
-    s.agents.push({
-      id: 'agt_spec', name: 'Spec', role: 'Specialist', description: '', instructions: '', modelId: 'llama-3-8b',
-      endpointId: 'ep_local_llama', isPrimary: false, skillIds: [], status: 'idle', createdAt: '', lastRunAt: null,
-      runCount: 0, projectId: 'proj_gone',
-    })
-    s.projects.push({
-      id: 'proj_live', name: 'Live', desc: '', folder: join(d, 'live'), teamAgentIds: ['agt_spec', 'agt_deleted'],
-      createdAt: '', updatedAt: '',
-    })
-    expect(s.save()).toBe(true)
-    const loaded = createStore(path)
-    expect(loaded.projects.find((x) => x.id === 'proj_live')?.teamAgentIds).toEqual(['agt_spec'])
-    expect(loaded.agents.find((a) => a.id === 'agt_spec')?.projectId).toBeUndefined()
-    rmSync(d, { recursive: true, force: true })
-  })
-})
-
-describe('project chat', () => {
-  async function makeProject(name = 'Chat Project') {
-    const res = await inject('POST', '/api/projects', { name })
-    expect(res.statusCode).toBe(201)
-    return res.json() as { id: string }
-  }
-
-  it('posts user and agent messages and lists them oldest first', async () => {
-    const p = await makeProject()
-    const a = await inject('POST', '/api/agents', {
-      name: 'Chatty',
-      description: '',
-      instructions: '',
-      modelId: 'llama-3-8b',
-      endpointId: 'ep_local_llama',
-      skillIds: [],
-    })
-    const agent = a.json() as { id: string }
-
-    const m1 = await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'first' })
-    expect(m1.statusCode).toBe(201)
-    const m2 = await inject('POST', `/api/projects/${p.id}/messages`, { author: agent.id, text: 'second' })
-    expect(m2.statusCode).toBe(201)
-    // D-O11: the route answers with the project and the messages it wrote.
-    expect((m2.json() as { messages: unknown[] }).messages).toMatchObject([
-      { projectId: p.id, author: agent.id, text: 'second', kind: 'message' },
-    ])
-
-    const list = await inject('GET', `/api/projects/${p.id}/messages`)
-    const msgs = list.json() as { text: string }[]
-    expect(msgs.map((m) => m.text)).toEqual(['first', 'second'])
-  })
-
-  it('rejects empty text, unknown authors, and unknown projects', async () => {
-    const p = await makeProject('Validation Chat')
-    expect((await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: '  ' })).statusCode).toBe(400)
-    expect((await inject('POST', `/api/projects/${p.id}/messages`, { author: 'agent_nope', text: 'x' })).statusCode).toBe(400)
-    expect((await inject('POST', `/api/projects/${p.id}/messages`, { text: 'x' })).statusCode).toBe(400)
-    expect((await inject('POST', '/api/projects/proj_nope/messages', { author: 'user', text: 'x' })).statusCode).toBe(404)
-    expect((await inject('GET', '/api/projects/proj_nope/messages')).statusCode).toBe(404)
-  })
-
-  it('keeps chats separate per project and deletes them with the project', async () => {
-    const a = await makeProject('Chat A')
-    const b = await makeProject('Chat B')
-    await inject('POST', `/api/projects/${a.id}/messages`, { author: 'user', text: 'in A' })
-    await inject('POST', `/api/projects/${b.id}/messages`, { author: 'user', text: 'in B' })
-
-    const listA = await inject('GET', `/api/projects/${a.id}/messages`)
-    expect((listA.json() as unknown[]).length).toBe(1)
-
-    await inject('DELETE', `/api/projects/${a.id}`)
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projectMessages.some((m) => m.projectId === a.id)).toBe(false)
-    expect(reloaded.projectMessages.some((m) => m.projectId === b.id)).toBe(true)
-  })
-
-  it('persists messages across a store reload', async () => {
-    const p = await makeProject('Persisted Chat')
-    await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'durable' })
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projectMessages.filter((m) => m.projectId === p.id).map((m) => m.text)).toEqual(['durable'])
-  })
-})
-
 describe('endpoint proxyUrl field', () => {
   it('stores, keeps, validates and clears proxyUrl', async () => {
     const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
@@ -2125,7 +1914,7 @@ describe('chat-first Part 1: agent profile fields', () => {
 describe('chat-first Part 2: conversations', () => {
   async function dmFor(agentId: string) {
     const list = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
-    const dm = list.find((c) => c.agentId === agentId)
+    const dm = list.find((c) => c.kind === 'dm' && c.agentId === agentId)
     expect(dm).toBeDefined()
     return dm as ConversationSummary
   }
@@ -2134,7 +1923,7 @@ describe('chat-first Part 2: conversations', () => {
     const res = await inject('GET', '/api/conversations')
     expect(res.statusCode).toBe(200)
     const list = res.json() as ConversationSummary[]
-    for (const agent of store.agents) expect(list.some((c) => c.agentId === agent.id && c.kind === 'dm')).toBe(true)
+    for (const agent of store.agents) expect(list.some((c) => c.kind === 'dm' && c.agentId === agent.id)).toBe(true)
     const times = list.map((c) => c.updatedAt)
     expect(times).toEqual([...times].sort().reverse())
     // Listing twice does not create duplicates.
@@ -2241,7 +2030,7 @@ describe('chat-first Part 2: conversations', () => {
       writeFileSync(path, JSON.stringify(raw))
 
       const first = createStore(path)
-      const dm = first.conversations.find((c) => c.agentId === agentId) as Conversation
+      const dm = first.conversations.find((c) => c.kind === 'dm' && c.agentId === agentId) as Conversation
       const msgs = first.chatMessages.filter((m) => m.conversationId === dm.id)
       expect(msgs.map((m) => m.content)).toEqual(['in r1', 'out r1', 'in r2', 'out r2'])
       expect(dm.lastReadAt).toBe(dm.updatedAt)
@@ -2376,7 +2165,7 @@ describe('chat error flag', () => {
     const { agent } = await makeRunner()
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down', json: async () => ({}) })))
     const list = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
-    const dm = list.find((c) => c.agentId === agent.id) as ConversationSummary
+    const dm = list.find((c) => c.kind === 'dm' && c.agentId === agent.id) as ConversationSummary
     const sent = (await inject('POST', `/api/conversations/${dm.id}/messages`, { text: 'hi' })).json() as { messages: ChatMessage[] }
     const reply = sent.messages.find((m) => m.role === 'assistant')
     expect(reply).toMatchObject({ error: true })

@@ -16,7 +16,8 @@ beforeEach(() => {
   const store = createStore(join(dir, 'store.json'))
   store.agents.push({ id: 'author', name: 'Author', role: '', description: '', instructions: '',
     modelId: 'm', endpointId: 'ep_local_llama', skillIds: [], isPrimary: true,
-    status: 'idle', createdAt: '', lastRunAt: null, runCount: 0 })
+    status: 'idle', createdAt: '', lastRunAt: null, runCount: 0,
+    slug: 'author', internetPolicy: 'ask', memoryLearn: true })
   store.agents.push({ ...store.agents[0]!, id: 'other', isPrimary: false })
   ctx = { store, agentId: 'author', runId: 'run1', input: 'Exact_input with underscores',
     allowed: new Set(builtinTools.keys()), now: () => new Date('2026-10-11T12:00:00Z'),

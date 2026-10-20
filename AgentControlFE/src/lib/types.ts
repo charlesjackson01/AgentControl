@@ -342,7 +342,8 @@ export type Attachment = { root: 'agent' | 'group'; path: string; name: string; 
 export type MessageActivity = {
   skills: ActivatedSkill[]
   steps: { tool: string; summary: string; ok: boolean; path?: string }[]
-  filesChanged: { path: string; change: 'added' | 'modified' }[]
+  /** `bytes` and `modifiedAt` (ISO) arrive with BE-3; optional until then. */
+  filesChanged: { path: string; change: 'added' | 'modified'; bytes?: number; modifiedAt?: string }[]
 }
 
 /** One message in a chat-first conversation (independent of run pruning). */

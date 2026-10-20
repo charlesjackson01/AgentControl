@@ -7,12 +7,14 @@
  * both so an older or newer server can't break the thread.
  */
 import type { ActivatedSkill, MessageActivity } from './types'
+import { humanSize, relativeTime } from './file-format.ts'
 
 export const MAX_STEPS = 20
 
 /** `target` is the mono part after the verb: the step's path, or the tool name for tools without a verb ("Ran convert_units"). */
 export type ActivityStep = { tool: string; verb: string; target: string | null; summary: string; ok: boolean; path?: string }
-export type ActivityFile = { path: string; name: string; dir: string; change: 'added' | 'modified'; changeLabel: string }
+/** `meta` is the line under the name: "workspace/briefs · 2.4 KB · updated just now" (04), or "workspace/briefs · modified" without BE-3 fields. */
+export type ActivityFile = { path: string; name: string; dir: string; change: 'added' | 'modified'; changeLabel: string; size: string | null; updated: string | null; meta: string }
 
 /*
  * Mockup gaps (not shown in v3 04/05b; minimal neutral versions, pending Charles):
@@ -21,7 +23,8 @@ export type ActivityFile = { path: string; name: string; dir: string; change: 'a
  *   GAP-3 a skill with no steps: header only, no count, no toggle.
  *   GAP-4 steps with no skill: no pill or name, just the count and toggle.
  *   GAP-5 several skills: names joined in the header; sources listed in the body.
- *   GAP-6 file cards: no size/time (not in activity); "added"/"modified" as plain text.
+ *   GAP-6 file cards: resolved by BE-3 (`bytes`, `modifiedAt`): "folder · 2.4 KB · updated just now"
+ *         as in mockup 04. Until BE-3 lands, entries without them keep "folder · modified".
  *   GAP-7 Open disabled (stock disabled button); Download left out.
  *   GAP-8 20-step cap: rows simply stop at 20, no "more" line.
  *   GAP-9 a message with only files: file cards, no skill card.
@@ -104,28 +107,28 @@ function stepsOf(raw: unknown): ActivityStep[] {
     .slice(0, MAX_STEPS)
 }
 
-function filesOf(raw: unknown): ActivityFile[] {
+function filesOf(raw: unknown, now: Date): ActivityFile[] {
   if (!Array.isArray(raw)) return []
   return raw.flatMap((f): ActivityFile[] => {
     if (!isObj(f) || !str(f.path) || (f.change !== 'added' && f.change !== 'modified')) return []
     const path = f.path.replace(/\/+$/, '')
     const cut = path.lastIndexOf('/')
-    return [{
-      path,
-      name: cut === -1 ? path : path.slice(cut + 1),
-      dir: cut === -1 ? '' : path.slice(0, cut),
-      change: f.change,
-      changeLabel: f.change,
-    }]
+    const dir = cut === -1 ? '' : path.slice(0, cut)
+    const size = humanSize(f.bytes)
+    const rel = relativeTime(f.modifiedAt, now)
+    const updated = rel ? `updated ${rel}` : null
+    // Mockup 04 when BE-3 sends bytes/modifiedAt; otherwise today's "folder · modified".
+    const meta = (size || updated ? [dir, size, updated] : [dir, f.change]).filter(Boolean).join(' · ')
+    return [{ path, name: cut === -1 ? path : path.slice(cut + 1), dir, change: f.change, changeLabel: f.change, size, updated, meta }]
   })
 }
 
 /** The view for one message's activity, or null when there is nothing to show. */
-export function activityView(activity: MessageActivity | unknown): ActivityView | null {
+export function activityView(activity: MessageActivity | unknown, now: Date = new Date()): ActivityView | null {
   if (!isObj(activity)) return null
   const skills = skillsOf(activity.skills)
   const steps = stepsOf(activity.steps)
-  const files = filesOf(activity.filesChanged)
+  const files = filesOf(activity.filesChanged, now)
   if (skills.length + steps.length + files.length === 0) return null
   const failed = steps.filter((s) => !s.ok).length
   return {

@@ -95,9 +95,8 @@ export function FileCards({ files }: { files: ActivityView['files'] }) {
           <span className="cf-fcard__txt">
             <span className="cf-fcard__name" title={f.path}>{f.name}</span>
             <span className="cf-fcard__meta">
-              {/* Mockup 04: "workspace/briefs · 2.4 KB · updated just now". GAP-6: no size/time in activity. */}
-              {f.dir ? `${f.dir} · ` : ''}
-              {f.changeLabel}
+              {/* Mockup 04: "workspace/briefs · 2.4 KB · updated just now" (GAP-6, resolved once BE-3 sends bytes/modifiedAt). */}
+              {f.meta}
             </span>
           </span>
           {/* GAP-7: Open is enabled in mockup 04; disabled with the stock style until FE-4. Download: not in v3, left out. */}

@@ -32,7 +32,7 @@ describe('activity card: rendering from activity (mockup 04)', () => {
     assert.equal(v.failed, 0)
   })
   it('file cards: name, folder, change', () => {
-    assert.deepEqual(v.files, [{ path: 'workspace/briefs/lindmere-harbor.md', name: 'lindmere-harbor.md', dir: 'workspace/briefs', change: 'modified', changeLabel: 'modified' }])
+    assert.deepEqual(v.files, [{ path: 'workspace/briefs/lindmere-harbor.md', name: 'lindmere-harbor.md', dir: 'workspace/briefs', change: 'modified', changeLabel: 'modified', size: null, updated: null, meta: 'workspace/briefs · modified' }])
     assert.equal(activityView({ skills: [], steps: [], filesChanged: [{ path: 'notes.md', change: 'added' }] }).files[0].dir, '')
   })
   it('one step reads "1 step"; the toggle label names skill, count and failures', () => {
@@ -46,6 +46,31 @@ describe('activity card: rendering from activity (mockup 04)', () => {
     assert.deepEqual(stepVerb('compare_text'), { verb: 'Compared', target: null }, 'mockup 04 "Compared pier length: …"')
     assert.deepEqual(stepVerb('activate_skill'), { verb: 'Activated skill', target: null })
     assert.deepEqual(stepVerb('read_skill_file', 'scripts/x.py'), { verb: 'Read skill file', target: 'scripts/x.py' })
+  })
+})
+
+describe('file cards: BE-3 bytes/modifiedAt (GAP-6 resolved)', () => {
+  const now = new Date('2026-10-20T12:00:00Z')
+  const file = (extra) => activityView({ skills: [], steps: [], filesChanged: [{ path: 'workspace/briefs/lindmere-harbor.md', change: 'modified', ...extra }] }, now).files[0]
+  it('both present → mockup 04 "workspace/briefs · 2.4 KB · updated just now"', () => {
+    assert.equal(file({ bytes: 2458, modifiedAt: '2026-10-20T11:59:40Z' }).meta, 'workspace/briefs · 2.4 KB · updated just now')
+  })
+  it('older times and bigger sizes', () => {
+    assert.equal(file({ bytes: 421888, modifiedAt: '2026-10-20T11:55:00Z' }).meta, 'workspace/briefs · 412 KB · updated 5 min ago')
+    assert.equal(file({ bytes: 1887437, modifiedAt: '2026-10-20T09:00:00Z' }).meta, 'workspace/briefs · 1.8 MB · updated 3 h ago')
+  })
+  it('only one present → that one, no change word', () => {
+    assert.equal(file({ bytes: 2458 }).meta, 'workspace/briefs · 2.4 KB')
+    assert.equal(file({ modifiedAt: '2026-10-20T11:59:40Z' }).meta, 'workspace/briefs · updated just now')
+  })
+  it('absent → today\'s "folder · modified"; top-level file has no folder', () => {
+    assert.equal(file({}).meta, 'workspace/briefs · modified')
+    assert.equal(activityView({ skills: [], steps: [], filesChanged: [{ path: 'notes.md', change: 'added', bytes: 1024 }] }, now).files[0].meta, '1 KB')
+  })
+  it('bad values are ignored and fall back', () => {
+    for (const extra of [{ bytes: -1 }, { bytes: '2458' }, { bytes: NaN }, { bytes: Infinity }, { modifiedAt: 'yesterday' }, { modifiedAt: 12 }, { modifiedAt: '' }, { bytes: null, modifiedAt: null }, { modifiedAt: '2026-10-21T12:00:00Z' }]) {
+      assert.equal(file(extra).meta, 'workspace/briefs · modified', JSON.stringify(extra))
+    }
   })
 })
 

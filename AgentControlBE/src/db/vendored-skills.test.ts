@@ -164,3 +164,53 @@ describe('vendor-skills-v1 id migration', () => {
     expect(createStore(path).skills).toEqual(store.skills)
   })
 })
+
+describe('BE-7 defaults for new bots', () => {
+  beforeEach(() => vi.stubEnv('AGENTCONTROL_SKILLS_VENDOR_DIR', DEFAULT_VENDOR_DIR))
+
+  const newBot = (extra: Record<string, unknown> = {}) => ({
+    name: `Bot ${Math.random()}`, description: '', instructions: '', modelId: 'llama-3-8b', endpointId: 'ep_local_llama', ...extra,
+  })
+
+  it('gives a new bot without skillIds all 41 defaults, and keeps an explicit list (even [])', async () => {
+    const store = createStore(join(dir, 'store.json'))
+    const app = buildApp(store)
+    const defaults = store.skills.filter((s) => s.defaultOn).map((s) => s.id)
+    expect(defaults).toHaveLength(41)
+    const bot = (await app.inject({ method: 'POST', url: '/api/agents', payload: newBot() })).json() as Agent
+    expect(bot.skillIds).toEqual(defaults)
+    expect(bot.skillIds.slice(0, 6).every((id) => id.startsWith('core/'))).toBe(true)
+    const empty = (await app.inject({ method: 'POST', url: '/api/agents', payload: newBot({ skillIds: [] }) })).json() as Agent
+    expect(empty.skillIds).toEqual([])
+    const one = (await app.inject({ method: 'POST', url: '/api/agents', payload: newBot({ skillIds: ['ecc/tdd-workflow'] }) })).json() as Agent
+    expect(one.skillIds).toEqual(['ecc/tdd-workflow'])
+    await app.close()
+  })
+
+  it('POST /api/agents/:id/skills/defaults merges the defaults after the bot\'s own skills, once', async () => {
+    const store = createStore(join(dir, 'store.json'))
+    const app = buildApp(store)
+    const defaults = store.skills.filter((s) => s.defaultOn).map((s) => s.id)
+    const own = store.skills.find((s) => !s.defaultOn)?.id as string
+    const bot = (await app.inject({ method: 'POST', url: '/api/agents', payload: newBot({ skillIds: [own, defaults[3]] }) })).json() as Agent
+    const res = await app.inject({ method: 'POST', url: `/api/agents/${bot.id}/skills/defaults` })
+    expect(res.statusCode).toBe(200)
+    const merged = res.json() as Agent
+    expect(merged.skillIds).toEqual([own, defaults[3], ...defaults.filter((id) => id !== defaults[3])])
+    expect(merged).toMatchObject({ id: bot.id, name: bot.name })
+    expect(store.agents.find((a) => a.id === bot.id)?.skillIds).toEqual(merged.skillIds)
+    const again = (await app.inject({ method: 'POST', url: `/api/agents/${bot.id}/skills/defaults` })).json() as Agent
+    expect(again.skillIds).toEqual(merged.skillIds)
+    expect((await app.inject({ method: 'POST', url: '/api/agents/agt_missing/skills/defaults' })).statusCode).toBe(404)
+    await app.close()
+  })
+
+  it('leaves existing bots\' skills alone when the store reopens', async () => {
+    const path = join(dir, 'store.json')
+    const store = createStore(path)
+    const app = buildApp(store)
+    const bot = (await app.inject({ method: 'POST', url: '/api/agents', payload: newBot({ skillIds: ['core/summarization'] }) })).json() as Agent
+    await app.close()
+    expect(createStore(path).agents.find((a) => a.id === bot.id)?.skillIds).toEqual(['core/summarization'])
+  })
+})

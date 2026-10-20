@@ -65,6 +65,9 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
       createdAt: replyAt,
       runId: run.id,
       authorAgentId: run.agentId,
+      ...(run.activatedSkills && run.activatedSkills.length > 0
+        ? { activity: { skills: run.activatedSkills.map((s) => ({ ...s })), steps: [], filesChanged: [] } }
+        : {}),
       ...(run.status === 'failed' ? { error: true as const } : {}),
     })
     newest = replyAt

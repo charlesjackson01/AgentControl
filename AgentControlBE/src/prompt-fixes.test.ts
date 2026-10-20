@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
-import { planPrompt, RESPONSE_RESERVE, summaryBlock } from './prompt.js'
 import type { Agent, AgentRun, Endpoint, Skill } from './shared/types.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import { builtinTools, executeToolCall, toolDeclaration, type ToolContext } from './tools.js'
@@ -108,38 +107,6 @@ afterEach(async () => {
   delete process.env.AGENTCONTROL_SECRET
 })
 
-describe('planPrompt keeps prompts that fit', () => {
-  it('sends a small skill in full when the prompt fits the hard limit, even without headroom', () => {
-    // Review repro: long instructions + one small skill. Master accepted this run.
-    const skill: Skill = { id: 'house-style', name: 'house-style', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(599), tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false }
-    const instructions = 'i'.repeat(4076 * 4 - 700)
-    const plan = planPrompt({ instructions, skills: [skill], input: '', contextWindow: 8192 })
-    expect(plan.estimatedTokens + RESPONSE_RESERVE).toBeLessThanOrEqual(8192)
-    expect(plan.mode).toBe('full')
-    expect(plan.summarizedSkillIds).toEqual([])
-    expect(plan.toolDeclarations).toEqual([])
-  })
-
-  it('never sends a summary plan that is not smaller than the full one', () => {
-    // The summary saves less than the get_skill schema costs.
-    const skill: Skill = { id: 'tiny', name: 'tiny', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(500), tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false }
-    expect(summaryBlock(skill).length).toBeLessThan(`## tiny\n${skill.content}`.length)
-    const instructions = 'i'.repeat(20_000)
-    const plan = planPrompt({ instructions, skills: [skill], input: '', contextWindow: 8192 })
-    expect(plan.mode).toBe('too-large')
-    expect(plan.summarizedSkillIds).toEqual([])
-    expect(plan.system).toBe(`${instructions}\n\nSkills:\n\n## tiny\n${skill.content}`)
-    expect(plan.toolDeclarations).toEqual([])
-  })
-
-  it('keeps a single seed skill with its tools in full on the seeded 8192 endpoint', () => {
-    const debugging = store.skills.find((s) => s.id === 'core/debugging') as Skill
-    const plan = planPrompt({ instructions: 'You help debug failing services. Be concrete.', skills: [debugging], input: 'Why does it crash?', contextWindow: 8192 })
-    expect(plan.mode).toBe('full')
-    expect(plan.system).toContain(debugging.content)
-  })
-})
-
 describe('paged reads fit the room the run has left', () => {
   const ctxFor = (resultMaxChars?: number): ToolContext => ({
     store, agentId: 'nobody', runId: 'r', input: '', allowed: new Set(builtinTools.keys()),
@@ -205,25 +172,25 @@ describe('paged reads fit the room the run has left', () => {
   })
 })
 
-describe('a planner-offered get_skill reads only the agent\'s own skills', () => {
-  it('refuses a skill the agent does not have, and reads its own', async () => {
+describe('activate_skill reads only the agent\'s own skills', () => {
+  it('refuses a skill the agent does not have, reads its own, and records only that one', async () => {
     const endpointId = await createEndpoint(6000)
     addSkill('big-one', 9000)
     addSkill('big-two', 8000)
     const agent = await createAgent({ skillIds: ['big-one', 'big-two'] }, endpointId)
     const mock = mockChatSequence([
-      toolCalls(['get_skill', { skill: 'core/code-review' }], ['get_skill', { skill: 'big-two' }]),
+      toolCalls(['activate_skill', { id: 'core/code-review' }], ['activate_skill', { id: 'big-two' }]),
       answer('ok'),
     ])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
     const run = res.json() as AgentRun
     expect(run.status).toBe('succeeded')
-    expect(run.skillSnapshot?.some((s) => s.mode === 'summary')).toBe(true)
+    expect(run.skillSnapshot?.every((s) => s.mode === 'catalog')).toBe(true)
     const [other, own] = expectNoCutJson(lastRequest(mock))
     expect(run.toolCalls?.map((c) => c.ok)).toEqual([false, true])
     expect(other?.content).toContain('No skill "core/code-review"')
-    expect(other?.content).not.toContain('Code Review')
-    expect(JSON.parse(own?.content ?? '{}')).toMatchObject({ id: 'big-two' })
+    expect(own?.content).toMatch(/^Skill big-two \(big-two\)\. chars 1-\d+ of 8000\. Next: activate_skill \{"id":"big-two","offset":\d+\}/)
+    expect(run.activatedSkills).toEqual([{ id: 'big-two', name: 'big-two', source: 'custom' }])
   })
 
   it('stays unscoped when an attached skill declares get_skill itself', async () => {

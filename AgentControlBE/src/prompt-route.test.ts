@@ -4,10 +4,11 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
-import { RESPONSE_RESERVE, SKILL_HEADROOM, summaryBlock } from './prompt.js'
+import { RESPONSE_RESERVE, skillCatalog } from './prompt.js'
 import type { Agent, AgentRun, Endpoint, PromptBudget, Skill } from './shared/types.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import { toolDeclaration } from './tools.js'
+import { SKILL_PAGE_CHARS } from './tools/skills.js'
 
 /**
  * Skills on small context windows, end to end through fastify.inject() with a
@@ -105,20 +106,13 @@ async function createEndpoint(contextWindow: number): Promise<string> {
 
 const leadSkills = (): Skill[] => LEAD_SKILL_IDS.map((id) => store.skills.find((s) => s.id === id) as Skill)
 
-/** The pre-planPrompt system prompt: instructions + every skill in full. */
-const fullSystem = (skills: Skill[]): string =>
-  [LEAD_INSTRUCTIONS, `Skills:\n\n${skills.map((s) => `## ${s.name}\n${s.content}`).join('\n\n')}`].join('\n\n')
+/** BE-7: what every run sends: instructions, then the catalog of the attached skills. */
+const catalogSystem = (skills: Skill[]): string => `${LEAD_INSTRUCTIONS}\n\n${skillCatalog(skills)}`
 
-/** Tools the attached skills declare, deduped in order (what a full-mode run offers). */
-const declaredTools = (skills: Skill[]): string[] => [
-  ...new Set(skills.flatMap((s) => s.tools.map((t) => t.name)).filter((name) => toolDeclaration(name))),
+/** Tools the attached skills declare, deduped in order, then activate_skill. */
+const offeredTools = (skills: Skill[]): string[] => [
+  ...new Set([...skills.flatMap((s) => s.tools.map((t) => t.name)).filter((name) => toolDeclaration(name)), 'activate_skill']),
 ]
-
-/** What a summary-mode run offers: the declared tools, then get_skill unless one declares it. */
-const summaryTools = (skills: Skill[]): string[] => {
-  const declared = declaredTools(skills)
-  return declared.includes('get_skill') ? declared : [...declared, 'get_skill']
-}
 
 beforeEach(() => {
   process.env.AGENTCONTROL_SECRET = 'test-secret'
@@ -135,101 +129,65 @@ afterEach(async () => {
 })
 
 describe('fresh-install Team Lead on the seeded 8192-token endpoint', () => {
-  it('runs instead of 413ing: summaries in the prompt, get_skill offered, snapshot marks them', async () => {
-    expect(store.endpoints.find((e) => e.id === 'ep_local_llama')?.contextWindow).toBe(8192)
-    // Premise: the old all-full prompt plus the reply reserve overflowed 8192 tokens.
-    expect(Math.ceil(fullSystem(leadSkills()).length / 4) + RESPONSE_RESERVE).toBeGreaterThan(8192)
-
+  it('runs with the skill catalog only: no bodies, activate_skill offered, snapshot marks catalog', async () => {
     const mock = mockChatSequence([contentResponse('Hello, I am the Team Lead.')])
     const agent = await createTeamLead()
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
     expect(res.statusCode).toBe(200)
     const run = res.json() as AgentRun
     expect(run.status).toBe('succeeded')
-    expect(run.output).toBe('Hello, I am the Team Lead.')
-    expect(mock).toHaveBeenCalledTimes(1)
 
     const req = requestAt(mock, 0)
     const system = req.messages?.[0]?.content ?? ''
-    expect(req.messages?.[0]?.role).toBe('system')
     expect(system).toBe(run.systemPrompt)
-    expect(system.startsWith(`${LEAD_INSTRUCTIONS}\n\nSkills:\n\n`)).toBe(true)
-
-    const summarized = (run.skillSnapshot ?? []).filter((s) => s.mode === 'summary').map((s) => s.id)
-    const largest = [...leadSkills()].sort((a, b) => b.content.length - a.content.length)[0] as Skill
-    expect(summarized).toContain(largest.id)
-    for (const s of leadSkills()) {
-      if (summarized.includes(s.id)) {
-        expect(system).toContain(summaryBlock(s))
-        expect(system).not.toContain(s.content)
-      } else {
-        expect(system).toContain(`## ${s.name}\n${s.content}`)
-      }
-    }
+    expect(system).toBe(catalogSystem(leadSkills()))
+    for (const s of leadSkills()) expect(system).not.toContain(s.content.slice(0, 200))
     expect(run.skillSnapshot).toEqual(
-      leadSkills().map((s) => ({
-        id: s.id,
-        name: s.name,
-        contentChars: s.content.length,
-        mode: summarized.includes(s.id) ? 'summary' : 'full',
-      })),
+      leadSkills().map((s) => ({ id: s.id, name: s.name, contentChars: s.content.length, mode: 'catalog' })),
     )
-
-    // get_skill joins the skills' own tools (last), with the registry schema.
-    const offered = (req.tools ?? []).map((t) => t.function.name)
-    expect(offered).toEqual(summaryTools(leadSkills()))
-    expect(req.tools?.find((t) => t.function.name === 'get_skill')?.function).toEqual(toolDeclaration('get_skill'))
-
-    // The estimate left room for the reply and the headroom.
-    const schemas = JSON.stringify(offered.map((name) => toolDeclaration(name))).length
-    const estimated = Math.ceil((system.length + 'hi'.length + schemas) / 4)
-    expect(estimated + RESPONSE_RESERVE + SKILL_HEADROOM).toBeLessThanOrEqual(8192)
+    expect((req.tools ?? []).map((t) => t.function.name)).toEqual(offeredTools(leadSkills()))
+    expect(req.tools?.find((t) => t.function.name === 'activate_skill')?.function).toEqual(toolDeclaration('activate_skill'))
     expect(req.max_tokens).toBe(RESPONSE_RESERVE)
   })
 
-  it('answers a get_skill call with the first page of the summarized skill', async () => {
+  it('answers activate_skill with the first page and records the skill in the run and the DM activity', async () => {
     const agent = await createTeamLead()
-    // Which skills a run summarizes: ask the budget route (same planner).
-    const budget = (await inject('POST', '/api/prompt-budget', {
-      endpointId: 'ep_local_llama',
-      skillIds: LEAD_SKILL_IDS,
-      instructions: LEAD_INSTRUCTIONS,
-    })).json() as PromptBudget
-    const target = store.skills.find((s) => s.id === budget.summarizedSkillIds[0]) as Skill
-    expect(target).toBeDefined()
-
+    const target = store.skills.find((s) => s.id === 'core/deep-research') as Skill
     const mock = mockChatSequence([
-      toolCallResponse('get_skill', JSON.stringify({ skill: target.id })),
+      toolCallResponse('activate_skill', JSON.stringify({ id: target.id })),
+      toolCallResponse('activate_skill', JSON.stringify({ id: target.id })),
       contentResponse('Read the procedure; here is the plan.'),
     ])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Research our options.' })
-    expect(res.statusCode).toBe(200)
     const run = res.json() as AgentRun
     expect(run.status).toBe('succeeded')
-    expect(run.output).toBe('Read the procedure; here is the plan.')
-    expect(mock).toHaveBeenCalledTimes(2)
-    expect(run.toolCalls).toEqual([
-      { name: 'get_skill', arguments: JSON.stringify({ skill: target.id }), resultChars: expect.any(Number), ok: true },
-    ])
+    expect(mock).toHaveBeenCalledTimes(3)
+    expect(run.toolCalls?.map((c) => [c.name, c.ok])).toEqual([['activate_skill', true], ['activate_skill', true]])
+    const toolMsg = requestAt(mock, 1).messages?.find((m) => m.role === 'tool')
+    const content = toolMsg?.content ?? ''
+    const cut = content.indexOf('\n---\n')
+    const head = content.slice(0, cut)
+    const body = content.slice(cut + 5)
+    // On the 8192 window the page shrinks to the room left, and says exactly where to continue.
+    expect(head).toMatch(new RegExp(`^Skill ${target.id} \\(${target.name}\\)\\. chars 1-(\\d+) of ${target.content.length}\\. Next: activate_skill`))
+    const end = Number(/chars 1-(\d+)/.exec(head ?? '')?.[1])
+    expect(end).toBeLessThanOrEqual(SKILL_PAGE_CHARS)
+    expect(head).toContain(JSON.stringify({ id: target.id, offset: end }))
+    expect(body).toBe(target.content.slice(0, end))
+    expect(toolMsg?.content.endsWith('…[truncated]')).toBe(false)
+    // Activated twice, recorded once.
+    expect(run.activatedSkills).toEqual([{ id: target.id, name: target.name, source: 'core' }])
+    const dm = store.conversations.find((c) => c.kind === 'dm' && c.agentId === agent.id)
+    const reply = store.chatMessages.find((m) => m.conversationId === dm?.id && m.runId === run.id && m.role === 'assistant')
+    expect(reply?.activity).toEqual({ skills: [{ id: target.id, name: target.name, source: 'core' }], steps: [], filesChanged: [] })
+  })
 
-    const second = requestAt(mock, 1)
-    const toolMsg = second.messages?.find((m) => m.role === 'tool')
-    expect(toolMsg?.tool_call_id).toBe('call_1')
-    const page = JSON.parse(toolMsg?.content ?? '{}') as {
-      id: string
-      totalChars: number
-      offset: number
-      content: string
-      nextOffset: number | null
-    }
-    expect(page.id).toBe(target.id)
-    expect(page.offset).toBe(0)
-    expect(page.totalChars).toBe(target.content.length)
-    expect(page.content.length).toBeGreaterThan(1000)
-    expect(target.content.startsWith(page.content)).toBe(true)
-    expect(page.nextOffset).toBe(page.content.length < target.content.length ? page.content.length : null)
-    // The tool-enabled follow-up call still offers get_skill.
-    expect(second.tools?.map((t) => t.function.name)).toContain('get_skill')
+  it('a reply that loaded no skill has no activity', async () => {
+    mockChatSequence([contentResponse('ok')])
+    const agent = await createTeamLead()
+    const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
+    expect(run.activatedSkills).toBeUndefined()
+    expect(store.chatMessages.find((m) => m.runId === run.id && m.role === 'assistant')).not.toHaveProperty('activity')
   })
 
   it('413s with the estimate, the reply reserve and the window when even summaries do not fit', async () => {
@@ -248,51 +206,10 @@ describe('fresh-install Team Lead on the seeded 8192-token endpoint', () => {
     expect(store.runs).toEqual([])
   })
 
-  it('runs in summary mode when the hard limit fits and only the headroom is short', async () => {
-    const budgetOn = async (endpointId: string) =>
-      (await inject('POST', '/api/prompt-budget', {
-        endpointId, skillIds: LEAD_SKILL_IDS, instructions: LEAD_INSTRUCTIONS,
-      })).json() as PromptBudget
-    // A window between the all-summarized prompt + reserve and + reserve + headroom.
-    const probe = await budgetOn(await createEndpoint(2000))
-    expect(probe.mode).toBe('too-large')
-    const window = probe.estimatedTokens + RESPONSE_RESERVE + 10
-    const endpointId = await createEndpoint(window)
-    expect((await budgetOn(endpointId)).mode).toBe('summary')
-
-    const mock = mockChatSequence([contentResponse('tight but fine')])
-    const agent = await createTeamLead(endpointId)
-    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
-    expect(res.statusCode).toBe(200)
-    const run = res.json() as AgentRun
-    expect(run.status).toBe('succeeded')
-    expect(run.skillSnapshot?.map((s) => s.mode)).toEqual(['summary', 'summary', 'summary'])
-    expect(requestAt(mock, 0).tools?.map((t) => t.function.name)).toContain('get_skill')
-  })
-})
-
-describe('agents whose skills fit', () => {
-  it('runs unchanged: every skill in full, no get_skill', async () => {
-    const endpointId = await createEndpoint(32_768)
-    const agent = await createTeamLead(endpointId)
-    const mock = mockChatSequence([contentResponse('ok')])
-    const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
-    expect(res.statusCode).toBe(200)
-    const run = res.json() as AgentRun
-
-    const req = requestAt(mock, 0)
-    expect(req.messages?.[0]?.content).toBe(fullSystem(leadSkills()))
-    expect(run.systemPrompt).toBe(fullSystem(leadSkills()))
-    expect(req.tools?.map((t) => t.function.name)).toEqual(declaredTools(leadSkills()))
-    if (!declaredTools(leadSkills()).includes('get_skill')) {
-      expect(req.tools?.map((t) => t.function.name)).not.toContain('get_skill')
-    }
-    expect(run.skillSnapshot?.every((s) => s.mode === 'full')).toBe(true)
-  })
 })
 
 describe('POST /api/prompt-budget', () => {
-  it('returns the mode, summaries and tools a run on that endpoint would use', async () => {
+  it('returns the mode, catalog size and tools a run on that endpoint would use', async () => {
     const res = await inject('POST', '/api/prompt-budget', {
       endpointId: 'ep_local_llama',
       skillIds: LEAD_SKILL_IDS,
@@ -301,41 +218,29 @@ describe('POST /api/prompt-budget', () => {
     expect(res.statusCode).toBe(200)
     const budget = res.json() as PromptBudget
     expect(Object.keys(budget).sort()).toEqual(
-      ['contextWindow', 'estimatedTokens', 'mode', 'responseReserve', 'rulesTokens', 'summarizedSkillIds', 'toolNames'],
+      ['catalogTokens', 'contextWindow', 'estimatedTokens', 'mode', 'responseReserve', 'rulesTokens', 'summarizedSkillIds', 'toolNames'],
     )
-    expect(budget).toMatchObject({ contextWindow: 8192, responseReserve: RESPONSE_RESERVE, mode: 'summary' })
-    expect(budget.estimatedTokens + RESPONSE_RESERVE + SKILL_HEADROOM).toBeLessThanOrEqual(8192)
+    expect(budget).toMatchObject({ contextWindow: 8192, responseReserve: RESPONSE_RESERVE, mode: 'catalog', summarizedSkillIds: [] })
+    expect(budget.catalogTokens).toBe(Math.ceil(skillCatalog(leadSkills()).length / 4))
 
     // The run makes the same choice.
     const mock = mockChatSequence([contentResponse('ok')])
     const agent = await createTeamLead()
     const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
-    expect(run.skillSnapshot?.filter((s) => s.mode === 'summary').map((s) => s.id)).toEqual(budget.summarizedSkillIds)
     expect(requestAt(mock, 0).tools?.map((t) => t.function.name)).toEqual(budget.toolNames)
     // The budget estimate is the run's system prompt + tool schemas (input '').
     const schemas = JSON.stringify(budget.toolNames.map((name) => toolDeclaration(name))).length
     expect(budget.estimatedTokens).toBe(Math.ceil(((run.systemPrompt ?? '').length + schemas) / 4))
   })
 
-  it('reports full mode with no summaries on a large window', async () => {
-    const endpointId = await createEndpoint(32_768)
-    const budget = (await inject('POST', '/api/prompt-budget', {
-      endpointId, skillIds: LEAD_SKILL_IDS, instructions: LEAD_INSTRUCTIONS,
-    })).json() as PromptBudget
-    expect(budget.mode).toBe('full')
-    expect(budget.summarizedSkillIds).toEqual([])
-    expect(budget.toolNames).toEqual(declaredTools(leadSkills()))
-    const schemas = JSON.stringify(budget.toolNames.map((name) => toolDeclaration(name))).length
-    expect(budget.estimatedTokens).toBe(Math.ceil((fullSystem(leadSkills()).length + schemas) / 4))
-  })
-
-  it('reports too-large with every skill summarized on a tiny window', async () => {
-    const endpointId = await createEndpoint(2000)
-    const budget = (await inject('POST', '/api/prompt-budget', {
-      endpointId, skillIds: LEAD_SKILL_IDS, instructions: LEAD_INSTRUCTIONS,
-    })).json() as PromptBudget
-    expect(budget).toMatchObject({ contextWindow: 2000, mode: 'too-large', summarizedSkillIds: LEAD_SKILL_IDS })
-    expect(budget.toolNames).toEqual(summaryTools(leadSkills()))
+  it('reports too-large when the catalog is over 25% of the window', async () => {
+    const many = Array.from({ length: 30 }, (_, i) => `bulk-${i}`)
+    for (const id of many) {
+      store.skills.push({ id, name: id, description: 'd'.repeat(300), tag: '', content: 'x', tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false })
+    }
+    const budget = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', skillIds: many })).json() as PromptBudget
+    expect(budget.catalogTokens).toBeGreaterThan(8192 * 0.25)
+    expect(budget.mode).toBe('too-large')
   })
 
   it('ignores unknown skill ids and trims the instructions, as saving and running do', async () => {
@@ -356,7 +261,8 @@ describe('POST /api/prompt-budget', () => {
       responseReserve: RESPONSE_RESERVE,
       rulesTokens: 0,
       estimatedTokens: 0,
-      mode: 'full',
+      catalogTokens: 0,
+      mode: 'catalog',
       summarizedSkillIds: [],
       toolNames: [],
     })

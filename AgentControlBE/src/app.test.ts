@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { catalogLine } from './prompt.js'
 import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import type { Agent, AgentRun, ChatMessage, Conversation, ConversationSummary, Endpoint, Note, Skill } from './shared/types.js'
@@ -295,7 +296,7 @@ describe('POST /api/agents/:id/runs', () => {
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, {})).statusCode).toBe(400)
   })
 
-  it('injects skill content into the system prompt and never sends tools', async () => {
+  it('lists the skill in the catalog (never its body) and offers only activate_skill', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner() // attached: the real "summarization" seed
     // The seed now declares tools; with them cleared it is a content-only skill.
@@ -305,10 +306,12 @@ describe('POST /api/agents/:id/runs', () => {
 
     const req = lastRequest(mock)
     const system = req.messages?.[0]?.content ?? ''
+    const skill = store.skills.find((s) => s.id === 'core/summarization') as Skill
     expect(system).toContain('Be brief.')
-    expect(system).toContain('## summarization')
-    expect(system).toContain('condense long-form text')
-    expect(req).not.toHaveProperty('tools')
+    expect(system).toContain('Skills (call activate_skill to use one):\n- core/summarization: ')
+    expect(system).toContain(catalogLine(skill))
+    expect(system).not.toContain(skill.content.slice(0, 120))
+    expect((req as { tools?: { function: { name: string } }[] }).tools?.map((t) => t.function.name)).toEqual(['activate_skill'])
   })
 })
 
@@ -322,10 +325,10 @@ describe('run audit fields', () => {
     const run = res.json() as AgentRun
     const skill = store.skills.find((s) => s.id === 'core/summarization') as Skill
     expect(run.systemPrompt).toContain('Be brief.')
-    expect(run.systemPrompt).toContain('## summarization')
-    expect(run.systemPrompt).toContain(skill.content.slice(0, 120))
+    expect(run.systemPrompt).toContain('- core/summarization: ')
+    expect(run.systemPrompt).not.toContain(skill.content.slice(0, 120))
     expect(run.skillSnapshot).toEqual([
-      { id: 'core/summarization', name: 'summarization', contentChars: skill.content.length, mode: 'full' },
+      { id: 'core/summarization', name: 'summarization', contentChars: skill.content.length, mode: 'catalog' },
     ])
 
     // Byte-identical to what went upstream.
@@ -398,7 +401,7 @@ describe('run audit fields', () => {
     const { agent } = await makeRunner()
     const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
     expect(run.status).toBe('failed')
-    expect(run.systemPrompt).toContain('## summarization')
+    expect(run.systemPrompt).toContain('- core/summarization: ')
     expect(run.skillSnapshot).toHaveLength(1)
   })
 })
@@ -569,10 +572,15 @@ describe('tool execution loop', () => {
     // registry's current description and schema (not the skill's stored copy).
     const first = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}') as ChatRequest
     const decl = toolDeclaration('list_skills')
+    const activate = toolDeclaration('activate_skill')
     expect(first.tools).toEqual([
       {
         type: 'function',
         function: { name: 'list_skills', description: decl?.description, parameters: decl?.parameters },
+      },
+      {
+        type: 'function',
+        function: { name: 'activate_skill', description: activate?.description, parameters: activate?.parameters },
       },
     ])
 
@@ -630,10 +638,10 @@ describe('tool execution loop', () => {
     ])
   })
 
-  it('omits the tools key when no attached skill declares tools', async () => {
+  it('omits the tools key when the agent has no skills', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner()
-    store.skills.find((s) => s.id === 'core/summarization')!.tools = [] // the attached seed, tools cleared
+    store.agents.find((a) => a.id === agent.id)!.skillIds = []
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
     expect(lastRequest(mock)).not.toHaveProperty('tools')
   })
@@ -1490,7 +1498,7 @@ describe('tool plumbing', () => {
     const { agent } = await makeRunner()
     store.skills.find((s) => s.id === 'core/summarization')!.tools = [] // the attached seed, tools cleared
     await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
-    expect(toolMessages(mock)[0]?.content).toContain('Available: none')
+    expect(toolMessages(mock)[0]?.content).toContain('Available: activate_skill')
   })
 
   it('answers every call but executes at most 8 per turn', async () => {

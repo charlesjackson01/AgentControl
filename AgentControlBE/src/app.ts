@@ -301,6 +301,11 @@ function slugify(name: string): string {
 
 const MAX_SKILL_TOOLS = 16
 const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/
+/** Every defaultOn skill id, in library order (core first). */
+export function defaultSkillIds(skills: readonly Skill[]): string[] {
+  return [...new Set(skills.filter((s) => s.defaultOn === true).map((s) => s.id))]
+}
+
 /** POST /api/prompt-budget plans at most this many attached skill ids. */
 const MAX_BUDGET_SKILL_IDS = 500
 
@@ -549,7 +554,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       responseReserve: replyReserve(endpoint),
       estimatedTokens: plan.estimatedTokens,
       mode: plan.mode,
-      summarizedSkillIds: plan.summarizedSkillIds,
+      catalogTokens: plan.catalogTokens,
+      summarizedSkillIds: [],
       toolNames: plan.toolDeclarations.map((t) => t.name),
       rulesTokens,
     }
@@ -663,6 +669,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     // Exactly one primary: honor the request, otherwise promote the first agent.
     const isPrimary = input.isPrimary === true || !hasPrimary
+    // BE-7: a new bot with no "skillIds" in the body gets every defaultOn skill.
+    const body = request.body as Record<string, unknown>
+    const skillIds = body.skillIds === undefined ? defaultSkillIds(store.skills) : input.skillIds
     const agent: Agent = mergeAgent(
       {
         id: uid('agt'),
@@ -673,7 +682,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         endpointId: input.endpointId,
         isPrimary,
         role: input.role,
-        skillIds: input.skillIds,
+        skillIds,
         slug: assignAgentSlug(input.name, isPrimary, new Set(store.agents.map((a) => a.slug))),
         internetPolicy: 'ask',
         memoryLearn: true,
@@ -682,11 +691,25 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         lastRunAt: null,
         runCount: 0,
       },
-      { ...input, isPrimary },
+      { ...input, skillIds, isPrimary },
     )
     store.agents = [agent, ...store.agents]
     store.save()
     void reply.status(201)
+    return agent
+  })
+
+  // BE-7: merge every defaultOn skill into an existing bot (its own skills stay, in order).
+  app.post('/api/agents/:id/skills/defaults', async (request) => {
+    const { id } = request.params as { id: string }
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    const current = (agent as Agent).skillIds
+    const added = defaultSkillIds(store.skills).filter((s) => !current.includes(s))
+    if (added.length > 0) {
+      ;(agent as Agent).skillIds = [...current, ...added]
+      store.save()
+    }
     return agent
   })
 

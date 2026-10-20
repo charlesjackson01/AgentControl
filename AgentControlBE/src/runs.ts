@@ -9,7 +9,7 @@ import { fail, uid } from './http.js'
 import { agentInstructions, attachedSkills, planPrompt, replyReserve } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
-import { executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
+import { builtinTools, executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
 import { chatCompletion, STOPPED_BY_YOU, type ChatMessage, type ChatResult, type ToolDeclaration } from './upstream.js'
 
 export interface RunOptions {
@@ -92,11 +92,10 @@ async function executeRunInner(
   const apiKey = store.endpointKeys[endpoint.id]
   const timeoutMs = endpoint.timeoutMs ?? 30_000
 
-  // System prompt = instructions + the full CONTENT of attached skills, or,
-  // when that leaves too little of the window, summaries of the largest
-  // skills plus get_skill to read them (see planPrompt). Offered tools are
-  // the registry tools the skills declare; only these may execute.
-  // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
+  // System prompt = instructions + a one-line catalog of the attached skills
+  // (BE-7); the model loads a body with activate_skill. Offered tools are the
+  // registry tools the skills declare plus the skill tools; only these may
+  // execute. Empty => no `tools` key upstream.
   const injectedSkills = attachedSkills(store.skills, agent.skillIds)
   const plan = planPrompt({
     instructions: agentInstructions(agent.instructions, agent.rules),
@@ -108,11 +107,7 @@ async function executeRunInner(
   const reserve = replyReserve(endpoint)
   const system = plan.system
   const toolDeclarations: ToolDeclaration[] = plan.toolDeclarations
-  const summarized = new Set(plan.summarizedSkillIds)
-  // get_skill the planner added (no attached skill declares it) reads only
-  // this agent's skills, not every skill in the workspace.
-  const plannerGetSkill =
-    summarized.size > 0 && !injectedSkills.some((s) => (s.tools ?? []).some((t) => t.name === 'get_skill'))
+  const activated = new Map<string, { id: string; name: string; source: string }>()
   const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
   const toolSchemaChars = sendTools ? JSON.stringify(sendTools).length : 0
 
@@ -183,7 +178,8 @@ async function executeRunInner(
     now: () => new Date(),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     writes: { count: 0 },
-    ...(plannerGetSkill ? { skillScope: new Set(injectedSkills.map((s) => s.id)) } : {}),
+    catalogSkillIds: new Set(plan.catalogSkillIds),
+    activatedSkills: activated,
   }
 
   const signal = opts.signal
@@ -269,7 +265,8 @@ async function executeRunInner(
         // What the context window still holds for this result. Paging tools
         // size their page to it; anything larger is clipped below.
         const remainingChars = (contextWindow - reserve - estimate([], true)) * 4
-        const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
+        const toolMax = builtinTools.get(call.name)?.maxResultChars ?? TOOL_RESULT_MAX_CHARS
+        const limit = Math.min(toolMax, remainingChars - 400)
         toolCtx.resultMaxChars = limit
         let outcome: ToolOutcome
         if (callsThisTurn > MAX_CALLS_PER_TURN || callsThisRun >= MAX_CALLS_PER_RUN) {
@@ -338,8 +335,9 @@ async function executeRunInner(
       id: s.id,
       name: s.name,
       contentChars: s.content.length,
-      mode: summarized.has(s.id) ? ('summary' as const) : ('full' as const),
+      mode: 'catalog' as const,
     })),
+    ...(activated.size > 0 ? { activatedSkills: [...activated.values()] } : {}),
     ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
     ...(projectId !== undefined ? { projectId } : {}),
   }

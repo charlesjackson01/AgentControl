@@ -133,15 +133,19 @@ export interface SkillInput {
 
 export type SkillPatch = Partial<SkillInput>
 
-/** How one attached skill went into a run's system prompt. */
-export type SkillPromptMode = 'full' | 'summary'
+/**
+ * How one attached skill went into a run's system prompt. 'catalog' (BE-7):
+ * one catalog line, body loaded on demand with activate_skill. 'full' and
+ * 'summary' appear only on runs recorded before BE-7.
+ */
+export type SkillPromptMode = 'full' | 'summary' | 'catalog'
 
 /**
- * How a run prompt fits its endpoint: every skill in full, some skills as
- * summaries (read in full with get_skill), or over budget even with every
- * skill summarized (the run may still be rejected with 413).
+ * How a run prompt fits its endpoint (BE-7): skills listed as a catalog, or
+ * 'too-large' when the catalog is over 25% of the window or the whole prompt
+ * does not fit (the run may then be rejected with 413).
  */
-export type PromptMode = 'full' | 'summary' | 'too-large'
+export type PromptMode = 'catalog' | 'too-large'
 
 /** POST /api/prompt-budget body: the agent draft to plan for. Unknown skill ids are ignored. */
 export interface PromptBudgetInput {
@@ -160,7 +164,9 @@ export interface PromptBudget {
   /** chars/4 estimate of system prompt + tool schemas. */
   estimatedTokens: number
   mode: PromptMode
-  /** Skills sent as summaries, in attachment order. */
+  /** chars/4 estimate of the skill catalog section alone (0 without skills). */
+  catalogTokens: number
+  /** @deprecated Always [] since BE-7 (no summary mode); kept for older clients. */
   summarizedSkillIds: string[]
   /** Tools the run would offer, in the order sent upstream. */
   toolNames: string[]
@@ -186,6 +192,8 @@ export interface AgentRun {
    * recorded before summaries existed have no mode (they were all full).
    */
   skillSnapshot?: { id: string; name: string; contentChars: number; mode?: SkillPromptMode }[]
+  /** Skills the model loaded with activate_skill, in first-use order (BE-7). */
+  activatedSkills?: { id: string; name: string; source: string }[]
   /** Per-tool-call audit for runs that used the tool loop. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
   /**

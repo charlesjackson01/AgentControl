@@ -41,6 +41,13 @@ export interface ToolContext {
    * attached skill declares get_skill (then any skill is readable).
    */
   skillScope?: ReadonlySet<string>
+  /**
+   * BE-7: the agent's catalog skill ids. activate_skill and read_skill_file
+   * read only these (no access to skills the agent does not have).
+   */
+  catalogSkillIds?: ReadonlySet<string>
+  /** BE-7: skills activate_skill loaded this run, in first-use order (keyed by id). */
+  activatedSkills?: Map<string, { id: string; name: string; source: string }>
 }
 
 /**
@@ -65,6 +72,8 @@ export interface ToolEntry {
   /** Flat JSON Schema object (llama.cpp grammar-friendly). */
   parameters: object
   contentParams?: ContentParams
+  /** Largest result the run loop keeps for this tool (default: its TOOL_RESULT_MAX_CHARS). */
+  maxResultChars?: number
   /** Return a JSON-serializable value or a string; throw Error('…') for bad input. */
   handler(args: Record<string, unknown>, ctx: ToolContext): unknown
 }

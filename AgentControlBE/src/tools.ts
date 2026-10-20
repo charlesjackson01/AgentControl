@@ -12,6 +12,7 @@ import { notesTools } from './tools/notes.js'
 import { resolveContentRefs } from './tools/refs.js'
 import { redactSecrets } from './tools/redact.js'
 import { clipText, RESULT_MAX_CHARS } from './tools/limits.js'
+import { skillTools } from './tools/skills.js'
 import { textTools } from './tools/text.js'
 import { timeTools } from './tools/time.js'
 import type { ToolCategory, ToolContext, ToolEffect, ToolEntry } from './tools/types.js'
@@ -31,7 +32,7 @@ export const MAX_TOOL_ARGUMENT_CHARS = 64_000
 
 export const builtinTools: ReadonlyMap<string, ToolEntry> = (() => {
   const map = new Map<string, ToolEntry>()
-  for (const entry of [...workspaceTools, ...notesTools, ...timeTools, ...mathTools, ...textTools, ...dataTools]) {
+  for (const entry of [...workspaceTools, ...notesTools, ...timeTools, ...mathTools, ...textTools, ...dataTools, ...skillTools]) {
     if (map.has(entry.name)) throw new Error(`Duplicate built-in tool "${entry.name}"`)
     map.set(entry.name, entry)
   }

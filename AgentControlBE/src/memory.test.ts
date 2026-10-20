@@ -163,6 +163,29 @@ describe('memory in runs', () => {
   })
 })
 
+describe('prompt budget with memory', () => {
+  it('counts a saved bot\'s memory block and recall, matching its run', async () => {
+    const a = await makeAgent('Writer')
+    expect((await inject('PATCH', `/api/agents/${a.id}`, { skillIds: [] })).statusCode).toBe(200)
+    await inject('POST', `/api/agents/${a.id}/memory`, { text: 'Prefers short answers.', category: 'preferences' })
+    const draft = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama' })).json() as { toolNames: string[]; estimatedTokens: number }
+    const saved = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: a.id })).json() as { toolNames: string[]; estimatedTokens: number }
+    expect(draft.toolNames).toEqual(['remember'])
+    expect(saved.toolNames).toEqual(['remember', 'recall'])
+    expect(saved.estimatedTokens).toBeGreaterThan(draft.estimatedTokens)
+
+    const mock = mockChatSequence([content('ok')])
+    const run = (await inject('POST', `/api/agents/${a.id}/runs`, { input: 'x' })).json() as { systemPrompt?: string }
+    expect(body(mock, 0).tools?.map((t) => t.function.name)).toEqual(saved.toolNames)
+    expect(run.systemPrompt).toContain('Prefers short answers.')
+
+    const off = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: a.id, memoryLearn: false })).json() as { toolNames: string[] }
+    expect(off.toolNames).toEqual(['recall'])
+    expect((await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: 'nope' })).statusCode).toBe(404)
+    expect((await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: 7 })).statusCode).toBe(400)
+  })
+})
+
 describe('PATCH /api/agents/:id', () => {
   it('updates any subset of fields with the PUT rules and returns the full agent', async () => {
     const a = await makeAgent('Writer')

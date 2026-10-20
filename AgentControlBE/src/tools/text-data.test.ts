@@ -7,8 +7,8 @@ import type { ToolContext } from './types.js'
 
 const entries = [...textTools, ...dataTools]
 function context(input = ''): ToolContext {
-  return { store: { endpointKeys: {}, notes: [{ id: 'draft', title: 'Draft', body: 'original_text' }] } as WorkspaceStore,
-    agentId: 'agent', runId: 'run', input, allowed: new Set([...entries.map((entry) => entry.name), 'read_note']),
+  return { store: { endpointKeys: {} } as WorkspaceStore,
+    agentId: 'agent', runId: 'run', input, allowed: new Set([...entries.map((entry) => entry.name)]),
     now: () => new Date('2026-01-01T00:00:00Z'), timeZone: 'UTC', writes: { count: 0 } }
 }
 function run(name: string, args: Record<string, unknown>): any { return entries.find((entry) => entry.name === name)!.handler(args, context()) }
@@ -106,11 +106,10 @@ describe('registry refs and recoverable failures', () => {
     expect(JSON.parse((await call('csv_summary', {}, context('```csv\na,b\n1,2\n```'))).content)).toMatchObject({ rows: 1, column_count: 2 })
     expect(JSON.parse((await call('json_query', { json: { items: [1] }, path: 'items[0]' })).content).value).toBe(1)
   })
-  it('checks read_note permission and returns handler errors to the model', async () => {
-    const ctx = context()
-    expect(JSON.parse((await call('transform_text', { text: '@note:Draft', operation: 'trim' }, ctx)).content)).toMatchObject({ text: 'original_text', sources: { text: '@note:draft' } })
-    ctx.allowed = new Set(['transform_text'])
-    expect((await call('transform_text', { text: '@note:Draft', operation: 'trim' }, ctx)).ok).toBe(false)
+  it('rejects retired "@note:" refs and returns handler errors to the model', async () => {
+    const retired = await call('transform_text', { text: '@note:Draft', operation: 'trim' }, context())
+    expect(retired.ok).toBe(false)
+    expect(retired.content).toContain('"@note:" references were retired')
     const result = await call('json_query', { json: '{bad}' })
     expect(result.ok).toBe(false)
     expect(result.content).toContain('Example:')

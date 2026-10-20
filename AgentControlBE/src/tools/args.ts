@@ -4,7 +4,7 @@
  * those, ignore unknown keys, and make every error end with a corrected
  * example so the model can fix the call within the loop's 4 iterations.
  */
-import type { Agent, Note, Skill } from '../shared/types.js'
+import type { Agent, Skill } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
 
 /** Error whose message ends with `Example: {...}` for the model to copy. */
@@ -148,9 +148,4 @@ export function findSkillIn(skills: readonly Skill[], ref: string): Skill | unde
   const suffix = `/${fold(ref)}`
   const matches = skills.filter((s) => s.id.toLowerCase().endsWith(suffix))
   return matches.length === 1 ? matches[0] : undefined
-}
-
-/** Note by id or case-insensitive title. */
-export function findNote(store: WorkspaceStore, ref: string): Note | undefined {
-  return store.notes.find((n) => n.id === ref) ?? store.notes.find((n) => fold(n.title) === fold(ref))
 }

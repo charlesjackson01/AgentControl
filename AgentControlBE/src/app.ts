@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path'
 import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
 import { NOTES_RETIRED, PROJECTS_RETIRED } from './archive.js'
-import { addMemory, deleteMemory, listMemory, parseCategory, parseText, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
+import { addMemory, deleteMemory, listMemory, memoryPromptBlock, parseCategory, parseText, sameScope, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels, PROXY_PROTOCOLS } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
@@ -535,6 +535,13 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (raw.memoryLearn !== undefined && typeof raw.memoryLearn !== 'boolean') {
       fail(400, '"memoryLearn" must be true or false.')
     }
+    if (raw.agentId !== undefined && typeof raw.agentId !== 'string') fail(400, '"agentId" must be a string.')
+    // A saved bot's preview counts its memory block and recall, as its DM run would.
+    const saved = typeof raw.agentId === 'string' ? store.agents.find((a) => a.id === raw.agentId) : undefined
+    if (typeof raw.agentId === 'string' && !saved) fail(404, `No agent with id "${raw.agentId.slice(0, 100)}"`)
+    const memoryScope: MemoryScope | undefined = saved ? { kind: 'agent', agentId: saved.id } : undefined
+    const learn = typeof raw.memoryLearn === 'boolean' ? raw.memoryLearn : (saved?.memoryLearn ?? true)
+    const hasMemory = memoryScope ? store.memories.some((m) => sameScope(m.scope, memoryScope)) : false
     const endpoint = store.endpoints.find((e) => e.id === endpointId)
     if (!endpoint) fail(400, `No endpoint with id "${endpointId.slice(0, 100)}". Pick an existing endpoint.`)
 
@@ -547,8 +554,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const plan = planPrompt({
       instructions: withRules,
       skills: attachedSkills(store.skills, skillIds),
-      // BE-4: a draft has no memories yet; remember is offered like a run's (memoryLearn defaults on).
-      memoryTools: raw.memoryLearn === false ? [] : ['remember'],
+      // BE-4: remember like a run's (memoryLearn defaults on); a saved bot adds its memories and recall.
+      memory: memoryScope ? memoryPromptBlock(store, memoryScope) : '',
+      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : [])],
       input: '',
       contextWindow: endpoint.contextWindow,
       responseReserve: replyReserve(endpoint),

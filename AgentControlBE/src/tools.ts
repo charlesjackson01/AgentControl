@@ -116,7 +116,7 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
   if (call.arguments.length > MAX_TOOL_ARGUMENT_CHARS) {
     return fail(
       `Tool arguments are too large (${call.arguments.length} chars, max ${MAX_TOOL_ARGUMENT_CHARS}). ` +
-        'Pass "@input" or "@note:<id>" instead of pasting the text.',
+        'Pass "@input" instead of pasting the text.',
     )
   }
 
@@ -133,7 +133,7 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
 
   try {
     const { args: resolved, sources } = resolveContentRefs(entry.contentParams, args, ctx)
-    // Text pulled in by "@note:"/"@input" is redacted before the handler sees
+    // Text pulled in by "@input" is redacted before the handler sees
     // it, so counts or match flags cannot probe a secret stored in a note.
     for (const param of Object.keys(sources)) {
       const value = resolved[param]

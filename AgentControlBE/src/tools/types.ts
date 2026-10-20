@@ -61,7 +61,7 @@ export interface ToolContext {
 
 /**
  * Text-content parameters that accept `"@input"` (this run's message) or
- * `"@note:<id|title>"` instead of literal text. Refs are resolved centrally in
+ * nothing else (BE-4 retired `"@note:"`) instead of literal text. Refs are resolved centrally in
  * executeToolCall before the handler runs; handlers then apply their own caps.
  */
 export interface ContentParams {

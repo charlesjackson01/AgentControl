@@ -17,6 +17,8 @@ import {
   folderLine,
   imageLine,
   joinPath,
+  latestSubfolder,
+  filesTotal,
   nameError,
   paneView,
   parentOf,
@@ -35,6 +37,8 @@ type Props = {
   /** Raw `?path=` (checked here; a refused path is never requested). */
   path: string
   onPath: (path: string) => void
+  /** GAP-F2: the latest listing's `totalFiles` (whole folder; undefined when the BE leaves it out). */
+  onTotal?: (total: number | undefined) => void
 }
 
 type Loaded = Record<string, FileListing>
@@ -43,7 +47,7 @@ type Busy = { text: string } | null
 const errText = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback)
 
 /** FE-4 Files tab (mockup 03d) on BE-2. Gaps are listed in lib/files.ts (GAP-F1…). */
-export default function FilesTab({ agent, path: rawPath, onPath }: Props) {
+export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Props) {
   const checked = checkPath(rawPath)
   const path = checked.ok ? checked.path : 'shared'
   const [loaded, setLoaded] = useState<Loaded>({})
@@ -69,6 +73,8 @@ export default function FilesTab({ agent, path: rawPath, onPath }: Props) {
         const listing = await files.list(agent.id, dir)
         loadedRef.current = { ...loadedRef.current, [dir]: listing }
         setLoaded(loadedRef.current)
+        // GAP-F2: totalFiles counts the whole folder (same on every path); the latest listing wins.
+        onTotal?.(filesTotal(listing))
         setListError((e) => (e?.path === dir ? null : e))
         return listing
       } catch (err) {
@@ -76,7 +82,7 @@ export default function FilesTab({ agent, path: rawPath, onPath }: Props) {
         return null
       }
     },
-    [agent.id],
+    [agent.id, onTotal],
   )
 
   const load = useCallback(
@@ -133,8 +139,12 @@ export default function FilesTab({ agent, path: rawPath, onPath }: Props) {
     setQuery('')
     onPath(p)
   }
+  // Default-open: shared/, workspace/ and its latest subfolder (03d), and the open folder's ancestors.
+  const autoOpen = loaded.workspace ? latestSubfolder('workspace', loaded.workspace.entries, loaded) : null
   const isOpen = (dir: string) =>
-    !!loaded[dir] && !collapsed.has(dir) && (opened.has(dir) || dir === 'shared' || dir === 'workspace' || ancestorsOf(path).includes(dir))
+    !!loaded[dir] &&
+    !collapsed.has(dir) &&
+    (opened.has(dir) || dir === 'shared' || dir === 'workspace' || dir === autoOpen || ancestorsOf(path).includes(dir))
   const setOpen = (dir: string, open: boolean) => {
     setOpened((s) => { const n = new Set(s); if (open) n.add(dir); else n.delete(dir); return n })
     setCollapsed((s) => { const n = new Set(s); if (open) n.delete(dir); else n.add(dir); return n })

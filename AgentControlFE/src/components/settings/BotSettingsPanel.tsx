@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Avatar from '../Avatar'
 import ProfileTab from './ProfileTab'
 import MemoryTab from './MemoryTab'
@@ -11,9 +11,11 @@ import { SETTINGS_TABS } from '../../lib/settings-tabs'
 import { botFolder } from '../../lib/agent-put'
 import type { SettingsTab } from '../../lib/commands'
 import type { Agent, Endpoint } from '../../lib/types'
-import { request } from '../../lib/api'
+import { putRaw, request, serverMessage } from '../../lib/api'
+import { filesApi, filesTotal } from '../../lib/files'
 
 const memory = memoryApi(request)
+const files = filesApi(request, putRaw, serverMessage)
 
 type Props = {
   agent: Agent
@@ -42,6 +44,21 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
   const agent = saved && saved.id === fromList.id ? saved : fromList
   const [mem, setMem] = useState<MemoryLoad | null>(null)
   const [memAttempt, setMemAttempt] = useState(0)
+  // GAP-F2: "Files N" = the whole folder's totalFiles from the latest listing (this root fetch,
+  // then every listing FilesTab loads); no count when it is missing or invalid.
+  const [filesCount, setFilesCount] = useState<{ id: string; n: number | undefined } | null>(null)
+
+  useEffect(() => {
+    let live = true
+    files.list(fromList.id, '').then(
+      (l) => live && setFilesCount({ id: fromList.id, n: filesTotal(l) }),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [fromList.id])
+  const onFilesTotal = useCallback((n: number | undefined) => setFilesCount({ id: fromList.id, n }), [fromList.id])
 
   useEffect(() => {
     let live = true
@@ -69,6 +86,7 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
   const counts: Partial<Record<SettingsTab, number>> = {
     memory: mem?.status === 'ok' ? mem.page.total : undefined,
     skills: agent.skillIds.length,
+    files: filesCount?.id === agent.id ? filesCount.n : undefined,
   }
   const folder = botFolder(agent.slug)
   const sub = [agent.role, agent.isPrimary ? 'personal agent' : null, folder ? `private folder ${folder}` : null].filter(Boolean).join(' · ')
@@ -126,7 +144,7 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
             />
           )}
           {tab === 'skills' && <SkillsTab key={agent.id} agent={agent} onAgentSaved={didSave} />}
-          {tab === 'files' && <FilesTab key={agent.id} agent={agent} path={filesPath} onPath={(p) => onFilesPath?.(p)} />}
+          {tab === 'files' && <FilesTab key={agent.id} agent={agent} path={filesPath} onPath={(p) => onFilesPath?.(p)} onTotal={onFilesTotal} />}
           {tab === 'sandbox' && <PlaceholderTab tab={tab} agent={agent} />}
         </div>
       </aside>

@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 import {
   MAX_UPLOAD_BYTES, ancestorsOf, baseName, breadcrumb, canModify, canWriteInto, checkPath, fileContentPath, fileIcon,
   fileSize, fileWhen, filesApi, filesErrorMessage, filesPanelOpen, filesPathParam, folderLine, imageLine, isImage,
-  joinPath, nameError, paneView, parentOf, treeEntries, treeSize, uploadError, usageView, withFilesPath, zoneBadge, zoneOfPath,
+  joinPath, nameError, filesTotal, latestSubfolder, paneView, parentOf, treeEntries, treeSize, uploadError, usageView, withFilesPath, zoneBadge, zoneOfPath,
 } from '../src/lib/files.ts'
 import { SETTINGS_TABS } from '../src/lib/settings-tabs.ts'
 
@@ -218,5 +218,44 @@ describe('files: API (BE-2 c2257b1)', () => {
     await assert.rejects(api.upload('a1', 'shared', { name: 'a.png', size: 10 }), { message: '"a.png" is over the 25 MB upload limit.' })
     reply = { ok: false, status: 403, json: async () => { throw new Error('not json') } }
     await assert.rejects(api.upload('a1', 'skills', { name: 'a.png', size: 10 }), { status: 403, message: 'That part of the bot folder is read-only.' })
+  })
+})
+
+describe('files: tree auto-expand (03d workspace/briefs)', () => {
+  const ws = [
+    e('workspace/briefs', { kind: 'dir', modifiedAt: oct12 }),
+    e('workspace/drafts', { kind: 'dir', modifiedAt: oct12 }),
+    e('workspace/todo.md', { modifiedAt: today }),
+  ]
+  it('workspace/: the subfolder holding the newest file opens (03d: briefs/, drafts/ stays shut)', () => {
+    const kids = {
+      'workspace/briefs': { entries: [e('workspace/briefs/lindmere-harbor.md', { modifiedAt: today })] },
+      'workspace/drafts': { entries: [e('workspace/drafts/intro.md', { modifiedAt: oct14 })] },
+    }
+    assert.equal(latestSubfolder('workspace', ws, kids), 'workspace/briefs')
+    kids['workspace/drafts'].entries.push(e('workspace/drafts/new.md', { modifiedAt: new Date(2026, 9, 20, 10).toISOString() }))
+    assert.equal(latestSubfolder('workspace', ws, kids), 'workspace/drafts', 'follows the latest work, not a fixed name')
+  })
+  it('falls back to folder mtimes, ties go by name; no subfolders -> none', () => {
+    assert.equal(latestSubfolder('workspace', ws, {}), 'workspace/briefs')
+    assert.equal(latestSubfolder('workspace', [e('workspace/a', { kind: 'dir', modifiedAt: oct12 }), e('workspace/b', { kind: 'dir', modifiedAt: oct14 })], {}), 'workspace/b')
+    assert.equal(latestSubfolder('workspace', [e('workspace/todo.md')], {}), null)
+  })
+  it('only workspace/: shared/ keeps site-photos collapsed (03d)', () => {
+    assert.equal(latestSubfolder('shared', [e('shared/site-photos', { kind: 'dir' })], {}), null)
+    assert.equal(latestSubfolder('workspace/briefs', ws, {}), null)
+  })
+})
+
+describe('files: GAP-F2 tab count from optional totalFiles', () => {
+  it('present and valid -> the number ("Files 31"), whatever folder the listing is for', () => {
+    assert.equal(filesTotal({ entries: [], totalFiles: 31 }), 31)
+    assert.equal(filesTotal({ path: 'workspace/briefs', entries: [e('workspace/briefs/a.md')], totalFiles: 31 }), 31, 'whole folder, not the open one')
+    assert.equal(filesTotal({ totalFiles: 0 }), 0)
+  })
+  it('missing or invalid -> no count (as with c2257b1)', () => {
+    for (const bad of [{ entries: [] }, { totalFiles: null }, { totalFiles: '31' }, { totalFiles: -1 }, { totalFiles: 2.5 }, { totalFiles: NaN }, { totalFiles: Infinity }, null, undefined, 31]) {
+      assert.equal(filesTotal(bad), undefined, JSON.stringify(bad))
+    }
   })
 })

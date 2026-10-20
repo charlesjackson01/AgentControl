@@ -4,7 +4,9 @@
  *
  * Mockup gaps (not shown in v3 03d; minimal neutral versions, pending Charles):
  *   GAP-F1 "Shared by you" / "All files": Shared opens shared/, All files opens the folder root.
- *   GAP-F2 tab count ("Files 31"): left out; BE-2 has no total-file count.
+ *   GAP-F2 tab count ("Files 31"): the latest listing's optional `totalFiles` (files in the whole
+ *          bot folder, not folders, no trash; same on every path), when valid (filesTotal); no
+ *          count otherwise. Resolved once BE-2 adds `totalFiles`.
  *   GAP-F3 "sent in chat" needs `sharedAt` (BE-9); without it the line shows the date only.
  *   GAP-F4 folder cards and file rows outside shared/: date only ("9 items · Oct 14").
  *   GAP-F5 row "⋯" menu (Open, Download, Rename…, Delete…): plain list popover; images and
@@ -138,6 +140,32 @@ export function treeEntries(dir: string, entries: readonly FileEntry[]): FileEnt
     return i === -1 ? ROOT_ORDER.length : i
   }
   return [...entries].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name))
+}
+
+/**
+ * Tree auto-expand (03d): workspace/ opens with the subfolder holding the bot's latest
+ * work expanded (03d: briefs/, which has the lindmere-harbor.md the chat just produced;
+ * drafts/ stays collapsed). Rule: in workspace/ only, the one subfolder whose newest
+ * entry (from the one-level prefetch; else the folder's own mtime) is the most recent.
+ * shared/ is not auto-expanded (03d keeps site-photos/ collapsed). Ties: name order.
+ */
+export function latestSubfolder(dir: string, entries: readonly FileEntry[], children: Readonly<Record<string, Pick<FileListing, 'entries'> | undefined>>): string | null {
+  if (dir !== 'workspace') return null
+  let best: { path: string; at: string } | null = null
+  const dirs = entries.filter((e) => e.kind === 'dir').sort((a, b) => a.name.localeCompare(b.name))
+  for (const d of dirs) {
+    const kids = children[d.path]?.entries ?? []
+    const at = kids.reduce((m, k) => (k.modifiedAt > m ? k.modifiedAt : m), d.modifiedAt ?? '')
+    if (!best || at > best.at) best = { path: d.path, at }
+  }
+  return best?.path ?? null
+}
+
+/** GAP-F2: "Files N" (whole bot folder) from a listing's optional `totalFiles`; undefined (no count) when missing or invalid. */
+export function filesTotal(listing: unknown): number | undefined {
+  if (!listing || typeof listing !== 'object') return undefined
+  const n = (listing as { totalFiles?: unknown }).totalFiles
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : undefined
 }
 
 /* ---------- right pane (03d) ---------- */

@@ -471,4 +471,9 @@ export type FileListing = {
   path: string
   entries: FileEntry[]
   usage: { bytes: number; quotaBytes: number }
+  /**
+   * Optional (BE-2 follow-up): files (not folders, trash left out) in the whole bot folder,
+   * the same on every path's listing. The "Files N" tab count (03d).
+   */
+  totalFiles?: number
 }

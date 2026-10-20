@@ -536,9 +536,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const agentId = conversation.agentId
     const agent = store.agents.find((a) => a.id === agentId)
     if (!agent) fail(404, `No agent for conversation "${id}"`)
-    const body = (request.body ?? {}) as { text?: unknown }
-    const text = typeof body.text === 'string' ? body.text.trim() : ''
-    if (!text) fail(400, 'Provide a "text" string.')
+    // `content` is the Phase 1 field; `text` stays as an alias through
+    // Phase 1. When both are sent, `content` wins.
+    const body = (request.body ?? {}) as { content?: unknown; text?: unknown }
+    const raw = typeof body.content === 'string' ? body.content : typeof body.text === 'string' ? body.text : ''
+    const text = raw.trim()
+    if (!text) fail(400, 'Provide a "content" string.')
     const run = await runAgent(store, agent as Agent, text)
     const messages = messagesOf(store, conversation.id).filter((m) => m.runId === run.id)
     return { conversation: summarize(store, conversation), messages, run: { id: run.id, status: run.status, error: run.error } }

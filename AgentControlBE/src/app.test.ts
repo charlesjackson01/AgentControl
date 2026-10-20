@@ -2071,6 +2071,23 @@ describe('chat-first Part 2: conversations', () => {
     expect(full.hasMore).toBe(false)
   })
 
+  it('accepts `content` on the DM send, keeps `text` as an alias, and prefers `content`', async () => {
+    const { agent } = await makeRunner()
+    const dm = await dmFor(agent.id)
+    mockChat('one')
+    const a = (await inject('POST', `/api/conversations/${dm.id}/messages`, { content: ' hello ' })).json() as { messages: ChatMessage[] }
+    expect(a.messages[0]).toMatchObject({ role: 'user', content: 'hello' })
+    mockChat('two')
+    const b = (await inject('POST', `/api/conversations/${dm.id}/messages`, { content: 'wins', text: 'loses' })).json() as { messages: ChatMessage[] }
+    expect(b.messages[0]).toMatchObject({ role: 'user', content: 'wins' })
+    mockChat('three')
+    const c = (await inject('POST', `/api/conversations/${dm.id}/messages`, { text: 'alias' })).json() as { messages: ChatMessage[] }
+    expect(c.messages[0]).toMatchObject({ role: 'user', content: 'alias' })
+    const empty = await inject('POST', `/api/conversations/${dm.id}/messages`, { content: '  ', text: 'ignored' })
+    expect(empty.statusCode).toBe(400)
+    expect((empty.json() as { message: string }).message).toContain('content')
+  })
+
   it('runs first-run profile setup and edits', async () => {
     const fresh = (await inject('GET', '/api/profile')).json() as { name: string; onboardedAt: string | null }
     expect(fresh).toEqual({ name: '', onboardedAt: null })

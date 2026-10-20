@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useMatch, useNavigate } from 'react-router-dom'
 import ChatList from './shell/ChatList'
+import CommandPalette from './shell/CommandPalette'
 import NewBotDialog from './NewBotDialog'
 import SettingsDialog from '../pages/Settings'
 import ConversationsProvider from '../state/ConversationsProvider'
@@ -9,6 +10,7 @@ import { useProfile } from '../state/profile-context'
 import { useConversations } from '../state/conversations-context'
 import { ShellContext, type ShellState } from '../state/shell-context'
 import { needsOnboarding } from '../lib/profile'
+import { commandAction, type CommandContext, type CommandName } from '../lib/commands'
 import { chatListUnread, readChatListOpen, shellShortcut, writeChatListOpen } from '../lib/shell'
 import Onboarding from '../pages/Onboarding'
 import '../shell.css'
@@ -62,7 +64,12 @@ function Shell() {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newBotOpen, setNewBotOpen] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const { conversations, agents } = useConversations()
+  const navigate = useNavigate()
+  const chatId = useMatch('/c/:conversationId')?.params.conversationId
+  const chatIsGroup = conversations?.find((c) => c.id === chatId)?.kind === 'group'
+  const commandCtx = useMemo<CommandContext>(() => ({ conversationId: chatId, isGroup: chatIsGroup }), [chatId, chatIsGroup])
 
   const listOpen = narrow ? drawerOpen : desktopOpen
   const toggleList = useCallback(() => {
@@ -82,8 +89,26 @@ function Shell() {
   const openSettings = useCallback(() => setSettingsOpen(true), [])
   const openNewBot = useCallback(() => {
     setSwitcherOpen(false)
+    setPaletteOpen(false)
     setNewBotOpen(true)
   }, [])
+  const openPalette = useCallback(() => {
+    setSwitcherOpen(false)
+    setPaletteOpen(true)
+  }, [])
+  const closePalette = useCallback(() => setPaletteOpen(false), [])
+  const runCommand = useCallback(
+    (name: CommandName, args = '') => {
+      const action = commandAction(name, commandCtx, args)
+      if (action.kind === 'unavailable') return action.reason
+      setPaletteOpen(false)
+      // FE-5 turns `/new <text>` into the in-chat draft card; until then it opens the New bot form.
+      if (action.kind === 'new-bot') openNewBot()
+      else navigate(action.to)
+      return null
+    },
+    [commandCtx, navigate, openNewBot],
+  )
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -94,16 +119,19 @@ function Shell() {
       }
       e.preventDefault()
       if (action === 'toggle-list') toggleList()
-      else setSwitcherOpen(true)
+      else openPalette()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [toggleList, narrow, drawerOpen])
+  }, [toggleList, openPalette, narrow, drawerOpen])
 
   const unread = chatListUnread(conversations ?? [], agents)
   const value = useMemo<ShellState>(
-    () => ({ listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, openSettings, openNewBot, unread }),
-    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, openSettings, openNewBot, unread],
+    () => ({
+      listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher,
+      paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, unread,
+    }),
+    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, unread],
   )
 
   return (
@@ -113,6 +141,7 @@ function Shell() {
         {listOpen && narrow && <div className="cf-scrim" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
         <div className="cf-chatcol">
           <Outlet />
+          {paletteOpen && <CommandPalette ctx={commandCtx} />}
         </div>
       </div>
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />

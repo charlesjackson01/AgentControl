@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import Avatar from '../components/Avatar'
 import ChatHeader from '../components/shell/ChatHeader'
 import { ProfilePanel } from '../components/ProfilePanel'
@@ -11,6 +11,9 @@ import { clockTime, threadItems, typingSeenFor } from '../lib/thread'
 import type { Agent, ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
+import { useShell } from '../state/shell-context'
+import { matchCommands, parseSlash, slashPrefix, type CommandDef } from '../lib/commands'
+import { moveActive } from '../lib/search'
 import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
 
 /** New-message check while the thread is open and the tab visible. */
@@ -29,9 +32,11 @@ function TypingDots() {
 }
 
 /** One assistant row: avatar at the bubble's foot, bubble, then its time. */
-function BotRow({ author, meta, error, children }: { author?: Agent; meta?: string; error?: boolean; children: React.ReactNode }) {
+type RowProps = { meta?: string; mid?: string; hit?: boolean; children: React.ReactNode }
+
+function BotRow({ author, meta, error, mid, hit, children }: RowProps & { author?: Agent; error?: boolean }) {
   return (
-    <div className="cf-row">
+    <div className={`cf-row${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
       <span className="cf-row__av">
         <Avatar name={author?.name ?? 'Bot'} agentId={author?.id} avatar={author?.avatar} color={author?.color} size="md" decorative />
       </span>
@@ -43,9 +48,9 @@ function BotRow({ author, meta, error, children }: { author?: Agent; meta?: stri
   )
 }
 
-function UserRow({ meta, children }: { meta?: string; children: React.ReactNode }) {
+function UserRow({ meta, mid, hit, children }: RowProps) {
   return (
-    <div className="cf-row cf-row--u">
+    <div className={`cf-row cf-row--u${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
       <div className="cf-grp">
         <div className="cf-bub cf-bub--u">{children}</div>
         {meta && <div className="cf-rcpt">{meta}</div>}
@@ -74,6 +79,15 @@ export default function ConversationChat() {
   const [profileOpen, setProfileOpen] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [shownFor, setShownFor] = useState(conversationId)
+  const shell = useShell()
+  // Deep links: `?m=<messageId>` (palette → message) and `?panel=settings` (/settings).
+  const [params, setParams] = useSearchParams()
+  const jumpId = params.get('m')
+  const panelParam = params.get('panel')
+  const [slashActive, setSlashActive] = useState(0)
+  const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
+  const [cmdNotice, setCmdNotice] = useState<string | null>(null)
+  const jumpTries = useRef(0)
 
   // Reset per conversation during render (no effect), so a switch never flashes the old thread.
   if (shownFor !== conversationId) {
@@ -85,6 +99,7 @@ export default function ConversationChat() {
     setPending(null)
     setRunError(null)
     setDraft('')
+    setCmdNotice(null)
   }
 
   const endpoints = useAsync(api.listEndpoints, [])
@@ -144,7 +159,8 @@ export default function ConversationChat() {
     } else {
       el.scrollTop = el.scrollHeight
     }
-  }, [newestId, messages?.length, pending])
+    if (jumpId) el.querySelector(`[data-mid="${CSS.escape(jumpId)}"]`)?.scrollIntoView({ block: 'center' })
+  }, [newestId, messages?.length, pending, jumpId])
 
   const loadOlder = async () => {
     const before = olderCursor(messages ?? [])
@@ -163,6 +179,26 @@ export default function ConversationChat() {
       setLoadingOlder(false)
     }
   }
+
+  // Jump target not loaded yet: page back (at most 10 pages), then drop the param once shown.
+  const jumpFound = Boolean(jumpId && messages?.some((m) => m.id === jumpId))
+  useEffect(() => {
+    if (!jumpId || !messages) return
+    if (jumpFound || !hasMore || jumpTries.current >= 10) {
+      const t = setTimeout(() => {
+        jumpTries.current = 0
+        setParams((p) => {
+          p.delete('m')
+          return p
+        }, { replace: true })
+      }, jumpFound ? 2500 : 0)
+      return () => clearTimeout(t)
+    }
+    if (loadingOlder) return
+    jumpTries.current += 1
+    const t = setTimeout(() => void loadOlder(), 0)
+    return () => clearTimeout(t)
+  }, [jumpId, jumpFound, messages, hasMore, loadingOlder]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const sending = pending?.status === 'typing'
   const send = useCallback(async (raw: string) => {
@@ -215,6 +251,52 @@ export default function ConversationChat() {
     )
   }
 
+  const closeProfile = () => {
+    setProfileOpen(false)
+    if (panelParam)
+      setParams((p) => {
+        p.delete('panel')
+        p.delete('path')
+        return p
+      }, { replace: true })
+  }
+
+  // Slash autocomplete: open while the draft is `/` + letters, until Esc for that draft.
+  const slash = slashPrefix(draft)
+  const slashItems = slash !== null && slashClosedFor !== draft && canSend ? matchCommands(slash) : []
+  const slashIdx = Math.min(slashActive, Math.max(0, slashItems.length - 1))
+  const runSlash = (def: CommandDef, args = '') => {
+    const reason = shell.runCommand(def.name, args)
+    if (reason) setCmdNotice(`/${def.name}: ${reason}`)
+    else setDraft('')
+  }
+  const onComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return
+    if (slashItems.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashActive((i) => Math.max(0, moveActive(i, e.key === 'ArrowDown' ? 1 : -1, slashItems.length)))
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashClosedFor(draft)
+        return
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault()
+        runSlash(slashItems[slashIdx])
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      const parsed = parseSlash(draft)
+      if (parsed) runSlash(parsed.command, parsed.args)
+      else void send(draft)
+    }
+  }
+
   const items = messages ? threadItems(messages, { typingSeen }) : []
   const lastIdx = (messages?.length ?? 0) - 1
 
@@ -255,13 +337,13 @@ export default function ConversationChat() {
                   const view = chatMessageView(m)
                   if (view.kind === 'user')
                     return (
-                      <UserRow key={item.key} meta={item.meta}>
+                      <UserRow key={item.key} meta={item.meta} mid={m.id} hit={m.id === jumpId}>
                         {view.text}
                       </UserRow>
                     )
                   const retryText = view.kind === 'error' ? retryTextBefore(messages, item.index) : undefined
                   return (
-                    <BotRow key={item.key} author={authorOf(m)} meta={item.meta} error={view.kind === 'error'}>
+                    <BotRow key={item.key} author={authorOf(m)} meta={item.meta} error={view.kind === 'error'} mid={m.id} hit={m.id === jumpId}>
                       {view.text}
                       {view.kind === 'error' && retryText !== undefined && item.index === lastIdx && canSend && (
                         <button type="button" className="chat__retry" onClick={() => void send(retryText)} disabled={sending}>
@@ -304,6 +386,41 @@ export default function ConversationChat() {
         </section>
 
         <div className="cf-compwrap">
+          {slashItems.length > 0 && (
+            <div className="cf-pop cf-slash" role="listbox" id="cf-slash" aria-label="Commands">
+              <p className="cf-sec">Commands</p>
+              <ul>
+                {slashItems.map((def, i) => {
+                  const reason = def.unavailable({ conversationId, isGroup })
+                  return (
+                    <li key={def.name}>
+                      <button
+                        type="button"
+                        role="option"
+                        id={`cf-slash-${i}`}
+                        aria-selected={i === slashIdx}
+                        aria-disabled={reason !== null || undefined}
+                        className={`cf-it${i === slashIdx ? ' cf-it--on' : ''}${reason ? ' cf-it--off' : ''}`}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseMove={() => i !== slashIdx && setSlashActive(i)}
+                        onClick={() => runSlash(def)}
+                      >
+                        <span className="cf-pal__ic cf-pal__ic--cmd" aria-hidden="true">/</span>
+                        <span className="cf-it__col">
+                          <span className="cf-it__t">
+                            <span className="cf-mono">/{def.name}</span>
+                            <span className="cf-pal__lbl">{def.label}</span>
+                          </span>
+                          <span className="cf-it__s">{reason ?? def.hint}</span>
+                        </span>
+                        {i === slashIdx && <kbd className="cf-it__k">↵</kbd>}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
           <div className="cf-comp">
             <button type="button" className="cf-cbtn cf-cbtn--plus" disabled title="Attachments aren't available yet" aria-label="Attach files">
               ＋
@@ -311,13 +428,17 @@ export default function ConversationChat() {
             <textarea
               className="cf-comp__input"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  void send(draft)
-                }
+              onChange={(e) => {
+                setDraft(e.target.value)
+                setSlashActive(0)
+                setCmdNotice(null)
               }}
+              onKeyDown={onComposerKey}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={slashItems.length > 0}
+              aria-controls={slashItems.length > 0 ? 'cf-slash' : undefined}
+              aria-activedescendant={slashItems.length > 0 ? `cf-slash-${slashIdx}` : undefined}
               placeholder={isGroup ? "Sending in group chats isn't available yet" : agent ? `Message ${agent.name}…` : 'Message…'}
               rows={1}
               disabled={sending || !canSend}
@@ -336,17 +457,21 @@ export default function ConversationChat() {
               {sending ? <span className="spinner" aria-hidden="true" /> : '↑'}
             </button>
           </div>
-          <p className="cf-hint">Enter to send · / for commands · Files you send are saved in this bot&apos;s folder</p>
+          {cmdNotice ? (
+            <p className="cf-hint cf-hint--notice" role="status">{cmdNotice}</p>
+          ) : (
+            <p className="cf-hint">Enter to send · / for commands · Files you send are saved in this bot&apos;s folder</p>
+          )}
         </div>
       </main>
 
       {agent && (
         <ProfilePanel
-          open={profileOpen}
+          open={profileOpen || panelParam === 'settings'}
           agent={agent}
           endpoints={endpoints.data ?? []}
           skills={skills.data ?? []}
-          onClose={() => setProfileOpen(false)}
+          onClose={closeProfile}
           onSaved={reloadSidebar}
           onDeleted={reloadSidebar}
           onCleared={() => {

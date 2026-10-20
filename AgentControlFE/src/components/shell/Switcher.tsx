@@ -8,10 +8,7 @@ import { switcherOrder, switcherSections, type SwitcherItem } from '../../lib/sh
 import { useConversations } from '../../state/conversations-context'
 import { useShell } from '../../state/shell-context'
 
-/**
- * The bot switcher popover (02a). Also what ⌘K / header search opens until the
- * FE-2 command palette lands: it searches bots and groups by name.
- */
+/** The bot switcher popover (02a): find a bot or group by name. ⌘K opens the palette instead. */
 export default function Switcher({ currentId }: { currentId?: string }) {
   const shell = useShell()
   const navigate = useNavigate()

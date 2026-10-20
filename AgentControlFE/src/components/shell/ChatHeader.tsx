@@ -134,7 +134,7 @@ export default function ChatHeader({
 
       <span className="cf-sp" />
 
-      <button type="button" className="cf-hbtn cf-hbtn--b cf-searchbtn" onClick={shell.openSwitcher} aria-label="Search (⌘K)">
+      <button type="button" className="cf-hbtn cf-hbtn--b cf-searchbtn" onClick={shell.openPalette} aria-label="Search (⌘K)">
         <SearchIcon size={13} />
         <span className="cf-searchbtn__t">Search messages, files</span>
         <kbd>⌘K</kbd>

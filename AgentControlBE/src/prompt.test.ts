@@ -107,7 +107,7 @@ describe('planPrompt catalog mode', () => {
     for (const s of seedSkills) expect(plan.system).toContain(`\n- ${s.id}: `)
   })
 
-  it('fits the 41 default skills in about 3.6k tokens on a 32k endpoint', () => {
+  it('fits the 41 default skills in a 2,625-token catalog (4,289 tokens in all) on a 32k endpoint', () => {
     const library = loadVendoredLibrary(DEFAULT_VENDOR_DIR)
     const defaults = [...seedSkills, ...library.skills].filter((s) => s.defaultOn)
     expect(defaults).toHaveLength(41)
@@ -116,6 +116,36 @@ describe('planPrompt catalog mode', () => {
     expect(plan.catalogTokens).toBeGreaterThan(2_500)
     expect(plan.catalogTokens).toBeLessThan(4_500)
     expect(plan.catalogTokens).toBeLessThan(32_768 * 0.25)
+  })
+})
+
+describe('planPrompt determinism', () => {
+  const lib = Array.from({ length: 12 }, (_, i) => skill(`s${i}`, 100 + i * 50, { tools: i % 3 === 0 ? [{ name: 'list_skills', description: '', parameters: {} }] : [] }))
+
+  it('returns the same plan for the same input', () => {
+    const input = { instructions: 'Be brief.', skills: lib, input: 'q', contextWindow: 32_768 }
+    const a = planPrompt(input)
+    expect(planPrompt({ ...input, skills: [...lib] })).toEqual(a)
+    expect(planPrompt(structuredClone(input))).toEqual(a)
+  })
+
+  it('keeps the catalog in attachment order, with equal-size skills in the order given', () => {
+    const same: Skill[] = ['zeta', 'alpha', 'mid'].map((id) => skill(id, 500, { description: 'Same length.' }))
+    const plan = planPrompt({ instructions: '', skills: [...same, same[0]!], input: '', contextWindow: 32_768 })
+    expect(plan.catalogSkillIds).toEqual(['zeta', 'alpha', 'mid'])
+    const lines = plan.system.split('\n').filter((l) => l.startsWith('- '))
+    expect(lines.map((l) => l.slice(2, l.indexOf(':')))).toEqual(['zeta', 'alpha', 'mid'])
+    const reversed = planPrompt({ instructions: '', skills: [...same].reverse(), input: '', contextWindow: 32_768 })
+    expect(reversed.catalogSkillIds).toEqual(['mid', 'alpha', 'zeta'])
+  })
+
+  it('plans hundreds of large skills quickly', () => {
+    const many = Array.from({ length: 500 }, (_, i) => skill(`big${i}`, 50_000, { description: 'd'.repeat(400) }))
+    const started = performance.now()
+    const plan = planPrompt({ instructions: 'x', skills: many, input: '', contextWindow: 1_000_000 })
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(plan.catalogSkillIds).toHaveLength(500)
+    expect(plan.system).not.toContain('xxxx')
   })
 })
 

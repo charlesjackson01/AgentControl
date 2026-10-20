@@ -386,6 +386,7 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
     ...(r.systemPrompt !== undefined ? { systemPrompt: r.systemPrompt } : {}),
     ...(r.skillSnapshot !== undefined ? { skillSnapshot: r.skillSnapshot } : {}),
     ...(r.toolCalls !== undefined ? { toolCalls: r.toolCalls } : {}),
+    ...(Array.isArray(r.activatedSkills) && r.activatedSkills.length > 0 ? { activatedSkills: r.activatedSkills } : {}),
     ...(typeof r.projectId === 'string' ? { projectId: r.projectId } : {}),
   }
 }

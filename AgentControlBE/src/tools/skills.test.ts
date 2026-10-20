@@ -129,6 +129,15 @@ describe('read_skill_file', () => {
     expect(second.head).toContain('chars 6001-8004 of 8004, the end.')
   })
 
+  it('records the skill once when a file read succeeds, and not when it fails', async () => {
+    expect((await call('read_skill_file', { id: 'ecc/demo', path: 'nope.md' })).ok).toBe(false)
+    expect((await call('read_skill_file', { id: 'ecc/demo', path: 'logo.png' })).ok).toBe(false)
+    expect(ctx.activatedSkills?.size).toBe(0)
+    expect((await call('read_skill_file', { id: 'ecc/demo', path: 'references/a.md' })).ok).toBe(true)
+    expect((await call('read_skill_file', { id: 'ecc/demo', path: 'references/a.md', page: 2 })).ok).toBe(true)
+    expect([...(ctx.activatedSkills?.values() ?? [])]).toEqual([{ id: 'ecc/demo', name: 'demo', source: 'ecc' }])
+  })
+
   it('refuses unlisted, binary and out-of-folder paths, and core or custom skills', async () => {
     const unlisted = await call('read_skill_file', { id: 'ecc/demo', path: 'nope.md' })
     expect(unlisted.content).toContain('No file "nope.md" in ecc/demo')

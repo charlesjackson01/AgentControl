@@ -41,6 +41,13 @@ function catalogSkill(ctx: ToolContext, ref: string, example: Record<string, unk
   throw argError(`No skill "${ref.slice(0, 80)}" in this agent's skills list. Known: ${known}.`, ids[0] ? { id: ids[0] } : example)
 }
 
+/** Record a skill the run used (activate_skill or a successful read_skill_file), once, in first-use order. */
+function recordActivated(ctx: ToolContext, skill: Skill): void {
+  if (ctx.activatedSkills && !ctx.activatedSkills.has(skill.id)) {
+    ctx.activatedSkills.set(skill.id, { id: skill.id, name: skill.name, source: skill.sourceId ?? 'custom' })
+  }
+}
+
 interface Page {
   start: number
   end: number
@@ -94,7 +101,7 @@ export const skillTools: ToolEntry[] = [
     category: 'workspace',
     effect: 'read',
     description:
-      'Load one of your skills (an id from the Skills list) and get its full instructions, in pages of 6,000 characters. Example: {"id":"superpowers/systematic-debugging"}',
+      'Load one of your skills (an id from the Skills list) and get its full instructions, in pages of 6,000 characters. Use this to follow a skill. Example: {"id":"superpowers/systematic-debugging"}',
     parameters: {
       type: 'object',
       properties: {
@@ -109,9 +116,7 @@ export const skillTools: ToolEntry[] = [
     handler: (args, ctx) => {
       const skill = catalogSkill(ctx, readString(args, ['id', 'skill', 'name'], ACTIVATE_EXAMPLE), ACTIVATE_EXAMPLE)
       const p = skillPage(skill.content ?? '', args, ctx, { id: skill.id })
-      if (ctx.activatedSkills && !ctx.activatedSkills.has(skill.id)) {
-        ctx.activatedSkills.set(skill.id, { id: skill.id, name: skill.name, source: skill.sourceId ?? 'custom' })
-      }
+      recordActivated(ctx, skill)
       const files = (skill.files ?? []).filter((f) => f !== 'SKILL.md')
       const lines = [`Skill ${skill.id} (${skill.name}). ${pageHeader(p, 'activate_skill', { id: skill.id })}`]
       if (p.start === 0 && skill.hasScripts) lines.push(SCRIPTS_UNAVAILABLE)
@@ -164,6 +169,7 @@ export const skillTools: ToolEntry[] = [
         throw new Error(`"${path}" is not a text file; only text files can be read.`)
       }
       const p = skillPage(text, args, ctx, { id: skill.id, path })
+      recordActivated(ctx, skill)
       return `File ${skill.id}/${path}. ${pageHeader(p, 'read_skill_file', { id: skill.id, path })}\n---\n${p.text}`
     },
   },

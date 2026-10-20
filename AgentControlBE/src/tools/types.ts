@@ -36,9 +36,9 @@ export interface ToolContext {
    */
   resultMaxChars?: number
   /**
-   * Skill ids get_skill may read. Set when the prompt planner offered
-   * get_skill on its own to read the agent's summarized skills; unset when an
-   * attached skill declares get_skill (then any skill is readable).
+   * Optional limit on the skill ids get_skill may read. Since BE-7 the run
+   * loop leaves it unset: get_skill is an audit read of any library skill,
+   * and activate_skill (catalogSkillIds) loads the agent's own skills.
    */
   skillScope?: ReadonlySet<string>
   /**

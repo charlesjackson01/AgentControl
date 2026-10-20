@@ -206,3 +206,30 @@ describe('activate_skill reads only the agent\'s own skills', () => {
     expect(JSON.parse(expectNoCutJson(lastRequest(mock))[0]?.content ?? '{}')).toMatchObject({ id: 'core/code-review' })
   })
 })
+
+describe('stored skillSnapshot modes across BE-7', () => {
+  it('reloads runs recorded as full, summary or catalog unchanged, with activatedSkills', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentcontrol-old-runs-'))
+    try {
+      const path = join(dir, 'store.json')
+      const first = createStore(path)
+      const base = { agentId: 'agt_old', startedAt: '2026-10-01T00:00:00.000Z', status: 'succeeded' as const, durationMs: 1, steps: 1, input: 'i', output: 'o', error: null }
+      first.runs.push(
+        { ...base, id: 'run_old_full', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900, mode: 'full' }] },
+        { ...base, id: 'run_old_summary', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900, mode: 'summary' }] },
+        { ...base, id: 'run_old_nomode', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900 }] },
+        { ...base, id: 'run_new', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900, mode: 'catalog' }], activatedSkills: [{ id: 'core/code-review', name: 'Code Review', source: 'core' }] },
+      )
+      expect(first.save()).toBe(true)
+      const runs = new Map(createStore(path).runs.map((r) => [r.id, r]))
+      expect(runs.get('run_old_full')?.skillSnapshot?.[0]?.mode).toBe('full')
+      expect(runs.get('run_old_summary')?.skillSnapshot?.[0]?.mode).toBe('summary')
+      expect(runs.get('run_old_nomode')?.skillSnapshot?.[0]).not.toHaveProperty('mode')
+      expect(runs.get('run_new')?.skillSnapshot?.[0]?.mode).toBe('catalog')
+      expect(runs.get('run_new')?.activatedSkills).toEqual([{ id: 'core/code-review', name: 'Code Review', source: 'core' }])
+      expect(runs.get('run_old_full')).not.toHaveProperty('activatedSkills')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

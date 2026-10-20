@@ -45,3 +45,22 @@ export function relativeTime(iso: unknown, now: Date = new Date()): string | nul
   const day = `${MONTHS[d.getMonth()]} ${d.getDate()}`
   return d.getFullYear() === now.getFullYear() ? day : `${day}, ${d.getFullYear()}`
 }
+
+/** Tree sizes in 03d are whole numbers ("2 KB", "1 KB"). Null for bad values. */
+export function wholeSize(bytes: unknown): string | null {
+  const h = humanSize(bytes)
+  if (!h) return null
+  const [n, unit] = h.split(' ')
+  return `${Math.max(Number(n) < 1 ? 0 : 1, Math.round(Number(n)))} ${unit}`
+}
+
+/** Dates in 03d's file lists: "Today", "Oct 12" (year added when it differs). Null for bad values. */
+export function shortDate(iso: unknown, now: Date = new Date()): string | null {
+  if (typeof iso !== 'string' || iso.trim() === '') return null
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return null
+  const d = new Date(t)
+  if (d.toDateString() === now.toDateString()) return 'Today'
+  const day = `${MONTHS[d.getMonth()]} ${d.getDate()}`
+  return d.getFullYear() === now.getFullYear() ? day : `${day}, ${d.getFullYear()}`
+}

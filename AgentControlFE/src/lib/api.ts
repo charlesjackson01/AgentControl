@@ -131,6 +131,19 @@ export async function putAvatarImage<T>(path: string, file: Blob): Promise<T> {
   return (await res.json()) as T
 }
 
+/** Raw PUT for BE-2 file uploads (Content-Type = the file's type); the caller reads status and body. */
+export function putRaw(url: string, body: Blob): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': body.type || 'application/octet-stream' }
+  if (AUTH_TOKEN) headers.Authorization = `Bearer ${AUTH_TOKEN}`
+  return fetch(apiUrl(url), { method: 'PUT', headers, body })
+}
+
+/** The server's own error text, or null when it sent only a generic one. */
+export function serverMessage(body: unknown): string | null {
+  const m = errorMessageFrom(body)
+  return m === DEFAULT_ERROR_MESSAGE ? null : m
+}
+
 function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
   return putAvatarImage<Agent>(`/api/agents/${encodeURIComponent(agentId)}/avatar`, file)
 }

@@ -4,6 +4,7 @@ import ProfileTab from './ProfileTab'
 import MemoryTab from './MemoryTab'
 import SkillsTab from './SkillsTab'
 import PlaceholderTab from './PlaceholderTab'
+import FilesTab from './FilesTab'
 import { saveAgentChange } from '../../lib/agent-patch'
 import { memoryApi, type MemoryLoad } from '../../lib/memory'
 import { SETTINGS_TABS } from '../../lib/settings-tabs'
@@ -24,6 +25,9 @@ type Props = {
   onSaved?: () => void
   onCleared?: () => void
   onDeleted?: () => void
+  /** Files tab folder (`?panel=files&path=…`, raw) and navigation (FE-4). */
+  filesPath?: string
+  onFilesPath?: (path: string) => void
 }
 
 /**
@@ -31,7 +35,7 @@ type Props = {
  * Skills, Files and Sandbox tabs. The tab lives in the URL (`?panel=settings&tab=`);
  * Files and Sandbox are FE-4 placeholders.
  */
-export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTab, onClose, onSaved, onCleared, onDeleted }: Props) {
+export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTab, onClose, onSaved, onCleared, onDeleted, filesPath = 'shared', onFilesPath }: Props) {
   // The latest saved copy wins until the list reload catches up, so one tab's save
   // never resends another tab's stale fields.
   const [saved, setSaved] = useState<Agent | null>(null)
@@ -93,6 +97,9 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
               aria-selected={tab === t.id}
               aria-controls="cf-set-body"
               className={`cf-set__tab${tab === t.id ? ' cf-set__tab--on' : ''}`}
+              // GAP-F14: Sandbox needs BE-8; the tab stays visible but disabled.
+              disabled={t.comingSoon}
+              title={t.comingSoon ? 'Coming soon' : undefined}
               onClick={() => onTab(t.id)}
             >
               {t.label}
@@ -119,7 +126,8 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
             />
           )}
           {tab === 'skills' && <SkillsTab key={agent.id} agent={agent} onAgentSaved={didSave} />}
-          {(tab === 'files' || tab === 'sandbox') && <PlaceholderTab tab={tab} agent={agent} />}
+          {tab === 'files' && <FilesTab key={agent.id} agent={agent} path={filesPath} onPath={(p) => onFilesPath?.(p)} />}
+          {tab === 'sandbox' && <PlaceholderTab tab={tab} agent={agent} />}
         </div>
       </aside>
     </>

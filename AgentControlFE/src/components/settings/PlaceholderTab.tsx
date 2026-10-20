@@ -12,7 +12,7 @@ export default function PlaceholderTab({ tab, agent }: { tab: 'files' | 'sandbox
         <p className="cf-card__hint">
           {tab === 'files'
             ? `Browsing, uploading and previewing ${agent.name}'s files arrives with FE-4 (needs BE-2).`
-            : `The bot VM, run limits and run history arrive with FE-4 (needs BE-8). The VM itself is Phase 2.`}
+            : `Coming soon. The bot VM, run limits and run history need BE-8; the VM itself is Phase 2.`}
         </p>
         <dl className="cf-kv">
           {tab === 'files' ? (

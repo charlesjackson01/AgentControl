@@ -106,7 +106,8 @@ describe('palette: sections (02b)', () => {
     const byName = Object.fromEntries(s.commands.map((i) => [i.command.name, i.reason]))
     assert.equal(byName.settings, null)
     assert.equal(byName.skills, null, 'FE-3: /skills runs in a DM')
-    assert.match(byName.sandbox, /FE-4/)
+    assert.equal(byName.files, null, 'FE-4: /files runs in a DM')
+    assert.match(byName.sandbox, /coming/)
   })
   it('a server error for this query is surfaced', () => {
     const s = sections('pier', { status: 'error', query: 'pier', message: 'boom' })

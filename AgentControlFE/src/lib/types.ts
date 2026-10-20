@@ -446,3 +446,29 @@ export type MemoryItem = {
 }
 /** GET /api/agents/:id/memory */
 export type MemoryPage = { items: MemoryItem[]; total: number; promptTokens: number }
+
+/* BE-2 (c2257b1) per-bot files. */
+export type FileZone = 'shared' | 'workspace' | 'memory' | 'skills' | 'meta'
+
+export type FileEntry = {
+  path: string
+  name: string
+  kind: 'file' | 'dir'
+  size: number
+  mime?: string
+  modifiedAt: string
+  /** UI badges: workspace "scripts write", memory/meta "managed", skills "read-only". */
+  zone: FileZone
+  /** Files the user sent in chat (BE-9). */
+  sharedAt?: string
+  sharedInConversationId?: string
+  addedBy?: 'user' | string
+}
+
+export type FileListing = {
+  /** e.g. 'bots/primary/' */
+  root: string
+  path: string
+  entries: FileEntry[]
+  usage: { bytes: number; quotaBytes: number }
+}

@@ -34,7 +34,7 @@ const needsDm = (ctx: CommandContext) =>
 export const COMMANDS: readonly CommandDef[] = [
   { name: 'new', label: 'New bot', hint: 'Create a bot', unavailable: () => null },
   { name: 'group', label: 'New group', hint: 'Start a group chat', unavailable: later('Group chats arrive with BE-5 / FE-6.') },
-  { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: later('Bot folders arrive with BE-2 / FE-4.'), tab: 'files' },
+  { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: needsDm, tab: 'files' },
   { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: needsDm, tab: 'skills' },
   { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: needsDm, tab: 'memory' },
   {
@@ -43,7 +43,7 @@ export const COMMANDS: readonly CommandDef[] = [
     hint: "This bot's settings",
     unavailable: needsDm,
   },
-  { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab arrives with BE-8 / FE-4.'), tab: 'sandbox' },
+  { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab is coming (needs BE-8).'), tab: 'sandbox' },
 ]
 
 export function findCommand(name: string): CommandDef | undefined {
@@ -88,6 +88,8 @@ export function commandAction(name: CommandName, ctx: CommandContext, args = '')
   const reason = def ? def.unavailable(ctx) : 'Unknown command.'
   if (reason) return { kind: 'unavailable', reason }
   if (name === 'new') return { kind: 'new-bot', args }
+  // FE-4: /files opens the chat's bot folder at shared/ (?panel=files&path=shared).
+  if (name === 'files' && ctx.conversationId) return { kind: 'navigate', to: chatPanelPath(ctx.conversationId, 'files', { path: 'shared' }) }
   if (def && ctx.conversationId && (name === 'settings' || def.tab))
     return { kind: 'navigate', to: chatPanelPath(ctx.conversationId, 'settings', { tab: def.tab }) }
   return { kind: 'unavailable', reason: 'Not available yet.' }

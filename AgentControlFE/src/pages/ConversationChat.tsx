@@ -4,6 +4,7 @@ import Avatar from '../components/Avatar'
 import ChatHeader from '../components/shell/ChatHeader'
 import BotSettingsPanel from '../components/settings/BotSettingsPanel'
 import { settingsOpen, settingsTab, withSettingsTab, withoutPanel } from '../lib/settings-tabs'
+import { filesPanelOpen, filesPathParam, withFilesPath } from '../lib/files'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
@@ -255,8 +256,9 @@ export default function ConversationChat() {
   }
 
   // Bot settings (FE-3) live in the URL: ?panel=settings[&tab=…]. Closing drops panel/tab/path.
-  const panelOpen = settingsOpen(params)
-  const panelTab = settingsTab(params)
+  // FE-4: ?panel=files&path=… opens the same panel on Files at that folder.
+  const panelOpen = settingsOpen(params) || filesPanelOpen(params)
+  const panelTab = filesPanelOpen(params) ? 'files' : settingsTab(params)
   const openSettings = () => setParams((p) => withSettingsTab(p, 'profile'))
   const closeProfile = () => setParams((p) => withoutPanel(p), { replace: true })
 
@@ -480,6 +482,8 @@ export default function ConversationChat() {
           endpoints={endpoints.data ?? []}
           tab={panelTab}
           onTab={(t) => setParams((p) => withSettingsTab(p, t), { replace: true })}
+          filesPath={filesPathParam(params)}
+          onFilesPath={(path) => setParams((p) => withFilesPath(p, path), { replace: true })}
           onClose={closeProfile}
           onSaved={reloadSidebar}
           onDeleted={reloadSidebar}

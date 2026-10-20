@@ -36,8 +36,9 @@ const results = {
 const sections = (q, remote) => paletteSections(q, { conversations, agents, remote, ctx, now })
 
 describe('palette: server search', () => {
-  it('searches only real text, ≥2 chars', () => {
-    assert.equal(shouldSearch('p'), false)
+  it('searches any non-empty text (BE-10 answers 1 char); not command mode', () => {
+    assert.equal(shouldSearch('p'), true)
+    assert.equal(shouldSearch('  '), false)
     assert.equal(shouldSearch(' pi '), true)
     assert.equal(shouldSearch('/new'), false)
     assert.equal(searchPath(' pier '), '/api/search?q=pier&limit=20')

@@ -9,6 +9,9 @@ export type CommandContext = {
   isGroup?: boolean
 }
 
+/** Bot settings tabs FE-3/FE-4 read from `?panel=settings&tab=`. */
+export type SettingsTab = 'profile' | 'memory' | 'skills' | 'files' | 'sandbox'
+
 export type CommandDef = {
   name: CommandName
   label: string
@@ -19,6 +22,8 @@ export type CommandDef = {
    * run; the rest stay visible and explain which ticket brings them.
    */
   unavailable: (ctx: CommandContext) => string | null
+  /** Settings tab this command opens once it's available (`?panel=settings&tab=`). */
+  tab?: SettingsTab
 }
 
 const later = (reason: string) => () => reason
@@ -26,9 +31,9 @@ const later = (reason: string) => () => reason
 export const COMMANDS: readonly CommandDef[] = [
   { name: 'new', label: 'New bot', hint: 'Create a bot', unavailable: () => null },
   { name: 'group', label: 'New group', hint: 'Start a group chat', unavailable: later('Group chats arrive with BE-5 / FE-6.') },
-  { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: later('Bot folders arrive with BE-2 / FE-4.') },
-  { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: later('The Skills tab arrives with FE-3.') },
-  { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: later('Memory arrives with BE-4 / FE-3.') },
+  { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: later('Bot folders arrive with BE-2 / FE-4.'), tab: 'files' },
+  { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: later('The Skills tab arrives with FE-3.'), tab: 'skills' },
+  { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: later('Memory arrives with BE-4 / FE-3.'), tab: 'memory' },
   {
     name: 'settings',
     label: 'Settings',
@@ -36,7 +41,7 @@ export const COMMANDS: readonly CommandDef[] = [
     unavailable: (ctx) =>
       !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? 'Group settings arrive with FE-6.' : null,
   },
-  { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab arrives with BE-8 / FE-4.') },
+  { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab arrives with BE-8 / FE-4.'), tab: 'sandbox' },
 ]
 
 export function findCommand(name: string): CommandDef | undefined {
@@ -81,14 +86,23 @@ export function commandAction(name: CommandName, ctx: CommandContext, args = '')
   const reason = def ? def.unavailable(ctx) : 'Unknown command.'
   if (reason) return { kind: 'unavailable', reason }
   if (name === 'new') return { kind: 'new-bot', args }
-  if (name === 'settings' && ctx.conversationId) return { kind: 'navigate', to: chatPanelPath(ctx.conversationId, 'settings') }
+  if (def && ctx.conversationId && (name === 'settings' || def.tab))
+    return { kind: 'navigate', to: chatPanelPath(ctx.conversationId, 'settings', { tab: def.tab }) }
   return { kind: 'unavailable', reason: 'Not available yet.' }
 }
 
-/** Deep link to a chat with a side panel open (`?panel=`). FE-3/FE-4 add tabs; `path` selects a file. */
-export function chatPanelPath(conversationId: string, panel: 'settings' | 'files', path?: string): string {
+/**
+ * Deep link to a chat with a side panel open. Agreed with FE-3/FE-4:
+ * `?panel=settings[&tab=profile|memory|skills|files|sandbox]` and `?panel=files&path=…`.
+ */
+export function chatPanelPath(
+  conversationId: string,
+  panel: 'settings' | 'files',
+  opts: { tab?: SettingsTab; path?: string } = {},
+): string {
   const qs = new URLSearchParams({ panel })
-  if (path) qs.set('path', path)
+  if (panel === 'settings' && opts.tab) qs.set('tab', opts.tab)
+  if (panel === 'files' && opts.path) qs.set('path', opts.path)
   return `/c/${encodeURIComponent(conversationId)}?${qs}`
 }
 

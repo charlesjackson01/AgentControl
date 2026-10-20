@@ -80,7 +80,7 @@ export default function ConversationChat() {
   const [runError, setRunError] = useState<string | null>(null)
   const [shownFor, setShownFor] = useState(conversationId)
   const shell = useShell()
-  // Deep links: `?m=<messageId>` (palette → message) and `?panel=settings` (/settings).
+  // Deep links: `?m=<messageId>` (palette → message) and `?panel=settings[&tab=…]` (FE-3 picks the tab).
   const [params, setParams] = useSearchParams()
   const jumpId = params.get('m')
   const panelParam = params.get('panel')
@@ -256,6 +256,7 @@ export default function ConversationChat() {
     if (panelParam)
       setParams((p) => {
         p.delete('panel')
+        p.delete('tab')
         p.delete('path')
         return p
       }, { replace: true })

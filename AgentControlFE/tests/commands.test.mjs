@@ -54,12 +54,20 @@ describe('slash commands: dispatch', () => {
   it('/settings navigates to the chat with its panel open', () => {
     assert.deepEqual(commandAction('settings', dm), { kind: 'navigate', to: '/c/c%201?panel=settings' })
   })
+  it('tab commands know their FE-3/FE-4 settings tab for when they go live', () => {
+    assert.deepEqual(Object.fromEntries(COMMANDS.filter((c) => c.tab).map((c) => [c.name, c.tab])), {
+      files: 'files', skills: 'skills', memory: 'memory', sandbox: 'sandbox',
+    })
+  })
   it('unbacked commands return their reason instead of faking it', () => {
     for (const name of ['group', 'files', 'skills', 'memory', 'sandbox']) assert.equal(commandAction(name, dm).kind, 'unavailable')
     assert.equal(commandAction('settings', { conversationId: 'g', isGroup: true }).kind, 'unavailable')
   })
   it('deep links', () => {
-    assert.equal(chatPanelPath('c1', 'files', 'shared/a b.png'), '/c/c1?panel=files&path=shared%2Fa+b.png')
+    assert.equal(chatPanelPath('c1', 'files', { path: 'shared/a b.png' }), '/c/c1?panel=files&path=shared%2Fa+b.png')
+    assert.equal(chatPanelPath('c1', 'settings'), '/c/c1?panel=settings')
+    assert.equal(chatPanelPath('c1', 'settings', { tab: 'memory' }), '/c/c1?panel=settings&tab=memory')
+    assert.equal(chatPanelPath('c1', 'settings', { path: 'x' }), '/c/c1?panel=settings', 'path only belongs to panel=files')
     assert.equal(messagePath('c1', 'msg-1'), '/c/c1?m=msg-1')
   })
 })

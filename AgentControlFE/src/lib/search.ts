@@ -11,7 +11,11 @@ import { dmAgentId } from './conversations.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden' | 'role' | 'avatar' | 'color'>>
 
-/** BE-10 response (phase1-tickets.md, BE-10). */
+/**
+ * BE-10 response (phase1-tickets.md, BE-10). `agents`/`groups` are kept by the BE
+ * but ignored here: bots and groups match locally (with avatars). For a group file
+ * `ownerId` is the group's conversation id.
+ */
 export type SearchResults = {
   agents: { id: string; name: string }[]
   groups: { id: string; name: string }[]
@@ -28,10 +32,11 @@ export type RemoteSearch =
   | { status: 'error'; query: string; message: string }
 
 export const SEARCH_LIMIT = 20
-export const SEARCH_MIN_CHARS = 2
+/** BE-10 answers a 1-character `q`; only empty is a 400. */
+export const SEARCH_MIN_CHARS = 1
 export const SEARCH_DEBOUNCE_MS = 160
 
-/** Server search only for real text queries; `/…` is command mode. */
+/** Server search for any non-empty text query; `/…` is command mode. */
 export function shouldSearch(query: string): boolean {
   const q = query.trim()
   return q.length >= SEARCH_MIN_CHARS && !q.startsWith('/')
@@ -109,9 +114,9 @@ export function fileTarget(
   f: SearchResults['files'][number],
   list: readonly ShellConversation[],
 ): string | null {
-  if (f.root === 'group') return chatPanelPath(f.ownerId, 'files', f.path)
+  if (f.root === 'group') return chatPanelPath(f.ownerId, 'files', { path: f.path })
   const dm = agentDmPath(f.ownerId, list)
-  return dm ? chatPanelPath(dm.slice('/c/'.length), 'files', f.path) : null
+  return dm ? chatPanelPath(dm.slice('/c/'.length), 'files', { path: f.path }) : null
 }
 
 export function paletteSections(

@@ -218,6 +218,24 @@ describe('PATCH /api/agents/:id', () => {
     expect((await inject('PATCH', `/api/agents/${a.id}`, { temperature: 0.5 })).json()).toMatchObject({ temperature: 0.5, role: 'Drafts docs', skillIds: ['nope/nope'] })
     expect((await inject('PATCH', `/api/agents/${a.id}`, { temperature: null })).statusCode).toBe(200)
   })
+
+  it('clears temperature with null on PATCH and PUT, and keeps it when PATCH leaves it out', async () => {
+    const a = await makeAgent('Writer')
+    const stored = () => store.agents.find((x) => x.id === a.id)!
+    await inject('PATCH', `/api/agents/${a.id}`, { temperature: 0.5 })
+    expect((await inject('PATCH', `/api/agents/${a.id}`, { description: 'kept' })).json()).toMatchObject({ temperature: 0.5 })
+    const cleared = await inject('PATCH', `/api/agents/${a.id}`, { temperature: null })
+    expect(cleared.statusCode).toBe(200)
+    expect(cleared.json()).not.toHaveProperty('temperature')
+    expect(stored()).not.toHaveProperty('temperature')
+
+    await inject('PATCH', `/api/agents/${a.id}`, { temperature: 1.2 })
+    const put = await inject('PUT', `/api/agents/${a.id}`, { name: 'Writer', endpointId: 'ep_local_llama', modelId: 'llama-3-8b', temperature: null })
+    expect(put.statusCode).toBe(200)
+    expect(put.json()).not.toHaveProperty('temperature')
+    // Survives a reload: the field is gone from store.json, not saved as null.
+    expect(createStore(join(dir, 'store.json')).agents.find((x) => x.id === a.id)).not.toHaveProperty('temperature')
+  })
 })
 
 describe('notes retirement', () => {

@@ -184,8 +184,10 @@ function parseAgentInput(store: WorkspaceStore, body: unknown, opts: { checkMode
     ? raw.skillIds.filter((s): s is string => typeof s === 'string')
     : []
 
-  let temperature: number | undefined
-  if (raw.temperature !== undefined && raw.temperature !== null) {
+  let temperature: number | null | undefined
+  if (raw.temperature === null) {
+    temperature = null
+  } else if (raw.temperature !== undefined) {
     const t = raw.temperature
     if (typeof t !== 'number' || !Number.isFinite(t) || t < 0 || t > 2) {
       fail(400, 'Temperature must be a number between 0 and 2.')
@@ -278,8 +280,10 @@ function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
 
 /** Apply an AgentInput onto an agent: null clears color/avatar, omitted keeps them. */
 function mergeAgent(current: Agent, input: AgentInput): Agent {
-  const { color, avatar, ...rest } = input
+  const { color, avatar, temperature, ...rest } = input
   const next: Agent = { ...current, ...rest }
+  if (temperature === null) delete next.temperature
+  else if (temperature !== undefined) next.temperature = temperature
   if (color === null) delete next.color
   else if (color !== undefined) next.color = color
   if (avatar === null) delete next.avatar

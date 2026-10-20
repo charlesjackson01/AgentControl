@@ -260,8 +260,8 @@ export interface AgentInput {
   /** Create: honored only when no primary exists. Update: true transfers the role. */
   isPrimary?: boolean
   role: string
-  /** 0–2. Omitted keeps the stored value (unset on create). */
-  temperature?: number
+  /** 0–2. Omitted keeps the stored value (unset on create); null clears it back to the endpoint default. */
+  temperature?: number | null
   skillIds: string[]
   /** Omitted keeps the stored value on update. */
   rules?: string[]

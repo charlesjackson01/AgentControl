@@ -219,6 +219,23 @@ describe('PATCH /api/agents/:id', () => {
     expect((await inject('PATCH', `/api/agents/${a.id}`, { temperature: null })).statusCode).toBe(200)
   })
 
+  it('saves temperature on POST, validates it, and leaves it unset when omitted or null', async () => {
+    const base = { endpointId: 'ep_local_llama', modelId: 'llama-3-8b' }
+    const warm = await inject('POST', '/api/agents', { ...base, name: 'Warm', temperature: 0.7 })
+    expect(warm.statusCode).toBe(201)
+    const id = (warm.json() as Agent).id
+    expect(warm.json()).toMatchObject({ temperature: 0.7 })
+    expect(createStore(join(dir, 'store.json')).agents.find((x) => x.id === id)).toMatchObject({ temperature: 0.7 })
+    for (const temperature of [undefined, null]) {
+      const res = await inject('POST', '/api/agents', { ...base, name: 'Plain', temperature })
+      expect(res.statusCode).toBe(201)
+      expect(res.json()).not.toHaveProperty('temperature')
+    }
+    for (const temperature of [3, -1, '1']) {
+      expect((await inject('POST', '/api/agents', { ...base, name: 'Bad', temperature })).statusCode).toBe(400)
+    }
+  })
+
   it('clears temperature with null on PATCH and PUT, and keeps it when PATCH leaves it out', async () => {
     const a = await makeAgent('Writer')
     const stored = () => store.agents.find((x) => x.id === a.id)!

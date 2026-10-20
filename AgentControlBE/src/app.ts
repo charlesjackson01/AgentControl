@@ -718,6 +718,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         endpointId: input.endpointId,
         isPrimary,
         role: input.role,
+        ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
         skillIds,
         slug: assignAgentSlug(input.name, isPrimary, new Set(store.agents.map((a) => a.slug))),
         internetPolicy: 'ask',

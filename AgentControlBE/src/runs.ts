@@ -65,6 +65,23 @@ export async function executeRun(
   input: string,
   opts: RunOptions = {},
 ): Promise<RunOutcome> {
+  // 'running' while the run is in flight (drives ConversationSummary.typingAgentId).
+  // A run that throws before finishing (400/413) puts the previous status back.
+  const previous = agent.status
+  agent.status = 'running'
+  try {
+    return await executeRunInner(store, agent, input, opts)
+  } finally {
+    if (agent.status === 'running') agent.status = previous === 'running' ? 'idle' : previous
+  }
+}
+
+async function executeRunInner(
+  store: WorkspaceStore,
+  agent: Agent,
+  input: string,
+  opts: RunOptions,
+): Promise<RunOutcome> {
   if (!input) fail(400, 'Provide an "input" string to run the agent.')
   const projectId = opts.projectId
 

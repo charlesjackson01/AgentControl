@@ -216,3 +216,48 @@ describe('executeRun', () => {
     }
   })
 })
+
+describe('typing status (BE-1 follow-up)', () => {
+  it('marks the agent running during the upstream call and shows typingAgentId on its DM', async () => {
+    const agent = await makeAgent('Typer')
+    const seen: { status: string; typing: unknown }[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const list = (await app.inject({ method: 'GET', url: '/api/conversations' })).json() as { kind: string; agentId?: string; typingAgentId: unknown }[]
+        seen.push({ status: agent.status, typing: list.find((c) => c.agentId === agent.id)?.typingAgentId })
+        return { ok: true, status: 200, json: async () => ({ choices: [{ index: 0, message: { role: 'assistant', content: 'hi' } }] }) }
+      }),
+    )
+    const run = await runAgent(store, agent, 'hello')
+    expect(seen).toEqual([{ status: 'running', typing: agent.id }])
+    expect(run.status).toBe('succeeded')
+    expect(agent.status).toBe('idle')
+    const after = (await app.inject({ method: 'GET', url: '/api/conversations' })).json() as { agentId?: string; typingAgentId: unknown }[]
+    expect(after.find((c) => c.agentId === agent.id)?.typingAgentId).toBeNull()
+  })
+
+  it('ends a failed run as error, and a run that throws before upstream restores the old status', async () => {
+    const agent = await makeAgent('Failer')
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, json: async () => ({}), text: async () => 'boom' })))
+    expect((await runAgent(store, agent, 'x')).status).toBe('failed')
+    expect(agent.status).toBe('error')
+    await expect(runAgent(store, agent, 'x'.repeat(40_000))).rejects.toMatchObject({ statusCode: 413 })
+    expect(agent.status).toBe('error')
+  })
+
+  it('resets a saved running status on load and backfills authorAgentId on old DM replies', async () => {
+    const agent = await makeAgent('Old')
+    mockEcho()
+    await runAgent(store, agent, 'hi')
+    for (const m of store.chatMessages) delete m.authorAgentId
+    agent.status = 'running'
+    store.save()
+    const reloaded = createStore(join(dir, 'store.json'))
+    expect(reloaded.agents.find((a) => a.id === agent.id)?.status).toBe('idle')
+    const replies = reloaded.chatMessages.filter((m) => m.role === 'assistant')
+    expect(replies).toHaveLength(1)
+    expect(replies.every((m) => m.authorAgentId === agent.id)).toBe(true)
+    expect(reloaded.chatMessages.filter((m) => m.role === 'user').every((m) => m.authorAgentId === undefined)).toBe(true)
+  })
+})

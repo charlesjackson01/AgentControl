@@ -179,3 +179,18 @@ export function backfillErrorFlags(state: ConversationState): boolean {
   }
   return changed
 }
+
+/** Set authorAgentId on DM assistant messages recorded before it existed. Returns whether any changed. */
+export function backfillAuthors(state: ConversationState): boolean {
+  const dmAgent = new Map<string, string>()
+  for (const c of state.conversations) if (c.kind === 'dm') dmAgent.set(c.id, c.agentId)
+  let changed = false
+  for (const m of state.chatMessages) {
+    const agentId = dmAgent.get(m.conversationId)
+    if (m.role === 'assistant' && m.authorAgentId === undefined && agentId !== undefined) {
+      m.authorAgentId = agentId
+      changed = true
+    }
+  }
+  return changed
+}

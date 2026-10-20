@@ -12,7 +12,7 @@ import {
 } from './db/seed.js'
 import { createVault } from './vault.js'
 import { ARCHIVE_MIGRATION, writeProjectArchive, type ProjectArchive } from './archive.js'
-import { backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
+import { backfillAuthors, backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
 import { AGENT_SLUG, INTERNET_POLICIES, MAX_MEMORY_TEXT_CHARS, MEMORY_CATEGORIES } from './shared/types.js'
 import type {
   Agent,
@@ -503,6 +503,11 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
     }
   }
   for (const agent of agents) {
+    // No run survives a restart, so a saved 'running' would show typing forever.
+    if (agent.status === 'running') {
+      agent.status = 'idle'
+      changed = true
+    }
     if (!INTERNET_POLICIES.includes(agent.internetPolicy as Agent['internetPolicy'])) {
       agent.internetPolicy = 'ask'
       changed = true
@@ -530,6 +535,7 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
   const conversationState = { agents: agents as Agent[], runs, conversations, chatMessages }
   if (migrateRunsToConversations(conversationState, meta.migrations)) changed = true
   if (backfillErrorFlags(conversationState)) changed = true
+  if (backfillAuthors(conversationState)) changed = true
 
   return {
     data: {

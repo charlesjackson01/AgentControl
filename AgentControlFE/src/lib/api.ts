@@ -1,4 +1,5 @@
 import { MAX_AVATAR_BYTES } from './types'
+import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
 import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
 import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
@@ -62,17 +63,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Deletes answer 204 with no body.
   if (res.status === 204) return undefined as T
   if (!res.ok) {
-    let message = 'Request failed'
+    let message = DEFAULT_ERROR_MESSAGE
     try {
-      const body: unknown = await res.json()
-      if (
-        typeof body === 'object' &&
-        body !== null &&
-        'message' in body &&
-        typeof (body as { message?: unknown }).message === 'string'
-      ) {
-        message = (body as { message: string }).message
-      }
+      message = errorMessageFrom(await res.json())
     } catch {
       // Non-JSON error body (e.g. upstream gateway HTML): keep the default.
     }
@@ -125,8 +118,8 @@ export async function putAvatarImage<T>(path: string, file: Blob): Promise<T> {
   if (!res.ok) {
     let serverMessage: string | null = null
     try {
-      const body = (await res.json()) as { message?: unknown }
-      if (typeof body.message === 'string') serverMessage = body.message
+      const parsed = errorMessageFrom(await res.json())
+      if (parsed !== DEFAULT_ERROR_MESSAGE) serverMessage = parsed
     } catch {
       // keep default
     }
@@ -164,7 +157,8 @@ export const api = {
   },
 
   /**
-   * Send in a DM: POST /api/conversations/:id/messages {text} -> {conversation, messages, run}.
+   * Send in a DM: POST /api/conversations/:id/messages {content} -> {conversation, messages, run}.
+   * Final Phase 1 send shape is { content, attachments? }; clients send `content` only (BE a30a385).
    * The only place the chat screen sends from. Falls back to the agent run route
    * (+ refetch) when the BE predates the send route (404 with no conversation match).
    */
@@ -172,7 +166,7 @@ export const api = {
     try {
       return await request<ConversationSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ content: text }),
       })
     } catch (err) {
       if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405) || !/^Route /.test(err.message)) throw err

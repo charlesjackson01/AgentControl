@@ -11,8 +11,15 @@ describe('validateProxyUrl', () => {
     assert.equal(validateProxyUrl('http://localhost:1055'), null)
     assert.equal(validateProxyUrl(' https://proxy.example.com:8443 '), null)
   })
+  it('accepts socks5 and socks5h (BE-11)', () => {
+    assert.equal(validateProxyUrl('socks5://localhost:1055'), null)
+    assert.equal(validateProxyUrl('socks5h://100.64.0.1:1080'), null)
+    assert.equal(validateProxyUrl('SOCKS5://user:pass@localhost:1080'), null)
+  })
   it('rejects other schemes and junk', () => {
-    assert.match(validateProxyUrl('socks5://localhost:1055'), /http/)
+    assert.match(validateProxyUrl('socks4://localhost:1055'), /socks5/)
+    assert.match(validateProxyUrl('ftp://localhost:21'), /http/)
+    assert.match(validateProxyUrl('socks5://'), /valid URL|host/)
     assert.match(validateProxyUrl('localhost:1055'), /http|valid/)
     assert.match(validateProxyUrl('not a url'), /valid URL/)
   })

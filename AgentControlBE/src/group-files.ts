@@ -16,6 +16,7 @@ import {
 } from './files.js'
 import { fail } from './http.js'
 import type { Agent, FileEntry, FileListing, FileZone, GroupConversation } from './shared/types.js'
+import { archiveShares, moveShares, readShares, withShares } from './share-records.js'
 import type { WorkspaceStore } from './store.js'
 
 const GROUP_MD = 'GROUP.md'
@@ -118,6 +119,7 @@ export function archiveGroupFolder(store: WorkspaceStore, group: GroupConversati
   renameSync(root, target)
   const meta = addedByFile(store, group.slug)
   if (existsSync(meta)) renameSync(meta, join(target, '.added-by.json'))
+  archiveShares(root, target)
   return relative(join(store.dataDir, 'archive'), target).split(sep).join('/')
 }
 
@@ -153,7 +155,7 @@ export function listGroupFolder(store: WorkspaceStore, group: GroupConversation,
   const path = parts.join('/')
   const map = readAddedBy(store, group.slug)
   const listing = (entries: FileEntry[]): FileListing => ({
-    root: `groups/${group.slug}/`, path, entries: entries.map((e) => withAddedBy(e, map)).sort(byKindThenName),
+    root: `groups/${group.slug}/`, path, entries: withShares(entries.map((e) => withAddedBy(e, map)), readShares(root)).sort(byKindThenName),
     usage: groupUsage(store, group), totalFiles: countFiles(root),
   })
   if (parts.length === 0) {
@@ -195,7 +197,7 @@ export function listGroupShared(store: WorkspaceStore, group: GroupConversation)
   }
   walk(['shared'])
   out.sort((a, b) => (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : a.modifiedAt < b.modifiedAt ? 1 : -1))
-  return { entries: out }
+  return { entries: withShares(out, readShares(root)) }
 }
 
 export function readGroupContent(store: WorkspaceStore, group: GroupConversation, rawPath: unknown): FileContent {
@@ -264,7 +266,8 @@ export function moveGroupPath(store: WorkspaceStore, group: GroupConversation, r
   mkdirsGuarded(root, to.slice(0, -1))
   renameSync(src, dst)
   moveAddedBy(store, group.slug, from.join('/'), to.join('/'))
-  return withAddedBy(entryFor(to, statSync(dst), 'shared'), readAddedBy(store, group.slug))
+  moveShares(root, from.join('/'), to.join('/'))
+  return withShares([withAddedBy(entryFor(to, statSync(dst), 'shared'), readAddedBy(store, group.slug))], readShares(root))[0]!
 }
 
 /** Move a file or folder to data/archive/trash/groups/<slug>/<ts>/<path>. Never removed here. */
@@ -280,4 +283,5 @@ export function trashGroupPath(store: WorkspaceStore, group: GroupConversation, 
   mkdirSync(dirname(dest), { recursive: true })
   renameSync(src, dest)
   moveAddedBy(store, group.slug, parts.join('/'), null)
+  moveShares(root, parts.join('/'), null)
 }

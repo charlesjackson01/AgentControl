@@ -12,6 +12,7 @@ import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyRes
 import { fail, uid } from './http.js'
 import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent, type FileContent } from './files.js'
 import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
+import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
@@ -678,20 +679,32 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const conversation = conversationOr404(id)
     // `content` is the Phase 1 field; `text` stays as an alias through
     // Phase 1. When both are sent, `content` wins.
-    const body = (request.body ?? {}) as { content?: unknown; text?: unknown }
+    const body = (request.body ?? {}) as { content?: unknown; text?: unknown; attachments?: unknown }
     const raw = typeof body.content === 'string' ? body.content : typeof body.text === 'string' ? body.text : ''
     const text = raw.trim()
-    if (!text) fail(400, 'Provide a "content" string.')
+    // BE-9: attachments must come from earlier uploads to this conversation.
+    const attachments = resolveAttachments(store, conversation, body.attachments)
+    if (!text && attachments.length === 0) fail(400, 'Provide a "content" string.')
     if (conversation.kind === 'group') {
       // BE-5: 202 with the user's message; replies arrive in the background (poll with ?after=).
-      const userMessage = postGroupMessage(store, groupOr404(store, conversation.id), text)
+      const userMessage = postGroupMessage(store, groupOr404(store, conversation.id), text, attachments)
       void reply.status(202)
       return { conversation: summarize(store, conversation), messages: [userMessage] }
     }
     const agentId = conversation.agentId
     const agent = store.agents.find((a) => a.id === agentId)
     if (!agent) fail(404, `No agent for conversation "${id}"`)
-    const run = await runAgent(store, agent as Agent, text)
+    const note = attachmentPrompt(attachments)
+    const run = await runAgent(store, agent as Agent, note ? (text ? `${text}\n\n${note}` : note) : text)
+    if (attachments.length > 0) {
+      // The run's input carries the "User attached: …" line; the chat shows the user's own words plus the cards.
+      const userMessage = store.chatMessages.find((m) => m.runId === run.id && m.role === 'user')
+      if (userMessage) {
+        userMessage.content = text
+        userMessage.attachments = attachments
+        store.save()
+      }
+    }
     const messages = messagesOf(store, conversation.id).filter((m) => m.runId === run.id)
     return { conversation: summarize(store, conversation), messages, run: { id: run.id, status: run.status, error: run.error } }
   })
@@ -1017,6 +1030,15 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       const entry = writeContent(store, agent, path, body, overwrite === '1' || overwrite === 'true')
       void reply.status(201)
       return entry
+    })
+    scope.put('/api/conversations/:id/uploads', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const { name } = (request.query ?? {}) as { name?: unknown }
+      const conversation = conversationOr404(id)
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
+      const attachment = uploadAttachment(store, conversation, name, body)
+      void reply.status(201)
+      return attachment
     })
     scope.put('/api/groups/:id/files/content', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
       const { id } = request.params as { id: string }

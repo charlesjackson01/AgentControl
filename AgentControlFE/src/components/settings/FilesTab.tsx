@@ -29,13 +29,19 @@ import {
   usageView,
   zoneBadge,
   zoneOfPath,
+  byMember,
+  groupFileWhen,
+  groupImageLine,
 } from '../../lib/files'
-import type { Agent, FileEntry, FileListing } from '../../lib/types'
+import type { Agent, FileEntry, FileListing, GroupConversation } from '../../lib/types'
+import { addedByName } from '../../lib/groups'
 
 const files = filesApi(request, putRaw, serverMessage)
 
 type Props = {
-  agent: Agent
+  agent?: Agent
+  /** FE-6 (06c): the group's shared folder (BE-5 /api/groups/:id/files) instead of a bot's. */
+  group?: { group: GroupConversation; agents: readonly Agent[] }
   /** Raw `?path=` (checked here; a refused path is never requested). */
   path: string
   onPath: (path: string) => void
@@ -49,7 +55,12 @@ type Busy = { text: string } | null
 const errText = (err: unknown, fallback: string) => (err instanceof Error && err.message ? err.message : fallback)
 
 /** FE-4 Files tab (mockup 03d) on BE-2. Gaps are listed in lib/files.ts (GAP-F1…). */
-export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Props) {
+export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal }: Props) {
+  const owner = group ? { groupId: group.group.id } : (agent?.id ?? '')
+  const ownerKey = group ? `g:${group.group.id}` : (agent?.id ?? '')
+  const ownerName = group ? group.group.name : (agent?.name ?? '')
+  const [membersView, setMembersView] = useState(false)
+  const who = (e: FileEntry) => (group ? addedByName(e.addedBy, group.agents) : '')
   const checked = checkPath(rawPath)
   /** ?path= after the guard: a folder, or a file (FE-7 Open: show its folder with the file picked out). */
   const target = checked.ok ? checked.path : 'shared'
@@ -76,12 +87,12 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
   const fileHit = target !== '' && fileTarget(loaded[parentOf(target)], target)
   /** The folder on show. */
   const path = fileHit ? parentOf(target) : target
-  const slug = botFolder(agent.slug)?.replace(/^bots\//, '').replace(/\/$/, '') || agent.slug || agent.name
+  const slug = group ? group.group.slug : botFolder(agent?.slug)?.replace(/^bots\//, '').replace(/\/$/, '') || agent?.slug || ownerName
 
   const fetchOne = useCallback(
     async (dir: string) => {
       try {
-        const listing = await files.list(agent.id, dir)
+        const listing = await files.list(owner, dir)
         loadedRef.current = { ...loadedRef.current, [dir]: listing }
         setLoaded(loadedRef.current)
         // GAP-F2: totalFiles counts the whole folder (same on every path); the latest listing wins.
@@ -93,7 +104,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         return null
       }
     },
-    [agent.id, onTotal],
+    [ownerKey, onTotal], // eslint-disable-line react-hooks/exhaustive-deps
   )
 
   const load = useCallback(
@@ -216,7 +227,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
     for (let i = 0; i < items.length; i++) {
       setBusy({ text: `Uploading ${items[i].name}${items.length > 1 ? ` (${i + 1} of ${items.length})` : ''}…` })
       try {
-        await files.upload(agent.id, path, items[i])
+        await files.upload(owner, path, items[i])
       } catch (err) {
         failed.push(errText(err, `Could not upload "${items[i].name}".`))
       }
@@ -244,7 +255,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
     }
   }
 
-  const contentUrl = (p: string, download = false) => apiUrl(fileContentPath(agent.id, p, download))
+  const contentUrl = (p: string, download = false) => apiUrl(fileContentPath(owner, p, download))
 
   const menuFor = (e: FileEntry) => (
     <span className="cf-fmenu">
@@ -297,7 +308,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
     if (!listing) return []
     return treeEntries(dir, listing.entries).flatMap((e) => {
       const pad = { paddingLeft: 8 + depth * 16 }
-      const badge = depth === 0 ? zoneBadge(e) : null
+      const badge = depth === 0 ? zoneBadge(e, Boolean(group)) : null
       const badgeEl = badge && <span className={`cf-zone cf-zone--${badge.tone}`}>{badge.label}</span>
       if (e.kind === 'dir') {
         const open = isOpen(e.path)
@@ -341,6 +352,17 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
     <div className="cf-files">
       <div className="cf-files__bar">
         {/* GAP-F1: Shared opens shared/, All files opens the folder root. */}
+        {group ? (
+          <div className="cf-files__seg" role="group" aria-label="Show">
+            <button type="button" className={!membersView ? 'is-on' : ''} aria-pressed={!membersView} onClick={() => { setMembersView(false); go('shared') }}>
+              All shared
+            </button>
+            {/* GAP-G12: By member groups shared/ files under who added them. */}
+            <button type="button" className={membersView ? 'is-on' : ''} aria-pressed={membersView} onClick={() => { setMembersView(true); go('shared') }}>
+              By member
+            </button>
+          </div>
+        ) : (
         <div className="cf-files__seg" role="group" aria-label="Show">
           <button type="button" className={zone === 'shared' ? 'is-on' : ''} aria-pressed={zone === 'shared'} onClick={() => go('shared')}>
             Shared by you
@@ -349,14 +371,15 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
             All files
           </button>
         </div>
+        )}
         <label className="cf-search cf-search--boxed cf-grow">
           <span aria-hidden="true">⌕</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search files" aria-label="Search files in this folder" />
         </label>
-        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : 'Open shared/ or workspace/ to upload'} onClick={() => inputRef.current?.click()}>
+        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : group ? 'Open shared/ to upload' : 'Open shared/ or workspace/ to upload'} onClick={() => inputRef.current?.click()}>
           ⤒ Upload
         </button>
-        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : 'Open shared/ or workspace/ to add a folder'} onClick={() => { setDialogError(null); setNewFolder(true) }}>
+        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : group ? 'Open shared/ to add a folder' : 'Open shared/ or workspace/ to add a folder'} onClick={() => { setDialogError(null); setNewFolder(true) }}>
           ＋ Folder
         </button>
         <input
@@ -374,9 +397,13 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
 
       <div className="cf-files__info">
         <span aria-hidden="true">🔒</span>
+        {group ? (
+          <span>Shared with everyone in this group. Members, and scripts they run in this group, can write to shared/. Nothing else is shared between bots.</span>
+        ) : (
         <span>
-          Private to {agent.name}; no other bot can see it. {agent.name} reads everything here. Its scripts can write only to workspace/. memory/ and BOT.md are managed by AgentControl, and skills/ is read-only.
+          Private to {ownerName}; no other bot can see it. {ownerName} reads everything here. Its scripts can write only to workspace/. memory/ and BOT.md are managed by AgentControl, and skills/ is read-only.
         </span>
+        )}
       </div>
 
       {/* GAP-F8, GAP-F13: one status / alert line. */}
@@ -385,8 +412,8 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
       {actionError && <p className="field__err cf-files__msg" role="alert">{actionError}</p>}
 
       <div className="cf-files__cols">
-        <nav className="cf-files__tree" aria-label="Bot folder" ref={treeRef}>
-          <div className="cf-files__root">{botFolder(agent.slug) ?? `bots/${slug}/`}</div>
+        <nav className="cf-files__tree" aria-label={group ? 'Group folder' : 'Bot folder'} ref={treeRef}>
+          <div className="cf-files__root">{group ? `groups/${slug}/` : (botFolder(agent?.slug) ?? `bots/${slug}/`)}</div>
           <ul className="cf-tree">{treeRows('', 0)}</ul>
           <div className="cf-tree__sp" />
           {usage && (
@@ -431,7 +458,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
               </span>
             ))}
             <span className="cf-tree__sp" />
-            {path === 'shared' && <span className="cf-files__note">Files you sent {agent.name} in chat · newest first</span>}
+            {path === 'shared' && <span className="cf-files__note">{group ? 'Everything added in this group · newest first' : `Files you sent ${ownerName} in chat · newest first`}</span>}
           </div>
 
           {listError?.path === path && <p className="field__err" role="alert">{listError.message}</p>}
@@ -453,7 +480,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
                       <span title={e.name}>{e.name}</span>
                       {menuFor(e)}
                     </div>
-                    <div className="cf-files__imgmeta">{imageLine(e)}</div>
+                    <div className="cf-files__imgmeta">{group ? groupImageLine(e, who(e)) : imageLine(e)}</div>
                   </div>
                 ))}
               </div>
@@ -480,7 +507,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
             </>
           )}
 
-          {view && view.files.length > 0 && (
+          {view && view.files.length > 0 && !(group && membersView) && (
             <>
               <div className="cf-files__lbl">Files</div>
               <ul className="cf-files__list">
@@ -491,7 +518,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
                       {e.name}
                     </a>
                     <span className="cf-tree__sp" />
-                    <span className="cf-files__rowwhen">{fileWhen(e)}</span>
+                    <span className="cf-files__rowwhen">{group ? groupFileWhen(e, who(e)) : fileWhen(e)}</span>
                     <span className="cf-files__rowsize">{fileSize(e)}</span>
                     {menuFor(e)}
                   </li>
@@ -500,7 +527,34 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
             </>
           )}
 
-          {path === 'shared' && <p className="cf-files__hint">Drop files here, or send them in chat, to share them with {agent.name}.</p>}
+          {group && membersView && view && view.files.length > 0 &&
+            byMember(view.files, (k) => addedByName(k, group.agents)).map((sec) => (
+              <div key={sec.key || 'none'}>
+                <div className="cf-files__lbl">{sec.label}</div>
+                <ul className="cf-files__list">
+                  {sec.entries.map((e) => (
+                    <li key={e.path} className="cf-files__row" data-fpath={e.path}>
+                      <span className="cf-files__rowico" aria-hidden="true">{fileIcon(e)}</span>
+                      <a className="cf-files__rowname" href={contentUrl(e.path)} target="_blank" rel="noopener noreferrer" title={e.name}>
+                        {e.name}
+                      </a>
+                      <span className="cf-tree__sp" />
+                      <span className="cf-files__rowwhen">{groupFileWhen(e, '')}</span>
+                      <span className="cf-files__rowsize">{fileSize(e)}</span>
+                      {menuFor(e)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+
+          {path === 'shared' && (
+            <p className="cf-files__hint">
+              {group
+                ? 'Files sent in the group chat land here. Your private chats with each bot keep their own folders.'
+                : `Drop files here, or send them in chat, to share them with ${ownerName}.`}
+            </p>
+          )}
         </section>
       </div>
 
@@ -515,7 +569,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         onTyping={() => setDialogError(null)}
         onSubmit={async (name) => {
           // Errors stay in the dialog (role=alert), with the name still filled in.
-          const ok = await act(`Creating ${name}…`, () => files.makeFolder(agent.id, joinPath(path, name)), [path], true)
+          const ok = await act(`Creating ${name}…`, () => files.makeFolder(owner, joinPath(path, name)), [path], true)
           if (ok) setNewFolder(false)
           return ok
         }}
@@ -535,7 +589,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
           const from = renaming.path
           const to = joinPath(parentOf(from), name)
           // Errors (e.g. a 400 for a symlink name) stay in the dialog with the name still filled in.
-          const ok = await act(`Renaming ${renaming.name}…`, () => files.move(agent.id, from, to), [parentOf(from)], true)
+          const ok = await act(`Renaming ${renaming.name}…`, () => files.move(owner, from, to), [parentOf(from)], true)
           if (ok) {
             // Focus returns to the row under its new name (it may have re-sorted).
             if (menuOrigin.current?.path === from) menuOrigin.current = { ...menuOrigin.current, path: to }
@@ -556,7 +610,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
         onConfirm={async () => {
           if (!deleting) return
           const doomed = deleting
-          const ok = await act(`Deleting ${doomed.name}…`, () => files.remove(agent.id, doomed.path), [parentOf(doomed.path)])
+          const ok = await act(`Deleting ${doomed.name}…`, () => files.remove(owner, doomed.path), [parentOf(doomed.path)])
           setDeleting(null)
           if (ok && (path === doomed.path || path.startsWith(`${doomed.path}/`))) go(parentOf(doomed.path))
         }}

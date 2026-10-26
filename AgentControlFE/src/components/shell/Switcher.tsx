@@ -122,7 +122,7 @@ export default function Switcher({ currentId }: { currentId?: string }) {
         <button type="button" className="cf-btn" onClick={shell.openNewBot}>
           ＋ New bot
         </button>
-        <button type="button" className="cf-btn" disabled title="Group chats aren't available yet">
+        <button type="button" className="cf-btn" onClick={shell.openNewGroup}>
           ＋ New group
         </button>
       </div>

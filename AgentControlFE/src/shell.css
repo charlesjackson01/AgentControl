@@ -636,3 +636,81 @@ ol.cf-md__list { list-style: decimal; }
   .cf-set__tabs { overflow-x: auto; scrollbar-width: none; }
   .cf-set__tab { flex: none; }
 }
+
+/* FE-6 group chats (06a–06d) */
+.cf-grow { flex: 1; min-width: 0; }
+.cf-pill { display: inline-flex; align-items: center; gap: 5px; height: 17px; padding: 0 7px; margin-left: 6px; border-radius: var(--r-full); background: var(--c-accent-soft); color: var(--c-accent); font-size: 10px; font-weight: 500; white-space: nowrap; vertical-align: 1px; }
+.cf-who { font-size: 12px; font-weight: 600; color: var(--c-text); }
+.cf-who .cf-pill { height: 16px; font-size: 9.5px; padding: 0 6px; }
+.cf-mention { color: var(--c-accent); font-weight: 600; }
+.cf-bub--u .cf-mention { color: #fff; text-decoration: underline; }
+.cf-stack { display: inline-flex; align-items: center; flex: none; }
+.cf-stack .avatar { box-shadow: 0 0 0 2px var(--c-bg); }
+.cf-stack .avatar + .avatar { margin-left: -9px; }
+.cf-stack--xs { vertical-align: middle; margin-left: 4px; }
+.cf-stack--xs .avatar { --avatar-size: 14px; font-size: 7px; box-shadow: 0 0 0 1.5px var(--c-bg); }
+.cf-stack--xs .avatar + .avatar { margin-left: -4px; }
+.cf-stack__more { display: inline-grid; place-items: center; width: var(--avatar-size); height: var(--avatar-size); border-radius: 50%; background: var(--c-bg-sunk); color: var(--c-text-2); font-size: 10px; font-weight: 600; }
+.cf-hdr__stack { margin-right: 6px; }
+.cf-hdr__stack .avatar { --avatar-size: 22px; font-size: 11px; }
+.cf-switch__lead { color: var(--c-accent); font-weight: 600; }
+.cf-capnote { max-width: 520px; text-align: center; }
+.cf-waiting::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; border: 1.5px solid var(--c-border-strong); border-top-color: var(--c-accent); animation: cf-spin 0.8s linear infinite; vertical-align: -1px; }
+.cf-sendfail { align-self: flex-end; font-size: 12px; color: var(--c-danger); margin: 0; }
+.cf-sendfail .chat__retry { margin-left: 6px; }
+.cf-linkbtn { border: 0; background: none; padding: 0; color: var(--c-accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.cf-mentionpop .cf-it .avatar { --avatar-size: 22px; font-size: 11px; }
+
+/* New group (GAP-G4) */
+.cf-ng { display: flex; flex-direction: column; gap: 12px; }
+.cf-ng__list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--c-border); border-radius: var(--r-lg); max-height: 340px; overflow-y: auto; }
+.cf-ng__list li + li { border-top: 1px solid var(--c-border); }
+.cf-ng__row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+.cf-ng__row.is-on { background: color-mix(in srgb, var(--c-accent-soft) 45%, transparent); }
+.cf-ng__row.is-locked { cursor: default; }
+.cf-ng__row input { accent-color: var(--c-accent); }
+.cf-ng__txt { display: flex; flex-direction: column; min-width: 0; }
+.cf-ng__name { font-weight: 600; font-size: 13px; }
+.cf-ng__sub { font-size: 12px; color: var(--c-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cf-ng__count { font-size: 12px; color: var(--c-text-3); margin-right: auto; }
+.cf-ng__hint { font-size: 12px; color: var(--c-text-2); margin: 0; }
+
+/* Group panel: Members (06b) */
+.cf-gmem { padding: 0; }
+.cf-gmem__hdr { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
+.cf-gmem__hdr b { font-weight: 600; }
+.cf-gmem__count { font-size: 12px; color: var(--c-text-3); }
+.cf-gmem__row { display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-top: 1px solid var(--c-border); }
+.cf-gmem__row .avatar { --avatar-size: 40px; font-size: 17px; }
+.cf-gmem__nm { font-weight: 600; }
+.cf-gmem__sub { font-size: 12px; color: var(--c-text-2); }
+.cf-gmem__rule { font-size: 12px; color: var(--c-text-2); white-space: nowrap; }
+.cf-gmem__x { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border: 0; border-radius: var(--r-sm); background: none; color: var(--c-text-3); font-size: 15px; cursor: pointer; }
+.cf-gmem__x:hover:not(:disabled) { background: var(--c-danger-soft); color: var(--c-danger); }
+.cf-gmem__x:disabled { cursor: not-allowed; opacity: 0.55; }
+.cf-gmem__confirm { display: flex; align-items: center; gap: 8px; padding: 9px 14px 11px 66px; font-size: 12.5px; background: var(--c-danger-soft); }
+.cf-gmem__add { border-top: 1px solid var(--c-border); padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.cf-gmem__add .cf-ng__row .avatar { --avatar-size: 26px; font-size: 12px; }
+.cf-gmem__addfoot { display: flex; justify-content: flex-end; gap: 8px; }
+.cf-gsee { margin-top: 14px; }
+.cf-gsee b { font-weight: 600; }
+.cf-gsee ul { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; font-size: 12.5px; }
+.cf-gsee li { display: flex; gap: 10px; }
+.cf-gsee__ok { color: var(--c-success); }
+.cf-gsee__no { color: var(--c-danger); }
+.cf-gset__foot { display: flex; gap: 8px; margin-top: 14px; }
+.cf-gset__del { color: var(--c-danger); }
+.cf-gset { display: flex; flex-direction: column; gap: 14px; }
+.cf-gset__name { display: flex; gap: 8px; }
+.cf-gset__name .input { flex: 1; }
+.cf-gset__row { display: flex; align-items: center; gap: 14px; }
+.cf-gset__mutehint { margin: 0; }
+@media (max-width: 759px) {
+  .cf-gmem__rule { display: none; }
+  .cf-gmem__confirm { padding-left: 14px; flex-wrap: wrap; }
+  .cf-mhdr__rl { font-size: 10.5px; }
+  .cf-mhdr__id--group .cf-switch__rl { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  /* GAP-G10: avatar beside the name and lead line, so the stack fits the 58px bar. */
+  .cf-mhdr__id--group { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 8px; row-gap: 1px; align-items: center; justify-items: start; text-align: left; }
+  .cf-mhdr__id--group > :first-child { grid-row: 1 / span 2; }
+}

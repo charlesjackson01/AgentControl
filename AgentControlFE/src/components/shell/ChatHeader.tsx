@@ -6,10 +6,11 @@ import Switcher from './Switcher'
 import UserAvatar from './UserAvatar'
 import { SearchIcon } from '../icons'
 import { agentStatusLine, isAgentTyping } from '../../lib/shell'
+import { groupHeaderLine, nameOf, orderedMembers } from '../../lib/groups'
 import { unreadLabel } from '../../lib/conversations'
 import { displayName } from '../../lib/profile'
 import { mobileBack } from '../../lib/mobile'
-import type { Agent, ConversationSummary } from '../../lib/types'
+import type { Agent, ConversationSummary, GroupConversation } from '../../lib/types'
 import { useConversations } from '../../state/conversations-context'
 import { useProfile } from '../../state/profile-context'
 import { useShell } from '../../state/shell-context'
@@ -102,15 +103,22 @@ export default function ChatHeader({
 
       <div className="cf-hdr__who">
         {group ? (
-          <div className="cf-switch cf-switch--static">
+          <button
+            type="button"
+            className={`cf-switch${shell.switcherOpen ? ' cf-switch--on' : ''}`}
+            onClick={() => (shell.switcherOpen ? shell.closeSwitcher() : shell.openSwitcher())}
+            aria-haspopup="dialog"
+            aria-expanded={shell.switcherOpen}
+            aria-label={`${group.name}, switch chat`}
+          >
             <GroupAvatar memberAgentIds={group.memberAgentIds} leadAgentId={group.leadAgentId} agents={agents} size="sm" />
-            <div>
-              <h1 className="cf-switch__nm">{group.name}</h1>
-              <p className="cf-switch__rl">
-                {group.memberAgentIds.length} {group.memberAgentIds.length === 1 ? 'bot' : 'bots'}
-              </p>
-            </div>
-          </div>
+            <span>
+              <span className="cf-switch__nm">
+                {group.name} <span className="cf-chev">▾</span>
+              </span>
+              <GroupSubline group={group} agents={agents} />
+            </span>
+          </button>
         ) : (
           <button
             type="button"
@@ -137,6 +145,7 @@ export default function ChatHeader({
       </div>
 
       <span className="cf-sp" />
+      {group && <MemberStack group={group} agents={agents} />}
 
       <button type="button" className="cf-hbtn cf-hbtn--b cf-searchbtn" onClick={shell.openPalette} aria-label="Search (⌘K)">
         <SearchIcon size={13} />
@@ -146,8 +155,8 @@ export default function ChatHeader({
       <button
         type="button"
         className="cf-hbtn cf-hbtn--ic"
-        title={onInfo ? 'Settings' : 'Group settings arrive with group chats'}
-        aria-label="Settings"
+        title={group ? 'Group settings' : 'Settings'}
+        aria-label={group ? 'Group settings' : 'Settings'}
         onClick={onInfo}
         disabled={!onInfo}
       >
@@ -179,11 +188,21 @@ function MobileHeader({ conversation, agent, onInfo, typing }: { conversation?: 
 
       <div className="cf-hdr__who cf-mhdr__who">
         {group ? (
-          // GAP-B4: 05b is a DM; a group's phone header is not mocked. Same pieces, centred.
-          <div className="cf-mhdr__id">
+          // GAP-G10 (was GAP-B4): 05b is a DM; a group's phone header is not mocked. Same pieces, centred, plus the lead line.
+          <button
+            type="button"
+            className="cf-mhdr__id cf-mhdr__id--group"
+            onClick={() => (shell.switcherOpen ? shell.closeSwitcher() : shell.openSwitcher())}
+            aria-haspopup="dialog"
+            aria-expanded={shell.switcherOpen}
+            aria-label={`${group.name}, switch chat`}
+          >
             <GroupAvatar memberAgentIds={group.memberAgentIds} leadAgentId={group.leadAgentId} agents={agents} size="sm" />
-            <h1 className="cf-mhdr__nm">{group.name}</h1>
-          </div>
+            <span className="cf-mhdr__nm">
+              {group.name} <span className="cf-mhdr__caret">▾</span>
+            </span>
+            <GroupSubline group={group} agents={agents} compact />
+          </button>
         ) : (
           <button
             type="button"
@@ -206,13 +225,50 @@ function MobileHeader({ conversation, agent, onInfo, typing }: { conversation?: 
       <button
         type="button"
         className="cf-hbtn cf-hbtn--ic cf-mhdr__info"
-        title={onInfo ? 'Settings' : 'Group settings arrive with group chats'}
-        aria-label="Settings"
+        title={group ? 'Group settings' : 'Settings'}
+        aria-label={group ? 'Group settings' : 'Settings'}
         onClick={onInfo}
         disabled={!onInfo}
       >
         ⓘ
       </button>
     </header>
+  )
+}
+
+type GroupSummaryLike = ConversationSummary & GroupConversation
+
+/** 06a: "★ Led by Primary" (accent) "· You, Researcher, Summarizer"; while a bot replies, "● Researcher is typing…". */
+function GroupSubline({ group, agents, compact = false }: { group: GroupSummaryLike; agents: readonly Agent[]; compact?: boolean }) {
+  const line = groupHeaderLine(group, agents)
+  const typing = group.typingAgentId ? nameOf(group.typingAgentId, agents) : null
+  if (typing)
+    return (
+      <span className="cf-switch__rl cf-switch__rl--typing" aria-live="polite">
+        <span className="cf-presence">●</span> {typing} is typing…
+      </span>
+    )
+  return (
+    <span className={`cf-switch__rl${compact ? ' cf-mhdr__rl' : ''}`}>
+      <span className="cf-switch__lead">{line.lead}</span>
+      {!compact && <> · {line.members}</>}
+    </span>
+  )
+}
+
+/** 06a header stack: lead, the other bots, then you. */
+function MemberStack({ group, agents }: { group: GroupSummaryLike; agents: readonly Agent[] }) {
+  const { profile } = useProfile()
+  const ids = orderedMembers(group)
+  const shown = ids.slice(0, 5)
+  return (
+    <span className="cf-stack cf-hdr__stack" aria-hidden="true">
+      {shown.map((id) => {
+        const a = agents.find((x) => x.id === id)
+        return <Avatar key={id} name={a?.name ?? '?'} agentId={id} avatar={a?.avatar} color={a?.color} size="sm" decorative />
+      })}
+      {ids.length > shown.length && <span className="avatar avatar--sm cf-stack__more">+{ids.length - shown.length}</span>}
+      <UserAvatar profile={profile} name={displayName(profile)} size="sm" />
+    </span>
   )
 }

@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { activityLabel, fileOpenPath, type ActivityView } from '../../lib/activity'
+import { groupFileCard } from '../../lib/groups'
 
 /**
  * FE-7: the skill/steps card above an assistant bubble (mockups 04, 05b).
@@ -106,6 +107,36 @@ export function FileCards({ files, conversationId }: { files: ActivityView['file
           </Link>
         </li>
       ))}
+    </ul>
+  )
+}
+
+/**
+ * FE-6 (06a) file cards in a group: `group:shared/x` files say "Group folder · added by X" and
+ * open the group's Shared files; anything else is in the author's own folder and opens in their chat.
+ */
+export function GroupFileCards({ files, groupId, authorName, authorChatId }: { files: ActivityView['files']; groupId: string; authorName: string; authorChatId?: string }) {
+  if (files.length === 0) return null
+  return (
+    <ul className="cf-fcards" aria-label="Files changed">
+      {files.map((f) => {
+        const card = groupFileCard(f.path, authorName, f.size)
+        const to = card.inGroup ? fileOpenPath(groupId, card.path) : authorChatId ? fileOpenPath(authorChatId, card.path) : null
+        return (
+          <li key={f.path} className="cf-fcard">
+            <span className="cf-fcard__ico" aria-hidden="true">📄</span>
+            <span className="cf-fcard__txt">
+              <span className="cf-fcard__name" title={card.path}>{f.name}</span>
+              <span className="cf-fcard__meta">{card.meta}</span>
+            </span>
+            {to && (
+              <Link className="cf-btn cf-fcard__open" to={to} aria-label={`Open ${f.name} in Files`}>
+                Open
+              </Link>
+            )}
+          </li>
+        )
+      })}
     </ul>
   )
 }

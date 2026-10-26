@@ -2,7 +2,7 @@ import { MAX_AVATAR_BYTES } from './types'
 import type { EndpointTestResult } from './endpoint-proxy'
 import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
 import { normalizeSkillsResponse, skillPath, type SkillsResponse } from './skills-catalog'
-import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
+import { CONVERSATION_PAGE_SIZE, MAX_CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary, type GroupCreateInput, type GroupPatch, type GroupSendResult, type GroupSummary } from './types'
 import type { SkillSummary } from './types'
 import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
@@ -196,6 +196,38 @@ export const api = {
         run: { id: run.id, status: run.status, error: run.error, ...(Array.isArray(run.filesChanged) ? { filesChanged: run.filesChanged } : {}) },
       }
     }
+  },
+
+  /** BE-5: messages newer than `after` (oldest -> newest), for the group poll. */
+  async listMessagesAfter(id: string, after: string, limit = MAX_CONVERSATION_PAGE_SIZE): Promise<ChatMessagePage> {
+    const qs = new URLSearchParams({ after, limit: String(limit) })
+    const body = await request<ConversationMessagesResponse>(`/api/conversations/${encodeURIComponent(id)}/messages?${qs}`)
+    return { conversation: body.conversation, messages: body.messages, hasMore: body.hasMore ?? false }
+  },
+
+  /** BE-5 group send: 202 with the user's message; the lead and mentioned bots reply in the background. */
+  async sendGroupMessage(conversationId: string, text: string): Promise<GroupSendResult> {
+    return request<GroupSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content: text }),
+    })
+  },
+
+  async createGroup(input: GroupCreateInput): Promise<GroupSummary> {
+    return request<GroupSummary>('/api/groups', { method: 'POST', body: JSON.stringify(input) })
+  },
+
+  async getGroup(id: string): Promise<GroupSummary> {
+    return request<GroupSummary>(`/api/groups/${encodeURIComponent(id)}`)
+  },
+
+  async updateGroup(id: string, patch: GroupPatch): Promise<GroupSummary> {
+    return request<GroupSummary>(`/api/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+
+  /** BE-5: 204; archives the group (it leaves GET /api/conversations). */
+  async deleteGroup(id: string): Promise<void> {
+    await request<unknown>(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   async markConversationRead(id: string): Promise<ConversationSummary> {

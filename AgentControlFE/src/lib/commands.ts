@@ -27,21 +27,23 @@ export type CommandDef = {
 }
 
 const later = (reason: string) => () => reason
-/** Bot settings tabs need an open DM; groups get their own panel in FE-6. */
+/** Panel tabs need an open chat; a group opens its own panel (FE-6). */
+const needsChat = (ctx: CommandContext) => (!ctx.conversationId ? 'Open a chat first.' : null)
+/** Bot-only tabs (skills): each bot in a group keeps its own. */
 const needsDm = (ctx: CommandContext) =>
-  !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? 'Group settings arrive with FE-6.' : null
+  !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? "Groups don't have skills. Each bot keeps its own; open its chat." : null
 
 export const COMMANDS: readonly CommandDef[] = [
   { name: 'new', label: 'New bot', hint: 'Create a bot', unavailable: () => null },
-  { name: 'group', label: 'New group', hint: 'Start a group chat', unavailable: later('Group chats arrive with BE-5 / FE-6.') },
-  { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: needsDm, tab: 'files' },
+  { name: 'group', label: 'New group', hint: 'Start a group chat', unavailable: () => null },
+  { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: needsChat, tab: 'files' },
   { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: needsDm, tab: 'skills' },
-  { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: needsDm, tab: 'memory' },
+  { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: needsChat, tab: 'memory' },
   {
     name: 'settings',
     label: 'Settings',
-    hint: "This bot's settings",
-    unavailable: needsDm,
+    hint: "This chat's settings",
+    unavailable: needsChat,
   },
   { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab is coming (needs BE-8).'), tab: 'sandbox' },
 ]
@@ -79,6 +81,8 @@ export function parseSlash(text: string): { command: CommandDef; args: string } 
 
 export type CommandAction =
   | { kind: 'new-bot'; args: string }
+  /** FE-6: open the New group dialog. */
+  | { kind: 'new-group' }
   | { kind: 'navigate'; to: string }
   | { kind: 'unavailable'; reason: string }
 
@@ -88,6 +92,9 @@ export function commandAction(name: CommandName, ctx: CommandContext, args = '')
   const reason = def ? def.unavailable(ctx) : 'Unknown command.'
   if (reason) return { kind: 'unavailable', reason }
   if (name === 'new') return { kind: 'new-bot', args }
+  if (name === 'group') return { kind: 'new-group' }
+  // FE-6: in a group, /settings opens the group panel's Settings tab, /memory its Memory tab.
+  if (ctx.isGroup && ctx.conversationId && name === 'settings') return { kind: 'navigate', to: chatPanelPath(ctx.conversationId, 'settings', { tab: 'settings' }) }
   // FE-4: /files opens the chat's bot folder at shared/ (?panel=files&path=shared).
   if (name === 'files' && ctx.conversationId) return { kind: 'navigate', to: chatPanelPath(ctx.conversationId, 'files', { path: 'shared' }) }
   if (def && ctx.conversationId && (name === 'settings' || def.tab))
@@ -102,7 +109,7 @@ export function commandAction(name: CommandName, ctx: CommandContext, args = '')
 export function chatPanelPath(
   conversationId: string,
   panel: 'settings' | 'files',
-  opts: { tab?: SettingsTab; path?: string } = {},
+  opts: { tab?: SettingsTab | 'members' | 'settings'; path?: string } = {},
 ): string {
   const qs = new URLSearchParams({ panel })
   if (panel === 'settings' && opts.tab) qs.set('tab', opts.tab)

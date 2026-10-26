@@ -24,6 +24,7 @@
  */
 import type { FileEntry, FileListing, FileZone } from './types.ts'
 import { humanSize, shortDate, wholeSize } from './file-format.ts'
+import { listTime } from './shell.ts'
 
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 export const WRITABLE_ZONES: readonly FileZone[] = ['shared', 'workspace']
@@ -76,7 +77,7 @@ export const parentOf = (path: string) => (path.includes('/') ? path.slice(0, pa
 export const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
 
 export function zoneOfPath(path: string): FileZone | null {
-  if (path === 'BOT.md') return 'meta'
+  if (path === 'BOT.md' || path === 'GROUP.md') return 'meta'
   const z = path.split('/')[0]
   return (['shared', 'workspace', 'memory', 'skills'] as const).find((x) => x === z) ?? null
 }
@@ -97,7 +98,9 @@ export function canModify(path: string): boolean {
 export type ZoneBadge = { label: string; tone: 'green' | 'neutral' }
 
 /** Badges on the tree's top-level rows: workspace "scripts write", memory and BOT.md "managed", skills "read-only". */
-export function zoneBadge(entry: Pick<FileEntry, 'path'>): ZoneBadge | null {
+export function zoneBadge(entry: Pick<FileEntry, 'path'>, group = false): ZoneBadge | null {
+  // FE-6 (06c): in a group, shared/ is where members' scripts write; GROUP.md is managed.
+  if (group) return entry.path === 'shared' ? { label: 'scripts write', tone: 'green' } : entry.path === 'memory' || entry.path === 'GROUP.md' ? { label: 'managed', tone: 'neutral' } : null
   switch (entry.path) {
     case 'workspace':
       return { label: 'scripts write', tone: 'green' }
@@ -216,6 +219,30 @@ export function fileWhen(e: FileEntry, now = new Date()): string {
   return shortDate(e.modifiedAt, now) ?? ''
 }
 
+/** FE-6 (06c) group rows: "Researcher · 8:29 PM" (who added it, when); the date alone when unknown. */
+export function groupFileWhen(e: FileEntry, who: string, now = new Date()): string {
+  const t = listTime(e.modifiedAt, now)
+  return [who || null, t || null].filter(Boolean).join(' · ')
+}
+
+/** FE-6 (06c) group image cards: "You · Today". */
+export function groupImageLine(e: FileEntry, who: string, now = new Date()): string {
+  return [who || null, shortDate(e.modifiedAt, now)].filter(Boolean).join(' · ') || (imageLine(e, now))
+}
+
+/** GAP-G12 "By member": files under who added them (the user first, then bots by name, unknown last). */
+export function byMember(entries: readonly FileEntry[], nameOf: (addedBy: string) => string): { key: string; label: string; entries: FileEntry[] }[] {
+  const groups = new Map<string, FileEntry[]>()
+  for (const e of entries) {
+    const k = e.addedBy ?? ''
+    groups.set(k, [...(groups.get(k) ?? []), e])
+  }
+  const rank = (k: string) => (k === 'user' ? 0 : k === '' ? 2 : 1)
+  return [...groups.entries()]
+    .map(([key, list]) => ({ key, label: key ? nameOf(key) : 'Added outside chat', entries: list }))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label))
+}
+
 export const fileSize = (e: FileEntry) => humanSize(e.size) ?? ''
 /** Tree rows: whole sizes ("2 KB"); 03d shows none on shared/ files. */
 export const treeSize = (e: FileEntry) => (e.kind === 'file' && e.zone !== 'shared' ? (wholeSize(e.size) ?? '') : '')
@@ -301,10 +328,13 @@ export function withFilesPath(params: URLSearchParams, path: string): URLSearchP
 
 type Req = <T>(path: string, init?: RequestInit) => Promise<T>
 
-const filesBase = (agentId: string) => `/api/agents/${encodeURIComponent(agentId)}/files`
+/** FE-6: a bot's folder (agent id) or a group's (`{ groupId }`, BE-5 /api/groups/:id/files). */
+export type FilesOwner = string | { groupId: string }
+const filesBase = (owner: FilesOwner) =>
+  typeof owner === 'string' ? `/api/agents/${encodeURIComponent(owner)}/files` : `/api/groups/${encodeURIComponent(owner.groupId)}/files`
 
 /** GET …/files/content; `download` adds Content-Disposition: attachment. */
-export function fileContentPath(agentId: string, path: string, download = false): string {
+export function fileContentPath(agentId: FilesOwner, path: string, download = false): string {
   const qs = new URLSearchParams({ path })
   if (download) qs.set('download', '1')
   return `${filesBase(agentId)}/content?${qs}`
@@ -314,12 +344,12 @@ export type Uploader = (url: string, body: Blob) => Promise<{ ok: boolean; statu
 
 export function filesApi(request: Req, upload: Uploader, messageOf: (body: unknown) => string | null) {
   return {
-    list: (agentId: string, path: string) => request<FileListing>(`${filesBase(agentId)}?${new URLSearchParams({ path })}`),
-    makeFolder: (agentId: string, path: string) => request<FileEntry>(`${filesBase(agentId)}/folders`, { method: 'POST', body: JSON.stringify({ path }) }),
-    move: (agentId: string, from: string, to: string) => request<FileEntry>(filesBase(agentId), { method: 'PATCH', body: JSON.stringify({ from, to }) }),
-    remove: (agentId: string, path: string) => request<void>(`${filesBase(agentId)}?${new URLSearchParams({ path })}`, { method: 'DELETE' }),
+    list: (agentId: FilesOwner, path: string) => request<FileListing>(`${filesBase(agentId)}?${new URLSearchParams({ path })}`),
+    makeFolder: (agentId: FilesOwner, path: string) => request<FileEntry>(`${filesBase(agentId)}/folders`, { method: 'POST', body: JSON.stringify({ path }) }),
+    move: (agentId: FilesOwner, from: string, to: string) => request<FileEntry>(filesBase(agentId), { method: 'PATCH', body: JSON.stringify({ from, to }) }),
+    remove: (agentId: FilesOwner, path: string) => request<void>(`${filesBase(agentId)}?${new URLSearchParams({ path })}`, { method: 'DELETE' }),
     /** PUT the raw file; refuses over 25 MiB before sending. Throws { status, message }. */
-    async upload(agentId: string, dir: string, file: File | (Blob & { name: string })): Promise<FileEntry> {
+    async upload(agentId: FilesOwner, dir: string, file: File | (Blob & { name: string })): Promise<FileEntry> {
       const tooBig = uploadError(file)
       if (tooBig) throw Object.assign(new Error(tooBig), { status: 413 })
       const bad = nameError(file.name)

@@ -26,7 +26,9 @@ export type ShellState = {
   openNewBot: () => void
   /** FE-5: the full New bot form, prefilled from the /new draft card. */
   openNewBotForm: (prefill?: AgentPrefill) => void
-  /** Sum for the ☰ badge. */
+  /** FE-6: the New group picker (GAP-G4). */
+  openNewGroup: () => void
+  /** Sum for the ☰ badge (muted groups left out, FE-6). */
   unread: number
 }
 

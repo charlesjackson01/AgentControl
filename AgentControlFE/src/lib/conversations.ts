@@ -124,6 +124,7 @@ export function olderCursor(messages: readonly ChatMessage[]): string | undefine
 }
 
 /** Mirrors the BE: assistant messages newer than lastReadAt (null = never opened -> all). */
-export function countUnread(messages: readonly Pick<ChatMessage, 'role' | 'createdAt'>[], lastReadAt: string | null): number {
-  return messages.filter((m) => m.role === 'assistant' && (lastReadAt === null || m.createdAt > lastReadAt)).length
+export function countUnread(messages: readonly (Pick<ChatMessage, 'role' | 'createdAt'> & { kind?: ChatMessage['kind'] })[], lastReadAt: string | null): number {
+  // FE-6: system lines ("You added Researcher.") never count, as on the BE.
+  return messages.filter((m) => m.role === 'assistant' && m.kind !== 'system' && (lastReadAt === null || m.createdAt > lastReadAt)).length
 }

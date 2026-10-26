@@ -1,6 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/AppShell'
-import ConversationChat from './pages/ConversationChat'
+import ChatRoute from './pages/ChatRoute'
 import Home, { AgentRedirect, SettingsRedirect } from './pages/Home'
 
 /**
@@ -13,7 +13,7 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route index element={<Home />} />
-        <Route path="c/:conversationId" element={<ConversationChat />} />
+        <Route path="c/:conversationId" element={<ChatRoute />} />
         <Route path="agents/new" element={<Navigate to="/" replace />} />
         <Route path="agents/:id" element={<AgentRedirect />} />
         <Route path="settings" element={<SettingsRedirect />} />

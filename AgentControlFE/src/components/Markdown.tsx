@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
-import { renderMarkdown } from '../lib/markdown-render.ts'
+import { renderMarkdown, type TextRenderer } from '../lib/markdown-render.ts'
 
-/** FE-9: an assistant reply with the safe markdown subset (see lib/markdown.ts). */
-export function Markdown({ text }: { text: string }) {
-  return useMemo(() => renderMarkdown(text), [text])
+/** FE-9: an assistant reply with the safe markdown subset (see lib/markdown.ts). FE-6: `text` styles @mentions. */
+export function Markdown({ text, renderText }: { text: string; renderText?: TextRenderer }) {
+  return useMemo(() => renderMarkdown(text, renderText), [text, renderText])
 }

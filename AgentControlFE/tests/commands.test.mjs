@@ -6,18 +6,18 @@ describe('slash commands: catalogue', () => {
   it('lists the seven FE-2 commands in ticket order', () => {
     assert.deepEqual(COMMANDS.map((c) => c.name), ['new', 'group', 'files', 'skills', 'memory', 'settings', 'sandbox'])
   })
-  it('FE-3/FE-4: /new, /files, /skills, /memory and /settings run in a DM; the rest say which ticket brings them', () => {
+  it('FE-3/FE-4/FE-6: everything but /sandbox runs in a DM; /sandbox says which ticket brings it', () => {
     const dm = { conversationId: 'c1', isGroup: false }
     const live = COMMANDS.filter((c) => c.unavailable(dm) === null).map((c) => c.name)
-    assert.deepEqual(live, ['new', 'files', 'skills', 'memory', 'settings'])
-    assert.match(findCommand('group').unavailable(dm), /BE-5|FE-6/)
+    assert.deepEqual(live, ['new', 'group', 'files', 'skills', 'memory', 'settings'])
+    assert.equal(findCommand('group').unavailable({}), null)
     assert.match(findCommand('sandbox').unavailable(dm), /coming.*BE-8/)
   })
-  it('settings-tab commands need an open DM', () => {
-    for (const name of ['settings', 'files', 'skills', 'memory']) {
-      assert.match(findCommand(name).unavailable({}), /Open a chat/)
-      assert.match(findCommand(name).unavailable({ conversationId: 'g', isGroup: true }), /FE-6/)
-    }
+  it('panel commands need an open chat; in a group only /skills is off (FE-6)', () => {
+    const g = { conversationId: 'g', isGroup: true }
+    for (const name of ['settings', 'files', 'skills', 'memory']) assert.match(findCommand(name).unavailable({}), /Open a chat/)
+    for (const name of ['settings', 'files', 'memory']) assert.equal(findCommand(name).unavailable(g), null)
+    assert.match(findCommand('skills').unavailable(g), /Groups don't have skills/)
   })
 })
 
@@ -67,8 +67,8 @@ describe('slash commands: dispatch', () => {
     assert.deepEqual(commandAction('files', dm), { kind: 'navigate', to: '/c/c%201?panel=files&path=shared' })
   })
   it('unbacked commands return their reason instead of faking it', () => {
-    for (const name of ['group', 'sandbox']) assert.equal(commandAction(name, dm).kind, 'unavailable')
-    assert.equal(commandAction('settings', { conversationId: 'g', isGroup: true }).kind, 'unavailable')
+    assert.equal(commandAction('sandbox', dm).kind, 'unavailable')
+    assert.equal(commandAction('skills', { conversationId: 'g', isGroup: true }).kind, 'unavailable')
   })
   it('deep links', () => {
     assert.equal(chatPanelPath('c1', 'files', { path: 'shared/a b.png' }), '/c/c1?panel=files&path=shared%2Fa+b.png')
@@ -76,5 +76,18 @@ describe('slash commands: dispatch', () => {
     assert.equal(chatPanelPath('c1', 'settings', { tab: 'memory' }), '/c/c1?panel=settings&tab=memory')
     assert.equal(chatPanelPath('c1', 'settings', { path: 'x' }), '/c/c1?panel=settings', 'path only belongs to panel=files')
     assert.equal(messagePath('c1', 'msg-1'), '/c/c1?m=msg-1')
+  })
+})
+
+describe('slash commands: groups (FE-6)', () => {
+  const g = { conversationId: 'g1', isGroup: true }
+  it('/group opens the New group dialog from anywhere', () => {
+    assert.deepEqual(commandAction('group', {}), { kind: 'new-group' })
+    assert.deepEqual(commandAction('group', g), { kind: 'new-group' })
+  })
+  it('in a group, /files opens Shared files, /memory and /settings their group tabs', () => {
+    assert.deepEqual(commandAction('files', g), { kind: 'navigate', to: '/c/g1?panel=files&path=shared' })
+    assert.deepEqual(commandAction('memory', g), { kind: 'navigate', to: '/c/g1?panel=settings&tab=memory' })
+    assert.deepEqual(commandAction('settings', g), { kind: 'navigate', to: '/c/g1?panel=settings&tab=settings' })
   })
 })

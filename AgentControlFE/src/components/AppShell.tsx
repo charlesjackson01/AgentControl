@@ -3,6 +3,8 @@ import { Outlet, useMatch, useNavigate } from 'react-router-dom'
 import ChatList from './shell/ChatList'
 import CommandPalette from './shell/CommandPalette'
 import NewBotDialog from './NewBotDialog'
+import NewGroupDialog from './shell/NewGroupDialog'
+import { useMutedGroups } from '../hooks/useMutedGroups'
 import type { AgentPrefill } from './AgentProfile'
 import { primaryConversation } from '../lib/conversations'
 import { newBotNavState } from '../lib/new-bot'
@@ -68,6 +70,8 @@ function Shell() {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newBotOpen, setNewBotOpen] = useState(false)
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const muted = useMutedGroups()
   const [newBotPrefill, setNewBotPrefill] = useState<AgentPrefill | undefined>(undefined)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { conversations, agents } = useConversations()
@@ -109,6 +113,11 @@ function Shell() {
     [conversations, agents, navigate, openNewBotForm],
   )
   const openNewBot = useCallback(() => startNewBot(''), [startNewBot])
+  const openNewGroup = useCallback(() => {
+    setSwitcherOpen(false)
+    setPaletteOpen(false)
+    setNewGroupOpen(true)
+  }, [])
   const openPalette = useCallback(() => {
     setSwitcherOpen(false)
     setPaletteOpen(true)
@@ -120,10 +129,11 @@ function Shell() {
       if (action.kind === 'unavailable') return action.reason
       setPaletteOpen(false)
       if (action.kind === 'new-bot') startNewBot(action.args)
+      else if (action.kind === 'new-group') openNewGroup()
       else navigate(action.to)
       return null
     },
-    [commandCtx, navigate, startNewBot],
+    [commandCtx, navigate, startNewBot, openNewGroup],
   )
 
   useEffect(() => {
@@ -138,13 +148,13 @@ function Shell() {
     return () => window.removeEventListener('keydown', onKey)
   }, [toggleList, openPalette])
 
-  const unread = chatListUnread(conversations ?? [], agents)
+  const unread = chatListUnread((conversations ?? []).filter((c) => !muted.has(c.id)), agents)
   const value = useMemo<ShellState>(
     () => ({
       listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher,
-      paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, unread,
+      paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, openNewGroup, unread,
     }),
-    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, unread],
+    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, openNewGroup, unread],
   )
 
   return (
@@ -158,6 +168,7 @@ function Shell() {
       </div>
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <NewBotDialog open={newBotOpen} prefill={newBotPrefill} onClose={() => setNewBotOpen(false)} />
+      <NewGroupDialog open={newGroupOpen} onClose={() => setNewGroupOpen(false)} />
     </ShellContext.Provider>
   )
 }

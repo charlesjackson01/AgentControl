@@ -434,6 +434,19 @@ export type ConversationSendResult = {
   run: { id: string; status: AgentRun['status']; error?: string | null; filesChanged?: FileChange[] }
 }
 
+/** BE-5 e76bfaf: POST /api/conversations/:id/messages on a group -> 202. Replies arrive by `?after=` polling. */
+export type GroupSendResult = {
+  conversation: ConversationSummary
+  /** The user's message only. */
+  messages: ChatMessage[]
+}
+
+/** BE-5: POST /api/groups {name, memberAgentIds} (Primary is added and put first). */
+export type GroupCreateInput = { name: string; memberAgentIds: string[] }
+/** BE-5: PATCH /api/groups/:id; each field optional. */
+export type GroupPatch = { name?: string; memberAgentIds?: string[]; memoryLearn?: boolean }
+export type GroupSummary = GroupConversation & Omit<ConversationSummary, keyof Conversation>
+
 /** Normalized page for the thread view. */
 export type ChatMessagePage = Omit<ConversationMessagesResponse, 'hasMore'> & { hasMore: boolean }
 

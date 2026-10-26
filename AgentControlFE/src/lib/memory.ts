@@ -43,11 +43,14 @@ export type MemoryLoad =
   | { status: 'unavailable' }
   | { status: 'error'; message: string }
 
-const base = (agentId: string) => `/api/agents/${encodeURIComponent(agentId)}/memory`
+/** FE-6: a bot's memory (agent id) or a group's (`{ groupId }`, BE-5 /api/groups/:id/memory). */
+export type MemoryOwner = string | { groupId: string }
+const base = (owner: MemoryOwner) =>
+  typeof owner === 'string' ? `/api/agents/${encodeURIComponent(owner)}/memory` : `/api/groups/${encodeURIComponent(owner.groupId)}/memory`
 
 export function memoryApi(request: Req) {
   return {
-    async list(agentId: string): Promise<MemoryLoad> {
+    async list(agentId: MemoryOwner): Promise<MemoryLoad> {
       try {
         const page = await request<MemoryPage>(`${base(agentId)}?${new URLSearchParams({ limit: String(MEMORY_SCOPE_LIMIT) })}`)
         return { status: 'ok', page: { items: page.items ?? [], total: page.total ?? page.items?.length ?? 0, promptTokens: page.promptTokens ?? 0 } }
@@ -56,13 +59,13 @@ export function memoryApi(request: Req) {
         return { status: 'error', message: err instanceof Error ? err.message : String(err) }
       }
     },
-    create(agentId: string, body: { text: string; category: MemoryCategory }): Promise<MemoryItem> {
+    create(agentId: MemoryOwner, body: { text: string; category: MemoryCategory }): Promise<MemoryItem> {
       return request<MemoryItem>(base(agentId), { method: 'POST', body: JSON.stringify(body) })
     },
-    update(agentId: string, id: string, body: { text?: string; category?: MemoryCategory }): Promise<MemoryItem> {
+    update(agentId: MemoryOwner, id: string, body: { text?: string; category?: MemoryCategory }): Promise<MemoryItem> {
       return request<MemoryItem>(`${base(agentId)}/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(body) })
     },
-    remove(agentId: string, id: string): Promise<unknown> {
+    remove(agentId: MemoryOwner, id: string): Promise<unknown> {
       return request<unknown>(`${base(agentId)}/${encodeURIComponent(id)}`, { method: 'DELETE' })
     },
   }
@@ -98,6 +101,13 @@ export function memorySourceLine(m: Pick<MemoryItem, 'source' | 'createdAt'>, no
   const when = listTime(m.createdAt, now)
   const day = /\d:\d\d/.test(when) ? 'Today' : when
   return `${m.source.kind === 'user' ? 'You told me' : 'Learned in chat'}${day ? ` · ${day}` : ''}`
+}
+
+/** FE-6 (06d) group rows: "Saved by Researcher · Today" or "You added this · Today" (GAP-G13). */
+export function groupMemorySourceLine(m: Pick<MemoryItem, 'source' | 'createdAt'>, nameOf: (id: string) => string, now: Date = new Date()): string {
+  const t = listTime(m.createdAt, now)
+  const when = /\d:\d\d/.test(t) ? `Today ${t}` : t
+  return `${m.source.kind === 'user' ? 'You added this' : `Saved by ${nameOf(m.source.agentId)}`}${when ? ` · ${when}` : ''}`
 }
 
 /** Local list after a create/update (replace by id, else prepend) or delete. */

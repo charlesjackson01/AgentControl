@@ -492,7 +492,7 @@ export default function ConversationChat() {
               aria-expanded={slashItems.length > 0}
               aria-controls={slashItems.length > 0 ? 'cf-slash' : undefined}
               aria-activedescendant={slashItems.length > 0 ? `cf-slash-${slashIdx}` : undefined}
-              placeholder={isGroup ? "Sending in group chats isn't available yet" : agent ? placeholderFor(nbPhase, agent.name) : 'Message…'}
+              placeholder={isGroup ? 'Opening the group…' : agent ? placeholderFor(nbPhase, agent.name) : 'Message…'}
               rows={1}
               disabled={sending || !canSend || locked}
               aria-label="Message"

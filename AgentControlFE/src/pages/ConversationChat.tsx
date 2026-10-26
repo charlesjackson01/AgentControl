@@ -456,7 +456,7 @@ export default function ConversationChat() {
               disabled={sending || !canSend}
               aria-label="Message"
             />
-            <button type="button" className="cf-cbtn" disabled title="Skills aren't available here yet" aria-label="Skills">
+            <button type="button" className="cf-cbtn cf-cbtn--skills" disabled title="Skills aren't available here yet" aria-label="Skills">
               ✦
             </button>
             <button

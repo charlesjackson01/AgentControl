@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { Navigate, useParams } from 'react-router-dom'
 import BootstrapPage from './BootstrapPage'
 import ChatHeader from '../components/shell/ChatHeader'
+import ChatList from '../components/shell/ChatList'
 import { Skeleton } from '../components/States'
 import { agentDmPath, homeTarget } from '../lib/shell'
+import { homeView } from '../lib/mobile'
 import { useConversations } from '../state/conversations-context'
 import { useShell } from '../state/shell-context'
 
@@ -21,13 +23,19 @@ function Waiting() {
   )
 }
 
-/** FE-1 `/`: the newest chat, else Primary's DM; first-run setup when there are no bots. */
+/**
+ * FE-1 `/`: the newest chat, else Primary's DM; first-run setup when there are no bots.
+ * FE-8 phones (05a): `/` is the chat list screen.
+ */
 export default function Home() {
   const { conversations, agents, loaded, error, reload } = useConversations()
-  if (!loaded) return <Waiting />
-  const target = homeTarget(conversations ?? [], agents)
-  if (target.kind === 'chat') return <Navigate to={`/c/${target.id}`} replace />
-  if (target.kind === 'setup' && !error) return <BootstrapPage />
+  const { narrow } = useShell()
+  const target = loaded ? homeTarget(conversations ?? [], agents) : undefined
+  const view = homeView({ narrow, loaded, target: target?.kind, error: Boolean(error) })
+  if (view === 'list') return <ChatList screen />
+  if (view === 'waiting') return <Waiting />
+  if (view === 'redirect' && target?.kind === 'chat') return <Navigate to={`/c/${target.id}`} replace />
+  if (view === 'setup') return <BootstrapPage />
   return (
     <>
       <ChatHeader />

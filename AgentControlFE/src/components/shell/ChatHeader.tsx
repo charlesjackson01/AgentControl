@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Avatar from '../Avatar'
 import GroupAvatar from './GroupAvatar'
 import Switcher from './Switcher'
@@ -7,6 +8,7 @@ import { SearchIcon } from '../icons'
 import { agentStatusLine, isAgentTyping } from '../../lib/shell'
 import { unreadLabel } from '../../lib/conversations'
 import { displayName } from '../../lib/profile'
+import { mobileBack } from '../../lib/mobile'
 import type { Agent, ConversationSummary } from '../../lib/types'
 import { useConversations } from '../../state/conversations-context'
 import { useProfile } from '../../state/profile-context'
@@ -82,6 +84,8 @@ export default function ChatHeader({
   const typing = sending || isAgentTyping(conversation, agent?.id)
   const subline = agent ? agentStatusLine(agent, { typing }) : ''
 
+  if (shell.narrow) return <MobileHeader conversation={conversation} agent={agent} onInfo={onInfo} typing={typing} />
+
   return (
     <header className="cf-hdr">
       {!shell.listOpen && (
@@ -150,6 +154,65 @@ export default function ChatHeader({
         ⓘ
       </button>
       {!shell.listOpen && <UserMenu />}
+    </header>
+  )
+}
+
+/**
+ * FE-8 phone header (05b): ‹ with the unread total back to the list screen, the
+ * bot centred (avatar over "Name ▾", which opens the switcher), and ⓘ. No search
+ * or account here; those live on the list screen.
+ */
+function MobileHeader({ conversation, agent, onInfo, typing }: { conversation?: ConversationSummary; agent?: Agent; onInfo?: () => void; typing: boolean }) {
+  const shell = useShell()
+  const { agents } = useConversations()
+  const group = conversation?.kind === 'group' ? conversation : undefined
+  const back = mobileBack(shell.unread)
+  return (
+    <header className="cf-hdr cf-mhdr">
+      <Link to={back.to} className="cf-mhdr__back" aria-label={back.label}>
+        <span className="cf-mhdr__chev" aria-hidden="true">
+          ‹
+        </span>
+        {back.badge && <span className="cf-badge">{back.badge}</span>}
+      </Link>
+
+      <div className="cf-hdr__who cf-mhdr__who">
+        {group ? (
+          // GAP-B4: 05b is a DM; a group's phone header is not mocked. Same pieces, centred.
+          <div className="cf-mhdr__id">
+            <GroupAvatar memberAgentIds={group.memberAgentIds} leadAgentId={group.leadAgentId} agents={agents} size="sm" />
+            <h1 className="cf-mhdr__nm">{group.name}</h1>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="cf-mhdr__id"
+            onClick={() => (shell.switcherOpen ? shell.closeSwitcher() : shell.openSwitcher())}
+            aria-haspopup="dialog"
+            aria-expanded={shell.switcherOpen}
+            aria-label={agent ? `${agent.name}, switch bot` : 'Switch bot'}
+          >
+            {agent && <Avatar name={agent.name} agentId={agent.id} avatar={agent.avatar} color={agent.color} size="md" decorative />}
+            <span className="cf-mhdr__nm">
+              {agent?.name ?? 'Chats'} <span className="cf-mhdr__caret">▾</span>
+            </span>
+            {typing && <span className="sr-only" aria-live="polite">{agent?.name} is typing</span>}
+          </button>
+        )}
+        {shell.switcherOpen && <Switcher currentId={conversation?.id} />}
+      </div>
+
+      <button
+        type="button"
+        className="cf-hbtn cf-hbtn--ic cf-mhdr__info"
+        title={onInfo ? 'Settings' : 'Group settings arrive with group chats'}
+        aria-label="Settings"
+        onClick={onInfo}
+        disabled={!onInfo}
+      >
+        ⓘ
+      </button>
     </header>
   )
 }

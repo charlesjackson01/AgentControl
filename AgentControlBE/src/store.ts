@@ -15,7 +15,7 @@ import {
 import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
 import { createVault } from './vault.js'
 import { ARCHIVE_MIGRATION, migrateNotesToMemory, NOTES_MIGRATION, writeProjectArchive, type ProjectArchive } from './archive.js'
-import { backfillAuthors, backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations } from './conversations.js'
+import { backfillAuthors, backfillErrorFlags, migrateRunsToConversations, normalizeChatMessages, normalizeConversations, syncGroupLeads } from './conversations.js'
 import { AGENT_SLUG, INTERNET_POLICIES, MAX_MEMORY_TEXT_CHARS, MEMORY_CATEGORIES, SKILL_SOURCE_IDS } from './shared/types.js'
 import type {
   Agent,
@@ -410,6 +410,7 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
     ...(r.activity && typeof r.activity === 'object' && Array.isArray(r.activity.steps) && Array.isArray(r.activity.filesChanged) ? { activity: r.activity } : {}),
     filesChanged: Array.isArray(r.filesChanged) ? r.filesChanged : Array.isArray(r.activity?.filesChanged) ? r.activity.filesChanged : [],
     ...(typeof r.projectId === 'string' ? { projectId: r.projectId } : {}),
+    ...(typeof r.groupId === 'string' ? { groupId: r.groupId } : {}),
   }
 }
 
@@ -626,6 +627,7 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
   if (migrateRunsToConversations(conversationState, meta.migrations)) changed = true
   if (backfillErrorFlags(conversationState)) changed = true
   if (backfillAuthors(conversationState)) changed = true
+  if (syncGroupLeads(conversationState.conversations, agents as Agent[])) changed = true
 
   return {
     data: {

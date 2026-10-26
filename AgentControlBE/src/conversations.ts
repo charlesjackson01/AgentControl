@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentRun, AgentStatus, Attachment, ChatMessage, Conversation, ConversationSummary, DmConversation, MessageActivity } from './shared/types.js'
+import type { AgentRun, AgentStatus, Attachment, ChatMessage, Conversation, ConversationSummary, DmConversation, GroupConversation, MessageActivity } from './shared/types.js'
+
+/** BE-5: which agent is writing a group reply right now, by conversation id (in memory only). */
+export const groupTyping = new Map<string, string>()
 
 /** The slice of the store this module touches (keeps it unit-testable). */
 export interface ConversationState {
@@ -37,7 +40,7 @@ export function ensureDm(state: ConversationState, agentId: string, now: string 
  * anything was added.
  */
 export function recordRunMessages(state: ConversationState, run: AgentRun): boolean {
-  if (run.projectId !== undefined) return false
+  if (run.projectId !== undefined || run.groupId !== undefined) return false
   if (!state.agents.some((a) => a.id === run.agentId)) return false
   if (state.chatMessages.some((m) => m.runId === run.id)) return false
   const conversation = ensureDm(state, run.agentId, run.startedAt)
@@ -81,7 +84,7 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
 export function migrateRunsToConversations(state: ConversationState, migrations: string[]): boolean {
   if (migrations.includes(CONVERSATIONS_MIGRATION)) return false
   const ordered = [...state.runs]
-    .filter((r) => r.projectId === undefined)
+    .filter((r) => r.projectId === undefined && r.groupId === undefined)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   const touched = new Set<string>()
   for (const run of ordered) {
@@ -104,11 +107,14 @@ export function summarize(state: ConversationState, c: Conversation): Conversati
   const messages = messagesOf(state, c.id)
   const lastMessage = messages.at(-1) ?? null
   const unreadCount = messages.filter(
-    (m) => m.role === 'assistant' && (c.lastReadAt === null || m.createdAt > c.lastReadAt),
+    (m) => m.role === 'assistant' && m.kind !== 'system' && (c.lastReadAt === null || m.createdAt > c.lastReadAt),
   ).length
-  // A DM is typing while its agent's run is in flight (groups set this in BE-5).
-  const typingAgentId =
-    c.kind === 'dm' && state.agents.some((a) => a.id === c.agentId && a.status === 'running') ? c.agentId : null
+  if (c.kind === 'group') {
+    const { archivedAt: _archived, ...group } = c
+    return { ...group, lastMessage, unreadCount, typingAgentId: groupTyping.get(c.id) ?? null }
+  }
+  // A DM is typing while its agent's run is in flight.
+  const typingAgentId = state.agents.some((a) => a.id === c.agentId && a.status === 'running') ? c.agentId : null
   return { ...c, lastMessage, unreadCount, typingAgentId }
 }
 
@@ -125,7 +131,11 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
   const seen = new Set<string>()
   const out: Conversation[] = []
   for (const c of raw as Partial<DmConversation>[]) {
-    // Groups arrive in BE-5; until then only DMs load.
+    if (c && (c as { kind?: unknown }).kind === 'group') {
+      const g = normalizeGroup(c as Partial<GroupConversation>, agentIds)
+      if (g && !out.some((o) => o.id === g.id)) out.push(g)
+      continue
+    }
     if (c && c.kind !== undefined && c.kind !== 'dm') continue
     if (!c || typeof c.id !== 'string' || typeof c.agentId !== 'string' || !agentIds.has(c.agentId)) continue
     if (seen.has(c.agentId)) continue
@@ -141,6 +151,28 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
     })
   }
   return out
+}
+
+function normalizeGroup(c: Partial<GroupConversation>, agentIds: Set<string>): GroupConversation | null {
+  if (typeof c.id !== 'string' || typeof c.name !== 'string' || typeof c.slug !== 'string' || !/^[a-z0-9-]{1,40}$/.test(c.slug)) return null
+  const members = Array.isArray(c.memberAgentIds)
+    ? [...new Set(c.memberAgentIds.filter((id): id is string => typeof id === 'string' && agentIds.has(id)))]
+    : []
+  const createdAt = typeof c.createdAt === 'string' ? c.createdAt : new Date(0).toISOString()
+  return {
+    id: c.id,
+    kind: 'group',
+    name: c.name,
+    slug: c.slug,
+    memberAgentIds: members,
+    // Re-pointed at the current Primary by syncGroupLeads once the store has loaded.
+    leadAgentId: typeof c.leadAgentId === 'string' ? c.leadAgentId : '',
+    memoryLearn: c.memoryLearn !== false,
+    createdAt,
+    updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : createdAt,
+    lastReadAt: typeof c.lastReadAt === 'string' ? c.lastReadAt : null,
+    ...(typeof c.archivedAt === 'string' ? { archivedAt: c.archivedAt } : {}),
+  }
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -164,7 +196,7 @@ function withAttachments(raw: unknown): { attachments?: Attachment[] } {
 }
 
 /** A reply's activity from its run: skill chips (BE-7) plus file steps and changes (BE-3). */
-function runActivity(run: AgentRun): { activity?: MessageActivity } {
+export function runActivity(run: AgentRun): { activity?: MessageActivity } {
   const skills = (run.activatedSkills ?? []).map((s) => ({ ...s }))
   const steps = (run.activity?.steps ?? []).map((s) => ({ ...s }))
   const filesChanged = (run.activity?.filesChanged ?? []).map((f) => ({ ...f }))
@@ -240,6 +272,28 @@ export function backfillAuthors(state: ConversationState): boolean {
     const agentId = dmAgent.get(m.conversationId)
     if (m.role === 'assistant' && m.authorAgentId === undefined && agentId !== undefined) {
       m.authorAgentId = agentId
+      changed = true
+    }
+  }
+  return changed
+}
+
+/**
+ * BE-5: every group is led by the current Primary, who is always a member
+ * (listed first when added here). Returns whether anything changed.
+ */
+export function syncGroupLeads(conversations: Conversation[], agents: readonly { id: string; isPrimary?: boolean }[]): boolean {
+  const primary = agents.find((a) => a.isPrimary)
+  if (!primary) return false
+  let changed = false
+  for (const c of conversations) {
+    if (c.kind !== 'group') continue
+    if (c.leadAgentId !== primary.id) {
+      c.leadAgentId = primary.id
+      changed = true
+    }
+    if (!c.memberAgentIds.includes(primary.id)) {
+      c.memberAgentIds = [primary.id, ...c.memberAgentIds]
       changed = true
     }
   }

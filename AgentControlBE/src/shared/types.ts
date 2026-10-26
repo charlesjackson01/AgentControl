@@ -177,6 +177,8 @@ export interface PromptBudget {
 export interface AgentRun {
   id: string
   agentId: string
+  /** BE-5: set on a run made for a group reply (its messages live in the group, not the DM). */
+  groupId?: string
   startedAt: string
   status: RunStatus
   durationMs: number
@@ -469,6 +471,8 @@ export interface GroupConversation extends ConversationBase {
   /** Always the Primary agent's id (server-enforced). */
   leadAgentId: string
   memoryLearn: boolean
+  /** Set when the group is deleted; archived groups are kept in the store but never listed or served. Server-only. */
+  archivedAt?: string
 }
 
 export type Conversation = DmConversation | GroupConversation

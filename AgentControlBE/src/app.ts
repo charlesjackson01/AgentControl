@@ -1,5 +1,5 @@
 import cors from '@fastify/cors'
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
@@ -10,11 +10,13 @@ import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.j
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
-import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent } from './files.js'
+import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent, type FileContent } from './files.js'
+import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
+import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
-import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize } from './conversations.js'
+import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
   MAX_CONVERSATION_PAGE_SIZE,
@@ -467,33 +469,36 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       reply.status(410).send({ statusCode: 410, error: 'Request Error', message: NOTES_RETIRED }))
   }
 
-  // BE-4 memory. Group routes reuse these handlers once groups load (BE-5).
+  // BE-4 memory, under /api/agents/:id (a bot's) and /api/groups/:id (BE-5, a group's).
   const agentScope = (id: string): MemoryScope => {
     if (!store.agents.some((a) => a.id === id)) fail(404, `No agent with id "${id}"`)
     return { kind: 'agent', agentId: id }
   }
-  app.get('/api/agents/:id/memory', async (request) => {
-    const { id } = request.params as { id: string }
-    return listMemory(store, agentScope(id), request.query as MemoryQuery)
-  })
-  app.post('/api/agents/:id/memory', async (request, reply) => {
-    const { id } = request.params as { id: string }
-    const scope = agentScope(id)
-    const raw = (request.body ?? {}) as Record<string, unknown>
-    if (typeof raw !== 'object' || Array.isArray(raw)) fail(400, 'Send { text, category }.')
-    const text = parseText(raw.text, true)!
-    const category = parseCategory(raw.category, 'other')!
-    return reply.status(201).send(addMemory(store, scope, text, category, { kind: 'user' }))
-  })
-  app.patch('/api/agents/:id/memory/:memoryId', async (request) => {
-    const { id, memoryId } = request.params as { id: string; memoryId: string }
-    return updateMemory(store, agentScope(id), memoryId, request.body)
-  })
-  app.delete('/api/agents/:id/memory/:memoryId', async (request, reply) => {
-    const { id, memoryId } = request.params as { id: string; memoryId: string }
-    deleteMemory(store, agentScope(id), memoryId)
-    return reply.status(204).send()
-  })
+  const groupScope = (id: string): MemoryScope => ({ kind: 'group', groupId: groupOr404(store, id).id })
+  for (const [base, scopeOf] of [['/api/agents', agentScope], ['/api/groups', groupScope]] as const) {
+    app.get(`${base}/:id/memory`, async (request) => {
+      const { id } = request.params as { id: string }
+      return listMemory(store, scopeOf(id), request.query as MemoryQuery)
+    })
+    app.post(`${base}/:id/memory`, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const scope = scopeOf(id)
+      const raw = (request.body ?? {}) as Record<string, unknown>
+      if (typeof raw !== 'object' || Array.isArray(raw)) fail(400, 'Send { text, category }.')
+      const text = parseText(raw.text, true)!
+      const category = parseCategory(raw.category, 'other')!
+      return reply.status(201).send(addMemory(store, scope, text, category, { kind: 'user' }))
+    })
+    app.patch(`${base}/:id/memory/:memoryId`, async (request) => {
+      const { id, memoryId } = request.params as { id: string; memoryId: string }
+      return updateMemory(store, scopeOf(id), memoryId, request.body)
+    })
+    app.delete(`${base}/:id/memory/:memoryId`, async (request, reply) => {
+      const { id, memoryId } = request.params as { id: string; memoryId: string }
+      deleteMemory(store, scopeOf(id), memoryId)
+      return reply.status(204).send()
+    })
+  }
   // Projects were retired (BE-1): every old route answers 410. The data is in
   // data/archive/projects-*.json; this lists those files (names only).
   for (const url of ['/api/projects', '/api/projects/*']) {
@@ -606,14 +611,14 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (!agent) fail(404, `No agent with id "${id}"`)
     // The agent's own chat only: project task runs are kept apart.
     return store.runs
-      .filter((r) => r.agentId === id && r.projectId === undefined)
+      .filter((r) => r.agentId === id && r.projectId === undefined && r.groupId === undefined)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, RUNS_PER_SCOPE)
   })
 
   // Chat-first conversations. Every agent has a DM; it is created on first list.
   const conversationOr404 = (id: string) => {
-    const conversation = store.conversations.find((c) => c.id === id)
+    const conversation = store.conversations.find((c) => c.id === id && (c.kind !== 'group' || c.archivedAt === undefined))
     if (!conversation) fail(404, `No conversation with id "${id}"`)
     return conversation as Conversation
   }
@@ -626,8 +631,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         created = true
       }
     }
+    if (syncGroupLeads(store.conversations, store.agents)) created = true
     if (created) store.save()
     return store.conversations
+      .filter((c) => c.kind !== 'group' || c.archivedAt === undefined)
       .map((c) => summarize(store, c))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   })
@@ -635,7 +642,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.get('/api/conversations/:id/messages', async (request) => {
     const { id } = request.params as { id: string }
     const conversation = conversationOr404(id)
-    const query = request.query as { before?: unknown; limit?: unknown }
+    const query = request.query as { before?: unknown; after?: unknown; limit?: unknown }
     let limit = CONVERSATION_PAGE_SIZE
     if (query.limit !== undefined) {
       const n = Number(query.limit)
@@ -645,6 +652,14 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       limit = n
     }
     let messages = messagesOf(store, conversation.id)
+    if (query.after !== undefined) {
+      // BE-5 polling: everything after a message id, oldest first, a page at a time.
+      if (query.before !== undefined) fail(400, 'Use either "before" or "after", not both.')
+      const index = typeof query.after === 'string' ? messages.findIndex((m) => m.id === query.after) : -1
+      if (index === -1) fail(400, `No message "${String(query.after)}" in this conversation.`)
+      const newer = messages.slice(index + 1)
+      return { conversation: summarize(store, conversation), messages: newer.slice(0, limit), hasMore: newer.length > limit }
+    }
     if (query.before !== undefined) {
       if (typeof query.before !== 'string' || Number.isNaN(Date.parse(query.before))) {
         fail(400, 'before must be an ISO timestamp')
@@ -658,19 +673,24 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   // Send in a DM: runs the agent (same as POST /api/agents/:id/runs) and
   // returns the turn's messages. A failed run still returns its user message
   // and, when there is one, the error as the assistant message.
-  app.post('/api/conversations/:id/messages', async (request) => {
+  app.post('/api/conversations/:id/messages', async (request, reply) => {
     const { id } = request.params as { id: string }
     const conversation = conversationOr404(id)
-    if (conversation.kind !== 'dm') fail(400, 'Group chats arrive with BE-5.')
-    const agentId = conversation.agentId
-    const agent = store.agents.find((a) => a.id === agentId)
-    if (!agent) fail(404, `No agent for conversation "${id}"`)
     // `content` is the Phase 1 field; `text` stays as an alias through
     // Phase 1. When both are sent, `content` wins.
     const body = (request.body ?? {}) as { content?: unknown; text?: unknown }
     const raw = typeof body.content === 'string' ? body.content : typeof body.text === 'string' ? body.text : ''
     const text = raw.trim()
     if (!text) fail(400, 'Provide a "content" string.')
+    if (conversation.kind === 'group') {
+      // BE-5: 202 with the user's message; replies arrive in the background (poll with ?after=).
+      const userMessage = postGroupMessage(store, groupOr404(store, conversation.id), text)
+      void reply.status(202)
+      return { conversation: summarize(store, conversation), messages: [userMessage] }
+    }
+    const agentId = conversation.agentId
+    const agent = store.agents.find((a) => a.id === agentId)
+    if (!agent) fail(404, `No agent for conversation "${id}"`)
     const run = await runAgent(store, agent as Agent, text)
     const messages = messagesOf(store, conversation.id).filter((m) => m.runId === run.id)
     return { conversation: summarize(store, conversation), messages, run: { id: run.id, status: run.status, error: run.error } }
@@ -693,7 +713,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
     // Clears the agent's own chat; its project task runs stay (deleting the agent removes them).
-    store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined)
+    store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined || r.groupId !== undefined)
     clearAgentConversations(store, id, false)
     store.save()
     void reply.status(204)
@@ -937,12 +957,30 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     store.memories = store.memories.filter((m) => !(m.scope.kind === 'agent' && m.scope.agentId === id))
     removeAvatarFile(store, agent)
     clearAgentConversations(store, id, true)
+    removeAgentFromGroups(store, agent)
     store.save()
     void reply.status(204)
     return null
   })
 
   // --- BE-2: per-bot folders + Files API -------------------------------------
+  const sendFile = (reply: FastifyReply, file: FileContent, download: unknown) => {
+    const ascii = file.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+    void reply
+      .header('Content-Type', file.mime.startsWith('text/') ? `${file.mime}; charset=utf-8` : file.mime)
+      .header('Content-Length', String(file.size))
+      .header('X-Content-Type-Options', 'nosniff')
+      // Served files never run in the app's origin (HTML, SVG).
+      .header('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'")
+      .header('Cache-Control', 'no-store')
+    if (download === '1' || download === 'true') {
+      void reply.header('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    } else {
+      void reply.header('Content-Disposition', `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    }
+    return reply.send(file.body)
+  }
+
   const fileAgent = (id: string): Agent => {
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
@@ -963,21 +1001,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.get('/api/agents/:id/files/content', async (request, reply) => {
     const { id } = request.params as { id: string }
     const { path, download } = (request.query ?? {}) as { path?: unknown; download?: unknown }
-    const file = await readContent(store, fileAgent(id), path)
-    const ascii = file.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
-    void reply
-      .header('Content-Type', file.mime.startsWith('text/') ? `${file.mime}; charset=utf-8` : file.mime)
-      .header('Content-Length', String(file.size))
-      .header('X-Content-Type-Options', 'nosniff')
-      // Served files never run in the app's origin (HTML, SVG).
-      .header('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'")
-      .header('Cache-Control', 'no-store')
-    if (download === '1' || download === 'true') {
-      void reply.header('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
-    } else {
-      void reply.header('Content-Disposition', `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
-    }
-    return reply.send(file.body)
+    return sendFile(reply, await readContent(store, fileAgent(id), path), download)
   })
 
   // Raw uploads (any content type, up to 25 MiB) are parsed only in this scope.
@@ -991,6 +1015,16 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       if (path === undefined || path === '') fail(400, '"path" is required.')
       const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
       const entry = writeContent(store, agent, path, body, overwrite === '1' || overwrite === 'true')
+      void reply.status(201)
+      return entry
+    })
+    scope.put('/api/groups/:id/files/content', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const { path, overwrite } = (request.query ?? {}) as { path?: unknown; overwrite?: unknown }
+      const group = groupOr404(store, id)
+      if (path === undefined || path === '') fail(400, '"path" is required.')
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
+      const entry = writeGroupContent(store, group, path, body, overwrite === '1' || overwrite === 'true')
       void reply.status(201)
       return entry
     })
@@ -1018,6 +1052,77 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const agent = fileAgent(id)
     if (path === undefined || path === '') fail(400, '"path" is required.')
     trashPath(store, agent, path)
+    void reply.status(204)
+    return null
+  })
+
+  // --- BE-5: group chats ------------------------------------------------------
+  app.post('/api/groups', async (request, reply) => {
+    const group = createGroup(store, request.body)
+    store.save()
+    void reply.status(201)
+    return summarize(store, group)
+  })
+
+  app.get('/api/groups/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    return summarize(store, groupOr404(store, id))
+  })
+
+  app.patch('/api/groups/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const group = updateGroup(store, groupOr404(store, id), request.body)
+    store.save()
+    return summarize(store, group)
+  })
+
+  app.delete('/api/groups/:id', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    archiveGroup(store, groupOr404(store, id))
+    store.save()
+    void reply.status(204)
+    return null
+  })
+
+  app.get('/api/groups/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    return listGroupFolder(store, groupOr404(store, id), path)
+  })
+
+  app.get('/api/groups/:id/files/shared', async (request) => {
+    const { id } = request.params as { id: string }
+    return listGroupShared(store, groupOr404(store, id))
+  })
+
+  app.get('/api/groups/:id/files/content', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path, download } = (request.query ?? {}) as { path?: unknown; download?: unknown }
+    return sendFile(reply, await readGroupContent(store, groupOr404(store, id), path), download)
+  })
+
+  app.post('/api/groups/:id/files/folders', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { path?: unknown }
+    const group = groupOr404(store, id)
+    if (typeof body.path !== 'string' || body.path.trim() === '') fail(400, '"path" is required.')
+    const entry = makeGroupFolder(store, group, body.path)
+    void reply.status(201)
+    return entry
+  })
+
+  app.patch('/api/groups/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { from?: unknown; to?: unknown }
+    return moveGroupPath(store, groupOr404(store, id), body.from, body.to)
+  })
+
+  app.delete('/api/groups/:id/files', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    const group = groupOr404(store, id)
+    if (path === undefined || path === '') fail(400, '"path" is required.')
+    trashGroupPath(store, group, path)
     void reply.status(204)
     return null
   })

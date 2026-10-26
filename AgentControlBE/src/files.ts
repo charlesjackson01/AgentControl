@@ -128,7 +128,7 @@ function memoryMarkdown(store: WorkspaceStore, agent: Agent): string {
   return lines.join('\n')
 }
 
-function writeIfChanged(path: string, text: string): void {
+export function writeIfChanged(path: string, text: string): void {
   try {
     if (lstatSync(path).isSymbolicLink()) fail(400, 'Symbolic links are not allowed in bot folders.')
   } catch (err) {
@@ -164,7 +164,7 @@ export function ensureAllBotFolders(store: WorkspaceStore, log: (msg: string) =>
 }
 
 /** Unique destination under `dir` for `base` (adds -2, -3… on a clash). */
-function freeName(dir: string, base: string): string {
+export function freeName(dir: string, base: string): string {
   let name = base
   for (let n = 2; existsSync(join(dir, name)); n++) name = `${base}-${n}`
   return join(dir, name)
@@ -242,10 +242,14 @@ export function folderUsage(store: WorkspaceStore, agent: Agent): { bytes: numbe
  * (trash only, never live files); 413 if it still does not fit.
  */
 export function ensureRoom(store: WorkspaceStore, agent: Agent, adding: number, freeing = 0): void {
+  ensureRoomAt(botRoot(store, agent), trashDir(store, agent), adding, freeing, 'bot folder')
+}
+
+/** ensureRoom for any folder with its own trash (BE-5 group folders use it too). */
+export function ensureRoomAt(liveRoot: string, trash: string, adding: number, freeing: number, what: string): void {
   const quota = quotaBytes()
-  const live = folderBytes(botRoot(store, agent))
-  if (live - freeing + adding > quota) fail(413, `This would put the bot folder over its ${Math.round(quota / 1024 / 1024)} MiB limit.`)
-  const trash = trashDir(store, agent)
+  const live = folderBytes(liveRoot)
+  if (live - freeing + adding > quota) fail(413, `This would put the ${what} over its ${Math.round(quota / 1024 / 1024)} MiB limit.`)
   let trashBytes = folderBytes(trash)
   if (live - freeing + adding + trashBytes <= quota) return
   let batches: string[] = []
@@ -308,7 +312,7 @@ export function tempNoFollow(full: string, body: Buffer | string): string {
   return temporary
 }
 
-const byKindThenName = (a: FileEntry, b: FileEntry) =>
+export const byKindThenName = (a: FileEntry, b: FileEntry) =>
   a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1
 
 /** Bytes used on disk under the bot root (symlinks are not followed). */

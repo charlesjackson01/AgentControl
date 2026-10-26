@@ -23,6 +23,7 @@ import {
   tempNoFollow,
 } from './files.js'
 import type { Agent } from './shared/types.js'
+import { ensureGroupRoom, recordAddedBy } from './group-files.js'
 import type { WorkspaceStore } from './store.js'
 import { argError } from './tools/args.js'
 import type { FileItem, FileService, SearchHit } from './tools/types.js'
@@ -256,8 +257,8 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
       const freeing = mode === 'overwrite' && existing ? existing.size : 0
       if (r.space === 'bot') {
         clean(() => ensureRoom(store, agent, body.length, freeing))
-      } else if (folderBytes(r.root) - freeing + body.length > quotaBytes()) {
-        throw new Error(`This would put the group folder over its ${Math.round(quotaBytes() / 1024 / 1024)} MiB limit.`)
+      } else {
+        clean(() => ensureGroupRoom(store, group!.slug, body.length, freeing))
       }
       clean(() => mkdirsGuarded(r.root, r.parts.slice(0, -1)))
       if (mode === 'append' && existing) {
@@ -275,6 +276,7 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
           rmSync(temporary, { force: true })
         }
       }
+      if (r.space === 'group') recordAddedBy(store, group!.slug, r.parts.join('/'), agent.id)
       const info = statSync(full)
       return { path: r.shown, change: existing ? 'modified' : 'added', bytes: info.size, modifiedAt: info.mtime.toISOString() }
     },

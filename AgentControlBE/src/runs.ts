@@ -135,11 +135,15 @@ async function executeRunInner(
   // (oldest first). Placeholder seed runs with empty text are skipped. A
   // project task sees only runs of the same project; the agent's own chat
   // never sees project runs.
-  const history = store.runs
+  // BE-5: a group run gets the group transcript in its input instead, and
+  // group runs never become DM history.
+  const groupId = opts.group?.id
+  const history = groupId !== undefined ? [] : store.runs
     .filter(
       (r) =>
         r.agentId === agent.id &&
         r.projectId === projectId &&
+        r.groupId === undefined &&
         r.status === 'succeeded' &&
         r.input.trim() !== '' &&
         r.output.trim() !== '',
@@ -383,13 +387,14 @@ async function executeRunInner(
     ...(activity.steps.length + activity.filesChanged.length > 0 ? { activity } : {}),
     filesChanged: activity.filesChanged.map((f) => ({ ...f })),
     ...(projectId !== undefined ? { projectId } : {}),
+    ...(groupId !== undefined ? { groupId } : {}),
   }
 
   // Prepend, then trim this agent's runs in this scope (its own chat, or this
   // project) to the newest RUNS_PER_SCOPE, so project work never pushes the
   // agent's chat transcript out, nor one project another's.
   store.runs = [run, ...store.runs]
-  const scoped = store.runs.filter((r) => r.agentId === agent.id && r.projectId === projectId)
+  const scoped = store.runs.filter((r) => r.agentId === agent.id && r.projectId === projectId && r.groupId === groupId)
   if (scoped.length > RUNS_PER_SCOPE) {
     const drop = new Set(scoped.slice(RUNS_PER_SCOPE).map((r) => r.id))
     store.runs = store.runs.filter((r) => !drop.has(r.id))

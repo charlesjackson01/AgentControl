@@ -539,3 +539,13 @@ export interface ProjectArchiveFile {
 
 export const CONVERSATION_PAGE_SIZE = 50
 export const MAX_CONVERSATION_PAGE_SIZE = 200
+
+/** BE-10: GET /api/search?q=&limit= (palette). Each list is capped at `limit`. */
+export interface SearchResults {
+  agents: { id: string; name: string }[]
+  groups: { id: string; name: string }[]
+  /** Newest first. `snippet` is ~120 chars around the first match. */
+  messages: { conversationId: string; messageId: string; snippet: string; authorAgentId?: string; createdAt: string }[]
+  /** Files only (no folders), newest first. `ownerId` is the agent id, or the group's conversation id. Paths are relative to that root. */
+  files: { root: 'agent' | 'group'; ownerId: string; path: string; name: string; modifiedAt: string }[]
+}

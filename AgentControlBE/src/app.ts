@@ -1,3 +1,4 @@
+import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -624,6 +625,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     return conversation as Conversation
   }
 
+  app.get('/api/search', async (request) => {
+    const { q, limit } = parseSearchQuery(request.query as { q?: unknown; limit?: unknown })
+    return search(store, q, limit)
+  })
+
   app.get('/api/conversations', async () => {
     let created = false
     for (const agent of store.agents) {
@@ -668,7 +674,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       const before = query.before as string
       messages = messages.filter((m) => m.createdAt < before)
     }
-    return { conversation, messages: messages.slice(-limit), hasMore: messages.length > limit }
+    // BE-10: the first page carries the same summary as ?after= (unread count, typing).
+    return { conversation: summarize(store, conversation), messages: messages.slice(-limit), hasMore: messages.length > limit }
   })
 
   // Send in a DM: runs the agent (same as POST /api/agents/:id/runs) and

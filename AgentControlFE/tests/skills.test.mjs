@@ -79,7 +79,7 @@ describe('SKILL.md export round-trips through the import parser', () => {
       tools: [tool('csv_summary'), tool('read_note')],
     }
     const { markdown, parsed } = roundTrip(skill)
-    assert.deepEqual(parsed, { name: skill.name, description: skill.description, tag: 'Data', content: skill.content, tools: ['csv_summary', 'read_note'] })
+    assert.deepEqual(parsed, { name: skill.name, description: skill.description, tag: 'Data', content: skill.content, tools: ['csv_summary', 'read_note'], warnings: [] })
     assert.match(markdown, /^---\nname: csv-analysis\ndescription: .+\ntag: Data\ntools: csv_summary, read_note\n---\n\n# CSV Analysis/)
   })
 

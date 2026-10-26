@@ -115,5 +115,6 @@ export interface ToolEntry {
   /** Return a JSON-serializable value or a string; throw Error('…') for bad input. */
   handler(args: Record<string, unknown>, ctx: ToolContext): unknown
   /** BE-3: a step line for the reply's activity (e.g. "Read shared/x.pdf"); tools without it add no step. */
-  activity?(args: Record<string, unknown>): { summary: string; path?: string }
+  /** BE-3: the step line for the reply's activity; `failed` is used when the call failed. */
+  activity?(args: Record<string, unknown>): { summary: string; failed?: string; path?: string }
 }

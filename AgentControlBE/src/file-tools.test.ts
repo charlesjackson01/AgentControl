@@ -233,3 +233,59 @@ describe('run activity (BE-3)', () => {
     expect(reply?.activity).toEqual({ skills: [], ...expected })
   })
 })
+
+describe('failed runs and steps (BE-3 review)', () => {
+  const toolCall = (id: string, name: string, args: unknown) => ({ ok: true, status: 200, json: async () => ({ choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: '', tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] }), text: async () => '' })
+  const reply = (content: string) => ({ ok: true, status: 200, json: async () => ({ choices: [{ index: 0, message: { role: 'assistant', content } }] }), text: async () => '' })
+  const err = (status: number, body: string) => ({ ok: false, status, json: async () => ({}), text: async () => body })
+  const PEG = '{"error":{"code":500,"message":"Failed to parse input: output that does not match the expected peg-native format"}}'
+  function script(responses: unknown[]) {
+    const mock = vi.fn(async () => responses.shift() ?? reply('done'))
+    vi.stubGlobal('fetch', mock)
+    return mock
+  }
+  const dmReply = (run: AgentRun) => store.chatMessages.find((m) => m.runId === run.id && m.role === 'assistant')
+
+  it("words a failed step as Couldn't …", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const a = await makeBot('Alpha')
+    script([toolCall('c1', 'write_file', { path: 'memory/x.md', content: 'x' }), reply('ok')])
+    const run = (await inject('POST', `/api/agents/${a.id}/runs`, { input: 'go' })).json() as AgentRun
+    expect(run.activity?.steps).toEqual([{ tool: 'write_file', summary: "Couldn't write memory/x.md", ok: false, path: 'memory/x.md' }])
+    expect(run.activity?.filesChanged).toEqual([])
+  })
+
+  it('keeps activity.filesChanged on a failed run and its DM reply', async () => {
+    const a = await makeBot('Alpha')
+    script([toolCall('c1', 'write_file', { path: 'workspace/notes/todo.md', content: '- a' }), err(503, 'busy')])
+    const run = (await inject('POST', `/api/agents/${a.id}/runs`, { input: 'go' })).json() as AgentRun
+    expect(run.status).toBe('failed')
+    const changed = [{ path: 'workspace/notes/todo.md', change: 'added', bytes: 3, modifiedAt: expect.any(String) }]
+    expect(run.activity?.filesChanged).toEqual(changed)
+    expect(dmReply(run)?.activity?.filesChanged).toEqual(changed)
+  })
+
+  it('retries a malformed-tool-call 500 once, then carries on', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const a = await makeBot('Alpha')
+    const mock = script([err(500, PEG), toolCall('c1', 'list_files', {}), reply('Here you go.')])
+    const run = (await inject('POST', `/api/agents/${a.id}/runs`, { input: 'go' })).json() as AgentRun
+    expect(run.status).toBe('succeeded')
+    expect(run.output).toBe('Here you go.')
+    expect(mock).toHaveBeenCalledTimes(3)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('retrying once'))).toBe(true)
+  })
+
+  it('retries only once per run, and never other 5xx errors', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const a = await makeBot('Alpha')
+    const twice = script([err(500, PEG), err(500, PEG)])
+    const run = (await inject('POST', `/api/agents/${a.id}/runs`, { input: 'go' })).json() as AgentRun
+    expect(run.status).toBe('failed')
+    expect(run.error).toContain('peg-native')
+    expect(twice).toHaveBeenCalledTimes(2)
+    const other = script([err(500, 'Internal Server Error')])
+    expect(((await inject('POST', `/api/agents/${a.id}/runs`, { input: 'go' })).json() as AgentRun).status).toBe('failed')
+    expect(other).toHaveBeenCalledTimes(1)
+  })
+})

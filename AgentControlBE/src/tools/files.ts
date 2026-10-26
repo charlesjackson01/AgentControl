@@ -20,8 +20,9 @@ function filesOf(ctx: ToolContext): FileService {
   return ctx.files
 }
 
-function step(summary: string, path?: string): { summary: string; path?: string } {
-  return { summary: summary.length > 120 ? `${summary.slice(0, 119)}…` : summary, ...(path ? { path: path.slice(0, 300) } : {}) }
+const clip = (s: string): string => (s.length > 120 ? `${s.slice(0, 119)}…` : s)
+function step(summary: string, failed: string, path?: string): { summary: string; failed: string; path?: string } {
+  return { summary: clip(summary), failed: clip(failed), ...(path ? { path: path.slice(0, 300) } : {}) }
 }
 const shownArg = (args: Record<string, unknown>): string => (typeof args.path === 'string' ? args.path.trim().replace(/\/$/, '') : '')
 
@@ -47,7 +48,7 @@ export const fileTools: ToolEntry[] = [
         recursive: { type: 'boolean' },
       },
     },
-    activity: (args) => step(`Listed ${shownArg(args) || 'files'}`, shownArg(args) || undefined),
+    activity: (args) => step(`Listed ${shownArg(args) || 'files'}`, `Couldn't list ${shownArg(args) || 'files'}`, shownArg(args) || undefined),
     handler(args, ctx) {
       const recursive = readBoolean(args, 'recursive', false)
       const out = filesOf(ctx).list(args.path, { recursive, max: MAX_LIST })
@@ -74,7 +75,7 @@ export const fileTools: ToolEntry[] = [
       },
       required: ['path'],
     },
-    activity: (args) => step(`Read ${shownArg(args) || 'a file'}`, shownArg(args) || undefined),
+    activity: (args) => step(`Read ${shownArg(args) || 'a file'}`, `Couldn't read ${shownArg(args) || 'a file'}`, shownArg(args) || undefined),
     handler(args, ctx) {
       const example = { path: 'shared/notes.md' }
       readString(args, 'path', { required: true, example })
@@ -107,7 +108,10 @@ export const fileTools: ToolEntry[] = [
       properties: { query: { type: 'string' }, path: { type: 'string' } },
       required: ['query'],
     },
-    activity: (args) => step(`Searched ${shownArg(args) || 'files'} for "${String(args.query ?? '').slice(0, 60)}"`, shownArg(args) || undefined),
+    activity: (args) => {
+      const what = `${shownArg(args) || 'files'} for "${String(args.query ?? '').slice(0, 60)}"`
+      return step(`Searched ${what}`, `Couldn't search ${what}`, shownArg(args) || undefined)
+    },
     handler(args, ctx) {
       const example = { query: 'invoice', path: 'shared/' }
       const query = readString(args, 'query', { required: true, max: 200, example })!.trim()
@@ -137,7 +141,7 @@ export const fileTools: ToolEntry[] = [
     },
     activity: (args) => {
       const verb = args.mode === 'overwrite' ? 'Wrote' : args.mode === 'append' ? 'Appended to' : 'Created'
-      return step(`${verb} ${shownArg(args) || 'a file'}`, shownArg(args) || undefined)
+      return step(`${verb} ${shownArg(args) || 'a file'}`, `Couldn't write ${shownArg(args) || 'a file'}`, shownArg(args) || undefined)
     },
     handler(args, ctx) {
       const example = { path: 'workspace/summary.md', content: '# Summary', mode: 'create' }
@@ -157,7 +161,7 @@ export const fileTools: ToolEntry[] = [
     effect: 'write',
     description: 'Make a folder in workspace/ (or group:shared/ in a group). Example: {"path":"workspace/drafts"}',
     parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
-    activity: (args) => step(`Made folder ${shownArg(args)}`.trim(), shownArg(args) || undefined),
+    activity: (args) => step(`Made folder ${shownArg(args)}`.trim(), `Couldn't make folder ${shownArg(args)}`.trim(), shownArg(args) || undefined),
     handler(args, ctx) {
       readString(args, 'path', { required: true, example: { path: 'workspace/drafts' } })
       return filesOf(ctx).makeFolder(args.path)
@@ -170,7 +174,7 @@ export function recordStep(ctx: ToolContext, tool: string, entry: ToolEntry, arg
   if (!entry.activity || !ctx.activity || ctx.activity.steps.length >= MAX_STEPS) return
   try {
     const s = entry.activity(args)
-    ctx.activity.steps.push({ tool, summary: s.summary, ok, ...(s.path ? { path: s.path } : {}) })
+    ctx.activity.steps.push({ tool, summary: ok ? s.summary : (s.failed ?? `Couldn't ${s.summary}`), ok, ...(s.path ? { path: s.path } : {}) })
   } catch {
     // a step line is best-effort
   }

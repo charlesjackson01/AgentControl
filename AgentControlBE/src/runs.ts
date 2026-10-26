@@ -183,6 +183,7 @@ async function executeRunInner(
   let steps = 0
   let exhausted = false
   let contextExhausted = false
+  let formatRetried = false
   let forceFinal = false
   let callsThisRun = 0
   let result: ChatResult | undefined
@@ -258,7 +259,7 @@ async function executeRunInner(
     messages.push({ role: 'user', content: input })
     messages.push(...loopMessages)
 
-    result = await chatCompletion(
+    const callUpstream = () => chatCompletion(
       baseUrl,
       apiKey,
       agent.modelId,
@@ -271,8 +272,18 @@ async function executeRunInner(
       endpoint.proxyUrl,
       { disableThinking: endpoint.disableThinking === true },
     )
+    result = await callUpstream()
     steps += 1
     totalLatency += result.latencyMs
+    // A 500 for a badly formatted tool call (llama-swap: "does not match the
+    // expected ... format") is the model's output, not a down server: retry
+    // that call once per run. Other 5xx errors are left alone.
+    if (!result.ok && !formatRetried && !signal?.aborted && isToolFormatError(result.error)) {
+      formatRetried = true
+      console.warn(`Run ${runId} is retrying once: ${result.error}`)
+      result = await callUpstream()
+      totalLatency += result.latencyMs
+    }
 
     if (!result.ok) break
     if (result.toolCalls && result.toolCalls.length > 0) {
@@ -398,4 +409,9 @@ function parseArgs(raw: string): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+/** Upstream 500 caused by the model's malformed tool-call output (e.g. llama-swap's peg-native parser). */
+export function isToolFormatError(error: string | undefined): boolean {
+  return typeof error === 'string' && /^Upstream responded 500\b/.test(error) && /does not match the expected .*format/i.test(error)
 }

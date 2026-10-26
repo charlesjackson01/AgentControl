@@ -38,7 +38,16 @@ export interface ModelsResult {
  * "fetch failed" and puts ECONNREFUSED, ENOTFOUND, SOCKS errors and the like
  * in `cause`.
  */
+/** `scheme://user:pass@host` and `scheme://token@host` become `scheme://***@host` anywhere in the text. */
+export function redactUrlCredentials(text: string): string {
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, '$1***@')
+}
+
 export function describeFetchError(err: unknown): string {
+  return redactUrlCredentials(describeFetchErrorRaw(err))
+}
+
+function describeFetchErrorRaw(err: unknown): string {
   if (!(err instanceof Error)) return 'Request failed'
   const parts: string[] = [err.message]
   let cause = (err as { cause?: unknown }).cause
@@ -275,7 +284,7 @@ export async function chatCompletion(
         ok: false,
         content: '',
         latencyMs,
-        error: `Upstream responded ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`,
+        error: redactUrlCredentials(`Upstream responded ${response.status}${detail ? `: ${detail.slice(0, 300)}` : ''}`),
       }
     }
     const body = (await response.json()) as { choices?: unknown }

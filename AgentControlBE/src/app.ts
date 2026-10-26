@@ -6,7 +6,7 @@ import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
 import { NOTES_RETIRED, PROJECTS_RETIRED } from './archive.js'
 import { addMemory, deleteMemory, listMemory, memoryPromptBlock, parseCategory, parseText, sameScope, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
-import { fetchModels, PROXY_PROTOCOLS } from './upstream.js'
+import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
@@ -405,11 +405,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.setErrorHandler((error, _request, reply) => {
     const err = error as Error & { statusCode?: number }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
-    if (status >= 500) app.log.error(err)
+    const message = redactUrlCredentials(err.message ?? '')
+    if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
     void reply.status(status).send({
       statusCode: status,
       error: status >= 500 ? 'Internal Server Error' : 'Request Error',
-      message: err.message,
+      message,
     })
   })
 

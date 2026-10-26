@@ -42,6 +42,47 @@ describe('SKILL.md import preview matches backend parsing', () => {
   })
 })
 
+describe('SKILL.md import preview warnings match backend parsing (long skills)', () => {
+  const longDescription = 'Summarize the data carefully. '.repeat(40).trim() // 1199 characters, over 1024
+  const longCompatibility = 'Requires python3 and network access. '.repeat(15).trim() // 554 characters, over 500
+  const longBody = Array.from({ length: 520 }, (_, i) => `${i + 1}. Step.`).join('\n') // 520 lines, over 500
+  const skill = (header, body = 'Follow these instructions.') => `---\nname: sample\n${header}\n---\n\n${body}\n`
+  const cases = [
+    ['a description over the limit', skill(`description: ${longDescription}`), ['description is 1199 characters (spec limit 1024)']],
+    ['compatibility over the limit', skill(`description: a skill\ncompatibility: ${longCompatibility}`), ['compatibility is 554 characters (spec limit 500)']],
+    ['a body over the line limit', skill('description: a skill', longBody), ['body is 520 lines (spec recommends under 500)']],
+    [
+      'all three with valid YAML',
+      skill(`description: ${longDescription}\ncompatibility: ${longCompatibility}`, longBody),
+      ['description is 1199 characters (spec limit 1024)', 'compatibility is 554 characters (spec limit 500)', 'body is 520 lines (spec recommends under 500)'],
+    ],
+    [
+      'all three plus invalid YAML',
+      skill(`description: ${longDescription}\ncompatibility: ${longCompatibility}\nbroken: [unclosed`, longBody),
+      [
+        'frontmatter is not valid YAML; read line by line',
+        'description is 1199 characters (spec limit 1024)',
+        'compatibility is 554 characters (spec limit 500)',
+        'body is 520 lines (spec recommends under 500)',
+      ],
+    ],
+  ]
+  for (const [label, input, expected] of cases) {
+    it(`warns for ${label} like the backend`, () => {
+      const preview = parsePreview(input)
+      const backend = parseSkillMarkdown(input)
+      assert.deepEqual(preview.warnings, backend.warnings)
+      assert.deepEqual(backend.warnings, expected)
+      assert.deepEqual(preview, backend)
+    })
+  }
+  it('measures the fixtures as intended', () => {
+    assert.equal(longDescription.length, 1199)
+    assert.equal(longCompatibility.length, 554)
+    assert.equal(longBody.split('\n').length, 520)
+  })
+})
+
 describe('tool selection and import', () => {
   const known = { name: 'remember', description: 'Save one short lasting fact.', parameters: { type: 'object' }, category: 'memory', effect: 'write' }
   const legacy = { name: 'custom_legacy', description: 'Original declaration', parameters: { retained: true } }

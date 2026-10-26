@@ -110,12 +110,20 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
   }
 
   function writableTarget(raw: unknown, example: Record<string, unknown>): Resolved {
+    const where = group ? 'workspace/ (your own files) or group:shared/ (the group)' : 'workspace/'
+    const notWritable = (shown: string) =>
+      argError(`You can only write inside ${where}; "${shown || '/'}" is read-only.`, { ...example, path: 'workspace/notes.md' })
+    // An unknown top-level path (e.g. notes/x.md) gets the write hint, not the read-zone list.
+    const text = typeof raw === 'string' ? raw.trim() : raw
+    if (typeof text !== 'string' || !text.startsWith(GROUP)) {
+      const parts = clean(() => parseClientPath(text))
+      if (parts.length > 0 && !(BOT_READ_ZONES.includes(parts[0]!) || (parts.length === 1 && parts[0] === 'BOT.md'))) {
+        throw notWritable(parts.join('/'))
+      }
+    }
     const r = resolvePath(raw, example)
     const ok = r.space === 'group' ? r.parts.length >= 2 : r.parts[0] === 'workspace' && r.parts.length >= 2
-    if (!ok) {
-      const where = group ? 'workspace/ (your own files) or group:shared/ (the group)' : 'workspace/'
-      throw argError(`You can only write inside ${where}; "${r.shown || '/'}" is read-only.`, { ...example, path: 'workspace/notes.md' })
-    }
+    if (!ok) throw notWritable(r.shown)
     if (r.space === 'group' && !existsSync(r.root)) throw new Error('This group has no folder yet.')
     return r
   }

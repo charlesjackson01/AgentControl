@@ -98,6 +98,22 @@ describe('file tools: isolation and zones', () => {
     expect(out.content).toContain('You can only write inside workspace/')
   })
 
+  it('a write to an unknown top-level path gets the write hint, not the read-zone list', async () => {
+    const a = await makeBot('Alpha')
+    for (const [tool, args] of [['write_file', { path: 'notes/x.md', content: 'x' }], ['make_folder', { path: 'notes/drafts' }]] as const) {
+      const out = await call(ctxFor(a), tool, args)
+      expect(out.ok).toBe(false)
+      expect(out.content).toContain('You can only write inside workspace/; "notes')
+      expect(out.content).not.toContain('Use shared/')
+    }
+    mkdirSync(join(dir, 'groups', 'crew', 'shared'), { recursive: true })
+    const inGroup = await call(ctxFor(a, { slug: 'crew' }), 'write_file', { path: 'notes/x.md', content: 'x' })
+    expect(inGroup.content).toContain('You can only write inside workspace/ (your own files) or group:shared/ (the group); "notes/x.md"')
+    expect(existsSync(join(root(a), 'notes'))).toBe(false)
+    // Reads keep the read-zone hint.
+    expect((await call(ctxFor(a), 'read_file', { path: 'notes/x.md' })).content).toContain('Use shared/, workspace/, memory/ or BOT.md')
+  })
+
   it('never sends an absolute server path', async () => {
     const a = await makeBot('Alpha')
     const ctx = ctxFor(a)

@@ -8,7 +8,7 @@ import { z } from 'zod'
 import { botRoot, folderBytes } from './files.js'
 import { fail } from './http.js'
 import { INTERNET_POLICIES, MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES, type Agent, type InternetPolicy, type Skill } from './shared/types.js'
-import type { WorkspaceStore } from './store.js'
+import { assignAgentSlug, type WorkspaceStore } from './store.js'
 import { chatCompletion } from './upstream.js'
 
 export const SANDBOX_LIMITS = { cpus: 2, memoryMb: 1024, timeoutSec: 60, pids: 256, outputMb: 200, diskQuotaMb: 500 } as const
@@ -33,8 +33,18 @@ export function sandboxInfo(store: WorkspaceStore, agent: Agent): SandboxInfo {
   }
 }
 
+/** Chip labels for the /new card (as in mockup 02c and the skills page). */
+export const SKILL_SOURCE_LABELS: Record<string, string> = {
+  core: 'AgentControl core',
+  superpowers: 'superpowers',
+  anthropics: 'anthropics/skills',
+  ecc: 'ECC essentials',
+  custom: 'Custom',
+}
+
 export interface AgentDefaults {
-  skills: { sourceId: string; count: number }[]
+  /** skillIds: the default-on skills of that source, so unticking a chip can drop exactly those. */
+  skills: { sourceId: string; label: string; count: number; skillIds: string[] }[]
   internetPolicy: InternetPolicy
   endpointId: string
   modelId: string
@@ -42,16 +52,16 @@ export interface AgentDefaults {
 
 /** Where a new bot starts: the default-on skills by source, and Primary's endpoint and model. */
 export function agentDefaults(store: WorkspaceStore, defaultSkillIds: string[]): AgentDefaults {
-  const counts = new Map<string, number>()
+  const bySource = new Map<string, string[]>()
   for (const id of defaultSkillIds) {
     const skill = store.skills.find((s: Skill) => s.id === id)
-    if (skill) counts.set(skill.sourceId, (counts.get(skill.sourceId) ?? 0) + 1)
+    if (skill) bySource.set(skill.sourceId, [...(bySource.get(skill.sourceId) ?? []), skill.id])
   }
   const primary = store.agents.find((a) => a.isPrimary)
   const endpoint = (primary && store.endpoints.find((e) => e.id === primary.endpointId)) ?? store.endpoints[0]
   const modelId = primary && endpoint && primary.endpointId === endpoint.id ? primary.modelId : (endpoint?.defaultModel ?? '')
   return {
-    skills: [...counts].map(([sourceId, count]) => ({ sourceId, count })),
+    skills: [...bySource].map(([sourceId, skillIds]) => ({ sourceId, label: SKILL_SOURCE_LABELS[sourceId] ?? sourceId, count: skillIds.length, skillIds })),
     internetPolicy: 'ask',
     endpointId: endpoint?.id ?? '',
     modelId,
@@ -64,21 +74,65 @@ export const DRAFT_TIMEOUT_MS = 30_000
 /** Room for a reasoning model to think before the JSON (muse-glimmer needed ~826). */
 export const DRAFT_MAX_TOKENS = 2_500
 
+export const AVATAR_CHOICES = 4
+/** Used to fill avatarChoices up to 4 when the model offers fewer. */
+const FILLER_EMOJI = ['🤖', '✨', '🧠', '📋', '💡']
+const Emoji = z.string().trim().min(1).max(16).refine((v) => !/[\s<>]/.test(v), 'one emoji, no spaces')
+
+/** What the model sends: avatarChoices (1-4) and/or avatarEmoji. */
+const ModelDraftSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  role: z.string().trim().max(80),
+  description: z.string().trim().max(300),
+  avatarEmoji: Emoji.optional(),
+  avatarChoices: z.array(Emoji).min(1).max(8).optional(),
+  rules: z.array(z.string().trim().min(1).max(MAX_AGENT_RULE_CHARS)).max(MAX_AGENT_RULES),
+}).refine((d) => d.avatarEmoji !== undefined || (d.avatarChoices?.length ?? 0) > 0, { message: 'needs avatarChoices', path: ['avatarChoices'] })
+
 export const DraftSchema = z.object({
   name: z.string().trim().min(1).max(60),
   role: z.string().trim().max(80),
   description: z.string().trim().max(300),
-  avatarEmoji: z.string().trim().max(16).refine((v) => !/[\s<>]/.test(v), 'one emoji, no spaces'),
+  /** Always avatarChoices[0]. */
+  avatarEmoji: Emoji,
+  /** 4 distinct emoji for the card's picker. */
+  avatarChoices: z.array(Emoji).length(AVATAR_CHOICES),
   rules: z.array(z.string().trim().min(1).max(MAX_AGENT_RULE_CHARS)).max(MAX_AGENT_RULES),
 })
 export type BotDraft = z.infer<typeof DraftSchema>
-export const BLANK_DRAFT: BotDraft = { name: '', role: '', description: '', avatarEmoji: '', rules: [] }
+export type DraftWarningCode = 'no_primary' | 'upstream' | 'invalid_output' | 'cancelled'
+/** The blank fallback has no emoji (avatarEmoji '', avatarChoices []). */
+export type DraftResult = (BotDraft | (Omit<BotDraft, 'avatarEmoji' | 'avatarChoices'> & { avatarEmoji: ''; avatarChoices: [] })) & { warning?: string; warningCode?: DraftWarningCode }
+export const BLANK_DRAFT = { name: '', role: '', description: '', avatarEmoji: '' as const, avatarChoices: [] as [], rules: [] as string[] }
+
+/** A previous draft sent back for "Reply to change the draft": every field optional, same limits. */
+export const PreviousDraftSchema = z.object({
+  name: z.string().max(60).optional(),
+  role: z.string().max(80).optional(),
+  description: z.string().max(300).optional(),
+  avatarEmoji: z.string().max(16).optional(),
+  avatarChoices: z.array(z.string().max(16)).max(8).optional(),
+  rules: z.array(z.string().max(MAX_AGENT_RULE_CHARS)).max(MAX_AGENT_RULES).optional(),
+})
+export type PreviousDraft = z.infer<typeof PreviousDraftSchema>
 
 const DRAFT_SYSTEM = [
   'You design chat assistant bots. Reply with one JSON object and nothing else, with exactly these keys:',
   '{"name": string (1-60 chars), "role": string (<= 80 chars), "description": string (<= 300 chars),',
-  ` "avatarEmoji": string (one emoji), "rules": string[] (0-${MAX_AGENT_RULES} short rules for how the bot behaves)}`,
+  ` "avatarChoices": string[] (${AVATAR_CHOICES} different single emoji that fit the bot, best first),`,
+  ` "rules": string[] (0-${MAX_AGENT_RULES} short rules for how the bot behaves)}`,
+  'When you are given a current draft, return the whole draft with the requested changes and keep everything else.',
 ].join('\n')
+
+/** 4 distinct choices: the model's (avatarEmoji first when it sent one), then fillers. */
+function avatarChoicesOf(d: { avatarEmoji?: string; avatarChoices?: string[] }): string[] {
+  const out: string[] = []
+  for (const e of [...(d.avatarEmoji ? [d.avatarEmoji] : []), ...(d.avatarChoices ?? []), ...FILLER_EMOJI]) {
+    if (!out.includes(e)) out.push(e)
+    if (out.length === AVATAR_CHOICES) break
+  }
+  return out
+}
 
 /** The JSON object in a reply: the whole text, a ```json fence, or the outermost {...}. */
 export function extractJson(text: string): unknown {
@@ -96,14 +150,20 @@ export function extractJson(text: string): unknown {
 
 export type DraftLog = (msg: string) => void
 
-export async function draftBot(store: WorkspaceStore, prompt: string, log: DraftLog = () => {}, signal?: AbortSignal): Promise<BotDraft & { warning?: string }> {
-  const blank = (warning: string, reason: string) => {
-    log(`POST /api/agents/draft fell back to a blank draft: ${reason}`)
-    return { ...BLANK_DRAFT, rules: [], warning }
+export async function draftBot(
+  store: WorkspaceStore,
+  prompt: string,
+  log: DraftLog = () => {},
+  signal?: AbortSignal,
+  previous?: PreviousDraft,
+): Promise<DraftResult> {
+  const blank = (warningCode: DraftWarningCode, warning: string, reason: string): DraftResult => {
+    log(`POST /api/agents/draft fell back to a blank draft (${warningCode}): ${reason}`)
+    return { ...BLANK_DRAFT, avatarChoices: [], rules: [], warning, warningCode }
   }
   const primary = store.agents.find((a) => a.isPrimary)
   const endpoint = primary && store.endpoints.find((e) => e.id === primary.endpointId)
-  if (!primary || !endpoint) return blank('No Primary bot with an endpoint to write the draft. Fill it in by hand.', 'no Primary bot with an endpoint')
+  if (!primary || !endpoint) return blank('no_primary', 'No Primary bot with an endpoint to write the draft. Fill it in by hand.', 'no Primary bot with an endpoint')
   const timeoutMs = endpoint.timeoutMs ?? DRAFT_TIMEOUT_MS
   let result: Awaited<ReturnType<typeof chatCompletion>>
   try {
@@ -111,7 +171,7 @@ export async function draftBot(store: WorkspaceStore, prompt: string, log: Draft
       endpoint.baseUrl,
       store.endpointKeys[endpoint.id],
       primary.modelId,
-      [{ role: 'system', content: DRAFT_SYSTEM }, { role: 'user', content: prompt }],
+      [{ role: 'system', content: DRAFT_SYSTEM }, { role: 'user', content: draftRequest(prompt, previous) }],
       timeoutMs,
       DRAFT_MAX_TOKENS,
       undefined,
@@ -121,22 +181,36 @@ export async function draftBot(store: WorkspaceStore, prompt: string, log: Draft
       { disableThinking: endpoint.disableThinking === true },
     )
   } catch (err) {
-    return blank("Primary couldn't write a draft right now. Fill it in by hand.", `upstream threw: ${err instanceof Error ? err.message : String(err)}`)
+    return blank('upstream', "Primary couldn't write a draft right now. Fill it in by hand.", `upstream threw: ${err instanceof Error ? err.message : String(err)}`)
   }
   const where = `endpoint ${endpoint.id}, model ${primary.modelId}, ${result.latencyMs}ms, timeout ${timeoutMs}ms, finish_reason ${result.finishReason ?? 'none'}`
-  if (!result.ok && signal?.aborted) return blank('The draft was cancelled.', `cancelled by the client (${where})`)
-  if (!result.ok) return blank("Primary couldn't write a draft right now. Fill it in by hand.", `${result.error ?? 'upstream error'} (${where})`)
+  if (!result.ok && signal?.aborted) return blank('cancelled', 'The draft was cancelled.', `cancelled by the client (${where})`)
+  if (!result.ok) return blank('upstream', "Primary couldn't write a draft right now. Fill it in by hand.", `${result.error ?? 'upstream error'} (${where})`)
   const json = extractJson(result.content)
   if (json === undefined) {
     const cut = result.finishReason === 'length' ? `; the reply hit max_tokens ${DRAFT_MAX_TOKENS}` : ''
-    return blank("Primary's draft wasn't usable. Fill it in by hand.", `no JSON object in the reply${cut} (${where})`)
+    return blank('invalid_output', "Primary's draft wasn't usable. Fill it in by hand.", `no JSON object in the reply${cut} (${where})`)
   }
-  const parsed = DraftSchema.safeParse(json)
+  const parsed = ModelDraftSchema.safeParse(json)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
-    return blank("Primary's draft wasn't usable. Fill it in by hand.", `draft failed validation at "${issue?.path.join('.') ?? ''}": ${issue?.message ?? 'invalid'} (${where})`)
+    return blank('invalid_output', "Primary's draft wasn't usable. Fill it in by hand.", `draft failed validation at "${issue?.path.join('.') ?? ''}": ${issue?.message ?? 'invalid'} (${where})`)
   }
-  return parsed.data
+  const { avatarEmoji: _one, avatarChoices: _many, ...fields } = parsed.data
+  const avatarChoices = avatarChoicesOf(parsed.data)
+  return { ...fields, avatarEmoji: avatarChoices[0]!, avatarChoices }
+}
+
+/** The user turn: the prompt alone, or the current draft plus the requested change. */
+export function draftRequest(prompt: string, previous?: PreviousDraft): string {
+  if (!previous || Object.keys(previous).length === 0) return prompt
+  return `Current draft:\n${JSON.stringify(previous)}\n\nChange it like this:\n${prompt}`
+}
+
+/** GET /api/agents/slug-preview: the folder name POST /api/agents would give this name now. */
+export function slugPreview(store: WorkspaceStore, name: string): string {
+  const isPrimary = !store.agents.some((a) => a.isPrimary)
+  return assignAgentSlug(name, isPrimary, new Set(store.agents.map((a) => a.slug)))
 }
 
 export function registerSandboxRoutes(app: FastifyInstance, store: WorkspaceStore, deps: { defaultSkillIds: () => string[] }): void {
@@ -171,18 +245,32 @@ export function registerSandboxRoutes(app: FastifyInstance, store: WorkspaceStor
 
   app.get('/api/agents/defaults', async () => agentDefaults(store, deps.defaultSkillIds()))
 
+  app.get('/api/agents/slug-preview', async (request) => {
+    const name = (request.query as Record<string, unknown>).name
+    if (typeof name !== 'string' || !name.trim()) fail(400, 'Send the bot name, e.g. /api/agents/slug-preview?name=Trip%20Planner.')
+    if (name.length > 200) fail(400, '"name" is too long.')
+    return { slug: slugPreview(store, name.trim()) }
+  })
+
   app.post('/api/agents/draft', async (request, reply) => {
     const body = request.body
     if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object, e.g. {"prompt":"A bot that plans trips"}.')
     const prompt = (body as Record<string, unknown>).prompt
     if (typeof prompt !== 'string' || !prompt.trim()) fail(400, 'Describe the bot in "prompt".')
     if (prompt.length > MAX_DRAFT_PROMPT_CHARS) fail(400, `"prompt" can be at most ${MAX_DRAFT_PROMPT_CHARS} characters.`)
+    const rawPrevious = (body as Record<string, unknown>).previous
+    let previous: PreviousDraft | undefined
+    if (rawPrevious !== undefined && rawPrevious !== null) {
+      const p = PreviousDraftSchema.safeParse(rawPrevious)
+      if (!p.success) fail(400, `"previous" must be the draft object the card shows (problem at "${p.error.issues[0]?.path.join('.') ?? ''}").`)
+      previous = p.data
+    }
     // FE-5 Cancel: when the client drops the request, stop the upstream call too.
     const cancel = new AbortController()
     const onClose = () => { if (!reply.raw.writableFinished) cancel.abort() }
     reply.raw.on('close', onClose)
     try {
-      return await draftBot(store, prompt.trim(), (msg) => request.log.warn(msg), cancel.signal)
+      return await draftBot(store, prompt.trim(), (msg) => request.log.warn(msg), cancel.signal, previous)
     } finally {
       reply.raw.off('close', onClose)
     }

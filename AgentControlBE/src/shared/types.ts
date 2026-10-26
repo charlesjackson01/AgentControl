@@ -254,7 +254,8 @@ export interface Agent {
 export interface AgentInput {
   name: string
   description: string
-  instructions: string
+  /** Optional since BE-8b (FE-5's card has none); defaults to ''. */
+  instructions?: string
   modelId: string
   endpointId: string
   /** Create: honored only when no primary exists. Update: true transfers the role. */

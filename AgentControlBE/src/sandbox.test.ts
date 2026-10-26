@@ -150,7 +150,7 @@ describe('POST /api/agents/draft', () => {
     const before = store.agents.length
     const res = await inject('POST', '/api/agents/draft', { prompt: 'A bot that plans trips' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual(good)
+    expect(res.json()).toEqual({ ...good, avatarChoices: ['✈️', '🤖', '✨', '🧠'] })
     expect(store.agents.length).toBe(before)
     expect(mock).toHaveBeenCalledTimes(1)
     const sent = JSON.parse((mock.mock.calls[0] as unknown as [string, { body: string }])[1].body)
@@ -161,7 +161,7 @@ describe('POST /api/agents/draft', () => {
   it('falls back with a warning when there is no Primary, without calling upstream', async () => {
     const mock = mockChat(JSON.stringify(good))
     const res = await inject('POST', '/api/agents/draft', { prompt: 'anything' })
-    expect(res.json()).toMatchObject({ name: '', rules: [] })
+    expect(res.json()).toMatchObject({ name: '', rules: [], avatarChoices: [], warningCode: 'no_primary' })
     expect(res.json().warning).toBeTruthy()
     expect(mock).not.toHaveBeenCalled()
   })
@@ -172,7 +172,7 @@ describe('POST /api/agents/draft', () => {
       mockChat(reply)
       const res = await inject('POST', '/api/agents/draft', { prompt: 'anything' })
       expect(res.statusCode).toBe(200)
-      expect(res.json()).toMatchObject({ name: '', role: '', description: '', avatarEmoji: '', rules: [] })
+      expect(res.json()).toMatchObject({ name: '', role: '', description: '', avatarEmoji: '', avatarChoices: [], rules: [], warningCode: 'invalid_output' })
       expect(typeof res.json().warning).toBe('string')
     }
   })
@@ -182,7 +182,7 @@ describe('POST /api/agents/draft', () => {
     mockChat(new Error('connect ECONNREFUSED'))
     const res = await inject('POST', '/api/agents/draft', { prompt: 'anything' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toMatchObject({ name: '', rules: [] })
+    expect(res.json()).toMatchObject({ name: '', rules: [], warningCode: 'upstream' })
     expect(res.json().warning).toBeTruthy()
   })
 
@@ -230,7 +230,7 @@ describe('POST /api/agents/draft', () => {
     cancel.abort()
     const out = await pending
     expect(seen?.aborted).toBe(true)
-    expect(out).toMatchObject({ name: '', warning: 'The draft was cancelled.' })
+    expect(out).toMatchObject({ name: '', warning: 'The draft was cancelled.', warningCode: 'cancelled' })
     expect(logs.at(-1)).toContain('cancelled by the client')
   })
 
@@ -265,5 +265,70 @@ describe('POST /api/agents/draft', () => {
     expect(extractJson('Sure!\n```json\n{"a":2}\n```')).toEqual({ a: 2 })
     expect(extractJson('Here: {"a":3} done')).toEqual({ a: 3 })
     expect(extractJson('nope')).toBeUndefined()
+  })
+})
+
+describe('BE-8b: draft contract for FE-5', () => {
+  const good = { name: 'Trip Planner', role: 'Travel helper', description: 'Plans trips.', avatarChoices: ['✈️', '🗺️', '🧳', '🏖️'], rules: ['Ask dates first.'] }
+
+  it('returns 4 avatarChoices with avatarEmoji as the first, filling and deduping', async () => {
+    await makePrimary()
+    mockChat(JSON.stringify(good))
+    expect((await inject('POST', '/api/agents/draft', { prompt: 'x' })).json()).toMatchObject({ avatarEmoji: '✈️', avatarChoices: good.avatarChoices })
+    mockChat(JSON.stringify({ ...good, avatarChoices: ['✈️', '✈️'] }))
+    const two = (await inject('POST', '/api/agents/draft', { prompt: 'x' })).json()
+    expect(two.avatarChoices).toHaveLength(4)
+    expect(new Set(two.avatarChoices).size).toBe(4)
+    expect(two.avatarChoices[0]).toBe('✈️')
+    mockChat(JSON.stringify({ ...good, avatarChoices: [] }))
+    expect((await inject('POST', '/api/agents/draft', { prompt: 'x' })).json().warningCode).toBe('invalid_output')
+  })
+
+  it('sends the previous draft with the change, and 400s on a malformed one', async () => {
+    await makePrimary()
+    const mock = mockChat(JSON.stringify(good))
+    const previous = { name: 'Trip Planner', role: 'Travel helper', description: 'Plans trips.', avatarEmoji: '✈️', avatarChoices: good.avatarChoices, rules: [] }
+    const res = await inject('POST', '/api/agents/draft', { prompt: 'Make it formal', previous })
+    expect(res.statusCode).toBe(200)
+    const sent = JSON.parse((mock.mock.calls[0] as unknown as [string, { body: string }])[1].body)
+    const content = sent.messages.at(-1).content as string
+    expect(content).toContain('Current draft:')
+    expect(content).toContain('"Trip Planner"')
+    expect(content).toContain('Make it formal')
+    for (const bad of ['x', [1], { name: 3 }, { rules: 'x' }]) {
+      expect((await inject('POST', '/api/agents/draft', { prompt: 'x', previous: bad })).statusCode).toBe(400)
+    }
+    expect((await inject('POST', '/api/agents/draft', { prompt: 'x', previous: null })).statusCode).toBe(200)
+  })
+
+  it('defaults give each source a label and its skillIds', async () => {
+    const body = (await inject('GET', '/api/agents/defaults')).json() as { skills: { sourceId: string; label: string; count: number; skillIds: string[] }[] }
+    const ids = defaultSkillIds(store.skills)
+    expect(body.skills.flatMap((s) => s.skillIds).sort()).toEqual([...ids].sort())
+    for (const s of body.skills) {
+      expect(s.count).toBe(s.skillIds.length)
+      expect(s.label.length).toBeGreaterThan(0)
+    }
+    expect(body.skills.find((s) => s.sourceId === 'core')?.label).toBe('AgentControl core')
+  })
+
+  it('slug-preview matches what create assigns, including -2 and reserved primary', async () => {
+    const first = (await inject('GET', '/api/agents/slug-preview?name=Trip%20Planner')).json()
+    expect(first).toEqual({ slug: 'primary' }) // no Primary yet: the first bot becomes it
+    await makePrimary()
+    expect((await inject('GET', '/api/agents/slug-preview?name=Primary')).json()).toEqual({ slug: 'primary-2' })
+    expect((await inject('GET', '/api/agents/slug-preview?name=Trip%20Planner')).json()).toEqual({ slug: 'trip-planner' })
+    const made = await makeAgent('Trip Planner')
+    expect(made.slug).toBe('trip-planner')
+    expect((await inject('GET', '/api/agents/slug-preview?name=Trip%20Planner')).json()).toEqual({ slug: 'trip-planner-2' })
+    expect((await inject('GET', '/api/agents/slug-preview?name=Trip%20Planner')).json()).toEqual({ slug: 'trip-planner-2' })
+    for (const q of ['', '?name=', '?name=%20%20']) expect((await inject('GET', `/api/agents/slug-preview${q}`)).statusCode).toBe(400)
+  })
+
+  it('creates a bot without instructions (defaults to empty)', async () => {
+    await makePrimary()
+    const res = await inject('POST', '/api/agents', { name: 'No Instructions', endpointId: 'ep_local_llama', modelId: 'llama-3-8b' })
+    expect(res.statusCode).toBe(201)
+    expect(res.json().instructions).toBe('')
   })
 })

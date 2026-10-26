@@ -715,7 +715,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         id: uid('agt'),
         name: input.name,
         description: input.description,
-        instructions: input.instructions,
+        instructions: input.instructions ?? '',
         modelId: input.modelId,
         endpointId: input.endpointId,
         isPrimary,

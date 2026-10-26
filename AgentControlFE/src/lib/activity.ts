@@ -97,12 +97,39 @@ function skillsOf(raw: unknown): ActivatedSkill[] {
   })
 }
 
+/**
+ * BE-3 file tools write the whole line as the summary ("Created workspace/x.md",
+ * "Couldn't write memory/x.md", "Listed files"). Such a line is shown as the server
+ * wrote it: the words before the path as the verb, the path as the mono target,
+ * so a failed step never reads like a success ("Wrote …" + ✕).
+ * Other summaries (BE-7, mockup 04 "pages 6–9") keep verb + target + summary.
+ */
+const SENTENCE = /^(Couldn't|Could not) /
+
+function stepLine(tool: string, summary: string, path?: string): Pick<ActivityStep, 'verb' | 'target' | 'summary'> {
+  const s = summary.trim()
+  const known = VERBS[tool]
+  const sentence = SENTENCE.test(s) || (!!path && s.includes(path) && /^[A-Z]/.test(s)) || (!!known && !path && s.startsWith(known))
+  if (sentence && s) {
+    if (path) {
+      const at = s.indexOf(path)
+      if (at > 0) {
+        const rest = s.slice(at + path.length).trim()
+        return { verb: s.slice(0, at).trim(), target: path, summary: rest }
+      }
+    }
+    return { verb: s, target: null, summary: '' }
+  }
+  // Anything else (BE-7 summaries, an older server's failed step): tool verb + target + summary (GAP-1 ✕ marks a failure).
+  return { ...stepVerb(tool, path), summary }
+}
+
 function stepsOf(raw: unknown): ActivityStep[] {
   if (!Array.isArray(raw)) return []
   return raw
     .flatMap((s): ActivityStep[] =>
       isObj(s) && str(s.tool) && typeof s.summary === 'string' && typeof s.ok === 'boolean'
-        ? [{ tool: s.tool, ...stepVerb(s.tool, str(s.path) ? s.path : undefined), summary: s.summary, ok: s.ok, ...(str(s.path) ? { path: s.path } : {}) }]
+        ? [{ tool: s.tool, ...stepLine(s.tool, s.summary, str(s.path) ? s.path : undefined), ok: s.ok, ...(str(s.path) ? { path: s.path } : {}) }]
         : [],
     )
     .slice(0, MAX_STEPS)
@@ -124,12 +151,30 @@ function filesOf(raw: unknown, now: Date): ActivityFile[] {
   })
 }
 
-/** The view for one message's activity, or null when there is nothing to show. */
-export function activityView(activity: MessageActivity | unknown, now: Date = new Date()): ActivityView | null {
-  if (!isObj(activity)) return null
-  const skills = skillsOf(activity.skills)
-  const steps = stepsOf(activity.steps)
-  const files = filesOf(activity.filesChanged, now)
+/**
+ * BE-3 (5d5a864): a run's top-level `filesChanged`, on every run (failed ones too,
+ * [] when it wrote nothing; backfilled for stored runs). This is the source for
+ * file cards whenever the run is known. Null when the value isn't a list
+ * (an older server, or a response that leaves the run's files out).
+ */
+export function runFilesChanged(run: unknown): unknown[] | null {
+  if (!isObj(run) || !Array.isArray(run.filesChanged)) return null
+  return run.filesChanged
+}
+
+/**
+ * The view for one message's activity, or null when there is nothing to show.
+ * `runFiles`: the run's top-level `filesChanged` (runFilesChanged) when the client
+ * has it; it then replaces the message's own copy. Without it the message's
+ * `activity.filesChanged` is used, because chat messages (GET/POST
+ * /api/conversations/:id/messages) carry no top-level field (see the FE-7 contract note).
+ */
+export function activityView(activity: MessageActivity | unknown, now: Date = new Date(), runFiles: unknown[] | null = null): ActivityView | null {
+  const act = isObj(activity) ? activity : runFiles ? {} : null
+  if (!act) return null
+  const skills = skillsOf(act.skills)
+  const steps = stepsOf(act.steps)
+  const files = filesOf(runFiles ?? act.filesChanged, now)
   if (skills.length + steps.length + files.length === 0) return null
   const failed = steps.filter((s) => !s.ok).length
   return {

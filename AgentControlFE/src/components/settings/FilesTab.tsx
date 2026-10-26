@@ -391,7 +391,7 @@ export default function FilesTab({ agent, path: rawPath, onPath, onTotal }: Prop
           <div className="cf-tree__sp" />
           {usage && (
             <div className="cf-files__usage">
-              <div className="cf-files__usebar" role="meter" aria-label="Folder space used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(usage.percent)}>
+              <div className="cf-files__usebar" role="meter" aria-label="Folder space used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(usage.percent)} aria-valuetext={usage.valueText}>
                 <div style={{ width: `${usage.percent}%` }} />
               </div>
               <div className="cf-files__uselabel">{usage.label}</div>

@@ -192,7 +192,8 @@ export const api = {
       return {
         conversation: summary,
         messages: page.messages.filter((m) => m.runId === run.id),
-        run: { id: run.id, status: run.status, error: run.error },
+        // The run route returns the whole run, so its top-level filesChanged (BE-3) comes along.
+        run: { id: run.id, status: run.status, error: run.error, ...(Array.isArray(run.filesChanged) ? { filesChanged: run.filesChanged } : {}) },
       }
     }
   },

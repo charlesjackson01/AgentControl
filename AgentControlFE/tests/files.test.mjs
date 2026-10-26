@@ -127,7 +127,7 @@ describe('files: tree and right pane', () => {
     assert.equal(treeSize(e('workspace/briefs', { kind: 'dir' })), '')
   })
   it('usage bar "46 MB of 500 MB"', () => {
-    assert.deepEqual(usageView({ bytes: 46 * 1024 * 1024, quotaBytes: 500 * 1024 * 1024 }), { label: '46 MB of 500 MB', percent: 9.2 })
+    assert.deepEqual(usageView({ bytes: 46 * 1024 * 1024, quotaBytes: 500 * 1024 * 1024 }), { label: '46 MB of 500 MB', percent: 9.2, valueText: '46 MB of 500 MB' })
     assert.equal(usageView({ bytes: 900, quotaBytes: 100 }).percent, 100)
     assert.equal(usageView(null), null)
     assert.equal(usageView({ bytes: 1, quotaBytes: 0 }), null)

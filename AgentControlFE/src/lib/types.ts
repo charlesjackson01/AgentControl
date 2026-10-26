@@ -195,9 +195,19 @@ export type AgentRun = {
   activatedSkills?: ActivatedSkill[]
   /** Tool calls executed during the run; absent on pre-tool-execution runs/BEs. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
+  /** BE-3: file steps and files written this run (also copied onto the reply's `activity`). */
+  activity?: { steps: MessageActivity['steps']; filesChanged: FileChange[] }
+  /**
+   * BE-3 (5d5a864): files this run wrote, on every run (failed ones too); [] when none.
+   * Backfilled from `activity` for stored runs. The FE's source for file cards (lib/activity runFilesChanged).
+   */
+  filesChanged?: FileChange[]
   /** Set on runs made for a project task; the agent's own chat leaves them out. */
   projectId?: string
 }
+
+/** BE-3: one file a run wrote; `bytes`/`modifiedAt` (ISO) are the file after the write (optional on old runs). */
+export type FileChange = { path: string; change: 'added' | 'modified'; bytes?: number; modifiedAt?: string }
 
 /**
  * How one attached skill went into a run's system prompt. 'catalog' (BE-7): one
@@ -350,8 +360,8 @@ export type Attachment = { root: 'agent' | 'group'; path: string; name: string; 
 export type MessageActivity = {
   skills: ActivatedSkill[]
   steps: { tool: string; summary: string; ok: boolean; path?: string }[]
-  /** `bytes` and `modifiedAt` (ISO) arrive with BE-3; optional until then. */
-  filesChanged: { path: string; change: 'added' | 'modified'; bytes?: number; modifiedAt?: string }[]
+  /** Same entries as the run's top-level `filesChanged` (BE-3); `bytes`/`modifiedAt` optional on old messages. */
+  filesChanged: FileChange[]
 }
 
 /** One message in a chat-first conversation (independent of run pruning). */
@@ -420,7 +430,8 @@ export type ConversationSendResult = {
   conversation: ConversationSummary
   /** This turn's messages (user, and assistant/error when there is one). */
   messages: ChatMessage[]
-  run: { id: string; status: AgentRun['status']; error?: string | null }
+  /** `filesChanged`: only if a server sends the run's top-level list here (5d5a864 does not yet). */
+  run: { id: string; status: AgentRun['status']; error?: string | null; filesChanged?: FileChange[] }
 }
 
 /** Normalized page for the thread view. */
@@ -478,7 +489,8 @@ export type FileListing = {
   root: string
   path: string
   entries: FileEntry[]
-  usage: { bytes: number; quotaBytes: number }
+  /** BE-3: `bytes` includes the bot's trash, which counts toward the quota; `trashBytes` is that part (absent before BE-3). */
+  usage: { bytes: number; quotaBytes: number; trashBytes?: number }
   /**
    * Optional (BE-2 follow-up): files (not folders, trash left out) in the whole bot folder,
    * the same on every path's listing. The "Files N" tab count (03d).

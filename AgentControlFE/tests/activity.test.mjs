@@ -175,6 +175,6 @@ describe('activity card: component wiring', () => {
     const rows = readFileSync(new URL('../src/components/shell/ChatRows.tsx', import.meta.url), 'utf8')
     assert.match(rows, /\{before\}\s*\n\s*<div className=\{`cf-bub cf-bub--a/)
     assert.match(rows, /\{after\}\s*\n\s*\{meta &&/)
-    assert.match(chat, /activityView\(m\.activity\)/)
+    assert.match(chat, /activityView\(m\.activity, undefined, \(m\.runId && runFiles\[m\.runId\]\) \|\| null\)/)
   })
 })

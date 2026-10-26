@@ -220,13 +220,21 @@ export const fileSize = (e: FileEntry) => humanSize(e.size) ?? ''
 /** Tree rows: whole sizes ("2 KB"); 03d shows none on shared/ files. */
 export const treeSize = (e: FileEntry) => (e.kind === 'file' && e.zone !== 'shared' ? (wholeSize(e.size) ?? '') : '')
 
-/** "46 MB of 500 MB" and the bar's width (0–100). */
-export function usageView(u: FileListing['usage'] | null | undefined): { label: string; percent: number } | null {
+/**
+ * "46 MB of 500 MB" (03d) and the bar's width (0–100). BE-3: `bytes` already includes
+ * the trash, which counts toward the quota, so label and bar show usage with trash.
+ * The visible label stays as in 03d (a separate trash figure isn't in v3); `valueText`
+ * names the trash part for screen readers when there is any.
+ */
+export function usageView(u: FileListing['usage'] | null | undefined): { label: string; percent: number; valueText: string } | null {
   if (!u || typeof u.bytes !== 'number' || typeof u.quotaBytes !== 'number' || u.quotaBytes <= 0) return null
   const used = humanSize(u.bytes)
   const quota = humanSize(u.quotaBytes)
   if (!used || !quota) return null
-  return { label: `${used} of ${quota}`, percent: Math.min(100, Math.max(0, (u.bytes / u.quotaBytes) * 100)) }
+  const label = `${used} of ${quota}`
+  const t = u.trashBytes
+  const trash = typeof t === 'number' && Number.isFinite(t) && t > 0 ? humanSize(t) : null
+  return { label, percent: Math.min(100, Math.max(0, (u.bytes / u.quotaBytes) * 100)), valueText: trash ? `${label}, including ${trash} in trash` : label }
 }
 
 /** Breadcrumb "primary / shared / site-photos". */

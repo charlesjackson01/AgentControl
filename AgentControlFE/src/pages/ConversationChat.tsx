@@ -17,7 +17,7 @@ import { useShell } from '../state/shell-context'
 import { matchCommands, parseSlash, slashPrefix, type CommandDef } from '../lib/commands'
 import { moveActive } from '../lib/search'
 import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
-import { activityView } from '../lib/activity'
+import { activityView, runFilesChanged } from '../lib/activity'
 import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
 import { Markdown } from '../components/Markdown'
 import { NewBotTurn } from '../components/shell/NewBotFlow'
@@ -48,6 +48,8 @@ export default function ConversationChat() {
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
+  /** BE-3: top-level `filesChanged` of runs sent from this screen, by run id (when the send result carries it). */
+  const [runFiles, setRunFiles] = useState<Record<string, unknown[]>>({})
   const [shownFor, setShownFor] = useState(conversationId)
   const shell = useShell()
   // Deep links: `?m=<messageId>` (palette → message) and `?panel=settings[&tab=…]` (FE-3 picks the tab).
@@ -193,6 +195,8 @@ export default function ConversationChat() {
       if (!agent) throw new Error('This chat has no bot.')
       const result = await api.sendConversationMessage(conversationId, agent.id, text)
       setMessages((prev) => mergeMessages(prev ?? [], result.messages))
+      const changed = runFilesChanged(result.run)
+      if (changed) setRunFiles((prev) => ({ ...prev, [result.run.id]: changed }))
       if (result.conversation) upsert(result.conversation)
       // A flagged failed reply renders as its own error bubble; otherwise surface run.error once.
       const outcome = liveRunOutcome(result.run, result.messages)
@@ -373,7 +377,7 @@ export default function ConversationChat() {
                       </UserRow>
                     )
                   const retryText = view.kind === 'error' ? retryTextBefore(messages, item.index) : undefined
-                  const act = activityView(m.activity)
+                  const act = activityView(m.activity, undefined, (m.runId && runFiles[m.runId]) || null)
                   return (
                     <BotRow
                       key={item.key}

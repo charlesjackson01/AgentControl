@@ -253,6 +253,7 @@ describe('failed runs and steps (BE-3 review)', () => {
     const run = (await inject('POST', `/api/agents/${a.id}/runs`, { input: 'go' })).json() as AgentRun
     expect(run.activity?.steps).toEqual([{ tool: 'write_file', summary: "Couldn't write memory/x.md", ok: false, path: 'memory/x.md' }])
     expect(run.activity?.filesChanged).toEqual([])
+    expect(run.filesChanged).toEqual([])
   })
 
   it('keeps activity.filesChanged on a failed run and its DM reply', async () => {
@@ -262,7 +263,10 @@ describe('failed runs and steps (BE-3 review)', () => {
     expect(run.status).toBe('failed')
     const changed = [{ path: 'workspace/notes/todo.md', change: 'added', bytes: 3, modifiedAt: expect.any(String) }]
     expect(run.activity?.filesChanged).toEqual(changed)
+    expect(run.filesChanged).toEqual(changed)
     expect(dmReply(run)?.activity?.filesChanged).toEqual(changed)
+    const listed = (await inject('GET', `/api/agents/${a.id}/runs`)).json() as AgentRun[]
+    expect(listed[0]?.filesChanged).toEqual(changed)
   })
 
   it('retries a malformed-tool-call 500 once, then carries on', async () => {

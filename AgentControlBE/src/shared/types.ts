@@ -198,6 +198,8 @@ export interface AgentRun {
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
   /** BE-3: file steps and files written this run (copied onto the reply's activity). */
   activity?: { steps: MessageActivity['steps']; filesChanged: FileChange[] }
+  /** BE-3: files this run wrote, on every run (failed ones too); [] when none. Same entries as activity.filesChanged. */
+  filesChanged?: FileChange[]
   /**
    * Set on runs made for a project task. Such runs only see earlier runs of
    * the same project as history, and the agent's own chat never sees them.

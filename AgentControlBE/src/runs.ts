@@ -381,6 +381,7 @@ async function executeRunInner(
     ...(activated.size > 0 ? { activatedSkills: [...activated.values()] } : {}),
     ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
     ...(activity.steps.length + activity.filesChanged.length > 0 ? { activity } : {}),
+    filesChanged: activity.filesChanged.map((f) => ({ ...f })),
     ...(projectId !== undefined ? { projectId } : {}),
   }
 

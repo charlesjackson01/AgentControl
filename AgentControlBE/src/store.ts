@@ -408,6 +408,7 @@ function normalizeRun(r: Partial<AgentRun>): AgentRun {
     ...(r.toolCalls !== undefined ? { toolCalls: r.toolCalls } : {}),
     ...(Array.isArray(r.activatedSkills) && r.activatedSkills.length > 0 ? { activatedSkills: r.activatedSkills } : {}),
     ...(r.activity && typeof r.activity === 'object' && Array.isArray(r.activity.steps) && Array.isArray(r.activity.filesChanged) ? { activity: r.activity } : {}),
+    filesChanged: Array.isArray(r.filesChanged) ? r.filesChanged : Array.isArray(r.activity?.filesChanged) ? r.activity.filesChanged : [],
     ...(typeof r.projectId === 'string' ? { projectId: r.projectId } : {}),
   }
 }

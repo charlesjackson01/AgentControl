@@ -47,3 +47,41 @@ describe('FE-9 markdown in replies', () => {
     assert.equal(rule('.cf-md :where(p, pre, ul, ol)').margin, '0')
   })
 })
+
+describe('FE-8 phone layouts stay below 760 px', () => {
+  /* Map each top-level rule to the @media it sits in (null = none). */
+  function rulesWithMedia(src) {
+    const out = []
+    let i = 0, media = null, depth = 0, start = 0
+    while (i < src.length) {
+      const c = src[i]
+      if (c === '{') {
+        const head = src.slice(start, i).trim()
+        if (depth === 0 && head.startsWith('@media')) media = head
+        else out.push({ selector: head, media: depth > 0 ? media : null, body: src.slice(i + 1, src.indexOf('}', i)) })
+        depth++; start = i + 1
+      } else if (c === '}') {
+        depth--; if (depth === 0) media = null
+        start = i + 1
+      } else if (c === ';' && depth === 0) start = i + 1
+      i++
+    }
+    return out
+  }
+  const rules = rulesWithMedia(css)
+
+  it('every phone-only rule is inside @media (max-width: 759px)', () => {
+    const phone = rules.filter((r) => /\.cf-mlist|\.cf-mhdr|\.cf-cbtn--skills/.test(r.selector))
+    assert.ok(phone.length > 10, 'FE-8 rules found')
+    for (const r of phone) assert.equal(r.media, '@media (max-width: 759px)', r.selector)
+  })
+  it('05b hides (bot avatars in the thread, ✦ and the hint) only on phones', () => {
+    const hides = rules.filter((r) => /display:\s*none/.test(r.body) && /\.cf-row__av|\.cf-cbtn--skills/.test(r.selector))
+    assert.ok(hides.some((r) => r.selector === '.cf-row__av'), '.cf-row__av hidden')
+    assert.ok(hides.some((r) => r.selector.includes('.cf-cbtn--skills')), '✦ hidden')
+    for (const r of hides) assert.equal(r.media, '@media (max-width: 759px)', r.selector)
+  })
+  it('the old narrow drawer rule is gone (05a replaces it with the list screen)', () => {
+    assert.ok(!rules.some((r) => r.selector === '.cf-shell--narrow .cf-side'))
+  })
+})

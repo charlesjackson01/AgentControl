@@ -157,9 +157,8 @@
 .dialog--lg { max-width: 760px; }
 .cf-settings .section:first-child { margin-top: 0; }
 
-/* --- narrow (<760 px): list as an overlay drawer; FE-8 owns real mobile --- */
+/* --- narrow (<760 px): FE-8 phone layouts are at the end of this file --- */
 .cf-scrim { position: absolute; inset: 0; background: var(--c-overlay); z-index: 25; }
-.cf-shell--narrow .cf-side { position: absolute; top: 0; bottom: 0; left: 0; z-index: 30; max-width: 88vw; box-shadow: var(--sh-lg); background: var(--c-bg); }
 @media (max-width: 759px) {
   .cf-searchbtn { width: 32px; padding: 0; justify-content: center; }
   .cf-searchbtn__t, .cf-searchbtn kbd { display: none; }
@@ -569,4 +568,71 @@ ol.cf-md__list { list-style: decimal; }
   .dialog { min-width: 0; }
   .dialog .avatarpick { flex-wrap: wrap; }
   .dialog .avatarpick__body { flex-basis: 180px; }
+}
+
+/* ==========================================================================
+   FE-8 phone layouts (v3 05a list screen, 05b chat). Everything is inside
+   `max-width: 759px`, so ≥760 px (and the 1440 desktop) is untouched.
+   Blocks marked GAP-B<n> are NOT in the mockups: minimal, neutral, and
+   isolated here so they can be swapped without touching the covered rules.
+   ========================================================================== */
+@media (max-width: 759px) {
+  /* 05a: `/` is the chat list screen. */
+  .cf-mlist { width: 100%; flex: 1; border-right: 0; background: var(--c-bg); }
+  [data-theme='dark'] .cf-mlist { background: var(--c-bg); }
+  .cf-mlist__top { height: 52px; flex: none; display: flex; align-items: center; padding: 8px 12px 0 16px; }
+  .cf-mlist__me { padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; display: block; }
+  .cf-mlist__me .avatar { --avatar-size: 30px; font-size: 13px; }
+  .cf-mlist__top .cf-hbtn--ic { font-size: 18px; }
+  .cf-mlist__ttl { margin: 2px 16px 10px; font-size: 32px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+  .cf-mlist .cf-side__search { padding: 0 16px 6px; }
+  .cf-mlist .cf-search { height: 36px; border-radius: 10px; font-size: 15px; }
+  .cf-mlist .cf-search input { font-size: 15px; }
+  .cf-mlist .cf-ssec { padding: 14px 16px 2px; font-size: 11px; }
+  .cf-mlist .cf-ssec--gap { margin-top: 10px; }
+  .cf-mlist .cf-crow, .cf-mlist .cf-crow:hover, .cf-mlist .cf-crow--on { margin: 0; padding: 0 16px; gap: 14px; border: 0; border-radius: 0; background: none; box-shadow: none; min-height: 72px; }
+  .cf-mlist .cf-crow:active { background: var(--c-bg-sunk); }
+  .cf-mlist .cf-crow .avatar { --avatar-size: 50px; font-size: 19px; }
+  .cf-mlist .cf-gav--lg { width: 50px; height: 50px; }
+  .cf-mlist .cf-crow__col { align-self: stretch; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid var(--c-border); padding: 10px 0; }
+  .cf-mlist .cf-crow__nm { font-size: 15px; }
+  .cf-mlist .cf-crow__tm { font-size: 12px; }
+  .cf-mlist .cf-crow__pv { font-size: 13.5px; }
+  .cf-mlist .cf-crow__l2 { margin-top: 3px; }
+  .cf-mlist .cf-badge { min-width: 20px; height: 20px; border-radius: 10px; font-size: 11px; }
+  .cf-mlist .cf-tag { display: none; } /* 05a shows no "Primary" tag. */
+  .cf-mlist .cf-side__note { padding: 8px 16px; }
+
+  /* 05b: ‹ unread | avatar over "Name ▾" | ⓘ */
+  .cf-mhdr { height: 58px; padding: 0 8px; gap: 0; justify-content: space-between; }
+  .cf-mhdr__back { display: inline-flex; align-items: center; gap: 6px; min-width: 64px; height: 40px; padding: 0 6px; color: var(--c-text); text-decoration: none; border-radius: var(--r-sm); }
+  .cf-mhdr__chev { font-size: 30px; font-weight: 300; line-height: 1; margin-top: -4px; color: var(--c-text-2); }
+  .cf-mhdr__back .cf-badge { min-width: 20px; height: 20px; border-radius: 10px; font-size: 11px; }
+  .cf-mhdr__who { position: absolute; left: 0; right: 0; top: 0; margin: 0 auto; width: fit-content; max-width: calc(100% - 150px); height: 100%; display: flex; align-items: center; }
+  .cf-mhdr__id { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; max-width: 100%; padding: 0 6px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+  .cf-mhdr__id .avatar { --avatar-size: 28px; font-size: 12px; }
+  .cf-mhdr__nm { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.2; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cf-mhdr__caret { font-size: 10px; }
+  .cf-mhdr__info { margin-left: auto; font-size: 17px; }
+
+  /* 05b thread: no bot avatar beside replies, wider bubbles, bigger corners. */
+  .cf-row__av { display: none; }
+  .cf-grp, .cf-row--u .cf-grp { max-width: 80%; }
+  .cf-bub { border-radius: 16px; font-size: 15px; line-height: 1.5; }
+  .cf-thread__inner { padding-top: 20px; gap: 12px; }
+
+  /* 05b composer: ＋, the field, send. No ✦, no hint line (a command notice still shows). */
+  .cf-compwrap { padding: 6px 10px 14px; padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+  .cf-comp { padding: 6px 6px 6px 8px; }
+  .cf-comp__input { font-size: 16px; } /* 16 px stops iOS zooming on focus. */
+  .cf-cbtn--skills, .cf-hint:not(.cf-hint--notice) { display: none; }
+  .cf-send { width: 34px; height: 34px; }
+
+  /* GAP-B3: switcher on a phone (not mocked). The 02a popover, pinned under the header at full width. */
+  .cf-mhdr .cf-switcher { position: fixed; top: 62px; left: 8px; right: 8px; width: auto; } /* fixed to .cf-hdr (backdrop-filter is its containing block) */
+
+  /* GAP-B1: settings panel on a phone (ticket: "full-screen with tabs", not mocked). Already 100vw; tabs scroll sideways. */
+  .cf-set { border-left: 0; }
+  .cf-set__tabs { overflow-x: auto; scrollbar-width: none; }
+  .cf-set__tab { flex: none; }
 }

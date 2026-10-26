@@ -1,36 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useSyncExternalStore } from 'react'
+import { DARK_QUERY, createThemeController, type Theme, type ThemeController } from '../lib/theme'
 
-export type Theme = 'light' | 'dark' | 'system'
+export type { Theme }
 
-const KEY = 'agentcontrol.theme'
+let controller: ThemeController | null = null
 
-function read(): Theme {
-  const raw = localStorage.getItem(KEY)
-  return raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'system'
+/** Called once from main.tsx, before the first render, so every route gets the saved theme. */
+export function startTheme(): ThemeController {
+  controller ??= createThemeController({
+    storage: window.localStorage,
+    media: window.matchMedia(DARK_QUERY),
+    root: document.documentElement,
+  })
+  return controller
 }
 
-/** Resolved appearance actually painted on <html data-theme>. */
+/** Read/change the theme. Painting <html data-theme> is owned by the app-level controller. */
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(read)
-  const [systemDark, setSystemDark] = useState(
-    () => window.matchMedia('(prefers-color-scheme: dark)').matches,
-  )
-
-  useEffect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    const onChange = (e: MediaQueryListEvent) => setSystemDark(e.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-
-  useEffect(() => {
-    const resolved = theme === 'system' ? (systemDark ? 'dark' : 'light') : theme
-    document.documentElement.dataset.theme = resolved
-  }, [theme, systemDark])
-
-  useEffect(() => {
-    localStorage.setItem(KEY, theme)
-  }, [theme])
-
-  return { theme, setTheme }
+  const c = startTheme()
+  const theme = useSyncExternalStore(c.subscribe, c.get)
+  return { theme, setTheme: c.set }
 }

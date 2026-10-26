@@ -15,10 +15,9 @@ import { ShellContext, type ShellState } from '../state/shell-context'
 import { needsOnboarding } from '../lib/profile'
 import { commandAction, type CommandContext, type CommandName } from '../lib/commands'
 import { chatListUnread, readChatListOpen, shellShortcut, writeChatListOpen } from '../lib/shell'
+import { MOBILE_BACK_PATH, MOBILE_QUERY } from '../lib/mobile'
 import Onboarding from '../pages/Onboarding'
 import '../shell.css'
-
-const NARROW_QUERY = '(max-width: 759px)'
 
 function storage(): Storage | null {
   try {
@@ -49,9 +48,9 @@ function OnboardingGate() {
 }
 
 function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
+  const [narrow, setNarrow] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
   useEffect(() => {
-    const mq = window.matchMedia(NARROW_QUERY)
+    const mq = window.matchMedia(MOBILE_QUERY)
     const onChange = (e: MediaQueryListEvent) => setNarrow(e.matches)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
@@ -59,11 +58,13 @@ function useNarrow(): boolean {
   return narrow
 }
 
-/** FE-1: chat-only shell. Optional 308 px chat list (fully hidden when off) + the routed chat. */
+/**
+ * FE-1: chat-only shell. Optional 308 px chat list (fully hidden when off) + the routed chat.
+ * FE-8 (<760 px, 05a/05b): no side panel; the list is its own screen at `/` and ‹ goes back to it.
+ */
 function Shell() {
   const narrow = useNarrow()
   const [desktopOpen, setDesktopOpen] = useState(() => readChatListOpen(storage()))
-  const [drawerOpen, setDrawerOpen] = useState(false)
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newBotOpen, setNewBotOpen] = useState(false)
@@ -75,18 +76,16 @@ function Shell() {
   const chatIsGroup = conversations?.find((c) => c.id === chatId)?.kind === 'group'
   const commandCtx = useMemo<CommandContext>(() => ({ conversationId: chatId, isGroup: chatIsGroup }), [chatId, chatIsGroup])
 
-  const listOpen = narrow ? drawerOpen : desktopOpen
+  const listOpen = narrow ? false : desktopOpen
   const toggleList = useCallback(() => {
-    if (narrow) setDrawerOpen((o) => !o)
+    if (narrow) navigate(MOBILE_BACK_PATH)
     else
       setDesktopOpen((o) => {
         writeChatListOpen(storage(), !o)
         return !o
       })
-  }, [narrow])
-  const closeListIfOverlay = useCallback(() => {
-    if (narrow) setDrawerOpen(false)
-  }, [narrow])
+  }, [narrow, navigate])
+  const closeListIfOverlay = useCallback(() => {}, [])
 
   const openSwitcher = useCallback(() => setSwitcherOpen(true), [])
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), [])
@@ -105,10 +104,9 @@ function Shell() {
       if (!primary) return openNewBotForm()
       setSwitcherOpen(false)
       setPaletteOpen(false)
-      if (narrow) setDrawerOpen(false)
       navigate(`/c/${encodeURIComponent(primary.id)}`, { state: { newBot: newBotNavState(prompt) } })
     },
-    [conversations, agents, narrow, navigate, openNewBotForm],
+    [conversations, agents, navigate, openNewBotForm],
   )
   const openNewBot = useCallback(() => startNewBot(''), [startNewBot])
   const openPalette = useCallback(() => {
@@ -131,17 +129,14 @@ function Shell() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const action = shellShortcut(e)
-      if (!action) {
-        if (e.key === 'Escape' && narrow && drawerOpen) setDrawerOpen(false)
-        return
-      }
+      if (!action) return
       e.preventDefault()
       if (action === 'toggle-list') toggleList()
       else openPalette()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [toggleList, openPalette, narrow, drawerOpen])
+  }, [toggleList, openPalette])
 
   const unread = chatListUnread(conversations ?? [], agents)
   const value = useMemo<ShellState>(
@@ -156,7 +151,6 @@ function Shell() {
     <ShellContext.Provider value={value}>
       <div className={`cf-shell${listOpen ? ' cf-shell--list' : ''}${narrow ? ' cf-shell--narrow' : ''}`}>
         {listOpen && <ChatList />}
-        {listOpen && narrow && <div className="cf-scrim" onClick={() => setDrawerOpen(false)} aria-hidden="true" />}
         <div className="cf-chatcol">
           <Outlet />
           {paletteOpen && <CommandPalette ctx={commandCtx} />}

@@ -7,7 +7,7 @@ export type ShellState = {
   listOpen: boolean
   toggleList: () => void
   closeListIfOverlay: () => void
-  /** Below 760 px the list is an overlay drawer and its state isn't persisted (FE-8 owns mobile). */
+  /** Below 760 px (FE-8): phone layouts. The list is its own screen at `/`, never a panel; toggleList goes there. */
   narrow: boolean
   /** Bot/group switcher popover (02a), from the header title. */
   switcherOpen: boolean

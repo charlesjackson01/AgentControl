@@ -66,8 +66,12 @@ function Row({ c, agents, now, onNavigate }: { c: ConversationSummary; agents: A
   )
 }
 
-/** FE-1 chat list (01a): Bots + Group chats, 308 px, fully hidden when toggled off. */
-export default function ChatList() {
+/**
+ * FE-1 chat list (01a): Bots + Group chats, 308 px, fully hidden when toggled off.
+ * `screen` (FE-8, 05a): the phone's `/` screen. Avatar + ✎ on top, a large "Chats"
+ * title, the same search and sections, and no footer.
+ */
+export default function ChatList({ screen = false }: { screen?: boolean }) {
   const { conversations, agents, error, reload } = useConversations()
   const shell = useShell()
   const { profile } = useProfile()
@@ -85,20 +89,34 @@ export default function ChatList() {
   const hidden = hiddenCount(all, agents)
 
   return (
-    <aside className="cf-side" aria-label="Chats">
-      <div className="cf-side__top">
-        <span className="cf-logo" aria-hidden="true">
-          <SparkIcon size={14} />
-        </span>
-        <h2 className="cf-side__ttl">Chats</h2>
-        <span className="cf-sp" />
-        <button type="button" className="cf-hbtn cf-hbtn--ic" title="New bot" aria-label="New bot" onClick={shell.openNewBot}>
-          ✎
-        </button>
-        <button type="button" className="cf-hbtn cf-hbtn--ic" title="Hide chats (⌘\)" aria-label="Hide chats" onClick={shell.toggleList}>
-          ⇤
-        </button>
-      </div>
+    <aside className={screen ? 'cf-side cf-mlist' : 'cf-side'} aria-label="Chats">
+      {screen ? (
+        <div className="cf-mlist__top">
+          {/* GAP-B2: 05a doesn't say what the avatar opens; it opens Profile & endpoints, like the desktop list footer. */}
+          <button type="button" className="cf-mlist__me" onClick={shell.openSettings} aria-label="Profile & endpoints">
+            <UserAvatar profile={profile} name={name} size="md" />
+          </button>
+          <span className="cf-sp" />
+          <button type="button" className="cf-hbtn cf-hbtn--ic" title="New bot" aria-label="New bot" onClick={shell.openNewBot}>
+            ✎
+          </button>
+        </div>
+      ) : (
+        <div className="cf-side__top">
+          <span className="cf-logo" aria-hidden="true">
+            <SparkIcon size={14} />
+          </span>
+          <h2 className="cf-side__ttl">Chats</h2>
+          <span className="cf-sp" />
+          <button type="button" className="cf-hbtn cf-hbtn--ic" title="New bot" aria-label="New bot" onClick={shell.openNewBot}>
+            ✎
+          </button>
+          <button type="button" className="cf-hbtn cf-hbtn--ic" title="Hide chats (⌘\)" aria-label="Hide chats" onClick={shell.toggleList}>
+            ⇤
+          </button>
+        </div>
+      )}
+      {screen && <h1 className="cf-mlist__ttl">Chats</h1>}
 
       <div className="cf-side__search">
         <label className="cf-search">
@@ -137,18 +155,20 @@ export default function ChatList() {
         )}
       </nav>
 
-      <div className="cf-side__foot">
-        <button type="button" className="cf-me" onClick={shell.openSettings} aria-label="Profile & endpoints">
-          <UserAvatar profile={profile} name={name} size="md" />
-          <span className="cf-me__col">
-            <span className="cf-me__nm">{name}</span>
-            <span className="cf-me__sub">Profile &amp; endpoints</span>
-          </span>
-          <span className="cf-hbtn cf-hbtn--ic" aria-hidden="true">
-            ⚙
-          </span>
-        </button>
-      </div>
+      {!screen && (
+        <div className="cf-side__foot">
+          <button type="button" className="cf-me" onClick={shell.openSettings} aria-label="Profile & endpoints">
+            <UserAvatar profile={profile} name={name} size="md" />
+            <span className="cf-me__col">
+              <span className="cf-me__nm">{name}</span>
+              <span className="cf-me__sub">Profile &amp; endpoints</span>
+            </span>
+            <span className="cf-hbtn cf-hbtn--ic" aria-hidden="true">
+              ⚙
+            </span>
+          </button>
+        </div>
+      )}
     </aside>
   )
 }

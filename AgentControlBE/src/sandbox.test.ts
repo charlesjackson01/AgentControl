@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp, defaultSkillIds } from './app.js'
 import { botRoot } from './files.js'
-import { draftBot, DRAFT_MAX_TOKENS, DRAFT_TIMEOUT_MS, extractJson, SANDBOX_LIMITS } from './sandbox.js'
+import { closeOpenJson, draftBot, DRAFT_MAX_TOKENS, DRAFT_TIMEOUT_MS, extractJson, SANDBOX_LIMITS } from './sandbox.js'
 import { createStore } from './store.js'
 import type { Agent } from './shared/types.js'
 
@@ -330,5 +330,51 @@ describe('BE-8b: draft contract for FE-5', () => {
     const res = await inject('POST', '/api/agents', { name: 'No Instructions', endpointId: 'ep_local_llama', modelId: 'llama-3-8b' })
     expect(res.statusCode).toBe(201)
     expect(res.json().instructions).toBe('')
+  })
+})
+
+describe('BE-8b: replies missing their closing brace', () => {
+  const good = { name: 'Trip Planner', role: 'Travel helper', description: 'Plans trips.', avatarChoices: ['✈️', '🗺️', '🧳', '🏖️'], rules: ['Ask dates first.'] }
+
+  it('extractJson closes open braces, brackets and strings', () => {
+    const full = JSON.stringify(good)
+    expect(extractJson(full.slice(0, -1))).toEqual(good)
+    expect(extractJson('Here you go:\n' + full.slice(0, -1) + '\n')).toEqual(good)
+    expect(extractJson('```json\n' + full.slice(0, -1) + '\n```')).toEqual(good)
+    expect(extractJson('{"name": "A", "rules": ["x", "y"')).toEqual({ name: 'A', rules: ['x', 'y'] })
+    expect(extractJson('{"name": "A {not a brace}", "rules": [],')).toEqual({ name: 'A {not a brace}', rules: [] })
+    expect(extractJson('{"name": "Half a str')).toEqual({ name: 'Half a str' })
+    expect(closeOpenJson('{"a": 1}')).toBeNull()
+    expect(closeOpenJson('{"a": [1}')).toBeNull()
+    expect(extractJson('no json here')).toBeUndefined()
+  })
+
+  it('a reply one brace short with finish_reason stop still drafts, in one call', async () => {
+    await makePrimary()
+    const mock = mockChat(JSON.stringify(good).slice(0, -1))
+    const res = await inject('POST', '/api/agents/draft', { prompt: 'x' })
+    expect(res.json()).toMatchObject({ name: 'Trip Planner', avatarEmoji: '✈️' })
+    expect(res.json().warningCode).toBeUndefined()
+    expect(mock).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries the upstream call once when the reply is still unusable', async () => {
+    await makePrimary()
+    const replies = ['not json at all', JSON.stringify(good)]
+    const mock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: replies.shift() } }] }) }))
+    vi.stubGlobal('fetch', mock)
+    const logs: string[] = []
+    const out = await draftBot(store, 'x', (m) => logs.push(m))
+    expect(out).toMatchObject({ name: 'Trip Planner' })
+    expect(mock).toHaveBeenCalledTimes(2)
+    expect(logs.some((l) => l.includes('retrying once'))).toBe(true)
+
+    const twice = mockChat('still not json')
+    expect(await draftBot(store, 'x')).toMatchObject({ warningCode: 'invalid_output' })
+    expect(twice).toHaveBeenCalledTimes(2)
+
+    const broken = mockChat(new Error('connect ECONNREFUSED'))
+    expect(await draftBot(store, 'x')).toMatchObject({ warningCode: 'upstream' })
+    expect(broken).toHaveBeenCalledTimes(1) // upstream errors are not retried
   })
 })

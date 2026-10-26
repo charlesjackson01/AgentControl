@@ -18,6 +18,12 @@ describe('redactUrlCredentials', () => {
     expect(redactUrlCredentials('mail me at a@b.c')).toBe('mail me at a@b.c')
   })
 
+  it('hides a password that contains "@" whole (up to the last @ before the host)', () => {
+    expect(redactUrlCredentials('http://u:p@ss@h:8080/v1')).toBe('http://***@h:8080/v1')
+    expect(redactUrlCredentials(`socks5://u:${SECRET}@x@y@proxy:1080 then https://h/a?to=a@b.c`)).toBe('socks5://***@proxy:1080 then https://h/a?to=a@b.c')
+    expect(redactUrlCredentials('http://u:p@ss@h/v1').includes('ss')).toBe(false)
+  })
+
   it('describeFetchError redacts the message and every cause', () => {
     const err = new TypeError(`Request cannot be constructed from a URL that includes credentials: http://bob:${SECRET}@h/v1`, {
       cause: { code: 'X', message: `proxy socks5://u:${SECRET}@p:1 refused` },

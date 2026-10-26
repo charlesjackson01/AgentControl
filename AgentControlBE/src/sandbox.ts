@@ -73,6 +73,8 @@ export const MAX_DRAFT_PROMPT_CHARS = 2_000
 export const DRAFT_TIMEOUT_MS = 30_000
 /** Room for a reasoning model to think before the JSON (muse-glimmer needed ~826). */
 export const DRAFT_MAX_TOKENS = 2_500
+/** One retry when the reply has no usable draft. */
+export const DRAFT_ATTEMPTS = 2
 
 export const AVATAR_CHOICES = 4
 /** Used to fill avatarChoices up to 4 when the model offers fewer. */
@@ -134,18 +136,60 @@ function avatarChoicesOf(d: { avatarEmoji?: string; avatarChoices?: string[] }):
   return out
 }
 
-/** The JSON object in a reply: the whole text, a ```json fence, or the outermost {...}. */
+/**
+ * The JSON object in a reply: the whole text, a ```json fence, or the outermost
+ * {...}. Some models stop with finish_reason "stop" one closing brace short, so
+ * each candidate is also tried with its open strings, brackets and braces closed.
+ */
 export function extractJson(text: string): unknown {
   const candidates = [text.trim()]
-  const fence = /```(?:json)?\s*\n([\s\S]*?)```/i.exec(text)
+  const fence = /```(?:json)?\s*\n([\s\S]*?)(?:```|$)/i.exec(text)
   if (fence?.[1]) candidates.push(fence[1].trim())
   const open = text.indexOf('{')
   const close = text.lastIndexOf('}')
   if (open !== -1 && close > open) candidates.push(text.slice(open, close + 1))
+  if (open !== -1) candidates.push(text.slice(open).trim())
   for (const c of candidates) {
     try { return JSON.parse(c) } catch { /* next */ }
   }
+  for (const c of candidates) {
+    const repaired = closeOpenJson(c)
+    if (repaired === null) continue
+    try { return JSON.parse(repaired) } catch { /* next */ }
+  }
   return undefined
+}
+
+/**
+ * `text` (starting at its first "{") with any unterminated string and every
+ * open [ or { closed, a dangling "," dropped. null when nothing is open or
+ * the brackets do not nest.
+ */
+export function closeOpenJson(text: string): string | null {
+  const start = text.indexOf('{')
+  if (start === -1) return null
+  const body = text.slice(start)
+  const stack: string[] = []
+  let inString = false
+  let escaped = false
+  for (const ch of body) {
+    if (inString) {
+      if (escaped) escaped = false
+      else if (ch === '\\') escaped = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{' || ch === '[') stack.push(ch === '{' ? '}' : ']')
+    else if (ch === '}' || ch === ']') {
+      if (stack.pop() !== ch) return null
+      if (stack.length === 0) return null // already balanced: nothing to repair
+    }
+  }
+  if (stack.length === 0) return null
+  let out = inString ? `${body}${escaped ? '\\' : ''}"` : body.trimEnd()
+  out = out.replace(/,\s*$/, '')
+  return out + stack.reverse().join('')
 }
 
 export type DraftLog = (msg: string) => void
@@ -165,40 +209,49 @@ export async function draftBot(
   const endpoint = primary && store.endpoints.find((e) => e.id === primary.endpointId)
   if (!primary || !endpoint) return blank('no_primary', 'No Primary bot with an endpoint to write the draft. Fill it in by hand.', 'no Primary bot with an endpoint')
   const timeoutMs = endpoint.timeoutMs ?? DRAFT_TIMEOUT_MS
-  let result: Awaited<ReturnType<typeof chatCompletion>>
-  try {
-    result = await chatCompletion(
-      endpoint.baseUrl,
-      store.endpointKeys[endpoint.id],
-      primary.modelId,
-      [{ role: 'system', content: DRAFT_SYSTEM }, { role: 'user', content: draftRequest(prompt, previous) }],
-      timeoutMs,
-      DRAFT_MAX_TOKENS,
-      undefined,
-      0.2,
-      signal,
-      endpoint.proxyUrl,
-      { disableThinking: endpoint.disableThinking === true },
-    )
-  } catch (err) {
-    return blank('upstream', "Primary couldn't write a draft right now. Fill it in by hand.", `upstream threw: ${err instanceof Error ? err.message : String(err)}`)
-  }
-  const where = `endpoint ${endpoint.id}, model ${primary.modelId}, ${result.latencyMs}ms, timeout ${timeoutMs}ms, finish_reason ${result.finishReason ?? 'none'}`
-  if (!result.ok && signal?.aborted) return blank('cancelled', 'The draft was cancelled.', `cancelled by the client (${where})`)
-  if (!result.ok) return blank('upstream', "Primary couldn't write a draft right now. Fill it in by hand.", `${result.error ?? 'upstream error'} (${where})`)
-  const json = extractJson(result.content)
-  if (json === undefined) {
+  const messages = [{ role: 'system' as const, content: DRAFT_SYSTEM }, { role: 'user' as const, content: draftRequest(prompt, previous) }]
+  // An unusable reply (no JSON, or the wrong shape) gets one more try.
+  for (let attempt = 1; ; attempt++) {
+    let result: Awaited<ReturnType<typeof chatCompletion>>
+    try {
+      result = await chatCompletion(
+        endpoint.baseUrl,
+        store.endpointKeys[endpoint.id],
+        primary.modelId,
+        messages,
+        timeoutMs,
+        DRAFT_MAX_TOKENS,
+        undefined,
+        0.2,
+        signal,
+        endpoint.proxyUrl,
+        { disableThinking: endpoint.disableThinking === true },
+      )
+    } catch (err) {
+      if (signal?.aborted) return blank('cancelled', 'The draft was cancelled.', 'cancelled by the client')
+      return blank('upstream', "Primary couldn't write a draft right now. Fill it in by hand.", `upstream threw: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    const where = `endpoint ${endpoint.id}, model ${primary.modelId}, attempt ${attempt}, ${result.latencyMs}ms, timeout ${timeoutMs}ms, finish_reason ${result.finishReason ?? 'none'}`
+    if (!result.ok && signal?.aborted) return blank('cancelled', 'The draft was cancelled.', `cancelled by the client (${where})`)
+    if (!result.ok) return blank('upstream', "Primary couldn't write a draft right now. Fill it in by hand.", `${result.error ?? 'upstream error'} (${where})`)
+    let problem: string
     const cut = result.finishReason === 'length' ? `; the reply hit max_tokens ${DRAFT_MAX_TOKENS}` : ''
-    return blank('invalid_output', "Primary's draft wasn't usable. Fill it in by hand.", `no JSON object in the reply${cut} (${where})`)
+    const json = extractJson(result.content)
+    if (json === undefined) {
+      problem = `no JSON object in the reply${cut} (${where})`
+    } else {
+      const parsed = ModelDraftSchema.safeParse(json)
+      if (parsed.success) {
+        const { avatarEmoji: _one, avatarChoices: _many, ...fields } = parsed.data
+        const avatarChoices = avatarChoicesOf(parsed.data)
+        return { ...fields, avatarEmoji: avatarChoices[0]!, avatarChoices }
+      }
+      const issue = parsed.error.issues[0]
+      problem = `draft failed validation at "${issue?.path.join('.') ?? ''}": ${issue?.message ?? 'invalid'}${cut} (${where})`
+    }
+    if (attempt >= DRAFT_ATTEMPTS || signal?.aborted) return blank('invalid_output', "Primary's draft wasn't usable. Fill it in by hand.", problem)
+    log(`POST /api/agents/draft is retrying once: ${problem}`)
   }
-  const parsed = ModelDraftSchema.safeParse(json)
-  if (!parsed.success) {
-    const issue = parsed.error.issues[0]
-    return blank('invalid_output', "Primary's draft wasn't usable. Fill it in by hand.", `draft failed validation at "${issue?.path.join('.') ?? ''}": ${issue?.message ?? 'invalid'} (${where})`)
-  }
-  const { avatarEmoji: _one, avatarChoices: _many, ...fields } = parsed.data
-  const avatarChoices = avatarChoicesOf(parsed.data)
-  return { ...fields, avatarEmoji: avatarChoices[0]!, avatarChoices }
 }
 
 /** The user turn: the prompt alone, or the current draft plus the requested change. */

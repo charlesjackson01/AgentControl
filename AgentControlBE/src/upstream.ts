@@ -34,15 +34,19 @@ export interface ModelsResult {
 }
 
 /**
+ * `scheme://user:pass@host` and `scheme://token@host` become `scheme://***@host`
+ * anywhere in the text. The userinfo runs to the LAST "@" before the host, so a
+ * password with "@" in it (`u:p@ss@h`) is hidden whole.
+ */
+export function redactUrlCredentials(text: string): string {
+  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1***@')
+}
+
+/**
  * A network error with its real cause: undici reports most failures as a bare
  * "fetch failed" and puts ECONNREFUSED, ENOTFOUND, SOCKS errors and the like
  * in `cause`.
  */
-/** `scheme://user:pass@host` and `scheme://token@host` become `scheme://***@host` anywhere in the text. */
-export function redactUrlCredentials(text: string): string {
-  return text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/?#@]+@/gi, '$1***@')
-}
-
 export function describeFetchError(err: unknown): string {
   return redactUrlCredentials(describeFetchErrorRaw(err))
 }

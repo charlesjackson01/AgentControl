@@ -65,9 +65,7 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
       createdAt: replyAt,
       runId: run.id,
       authorAgentId: run.agentId,
-      ...(run.activatedSkills && run.activatedSkills.length > 0
-        ? { activity: { skills: run.activatedSkills.map((s) => ({ ...s })), steps: [], filesChanged: [] } }
-        : {}),
+      ...runActivity(run),
       ...(run.status === 'failed' ? { error: true as const } : {}),
     })
     newest = replyAt
@@ -165,6 +163,14 @@ function withAttachments(raw: unknown): { attachments?: Attachment[] } {
   return list.length > 0 ? { attachments: list } : {}
 }
 
+/** A reply's activity from its run: skill chips (BE-7) plus file steps and changes (BE-3). */
+function runActivity(run: AgentRun): { activity?: MessageActivity } {
+  const skills = (run.activatedSkills ?? []).map((s) => ({ ...s }))
+  const steps = (run.activity?.steps ?? []).map((s) => ({ ...s }))
+  const filesChanged = (run.activity?.filesChanged ?? []).map((f) => ({ ...f }))
+  return skills.length + steps.length + filesChanged.length > 0 ? { activity: { skills, steps, filesChanged } } : {}
+}
+
 /** Stored run activity (skill chips, steps, files changed), dropping malformed entries. */
 function withActivity(raw: unknown): { activity?: MessageActivity } {
   if (!isObj(raw)) return {}
@@ -175,7 +181,12 @@ function withActivity(raw: unknown): { activity?: MessageActivity } {
     .slice(0, 20)
     .map((x) => ({ tool: x.tool as string, summary: x.summary as string, ok: x.ok as boolean, ...(typeof x.path === 'string' ? { path: x.path } : {}) }))
   const filesChanged = arr(raw.filesChanged).filter((x) => typeof x.path === 'string' && (x.change === 'added' || x.change === 'modified'))
-    .map((x) => ({ path: x.path as string, change: x.change as 'added' | 'modified' }))
+    .map((x) => ({
+      path: x.path as string,
+      change: x.change as 'added' | 'modified',
+      ...(typeof x.bytes === 'number' && Number.isFinite(x.bytes) && x.bytes >= 0 ? { bytes: x.bytes } : {}),
+      ...(typeof x.modifiedAt === 'string' && !Number.isNaN(Date.parse(x.modifiedAt)) ? { modifiedAt: x.modifiedAt } : {}),
+    }))
   if (skills.length + steps.length + filesChanged.length === 0) return {}
   return { activity: { skills, steps, filesChanged } }
 }

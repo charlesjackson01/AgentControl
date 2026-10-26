@@ -13,6 +13,7 @@ import { fail, uid } from './http.js'
 import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent } from './files.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
+import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
@@ -582,7 +583,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       skills: attachedSkills(store.skills, skillIds),
       // BE-4: remember like a run's (memoryLearn defaults on); a saved bot adds its memories and recall.
       memory: memoryScope ? memoryPromptBlock(store, memoryScope) : '',
-      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : [])],
+      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
       input: '',
       contextWindow: endpoint.contextWindow,
       responseReserve: replyReserve(endpoint),

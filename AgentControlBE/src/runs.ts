@@ -12,6 +12,9 @@ import { agentInstructions, attachedSkills, planPrompt, replyReserve } from './p
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { builtinTools, executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
+import { createFileService } from './file-service.js'
+import { FILE_TOOL_NAMES, recordStep } from './tools/files.js'
+import type { RunActivity } from './tools/types.js'
 import { chatCompletion, STOPPED_BY_YOU, type ChatMessage, type ChatResult, type ToolDeclaration } from './upstream.js'
 
 export interface RunOptions {
@@ -30,7 +33,7 @@ export interface RunOptions {
    * BE-4 (wired by BE-5): set for a group run. Memory then comes from the
    * group's scope and the bot's private memory is not injected.
    */
-  group?: { id: string; memoryLearn: boolean }
+  group?: { id: string; memoryLearn: boolean; /** BE-3: the group's folder name (data/groups/<slug>/) for group:shared/ */ slug?: string }
   /** Conversation the run belongs to (memory source); defaults to the agent's DM. */
   conversationId?: string
 }
@@ -114,7 +117,7 @@ async function executeRunInner(
   const hasMemory = store.memories.some((m) => sameScope(m.scope, memoryScope))
   const plan = planPrompt({
     memory,
-    memoryTools: [...(memoryLearn ? ['remember'] : []), ...(hasMemory ? ['recall'] : [])],
+    memoryTools: [...(memoryLearn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
     instructions: agentInstructions(agent.instructions, agent.rules),
     skills: injectedSkills,
     input,
@@ -185,6 +188,7 @@ async function executeRunInner(
   let result: ChatResult | undefined
 
   const runId = uid('run')
+  const activity: RunActivity = { steps: [], filesChanged: [] }
   const toolCtx: ToolContext = {
     store,
     agentId: agent.id,
@@ -201,6 +205,9 @@ async function executeRunInner(
     memoryLearn,
     ...(conversationId !== undefined ? { conversationId } : {}),
     memoryWrites: { count: 0 },
+    ...(opts.group?.slug ? { group: { id: opts.group.id, slug: opts.group.slug } } : {}),
+    files: createFileService(store, agent, opts.group?.slug ? { slug: opts.group.slug } : undefined),
+    activity,
   }
 
   const signal = opts.signal
@@ -313,6 +320,8 @@ async function executeRunInner(
             content = `${content.slice(0, Math.max(0, limit - marker.length))}${marker}`
           }
         }
+        const entry = builtinTools.get(call.name)
+        if (entry && toolCtx.allowed.has(call.name)) recordStep(toolCtx, call.name, entry, parseArgs(call.arguments), ok)
         loopChars += content.length
         loopMessages.push({ role: 'tool', content, toolCallId: call.id })
         toolAudit.push({
@@ -360,6 +369,7 @@ async function executeRunInner(
     })),
     ...(activated.size > 0 ? { activatedSkills: [...activated.values()] } : {}),
     ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
+    ...(activity.steps.length + activity.filesChanged.length > 0 ? { activity } : {}),
     ...(projectId !== undefined ? { projectId } : {}),
   }
 
@@ -378,4 +388,14 @@ async function executeRunInner(
   agent.runCount += 1
   agent.status = run.status === 'succeeded' ? 'idle' : 'error'
   return { run, persisted: store.save() }
+}
+
+/** Tool-call arguments as an object for the activity line ({} when unparseable). */
+function parseArgs(raw: string): Record<string, unknown> {
+  try {
+    const v: unknown = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
 }

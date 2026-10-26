@@ -6,6 +6,7 @@ import { buildApp } from './app.js'
 import { NOTES_MIGRATION, NOTES_RETIRED } from './archive.js'
 import { MAX_MEMORY_PER_SCOPE, MEMORY_HEADER } from './memory.js'
 import { createStore } from './store.js'
+import { FILE_TOOL_NAMES } from './tools/files.js'
 import type { Agent, MemoryItem } from './shared/types.js'
 
 /** BE-4: per-bot memory (CRUD, limits, scope, prompt, tools), PATCH agent, and notes-to-memory-v1. */
@@ -170,8 +171,8 @@ describe('prompt budget with memory', () => {
     await inject('POST', `/api/agents/${a.id}/memory`, { text: 'Prefers short answers.', category: 'preferences' })
     const draft = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama' })).json() as { toolNames: string[]; estimatedTokens: number }
     const saved = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: a.id })).json() as { toolNames: string[]; estimatedTokens: number }
-    expect(draft.toolNames).toEqual(['remember'])
-    expect(saved.toolNames).toEqual(['remember', 'recall'])
+    expect(draft.toolNames).toEqual(['remember', ...FILE_TOOL_NAMES])
+    expect(saved.toolNames).toEqual(['remember', 'recall', ...FILE_TOOL_NAMES])
     expect(saved.estimatedTokens).toBeGreaterThan(draft.estimatedTokens)
 
     const mock = mockChatSequence([content('ok')])
@@ -180,7 +181,7 @@ describe('prompt budget with memory', () => {
     expect(run.systemPrompt).toContain('Prefers short answers.')
 
     const off = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: a.id, memoryLearn: false })).json() as { toolNames: string[] }
-    expect(off.toolNames).toEqual(['recall'])
+    expect(off.toolNames).toEqual(['recall', ...FILE_TOOL_NAMES])
     expect((await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: 'nope' })).statusCode).toBe(404)
     expect((await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', agentId: 7 })).statusCode).toBe(400)
   })

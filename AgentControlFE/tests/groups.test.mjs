@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import {
   GROUP_START_GRACE_MS, IDLE_POLL, MAX_GROUP_BOTS, addableBots, afterCursor, createGroupBody, createGroupError, groupFileCard,
   groupHeaderLine, groupPanelSub, groupTab, insertMention, isLocked, memberRule, membersCount, mentionCandidates, mentionIds,
-  mentionMatches, mentionParts, mentionQuery, nextPoll, orderedMembers, pickerInitial, readMuted, seenBy, skippedMentions,
+  mentionMatches, mentionParts, mentionQuery, nextPoll, orderedMembers, pickerInitial, readMuted, seenBy, serverSkipped, skippedMentions, typingAfterSend,
   suggestName, systemLineText, togglePick, typingLabel, withGroupTab, withMembers, withoutMember, writeMuted,
 } from '../src/lib/groups.ts'
 import { renderMentions } from '../src/lib/mention-render.ts'
@@ -161,6 +161,17 @@ describe('poll start/stop (gaps of 20 s+ between replies)', () => {
     assert.equal(typingLabel('Researcher', t0, t0 + 25_400), 'Researcher is typing… · 25s')
     assert.equal(typingLabel('Researcher', null, t0), 'Researcher is typing…')
   })
+  it('BE-5 d5e5a99: the 202 typingAgentId shows the lead typing right away', () => {
+    assert.equal(typingAfterSend({ typingAgentId: 'p' }), 'p')
+    assert.equal(typingAfterSend({ typingAgentId: null }), null)
+    assert.equal(typingAfterSend({ typingAgentId: '' }), null)
+    assert.equal(typingAfterSend({}), null)
+    assert.equal(typingAfterSend(undefined), null)
+    // With typing from the 202 the poll counts it as seen, so it stops when typing clears.
+    const t0 = 1_000_000
+    const s = { sentAt: t0, sawTyping: Boolean(typingAfterSend({ typingAgentId: 'p' })) }
+    assert.equal(nextPoll(s, { typingAgentId: null }, t0 + 1500).poll, false)
+  })
   it('afterCursor is the newest id', () => {
     assert.equal(afterCursor([{ id: 'a' }, { id: 'b' }]), 'b')
     assert.equal(afterCursor([]), undefined)
@@ -186,6 +197,29 @@ describe('turns: Seen by, the 4-reply cap, system lines', () => {
     assert.deepEqual(skippedMentions([user, lead], g, cands), ['w', 'ww'])
     const errLead = msg({ authorAgentId: 'p', content: '@Researcher go', error: true })
     assert.deepEqual(skippedMentions([user, errLead], g, cands), ['ww'])
+  })
+  it('BE-5 d5e5a99: the lead reply\'s skippedAgentIds wins over the FE calculation', () => {
+    // The FE alone would say ['ww']; the server's list is used as given, in its order.
+    const lead = msg({ authorAgentId: 'p', content: 'On it.', skippedAgentIds: ['w', 'ww'] })
+    assert.deepEqual(skippedMentions([user, lead], g, cands), ['w', 'ww'])
+    const one = msg({ authorAgentId: 'p', content: '@Researcher go', skippedAgentIds: ['ww'] })
+    assert.deepEqual(skippedMentions([user, one], g, cands), ['ww'])
+  })
+  it('skippedAgentIds: an empty list means nobody was skipped; missing falls back to the calculation', () => {
+    assert.deepEqual(skippedMentions([user, msg({ authorAgentId: 'p', content: 'On it.', skippedAgentIds: [] })], g, cands), [])
+    assert.deepEqual(skippedMentions([user, msg({ authorAgentId: 'p', content: 'On it.' })], g, cands), ['ww'])
+    const quiet = msg({ id: 'q', role: 'user', content: 'Hello team' })
+    assert.deepEqual(skippedMentions([quiet, msg({ authorAgentId: 'p', content: 'Hi' })], g, cands), [])
+  })
+  it('serverSkipped keeps strings once, and is null when the field is absent or malformed', () => {
+    assert.equal(serverSkipped({}), null)
+    assert.equal(serverSkipped({ skippedAgentIds: 'w' }), null)
+    assert.deepEqual(serverSkipped({ skippedAgentIds: ['w', 3, '', 'w', 'ww'] }), ['w', 'ww'])
+  })
+  it('only the lead reply\'s field counts (a member reply carrying one is ignored)', () => {
+    const lead = msg({ id: 'l2', authorAgentId: 'p', content: 'On it.', createdAt: '2026-10-26T01:24:10Z' })
+    const member = msg({ id: 'm2', authorAgentId: 'r', content: 'Done', skippedAgentIds: ['s'], createdAt: '2026-10-26T01:24:20Z' })
+    assert.deepEqual(skippedMentions([user, lead, member], g, cands), ['ww'])
   })
   it('system line takes the day label', () => {
     assert.equal(systemLineText('You created “Harbor team” and added Primary, Researcher and Summarizer.', 'Today', '8:20 PM'), 'Today · You created “Harbor team” and added Primary, Researcher and Summarizer · 8:20 PM')

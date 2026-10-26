@@ -32,6 +32,7 @@ import {
   seenBy,
   skippedMentions,
   systemLineText,
+  typingAfterSend,
   typingLabel,
   withGroupTab,
   type PollState,
@@ -281,8 +282,11 @@ export default function GroupChat({ group }: { group: Group }) {
         setMessages((prev) => mergeMessages(prev ?? [], result.messages))
         if (result.conversation) upsert(result.conversation)
         setPending(null)
-        setAwaiting(!result.conversation?.typingAgentId)
-        startPoll({ sentAt: Date.now(), sawTyping: Boolean(result.conversation?.typingAgentId) })
+        // BE-5 d5e5a99: the 202 names the lead as typing, so its row (and the "· 25s" clock) starts now.
+        const typingNow = typingAfterSend(result.conversation)
+        if (typingNow) setTypingFrom({ id: typingNow, at: Date.now() })
+        setAwaiting(!typingNow)
+        startPoll({ sentAt: Date.now(), sawTyping: Boolean(typingNow) })
       } catch (err) {
         setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
       }

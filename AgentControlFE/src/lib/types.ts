@@ -379,6 +379,8 @@ export type ChatMessage = {
   kind?: 'message' | 'system'
   /** Set on assistant messages (required in groups, BE-5). */
   authorAgentId?: string
+  /** BE-5 d5e5a99: on the lead's reply, the @mentioned bots the 4-reply cap left out, in mention order (absent when none). */
+  skippedAgentIds?: string[]
   attachments?: Attachment[]
   activity?: MessageActivity
 }

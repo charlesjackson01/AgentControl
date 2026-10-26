@@ -270,12 +270,23 @@ export function skippedMentions(messages: readonly ChatMessage[], g: GroupLike, 
   if (userIndex < 0) return []
   const lead = replies.find((m) => m.authorAgentId === g.leadAgentId)
   if (!lead) return []
+  // BE-5 d5e5a99: the lead's reply says who the cap skipped. The calculation below is the
+  // fallback for replies stored before the field existed.
+  const listed = serverSkipped(lead)
+  if (listed) return listed
   const cands = mentionCandidates(g, agents)
   const fromUser = mentionIds(messages[userIndex].content, cands)
   const fromLead = lead.error ? [] : mentionIds(lead.content, cands)
   const queue = [...new Set([...fromUser, ...fromLead])]
   const room = MAX_GROUP_REPLIES - 1 - (fromLead.length > 0 ? 1 : 0)
   return queue.slice(Math.max(0, room))
+}
+
+/** The lead reply's own `skippedAgentIds` (deduped, strings only); null when the BE didn't send one. */
+export function serverSkipped(lead: Pick<ChatMessage, 'skippedAgentIds'>): string[] | null {
+  const raw: unknown = lead.skippedAgentIds
+  if (!Array.isArray(raw)) return null
+  return [...new Set(raw.filter((id): id is string => typeof id === 'string' && id !== ''))]
 }
 
 /* ---------- polling ---------- */
@@ -301,6 +312,15 @@ export function nextPoll(state: PollState, poll: { typingAgentId?: string | null
   if (state.sawTyping) return { state: IDLE_POLL, poll: false }
   if (state.sentAt !== null && now - state.sentAt < GROUP_START_GRACE_MS) return { state, poll: true }
   return { state: IDLE_POLL, poll: false }
+}
+
+/**
+ * BE-5 d5e5a99: the 202 send already names the lead as typing. Who to show typing straight
+ * after a send, or null when the 202 doesn't say (older BEs: "Waiting for replies…" until a poll does).
+ */
+export function typingAfterSend(conversation: { typingAgentId?: string | null } | null | undefined): string | null {
+  const id = conversation?.typingAgentId
+  return typeof id === 'string' && id !== '' ? id : null
 }
 
 /** GAP-G1: "Researcher is typing…" and, past 10 s on one reply, "· 25s". */

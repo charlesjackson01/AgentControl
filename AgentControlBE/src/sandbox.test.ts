@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp, defaultSkillIds } from './app.js'
 import { botRoot } from './files.js'
-import { extractJson, SANDBOX_LIMITS } from './sandbox.js'
+import { draftBot, DRAFT_MAX_TOKENS, DRAFT_TIMEOUT_MS, extractJson, SANDBOX_LIMITS } from './sandbox.js'
 import { createStore } from './store.js'
 import type { Agent } from './shared/types.js'
 
@@ -184,6 +184,34 @@ describe('POST /api/agents/draft', () => {
     expect(res.statusCode).toBe(200)
     expect(res.json()).toMatchObject({ name: '', rules: [] })
     expect(res.json().warning).toBeTruthy()
+  })
+
+  it('asks for 2,500 tokens and uses the endpoint timeout, defaulting to 30s', async () => {
+    await makePrimary()
+    const mock = mockChat(JSON.stringify(good))
+    await inject('POST', '/api/agents/draft', { prompt: 'x' })
+    const sent = JSON.parse((mock.mock.calls[0] as unknown as [string, { body: string }])[1].body)
+    expect(sent.max_tokens).toBe(DRAFT_MAX_TOKENS)
+    expect(DRAFT_MAX_TOKENS).toBe(2_500)
+    expect(DRAFT_TIMEOUT_MS).toBe(30_000)
+  })
+
+  it('logs why it fell back: thrown errors, a cut-off reply and schema failures', async () => {
+    await makePrimary()
+    const logs: string[] = []
+    mockChat(new Error('connect ECONNREFUSED'))
+    await draftBot(store, 'x', (m) => logs.push(m))
+    expect(logs.at(-1)).toContain('ECONNREFUSED')
+
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ index: 0, finish_reason: 'length', message: { role: 'assistant', content: '{"name": "Tri' } }] }) })))
+    await draftBot(store, 'x', (m) => logs.push(m))
+    expect(logs.at(-1)).toContain('max_tokens 2500')
+    expect(logs.at(-1)).toContain('finish_reason length')
+
+    mockChat(JSON.stringify({ ...good, name: '' }))
+    await draftBot(store, 'x', (m) => logs.push(m))
+    expect(logs.at(-1)).toContain('"name"')
+    expect(logs.join('\n')).not.toContain('sandbox-test-secret')
   })
 
   it('400s on a missing, blank or too-long prompt', async () => {

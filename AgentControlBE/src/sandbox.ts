@@ -59,8 +59,10 @@ export function agentDefaults(store: WorkspaceStore, defaultSkillIds: string[]):
 }
 
 export const MAX_DRAFT_PROMPT_CHARS = 2_000
-const DRAFT_TIMEOUT_MS = 30_000
-const DRAFT_MAX_TOKENS = 600
+/** Default when the endpoint sets no timeout; an endpoint's own timeoutMs wins. */
+export const DRAFT_TIMEOUT_MS = 30_000
+/** Room for a reasoning model to think before the JSON (muse-glimmer needed ~826). */
+export const DRAFT_MAX_TOKENS = 2_500
 
 export const DraftSchema = z.object({
   name: z.string().trim().min(1).max(60),
@@ -92,27 +94,47 @@ export function extractJson(text: string): unknown {
   return undefined
 }
 
-export async function draftBot(store: WorkspaceStore, prompt: string): Promise<BotDraft & { warning?: string }> {
-  const blank = (warning: string) => ({ ...BLANK_DRAFT, rules: [], warning })
+export type DraftLog = (msg: string) => void
+
+export async function draftBot(store: WorkspaceStore, prompt: string, log: DraftLog = () => {}): Promise<BotDraft & { warning?: string }> {
+  const blank = (warning: string, reason: string) => {
+    log(`POST /api/agents/draft fell back to a blank draft: ${reason}`)
+    return { ...BLANK_DRAFT, rules: [], warning }
+  }
   const primary = store.agents.find((a) => a.isPrimary)
   const endpoint = primary && store.endpoints.find((e) => e.id === primary.endpointId)
-  if (!primary || !endpoint) return blank('No Primary bot with an endpoint to write the draft. Fill it in by hand.')
-  const result = await chatCompletion(
-    endpoint.baseUrl,
-    store.endpointKeys[endpoint.id],
-    primary.modelId,
-    [{ role: 'system', content: DRAFT_SYSTEM }, { role: 'user', content: prompt }],
-    Math.min(endpoint.timeoutMs ?? DRAFT_TIMEOUT_MS, DRAFT_TIMEOUT_MS),
-    DRAFT_MAX_TOKENS,
-    undefined,
-    0.2,
-    undefined,
-    endpoint.proxyUrl,
-    { disableThinking: endpoint.disableThinking === true },
-  ).catch(() => null)
-  if (!result?.ok) return blank("Primary couldn't write a draft right now. Fill it in by hand.")
-  const parsed = DraftSchema.safeParse(extractJson(result.content))
-  if (!parsed.success) return blank("Primary's draft wasn't usable. Fill it in by hand.")
+  if (!primary || !endpoint) return blank('No Primary bot with an endpoint to write the draft. Fill it in by hand.', 'no Primary bot with an endpoint')
+  const timeoutMs = endpoint.timeoutMs ?? DRAFT_TIMEOUT_MS
+  let result: Awaited<ReturnType<typeof chatCompletion>>
+  try {
+    result = await chatCompletion(
+      endpoint.baseUrl,
+      store.endpointKeys[endpoint.id],
+      primary.modelId,
+      [{ role: 'system', content: DRAFT_SYSTEM }, { role: 'user', content: prompt }],
+      timeoutMs,
+      DRAFT_MAX_TOKENS,
+      undefined,
+      0.2,
+      undefined,
+      endpoint.proxyUrl,
+      { disableThinking: endpoint.disableThinking === true },
+    )
+  } catch (err) {
+    return blank("Primary couldn't write a draft right now. Fill it in by hand.", `upstream threw: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  const where = `endpoint ${endpoint.id}, model ${primary.modelId}, ${result.latencyMs}ms, timeout ${timeoutMs}ms, finish_reason ${result.finishReason ?? 'none'}`
+  if (!result.ok) return blank("Primary couldn't write a draft right now. Fill it in by hand.", `${result.error ?? 'upstream error'} (${where})`)
+  const json = extractJson(result.content)
+  if (json === undefined) {
+    const cut = result.finishReason === 'length' ? `; the reply hit max_tokens ${DRAFT_MAX_TOKENS}` : ''
+    return blank("Primary's draft wasn't usable. Fill it in by hand.", `no JSON object in the reply${cut} (${where})`)
+  }
+  const parsed = DraftSchema.safeParse(json)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return blank("Primary's draft wasn't usable. Fill it in by hand.", `draft failed validation at "${issue?.path.join('.') ?? ''}": ${issue?.message ?? 'invalid'} (${where})`)
+  }
   return parsed.data
 }
 
@@ -154,6 +176,6 @@ export function registerSandboxRoutes(app: FastifyInstance, store: WorkspaceStor
     const prompt = (body as Record<string, unknown>).prompt
     if (typeof prompt !== 'string' || !prompt.trim()) fail(400, 'Describe the bot in "prompt".')
     if (prompt.length > MAX_DRAFT_PROMPT_CHARS) fail(400, `"prompt" can be at most ${MAX_DRAFT_PROMPT_CHARS} characters.`)
-    return draftBot(store, prompt.trim())
+    return draftBot(store, prompt.trim(), (msg) => request.log.warn(msg))
   })
 }

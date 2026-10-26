@@ -300,6 +300,46 @@ describe('groups: sending and replies', () => {
   })
 })
 
+describe('groups: lead typing on send and skippedAgentIds (BE-10)', () => {
+  it('the 202 send already shows the lead typing, cleared once the turn ends', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    vi.stubGlobal('fetch', vi.fn(async () => { await gate; return ok('ok') }))
+    const g = await makeGroup()
+    const res = await inject('POST', `/api/conversations/${g.id}/messages`, { content: 'hi' })
+    expect(res.statusCode).toBe(202)
+    expect((res.json() as { conversation: ConversationSummary }).conversation.typingAgentId).toBe(primary.id)
+    release()
+    await groupIdle(g.id)
+    expect(((await inject('GET', `/api/groups/${g.id}`)).json() as ConversationSummary).typingAgentId).toBeNull()
+  })
+
+  it("lists the bots the cap left out in the lead's mention order, not member order", async () => {
+    const extra = [await makeBot('Ana'), await makeBot('Ben'), await makeBot('Cy')]
+    const [ana, ben, cy] = extra
+    bots({ Primary: [ok('@Cy @Ben @Ana @Summarizer @Researcher go'), ok('wrap')] })
+    const g = await makeGroup('Big', [researcher.id, summarizer.id, ...extra.map((a) => a.id)])
+    await send(g.id, 'go')
+    const out = replies(g.id)
+    // 4 replies: lead, two members, lead wrap-up; the rest are skipped in the order the lead named them.
+    expect(out.map((m) => m.authorAgentId)).toEqual([primary.id, cy!.id, ben!.id, primary.id])
+    expect(out[0]!.skippedAgentIds).toEqual([ana!.id, summarizer.id, researcher.id])
+    const page = (await inject('GET', `/api/conversations/${g.id}/messages`)).json() as { messages: ChatMessage[] }
+    expect(page.messages.find((m) => m.id === out[0]!.id)?.skippedAgentIds).toEqual([ana!.id, summarizer.id, researcher.id])
+  })
+
+  it('leaves skippedAgentIds out entirely when nobody was skipped', async () => {
+    bots({ Primary: [ok('@Researcher take this'), ok('wrap')], Researcher: [ok('done')] })
+    const g = await makeGroup()
+    await send(g.id, 'go')
+    const page = (await inject('GET', `/api/conversations/${g.id}/messages`)).json() as { messages: ChatMessage[] }
+    const assistant = page.messages.filter((m) => m.role === 'assistant')
+    expect(assistant.length).toBeGreaterThan(0)
+    expect(assistant.every((m) => !('skippedAgentIds' in m))).toBe(true)
+    expect(store.chatMessages.every((m) => !('skippedAgentIds' in m))).toBe(true)
+  })
+})
+
 describe('groups: polling with after=', () => {
   it('returns messages after a message id, a page at a time', async () => {
     bots({ Primary: [ok('@Researcher'), ok('wrap')] })

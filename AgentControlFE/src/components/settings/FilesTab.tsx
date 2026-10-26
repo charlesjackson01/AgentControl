@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Dialog from '../Dialog'
+import { groupSharedWhen } from '../../lib/attachments'
 import ConfirmDialog from '../ConfirmDialog'
 import { apiUrl, putRaw, request, serverMessage } from '../../lib/api'
 import { botFolder } from '../../lib/agent-put'
@@ -480,7 +481,7 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
                       <span title={e.name}>{e.name}</span>
                       {menuFor(e)}
                     </div>
-                    <div className="cf-files__imgmeta">{group ? groupImageLine(e, who(e)) : imageLine(e)}</div>
+                    <div className="cf-files__imgmeta" title={e.sharedAt ? 'Sent in this chat' : undefined}>{group ? groupImageLine(e, who(e)) : imageLine(e)}</div>
                   </div>
                 ))}
               </div>
@@ -518,7 +519,9 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
                       {e.name}
                     </a>
                     <span className="cf-tree__sp" />
-                    <span className="cf-files__rowwhen">{group ? groupFileWhen(e, who(e)) : fileWhen(e)}</span>
+                    <span className="cf-files__rowwhen" title={e.sharedAt ? 'Sent in this chat' : undefined}>
+                      {group ? groupSharedWhen(e, group.group.id, who(e), (w) => groupFileWhen(e, w)) : fileWhen(e)}
+                    </span>
                     <span className="cf-files__rowsize">{fileSize(e)}</span>
                     {menuFor(e)}
                   </li>
@@ -539,7 +542,7 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
                         {e.name}
                       </a>
                       <span className="cf-tree__sp" />
-                      <span className="cf-files__rowwhen">{groupFileWhen(e, '')}</span>
+                      <span className="cf-files__rowwhen">{groupSharedWhen(e, group.group.id, '', (w) => groupFileWhen(e, w))}</span>
                       <span className="cf-files__rowsize">{fileSize(e)}</span>
                       {menuFor(e)}
                     </li>

@@ -1,5 +1,6 @@
 /* Pure helpers for the chat-first sidebar and thread (tests/conversations.test.mjs). */
 import type { Agent, ChatMessage, ConversationSummary } from './types.ts'
+import { attachmentsPreview } from './attachments.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
 /** DMs carry `agentId`; groups (BE-5) carry `kind: 'group'` and no agentId. */
@@ -53,9 +54,10 @@ export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null 
 }
 
 /** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
-export function previewText(last: Pick<ChatMessage, 'role' | 'content' | 'error'> | null | undefined, max = 80): string {
+export function previewText(last: (Pick<ChatMessage, 'role' | 'content' | 'error'> & { attachments?: readonly { name: string }[] }) | null | undefined, max = 80): string {
   if (!last) return 'No messages yet'
-  const body = last.content.replace(/\s+/g, ' ').trim() || (isErrorPreview(last) ? 'The run failed.' : '…')
+  // FE-7: a files-only message previews as "You: 📎 plan.pdf" / "You: 📎 3 files".
+  const body = last.content.replace(/\s+/g, ' ').trim() || attachmentsPreview(last.attachments) || (isErrorPreview(last) ? 'The run failed.' : '…')
   const prefix = last.role === 'user' ? 'You: ' : isErrorPreview(last) ? 'Failed: ' : ''
   const full = prefix + body
   const chars = Array.from(full)

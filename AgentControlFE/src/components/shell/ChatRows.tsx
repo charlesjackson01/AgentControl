@@ -37,11 +37,13 @@ export function BotRow({ author, authorName, who, meta, error, mid, hit, before,
   )
 }
 
-export function UserRow({ meta, mid, hit, children }: RowProps) {
+/** FE-7: `before` holds the attachment cards (04/05b, above the bubble); `bare` drops the bubble for a files-only message (GAP-A9). */
+export function UserRow({ meta, mid, hit, before, bare, children }: RowProps & { before?: ReactNode; bare?: boolean }) {
   return (
     <div className={`cf-row cf-row--u${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
       <div className="cf-grp">
-        <div className="cf-bub cf-bub--u">{children}</div>
+        {before}
+        {!bare && <div className="cf-bub cf-bub--u">{children}</div>}
         {meta && <div className="cf-rcpt">{meta}</div>}
       </div>
     </div>

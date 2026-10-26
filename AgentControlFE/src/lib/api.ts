@@ -4,7 +4,7 @@ import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
 import { normalizeSkillsResponse, skillPath, type SkillsResponse } from './skills-catalog'
 import { CONVERSATION_PAGE_SIZE, MAX_CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary, type GroupCreateInput, type GroupPatch, type GroupSendResult, type GroupSummary } from './types'
 import type { SkillSummary } from './types'
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
+import type { Agent, AgentInput, Attachment, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -138,6 +138,37 @@ export function putRaw(url: string, body: Blob): Promise<Response> {
   return fetch(apiUrl(url), { method: 'PUT', headers, body })
 }
 
+/**
+ * FE-7 (BE-9): PUT one chat upload with XHR, for upload progress (fetch has none).
+ * Resolves with the BE's Attachment (201); rejects with ApiError(status, server text) — status 0 for a
+ * network failure or abort. `abort()` cancels it (a removed chip).
+ */
+export function uploadChatFile(path: string, file: Blob, onProgress: (fraction: number) => void): { promise: Promise<Attachment>; abort: () => void } {
+  const xhr = new XMLHttpRequest()
+  const promise = new Promise<Attachment>((resolve, reject) => {
+    xhr.open('PUT', apiUrl(path))
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
+    if (AUTH_TOKEN) xhr.setRequestHeader('Authorization', `Bearer ${AUTH_TOKEN}`)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      let body: unknown = null
+      try {
+        body = JSON.parse(xhr.responseText)
+      } catch {
+        // non-JSON body (proxy error page)
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body && typeof body === 'object') resolve(body as Attachment)
+      else reject(new ApiError(serverMessage(body) ?? '', xhr.status))
+    }
+    xhr.onerror = () => reject(new ApiError('', 0))
+    xhr.onabort = () => reject(new ApiError('aborted', 0))
+    xhr.send(file)
+  })
+  return { promise, abort: () => xhr.abort() }
+}
+
 /** The server's own error text, or null when it sent only a generic one. */
 export function serverMessage(body: unknown): string | null {
   const m = errorMessageFrom(body)
@@ -178,14 +209,15 @@ export const api = {
    * The only place the chat screen sends from. Falls back to the agent run route
    * (+ refetch) when the BE predates the send route (404 with no conversation match).
    */
-  async sendConversationMessage(conversationId: string, agentId: string, text: string): Promise<ConversationSendResult> {
+  async sendConversationMessage(conversationId: string, agentId: string, text: string, attachments: readonly Attachment[] = []): Promise<ConversationSendResult> {
     try {
       return await request<ConversationSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify(attachments.length ? { content: text, attachments } : { content: text }),
       })
     } catch (err) {
-      if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405) || !/^Route /.test(err.message)) throw err
+      // The pre-BE-1 run-route fallback can't carry attachments.
+      if (attachments.length || !(err instanceof ApiError) || (err.status !== 404 && err.status !== 405) || !/^Route /.test(err.message)) throw err
       const run = await api.runAgent(agentId, text)
       const page = await api.listConversationMessages(conversationId)
       const [summary] = (await api.listConversations()).filter((c) => c.id === conversationId)
@@ -206,10 +238,10 @@ export const api = {
   },
 
   /** BE-5 group send: 202 with the user's message; the lead and mentioned bots reply in the background. */
-  async sendGroupMessage(conversationId: string, text: string): Promise<GroupSendResult> {
+  async sendGroupMessage(conversationId: string, text: string, attachments: readonly Attachment[] = []): Promise<GroupSendResult> {
     return request<GroupSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content: text }),
+      body: JSON.stringify(attachments.length ? { content: text, attachments } : { content: text }),
     })
   },
 

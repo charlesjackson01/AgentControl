@@ -10,7 +10,7 @@ import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
 import { dmAgentId, mergeMessages, olderCursor } from '../lib/conversations'
 import { clockTime, threadItems, typingSeenFor } from '../lib/thread'
-import type { Agent, ChatMessage } from '../lib/types'
+import type { Agent, Attachment, ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
 import { useShell } from '../state/shell-context'
@@ -24,11 +24,15 @@ import { NewBotTurn } from '../components/shell/NewBotFlow'
 import { useNewBot } from '../hooks/useNewBot'
 import { composerLocked, createBody, createFailureText, newBotApi, newCommandPrompt, placeholderFor, profilePrefill, readNewBotNav, tooLongNotice } from '../lib/new-bot'
 import { request } from '../lib/api'
+import { AttachButton, AttachmentCards, AttachTray } from '../components/shell/Attachments'
+import { useFileDrop } from '../hooks/useFileDrop'
+import { useAttachments } from '../hooks/useAttachments'
+import { sendFailureHint, type Chip } from '../lib/attachments'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
 
-type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: string }
+type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: string; attachments?: Attachment[] }
 
 /** FE-1 thread for one conversation: bottom-anchored, day separators, a time under each bubble. */
 export default function ConversationChat() {
@@ -64,6 +68,9 @@ export default function ConversationChat() {
   const isPrimaryDm = Boolean(agent?.isPrimary) && !isGroup
   const location = useLocation()
   const navigate = useNavigate()
+  // FE-7: files picked with ＋ or dropped on the chat, uploaded before the message is sent.
+  const att = useAttachments(conversationId)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   // Reset per conversation during render (no effect), so a switch never flashes the old thread.
   if (shownFor !== conversationId) {
@@ -76,6 +83,7 @@ export default function ConversationChat() {
     setRunError(null)
     setDraft('')
     setCmdNotice(null)
+    setSendError(null)
     nbs.setSession(null)
   }
 
@@ -186,14 +194,15 @@ export default function ConversationChat() {
   }, [jumpId, jumpFound, messages, hasMore, loadingOlder]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const sending = pending?.status === 'typing'
-  const send = useCallback(async (raw: string) => {
+  const send = useCallback(async (raw: string, attachments: Attachment[] = [], taken: Chip[] = []) => {
     const text = raw.trim()
-    if (!text || sending) return
-    setPending({ text, ts: new Date().toISOString(), status: 'typing' })
+    if ((!text && attachments.length === 0) || sending) return
+    setPending({ text, ts: new Date().toISOString(), status: 'typing', attachments })
     setDraft('')
+    setSendError(null)
     try {
       if (!agent) throw new Error('This chat has no bot.')
-      const result = await api.sendConversationMessage(conversationId, agent.id, text)
+      const result = await api.sendConversationMessage(conversationId, agent.id, text, attachments)
       setMessages((prev) => mergeMessages(prev ?? [], result.messages))
       const changed = runFilesChanged(result.run)
       if (changed) setRunFiles((prev) => ({ ...prev, [result.run.id]: changed }))
@@ -208,9 +217,19 @@ export default function ConversationChat() {
         setRunError(outcome.kind === 'banner' ? (outcome.text ?? 'The run failed.') : null)
       }
     } catch (err) {
-      setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
+      const error = friendly(err, 'The message could not be sent.')
+      if (taken.length) {
+        // GAP-A6: a send with files that failed (e.g. a 400 for a file no longer in shared/):
+        // the text and the files go back to the composer, the named file marked, to fix and resend.
+        setPending(null)
+        att.restore(taken, error)
+        setDraft((d) => d || text)
+        setSendError(sendFailureHint(taken, error))
+        return
+      }
+      setPending({ text, ts: new Date().toISOString(), status: 'error', error, attachments })
     }
-  }, [sending, agent, conversationId, upsert])
+  }, [sending, agent, conversationId, upsert, att])
 
 
   const authorOf = (m: ChatMessage): Agent | undefined =>
@@ -218,6 +237,10 @@ export default function ConversationChat() {
   const typingAgent =
     !pending && conversation?.typingAgentId ? agents.find((a) => a.id === conversation.typingAgentId) : undefined
   const canSend = Boolean(conversation) && !isGroup
+  // FE-7: ＋ and drop work whenever a plain message could be sent (not during a /new draft).
+  const nbActive = isPrimaryDm ? nbs.session : null
+  const canAttach = !sending && canSend && !composerLocked(nbActive?.phase ?? null) && !nbActive
+  const drop = useFileDrop(att, canAttach)
 
   // "Read" before a reply exists: when typing was first seen for this chat (held by the provider).
   const typingSeen = messages && !pending ? typingSeenFor(messages, typingSince[conversationId]) : null
@@ -275,6 +298,12 @@ export default function ConversationChat() {
       return
     }
     if (parsed) return runSlash(parsed.command, parsed.args)
+    if (!att.canSend(text)) return
+    if (att.chips.length > 0 && !nbSession) {
+      const ready = att.ready
+      void send(text, ready, att.take())
+      return
+    }
     if (!text.trim()) return
     if (nbPhase?.kind === 'ask') {
       setDraft('')
@@ -338,7 +367,7 @@ export default function ConversationChat() {
   return (
     <>
       <ChatHeader conversation={conversation} agent={agent} sending={sending} onInfo={agent ? openSettings : undefined} />
-      <main className="cf-main">
+      <main className="cf-main" {...drop.handlers}>
         <section className="cf-thread" aria-label="Conversation" ref={threadRef}>
           <div className="cf-thread__inner">
             {loadError && !messages ? (
@@ -370,12 +399,21 @@ export default function ConversationChat() {
                   const m = item.message
                   if (m.kind === 'system') return <p key={item.key} className="cf-system">{m.content}</p>
                   const view = chatMessageView(m)
-                  if (view.kind === 'user')
+                  if (view.kind === 'user') {
+                    const files = m.attachments ?? []
                     return (
-                      <UserRow key={item.key} meta={item.meta} mid={m.id} hit={m.id === jumpId}>
+                      <UserRow
+                        key={item.key}
+                        meta={item.meta}
+                        mid={m.id}
+                        hit={m.id === jumpId}
+                        before={<AttachmentCards attachments={files} ctx={{ agentId }} />}
+                        bare={files.length > 0 && !view.text.trim()}
+                      >
                         {view.text}
                       </UserRow>
                     )
+                  }
                   const retryText = view.kind === 'error' ? retryTextBefore(messages, item.index) : undefined
                   const act = activityView(m.activity, undefined, (m.runId && runFiles[m.runId]) || null)
                   return (
@@ -403,7 +441,13 @@ export default function ConversationChat() {
                 )}
                 {pending && (
                   <>
-                    <UserRow meta={clockTime(pending.ts)}>{pending.text}</UserRow>
+                    <UserRow
+                      meta={clockTime(pending.ts)}
+                      before={<AttachmentCards attachments={pending.attachments ?? []} ctx={{ agentId }} />}
+                      bare={Boolean(pending.attachments?.length) && !pending.text}
+                    >
+                      {pending.text}
+                    </UserRow>
                     {pending.status === 'typing' ? (
                       <BotRow author={agent}>
                         <span className="sr-only">{`${agent?.name ?? 'Bot'} is typing`}</span>
@@ -412,7 +456,7 @@ export default function ConversationChat() {
                     ) : (
                       <BotRow author={agent} error>
                         {pending.error}
-                        <button type="button" className="chat__retry" onClick={() => void send(pending.text)}>
+                        <button type="button" className="chat__retry" onClick={() => void send(pending.text, pending.attachments)}>
                           Retry
                         </button>
                       </BotRow>
@@ -474,10 +518,9 @@ export default function ConversationChat() {
               </ul>
             </div>
           )}
-          <div className="cf-comp">
-            <button type="button" className="cf-cbtn cf-cbtn--plus" disabled title="Attachments aren't available yet" aria-label="Attach files">
-              ＋
-            </button>
+          <AttachTray att={att} disabled={sending} />
+          <div className={`cf-comp${drop.over ? ' cf-comp--drop' : ''}`} data-gap={drop.over ? 'GAP-A2' : undefined}>
+            <AttachButton att={att} disabled={!canAttach} />
             <textarea
               className="cf-comp__input"
               value={draft}
@@ -504,13 +547,17 @@ export default function ConversationChat() {
               type="button"
               className="cf-send"
               onClick={() => submit(draft)}
-              disabled={sending || !draft.trim() || !canSend || locked || tooLong !== null}
+              disabled={sending || !att.canSend(draft) || !canSend || locked || tooLong !== null}
               aria-label={sending ? 'Sending' : 'Send'}
             >
               {sending ? <span className="spinner" aria-hidden="true" /> : '↑'}
             </button>
           </div>
-          {tooLong || cmdNotice ? (
+          {drop.over ? (
+            <p className="cf-hint cf-hint--drop">Drop to attach. Files you send are saved in this bot&apos;s folder</p>
+          ) : sendError ? (
+            <p className="cf-hint cf-hint--err" role="alert" data-gap="GAP-A6">Not sent: {sendError}</p>
+          ) : tooLong || cmdNotice ? (
             <p className="cf-hint cf-hint--notice" role="status">{tooLong ?? cmdNotice}</p>
           ) : (
             <p className="cf-hint">Enter to send · / for commands · Files you send are saved in this bot&apos;s folder</p>

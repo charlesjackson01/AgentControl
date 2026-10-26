@@ -305,7 +305,7 @@ export const IDLE_POLL: PollState = { sentAt: null, sawTyping: false }
  * - Typing set: always continue (a reply can take 20 s or more; never time out on typing).
  * - Typing clear after it was seen: the turn is over, stop.
  * - Typing never seen yet: continue for GROUP_START_GRACE_MS after the send (the BE starts
- *   the turn after its 202, so the 202 itself says nobody is typing), then stop.
+ *   the turn after its 202; before d5e5a99 the 202 said nobody was typing), then stop.
  */
 export function nextPoll(state: PollState, poll: { typingAgentId?: string | null }, now: number): { state: PollState; poll: boolean } {
   if (poll.typingAgentId) return { state: { ...state, sawTyping: true }, poll: true }

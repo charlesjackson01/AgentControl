@@ -38,7 +38,11 @@ import {
   type PollState,
 } from '../lib/groups'
 import { renderMentions } from '../lib/mention-render'
-import type { Agent, ChatMessage, ConversationSummary, GroupConversation } from '../lib/types'
+import { AttachButton, AttachmentCards, AttachTray } from '../components/shell/Attachments'
+import { useFileDrop } from '../hooks/useFileDrop'
+import { useAttachments } from '../hooks/useAttachments'
+import { sendFailureHint, type Chip } from '../lib/attachments'
+import type { Agent, Attachment, ChatMessage, ConversationSummary, GroupConversation } from '../lib/types'
 import { useConversations } from '../state/conversations-context'
 import { useShell } from '../state/shell-context'
 
@@ -48,7 +52,7 @@ const IDLE_THREAD_POLL_MS = 10_000
 const MAX_POLL_FAILS = 8
 
 type Group = ConversationSummary & GroupConversation
-type Pending = { text: string; ts: string; status: 'sending' | 'error'; error?: string }
+type Pending = { text: string; ts: string; status: 'sending' | 'error'; error?: string; attachments?: Attachment[] }
 
 /**
  * FE-6 group thread (06a) on BE-5. A send returns 202 with the user's message; the lead,
@@ -83,6 +87,9 @@ export default function GroupChat({ group }: { group: Group }) {
   const pollState = useRef<PollState>(IDLE_POLL)
   const msgsRef = useRef<ChatMessage[] | undefined>(undefined)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // FE-7: files picked with ＋ or dropped on the chat land in the group's shared/ folder.
+  const att = useAttachments(conversationId)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   if (shownFor !== conversationId) {
     setShownFor(conversationId)
@@ -93,6 +100,7 @@ export default function GroupChat({ group }: { group: Group }) {
     setPending(null)
     setDraft('')
     setCmdNotice(null)
+    setSendError(null)
     setPolling(false)
     setAwaiting(false)
     setPollLost(false)
@@ -272,13 +280,14 @@ export default function GroupChat({ group }: { group: Group }) {
 
   const sending = pending?.status === 'sending'
   const send = useCallback(
-    async (raw: string) => {
+    async (raw: string, attachments: Attachment[] = [], taken: Chip[] = []) => {
       const text = raw.trim()
-      if (!text || sending) return
-      setPending({ text, ts: new Date().toISOString(), status: 'sending' })
+      if ((!text && attachments.length === 0) || sending) return
+      setPending({ text, ts: new Date().toISOString(), status: 'sending', attachments })
       setDraft('')
+      setSendError(null)
       try {
-        const result = await api.sendGroupMessage(conversationId, text)
+        const result = await api.sendGroupMessage(conversationId, text, attachments)
         setMessages((prev) => mergeMessages(prev ?? [], result.messages))
         if (result.conversation) upsert(result.conversation)
         setPending(null)
@@ -288,12 +297,22 @@ export default function GroupChat({ group }: { group: Group }) {
         setAwaiting(!typingNow)
         startPoll({ sentAt: Date.now(), sawTyping: Boolean(typingNow) })
       } catch (err) {
-        setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
+        const error = friendly(err, 'The message could not be sent.')
+        if (taken.length) {
+          // GAP-A6: text and files go back to the composer, the file the 400 names marked.
+          setPending(null)
+          att.restore(taken, error)
+          setDraft((d) => d || text)
+          setSendError(sendFailureHint(taken, error))
+          return
+        }
+        setPending({ text, ts: new Date().toISOString(), status: 'error', error, attachments })
       }
     },
-    [sending, conversationId, upsert, startPoll],
+    [sending, conversationId, upsert, startPoll, att],
   )
 
+  const drop = useFileDrop(att, !sending)
   const lead = agents.find((a) => a.id === group.leadAgentId)
   const cands = useMemo(() => mentionCandidates(group, agents), [group, agents])
   const renderText = useCallback((t: string, key: string) => renderMentions(t, cands, key), [cands])
@@ -338,7 +357,12 @@ export default function GroupChat({ group }: { group: Group }) {
   const submit = (text: string) => {
     const parsed = parseSlash(text)
     if (parsed) return runSlash(parsed.command, parsed.args)
-    if (!text.trim()) return
+    if (!att.canSend(text)) return
+    if (att.chips.length > 0) {
+      const ready = att.ready
+      void send(text, ready, att.take())
+      return
+    }
     void send(text)
   }
   const onKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -413,7 +437,7 @@ export default function GroupChat({ group }: { group: Group }) {
   return (
     <>
       <ChatHeader conversation={group} onInfo={openPanel} />
-      <main className="cf-main">
+      <main className="cf-main" {...drop.handlers}>
         <section className="cf-thread" aria-label="Conversation" ref={threadRef}>
           <div className="cf-thread__inner">
             {loadError && !messages ? (
@@ -447,12 +471,21 @@ export default function GroupChat({ group }: { group: Group }) {
                       </p>
                     )
                   const view = chatMessageView(m)
-                  if (view.kind === 'user')
+                  if (view.kind === 'user') {
+                    const files = m.attachments ?? []
                     return (
-                      <UserRow key={row.key} meta={row.index === lastUserIdx ? seenMeta(m) : clockTime(m.createdAt)} mid={m.id} hit={m.id === jumpId}>
+                      <UserRow
+                        key={row.key}
+                        meta={row.index === lastUserIdx ? seenMeta(m) : clockTime(m.createdAt)}
+                        mid={m.id}
+                        hit={m.id === jumpId}
+                        before={<AttachmentCards attachments={files} ctx={{ groupId: group.id }} />}
+                        bare={files.length > 0 && !view.text.trim()}
+                      >
                         {renderMentions(view.text, cands, m.id)}
                       </UserRow>
                     )
+                  }
                   const author = authorOf(m)
                   const act = activityView(m.activity, undefined, null)
                   const authorChat = author ? conversations?.find((c) => c.kind === 'dm' && c.agentId === author.id)?.id : undefined
@@ -488,11 +521,17 @@ export default function GroupChat({ group }: { group: Group }) {
                 )}
                 {pending && (
                   <>
-                    <UserRow meta={pending.status === 'sending' ? 'Sending…' : clockTime(pending.ts)}>{renderMentions(pending.text, cands, 'pending')}</UserRow>
+                    <UserRow
+                      meta={pending.status === 'sending' ? 'Sending…' : clockTime(pending.ts)}
+                      before={<AttachmentCards attachments={pending.attachments ?? []} ctx={{ groupId: group.id }} />}
+                      bare={Boolean(pending.attachments?.length) && !pending.text}
+                    >
+                      {renderMentions(pending.text, cands, 'pending')}
+                    </UserRow>
                     {pending.status === 'error' && (
                       <p className="cf-sendfail" role="alert">
                         {pending.error}{' '}
-                        <button type="button" className="chat__retry" onClick={() => void send(pending.text)}>
+                        <button type="button" className="chat__retry" onClick={() => void send(pending.text, pending.attachments)}>
                           Retry
                         </button>
                       </p>
@@ -596,10 +635,9 @@ export default function GroupChat({ group }: { group: Group }) {
               </ul>
             </div>
           )}
-          <div className="cf-comp">
-            <button type="button" className="cf-cbtn cf-cbtn--plus" disabled title="Attachments aren't available yet" aria-label="Attach files">
-              ＋
-            </button>
+          <AttachTray att={att} disabled={sending} />
+          <div className={`cf-comp${drop.over ? ' cf-comp--drop' : ''}`} data-gap={drop.over ? 'GAP-A2' : undefined}>
+            <AttachButton att={att} disabled={sending} />
             <textarea
               ref={inputRef}
               className="cf-comp__input"
@@ -625,11 +663,15 @@ export default function GroupChat({ group }: { group: Group }) {
             <button type="button" className="cf-cbtn cf-cbtn--skills" disabled title="Skills aren't available here yet" aria-label="Skills">
               ✦
             </button>
-            <button type="button" className="cf-send" onClick={() => submit(draft)} disabled={sending || !draft.trim()} aria-label={sending ? 'Sending' : 'Send'}>
+            <button type="button" className="cf-send" onClick={() => submit(draft)} disabled={sending || !att.canSend(draft)} aria-label={sending ? 'Sending' : 'Send'}>
               {sending ? <span className="spinner" aria-hidden="true" /> : '↑'}
             </button>
           </div>
-          {cmdNotice ? (
+          {drop.over ? (
+            <p className="cf-hint cf-hint--drop">Drop to attach. Files you send are saved in the group&apos;s folder</p>
+          ) : sendError ? (
+            <p className="cf-hint cf-hint--err" role="alert" data-gap="GAP-A6">Not sent: {sendError}</p>
+          ) : cmdNotice ? (
             <p className="cf-hint cf-hint--notice" role="status">{cmdNotice}</p>
           ) : (
             <p className="cf-hint">Enter to send · / for commands · Files you send are saved in the group&apos;s folder</p>

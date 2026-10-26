@@ -8,7 +8,7 @@ import { filesPanelOpen, filesPathParam, withFilesPath } from '../lib/files'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
-import { dmAgentId, mergeMessages, olderCursor } from '../lib/conversations'
+import { dmAgentId, mergeMessages, olderCursor, pageSummary } from '../lib/conversations'
 import { clockTime, threadItems, typingSeenFor } from '../lib/thread'
 import type { Agent, Attachment, ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
@@ -104,6 +104,10 @@ export default function ConversationChat() {
     api.listConversationMessages(conversationId).then(
       (page) => {
         if (!active) return
+        // BE-10: the first page carries the summary, so typing/unread (and a chat the sidebar
+        // hasn't listed yet) show now rather than at the next sidebar poll. Older servers: null.
+        const summary = pageSummary(page.conversation)
+        if (summary) upsert(summary)
         setMessages((prev) => mergeMessages(prev ?? [], page.messages))
         setHasMore(page.hasMore)
         setLoadError(undefined)
@@ -115,7 +119,7 @@ export default function ConversationChat() {
     return () => {
       active = false
     }
-  }, [conversationId, attempt])
+  }, [conversationId, attempt, upsert])
 
   // Pick up messages that arrive while open (e.g. an agent finishing a turn).
   useEffect(() => {
@@ -123,12 +127,16 @@ export default function ConversationChat() {
     const timer = setInterval(() => {
       if (document.visibilityState !== 'visible') return
       api.listConversationMessages(conversationId).then(
-        (page) => setMessages((prev) => (prev ? mergeMessages(prev, page.messages) : prev)),
+        (page) => {
+          const summary = pageSummary(page.conversation)
+          if (summary) upsert(summary)
+          setMessages((prev) => (prev ? mergeMessages(prev, page.messages) : prev))
+        },
         () => {},
       )
     }, THREAD_POLL_MS)
     return () => clearInterval(timer)
-  }, [conversationId])
+  }, [conversationId, upsert])
 
   // Mark read on open and whenever a new message lands while the thread is open.
   const newestId = messages?.[messages.length - 1]?.id
@@ -245,7 +253,8 @@ export default function ConversationChat() {
   // "Read" before a reply exists: when typing was first seen for this chat (held by the provider).
   const typingSeen = messages && !pending ? typingSeenFor(messages, typingSince[conversationId]) : null
 
-  if (loaded && conversations && !conversation) {
+  // Not in the sidebar list: wait for the first page (BE-10 adds the chat from its summary), then say not found.
+  if (loaded && conversations && !conversation && (messages !== undefined || loadError)) {
     return (
       <>
         <ChatHeader />

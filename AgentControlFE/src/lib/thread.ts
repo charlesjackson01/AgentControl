@@ -118,6 +118,21 @@ export function noteTyping(
   return { typing, started: [...typing].filter((id) => !wasTyping.has(id)), at }
 }
 
+/**
+ * `noteTyping` for one conversation (a page summary or a send result): keeps the other
+ * conversations' typing state, and reports `started` when this one just began typing.
+ */
+export function noteTypingFor(
+  c: { id: string; typingAgentId?: string | null },
+  wasTyping: ReadonlySet<string>,
+  at: string,
+): { typing: Set<string>; started: string[]; at: string } {
+  const typing = new Set(wasTyping)
+  if (c.typingAgentId) typing.add(c.id)
+  else typing.delete(c.id)
+  return { typing, started: c.typingAgentId && !wasTyping.has(c.id) ? [c.id] : [], at }
+}
+
 /** The held typing time applies to the latest user message only when typing began at or after it was sent. */
 export function typingSeenFor(
   messages: readonly Pick<ChatMessage, 'id' | 'role' | 'kind' | 'createdAt'>[],

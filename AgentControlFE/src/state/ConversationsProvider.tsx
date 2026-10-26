@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api } from '../lib/api'
 import { markReadLocally, upsertConversation } from '../lib/conversations'
-import { noteTyping } from '../lib/thread'
+import { noteTyping, noteTypingFor } from '../lib/thread'
 import type { Agent, ConversationSummary } from '../lib/types'
 import { ConversationsContext, type ConversationsState } from './conversations-context'
 
@@ -61,6 +61,10 @@ export default function ConversationsProvider({ children }: { children: ReactNod
     )
   }, [])
   const upsert = useCallback((c: ConversationSummary) => {
+    // BE-10: a thread's first page can report typing before the sidebar poll does; start its clock now.
+    const seen = noteTypingFor(c, typingIds.current, new Date().toISOString())
+    typingIds.current = seen.typing
+    if (seen.started.length) setTypingSince((prev) => ({ ...prev, [c.id]: seen.at }))
     setConversations((list) => upsertConversation(list ?? [], c))
   }, [])
 

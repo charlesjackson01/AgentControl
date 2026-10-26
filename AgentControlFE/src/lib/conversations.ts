@@ -130,3 +130,18 @@ export function countUnread(messages: readonly (Pick<ChatMessage, 'role' | 'crea
   // FE-6: system lines ("You added Researcher.") never count, as on the BE.
   return messages.filter((m) => m.role === 'assistant' && m.kind !== 'system' && (lastReadAt === null || m.createdAt > lastReadAt)).length
 }
+
+/**
+ * BE-10: the summary a messages page carries (every page since 085be14; only `?after=`
+ * before that). Older servers send a plain Conversation on the first page: null, and the
+ * caller keeps relying on the sidebar poll for unread and typing.
+ */
+export function pageSummary(c: unknown): ConversationSummary | null {
+  if (!c || typeof c !== 'object') return null
+  const o = c as Record<string, unknown>
+  if (typeof o.id !== 'string') return null
+  if (o.kind !== undefined && o.kind !== 'dm' && o.kind !== 'group') return null
+  if (typeof o.unreadCount !== 'number' || !Number.isFinite(o.unreadCount) || !('lastMessage' in o)) return null
+  if (o.typingAgentId !== undefined && o.typingAgentId !== null && typeof o.typingAgentId !== 'string') return null
+  return c as ConversationSummary
+}

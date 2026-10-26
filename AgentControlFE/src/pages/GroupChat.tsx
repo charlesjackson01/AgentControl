@@ -9,7 +9,7 @@ import { Markdown } from '../components/Markdown'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
-import { mergeMessages, olderCursor } from '../lib/conversations'
+import { mergeMessages, olderCursor, pageSummary } from '../lib/conversations'
 import { settingsOpen, withoutPanel } from '../lib/settings-tabs'
 import { filesPanelOpen, filesPathParam, withFilesPath } from '../lib/files'
 import { clockTime, dayLabel } from '../lib/thread'
@@ -117,6 +117,16 @@ export default function GroupChat({ group }: { group: Group }) {
     api.listConversationMessages(conversationId).then(
       (page) => {
         if (!active) return
+        // BE-10: the first page's summary shows a bot already typing (and starts the fast poll) on open.
+        const summary = pageSummary(page.conversation)
+        if (summary) {
+          upsert(summary)
+          const typing = summary.typingAgentId ?? null
+          if (typing) {
+            const at = Date.now()
+            setTypingFrom((prev) => (prev.id === typing ? prev : { id: typing, at }))
+          }
+        }
         setMessages((prev) => mergeMessages(prev ?? [], page.messages))
         setHasMore(page.hasMore)
         setLoadError(undefined)
@@ -126,7 +136,7 @@ export default function GroupChat({ group }: { group: Group }) {
     return () => {
       active = false
     }
-  }, [conversationId, attempt])
+  }, [conversationId, attempt, upsert])
 
   const startPoll = useCallback((state: PollState) => {
     pollState.current = state
@@ -152,8 +162,8 @@ export default function GroupChat({ group }: { group: Group }) {
         if (!alive) return
         fails = 0
         if (page.messages.length) setMessages((prev) => mergeMessages(prev ?? [], page.messages))
-        // `?after=` returns the summarised conversation (BE-5: unread + typingAgentId); the first page does not.
-        const summary = page.conversation && 'unreadCount' in page.conversation ? (page.conversation as ConversationSummary) : null
+        // `?after=` returns the summarised conversation (BE-5: unread + typingAgentId); the first page does too since BE-10.
+        const summary = pageSummary(page.conversation)
         if (summary) upsert(summary)
         const typingId = summary?.typingAgentId ?? null
         if (typingId) setAwaiting(false)

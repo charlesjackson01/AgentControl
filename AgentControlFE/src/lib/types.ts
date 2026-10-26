@@ -420,9 +420,14 @@ export type ConversationSummary = Conversation & {
 export const CONVERSATION_PAGE_SIZE = 50
 export const MAX_CONVERSATION_PAGE_SIZE = 200
 
-/** GET /api/conversations/:id/messages response (messages oldest -> newest). `hasMore` since BE 2a6078c. */
+/**
+ * GET /api/conversations/:id/messages response (messages oldest -> newest). `hasMore` since BE 2a6078c.
+ * `conversation` is the full ConversationSummary (unread, typing, lastMessage) on every page since
+ * BE-10 (085be14); before that only `?after=` pages carried it and the first page sent a plain Conversation.
+ * Read it with `pageSummary` (lib/conversations.ts), which returns null for the plain shape.
+ */
 export type ConversationMessagesResponse = {
-  conversation: Conversation
+  conversation: Conversation | ConversationSummary
   messages: ChatMessage[]
   hasMore?: boolean
 }

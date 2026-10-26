@@ -1,3 +1,4 @@
+import type { AgentPrefill } from '../components/AgentProfile'
 import type { CommandName } from '../lib/commands'
 import { createContext, useContext } from 'react'
 
@@ -23,6 +24,8 @@ export type ShellState = {
   runCommand: (name: CommandName, args?: string) => string | null
   openSettings: () => void
   openNewBot: () => void
+  /** FE-5: the full New bot form, prefilled from the /new draft card. */
+  openNewBotForm: (prefill?: AgentPrefill) => void
   /** Sum for the ☰ badge. */
   unread: number
 }

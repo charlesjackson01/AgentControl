@@ -85,6 +85,19 @@ type FormProps = {
   onSaved?: (saved: Agent) => void
   /** Cancel handler; when omitted the form navigates to backTo. */
   onCancel?: () => void
+  /** FE-5 "Open full settings": a new bot's fields from the /new draft card (ignored when editing). */
+  prefill?: AgentPrefill
+}
+
+/** The /new draft card handed to the full form; `skillIds` present = the chips were changed. */
+export type AgentPrefill = Partial<Pick<AgentInput, 'name' | 'role' | 'description' | 'endpointId' | 'modelId' | 'rules' | 'internetPolicy' | 'skillIds'>> & {
+  avatarEmoji?: string
+}
+
+function prefillFields(prefill: AgentPrefill | undefined): Partial<AgentInput> {
+  if (!prefill) return {}
+  const { avatarEmoji: _avatar, ...fields } = prefill
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as Partial<AgentInput>
 }
 
 export default function AgentProfile({
@@ -98,6 +111,7 @@ export default function AgentProfile({
   noCancel = false,
   onSaved,
   onCancel,
+  prefill,
 }: FormProps) {
   const navigate = useNavigate()
   const baseline = initial
@@ -114,7 +128,7 @@ export default function AgentProfile({
           // BE-7 defaults + the Team Lead's starters (core/deep-research, …), sent explicitly.
           skillIds: newBotSkillIds(skills, true),
         }
-      : { ...EMPTY, endpointId: defaultEndpointId ?? '', skillIds: newBotSkillIds(skills, false) }
+      : { ...EMPTY, endpointId: defaultEndpointId ?? '', skillIds: newBotSkillIds(skills, false), ...prefillFields(prefill) }
 
   const [draft, setDraft] = useState<AgentInput>(baseline)
   // Temperature is optional (blank = endpoint default), so the field keeps its own text.
@@ -126,7 +140,9 @@ export default function AgentProfile({
   const [saving, setSaving] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [confirmDiscard, setConfirmDiscard] = useState(false)
-  const [avatarDraft, setAvatarDraft] = useState<AvatarDraft>(() => avatarBaseline(initial?.avatar))
+  const [avatarDraft, setAvatarDraft] = useState<AvatarDraft>(() =>
+    avatarBaseline(initial ? initial.avatar : prefill?.avatarEmoji ? { kind: 'emoji', value: prefill.avatarEmoji } : null),
+  )
   const [avatarError, setAvatarError] = useState<string | null>(null)
   // Endpoint/skills/parameters sit in a collapsible Advanced block; open for new agents.
   const [advancedOpen, setAdvancedOpen] = useState(!isEdit)
@@ -141,7 +157,7 @@ export default function AgentProfile({
   }
 
   // Untouched on create: the backend picks the skills (BE-7 defaults); see createSkillIds.
-  const [skillsTouched, setSkillsTouched] = useState(false)
+  const [skillsTouched, setSkillsTouched] = useState(() => !initial && prefill?.skillIds !== undefined)
   const toggleSkill = (id: string) => {
     setSkillsTouched(true)
     setDraft((d) => ({

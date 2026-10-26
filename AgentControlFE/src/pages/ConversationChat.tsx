@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
-import Avatar from '../components/Avatar'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { BotRow, TypingDots, UserRow } from '../components/shell/ChatRows'
 import ChatHeader from '../components/shell/ChatHeader'
 import BotSettingsPanel from '../components/settings/BotSettingsPanel'
 import { settingsOpen, settingsTab, withSettingsTab, withoutPanel } from '../lib/settings-tabs'
@@ -20,52 +20,15 @@ import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-rep
 import { activityView } from '../lib/activity'
 import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
 import { Markdown } from '../components/Markdown'
+import { NewBotTurn } from '../components/shell/NewBotFlow'
+import { useNewBot } from '../hooks/useNewBot'
+import { composerLocked, createBody, createFailureText, newBotApi, newCommandPrompt, placeholderFor, profilePrefill, readNewBotNav, tooLongNotice } from '../lib/new-bot'
+import { request } from '../lib/api'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
 
 type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: string }
-
-function TypingDots() {
-  return (
-    <span className="cf-typing" aria-hidden="true">
-      <i />
-      <i />
-      <i />
-    </span>
-  )
-}
-
-/** One assistant row: avatar at the bubble's foot, bubble, then its time. */
-type RowProps = { meta?: string; mid?: string; hit?: boolean; children: React.ReactNode }
-
-/** `before` / `after` sit above and below the bubble (FE-7 activity card, file cards). */
-function BotRow({ author, meta, error, mid, hit, before, after, children }: RowProps & { author?: Agent; error?: boolean; before?: React.ReactNode; after?: React.ReactNode }) {
-  return (
-    <div className={`cf-row${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
-      <span className="cf-row__av">
-        <Avatar name={author?.name ?? 'Bot'} agentId={author?.id} avatar={author?.avatar} color={author?.color} size="md" decorative />
-      </span>
-      <div className="cf-grp">
-        {before}
-        <div className={`cf-bub cf-bub--a${error ? ' cf-bub--error' : ''}`}>{children}</div>
-        {after}
-        {meta && <div className="cf-bt">{meta}</div>}
-      </div>
-    </div>
-  )
-}
-
-function UserRow({ meta, mid, hit, children }: RowProps) {
-  return (
-    <div className={`cf-row cf-row--u${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
-      <div className="cf-grp">
-        <div className="cf-bub cf-bub--u">{children}</div>
-        {meta && <div className="cf-rcpt">{meta}</div>}
-      </div>
-    </div>
-  )
-}
 
 /** FE-1 thread for one conversation: bottom-anchored, day separators, a time under each bubble. */
 export default function ConversationChat() {
@@ -94,6 +57,11 @@ export default function ConversationChat() {
   const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
   const [cmdNotice, setCmdNotice] = useState<string | null>(null)
   const jumpTries = useRef(0)
+  // FE-5: the /new draft card, only in Primary's DM.
+  const nbs = useNewBot(conversationId)
+  const isPrimaryDm = Boolean(agent?.isPrimary) && !isGroup
+  const location = useLocation()
+  const navigate = useNavigate()
 
   // Reset per conversation during render (no effect), so a switch never flashes the old thread.
   if (shownFor !== conversationId) {
@@ -106,7 +74,16 @@ export default function ConversationChat() {
     setRunError(null)
     setDraft('')
     setCmdNotice(null)
+    nbs.setSession(null)
   }
+
+  // "＋ New bot" / palette /new land here with router state; start the card once, then drop the state.
+  const navNewBot = readNewBotNav(location.state)
+  useEffect(() => {
+    if (!navNewBot || !agent) return
+    if (isPrimaryDm) nbs.start(navNewBot.prompt)
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
+  }, [navNewBot?.nonce, agent?.id, isPrimaryDm]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const endpoints = useAsync(api.listEndpoints, [])
 
@@ -165,7 +142,8 @@ export default function ConversationChat() {
       el.scrollTop = el.scrollHeight
     }
     if (jumpId) el.querySelector(`[data-mid="${CSS.escape(jumpId)}"]`)?.scrollIntoView({ block: 'center' })
-  }, [newestId, messages?.length, pending, jumpId])
+    // FE-5: re-anchor per /new turn (not on every keystroke in the card).
+  }, [newestId, messages?.length, pending, jumpId, nbs.session?.turn, nbs.session?.phase.kind, nbs.session?.userTs])
 
   const loadOlder = async () => {
     const before = olderCursor(messages ?? [])
@@ -272,6 +250,59 @@ export default function ConversationChat() {
     if (reason) setCmdNotice(`/${def.name}: ${reason}`)
     else setDraft('')
   }
+  const nbSession = isPrimaryDm ? nbs.session : null
+  const nbPhase = nbSession?.phase ?? null
+  // S7: the description's raw length (what POST /api/agents/draft counts), for /new and for replies to the card.
+  const slashNew = newCommandPrompt(draft)
+  const limitText = slashNew !== null ? slashNew : nbPhase?.kind === 'ask' || nbPhase?.kind === 'card' ? draft : ''
+  const tooLong = canSend ? tooLongNotice(limitText) : null
+  const locked = composerLocked(nbPhase)
+
+  const submit = (text: string) => {
+    if (tooLong || locked) return
+    const parsed = parseSlash(text)
+    if (parsed?.command.name === 'new') {
+      const raw = newCommandPrompt(text) ?? parsed.args
+      if (isPrimaryDm) {
+        setDraft('')
+        setCmdNotice(null)
+        nbs.start(raw)
+      } else runSlash(parsed.command, raw)
+      return
+    }
+    if (parsed) return runSlash(parsed.command, parsed.args)
+    if (!text.trim()) return
+    if (nbPhase?.kind === 'ask') {
+      setDraft('')
+      return nbs.answer(text)
+    }
+    if (nbPhase?.kind === 'card') {
+      setDraft('')
+      return nbs.reply(text)
+    }
+    if (nbSession) nbs.end()
+    void send(text)
+  }
+
+  const createBot = async () => {
+    const s = nbs.session
+    if (!s?.card || s.phase.kind !== 'card' || s.phase.creating) return
+    const card = s.card
+    nbs.setSession((x) => (x ? { ...x, phase: { kind: 'card', warning: s.phase.kind === 'card' ? s.phase.warning : undefined, creating: true } } : x))
+    let saved: Agent
+    try {
+      saved = await newBotApi(request).create<Agent>(createBody(card, nbs.extras.defaults))
+    } catch (err) {
+      nbs.setSession((x) => (x ? { ...x, phase: { kind: 'card', warning: s.phase.kind === 'card' ? s.phase.warning : undefined, error: createFailureText(card.name, err) } } : x))
+      return
+    }
+    // The bot exists now; a failed picture upload leaves the emoji (or initials) and still opens its chat.
+    if (nbs.file) await api.uploadAgentAvatar(saved.id, nbs.file.file).catch(() => undefined)
+    nbs.end()
+    reloadSidebar()
+    navigate(`/agents/${encodeURIComponent(saved.id)}`)
+  }
+
   const onComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing) return
     if (slashItems.length) {
@@ -293,9 +324,7 @@ export default function ConversationChat() {
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      const parsed = parseSlash(draft)
-      if (parsed) runSlash(parsed.command, parsed.args)
-      else void send(draft)
+      submit(draft)
     }
   }
 
@@ -392,6 +421,14 @@ export default function ConversationChat() {
                     <TypingDots />
                   </BotRow>
                 )}
+                {nbSession && (
+                  <NewBotTurn
+                    nbs={nbs}
+                    primary={agent}
+                    onCreate={() => void createBot()}
+                    onOpenFull={() => nbs.session?.card && shell.openNewBotForm(profilePrefill(nbs.session.card, nbs.extras.defaults))}
+                  />
+                )}
               </>
             )}
           </div>
@@ -451,9 +488,9 @@ export default function ConversationChat() {
               aria-expanded={slashItems.length > 0}
               aria-controls={slashItems.length > 0 ? 'cf-slash' : undefined}
               aria-activedescendant={slashItems.length > 0 ? `cf-slash-${slashIdx}` : undefined}
-              placeholder={isGroup ? "Sending in group chats isn't available yet" : agent ? `Message ${agent.name}…` : 'Message…'}
+              placeholder={isGroup ? "Sending in group chats isn't available yet" : agent ? placeholderFor(nbPhase, agent.name) : 'Message…'}
               rows={1}
-              disabled={sending || !canSend}
+              disabled={sending || !canSend || locked}
               aria-label="Message"
             />
             <button type="button" className="cf-cbtn" disabled title="Skills aren't available here yet" aria-label="Skills">
@@ -462,15 +499,15 @@ export default function ConversationChat() {
             <button
               type="button"
               className="cf-send"
-              onClick={() => void send(draft)}
-              disabled={sending || !draft.trim() || !canSend}
+              onClick={() => submit(draft)}
+              disabled={sending || !draft.trim() || !canSend || locked || tooLong !== null}
               aria-label={sending ? 'Sending' : 'Send'}
             >
               {sending ? <span className="spinner" aria-hidden="true" /> : '↑'}
             </button>
           </div>
-          {cmdNotice ? (
-            <p className="cf-hint cf-hint--notice" role="status">{cmdNotice}</p>
+          {tooLong || cmdNotice ? (
+            <p className="cf-hint cf-hint--notice" role="status">{tooLong ?? cmdNotice}</p>
           ) : (
             <p className="cf-hint">Enter to send · / for commands · Files you send are saved in this bot&apos;s folder</p>
           )}

@@ -3,6 +3,9 @@ import { Outlet, useMatch, useNavigate } from 'react-router-dom'
 import ChatList from './shell/ChatList'
 import CommandPalette from './shell/CommandPalette'
 import NewBotDialog from './NewBotDialog'
+import type { AgentPrefill } from './AgentProfile'
+import { primaryConversation } from '../lib/conversations'
+import { newBotNavState } from '../lib/new-bot'
 import SettingsDialog from '../pages/Settings'
 import ConversationsProvider from '../state/ConversationsProvider'
 import ProfileProvider from '../state/ProfileProvider'
@@ -64,6 +67,7 @@ function Shell() {
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [newBotOpen, setNewBotOpen] = useState(false)
+  const [newBotPrefill, setNewBotPrefill] = useState<AgentPrefill | undefined>(undefined)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const { conversations, agents } = useConversations()
   const navigate = useNavigate()
@@ -87,11 +91,26 @@ function Shell() {
   const openSwitcher = useCallback(() => setSwitcherOpen(true), [])
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), [])
   const openSettings = useCallback(() => setSettingsOpen(true), [])
-  const openNewBot = useCallback(() => {
+  const openNewBotForm = useCallback((prefill?: AgentPrefill) => {
     setSwitcherOpen(false)
     setPaletteOpen(false)
+    setNewBotPrefill(prefill)
     setNewBotOpen(true)
   }, [])
+  // FE-5: `/new <text>` and "＋ New bot" draft in Primary's chat (router state starts the card there).
+  // No Primary chat yet: the full form.
+  const startNewBot = useCallback(
+    (prompt: string) => {
+      const primary = primaryConversation(conversations ?? [], agents)
+      if (!primary) return openNewBotForm()
+      setSwitcherOpen(false)
+      setPaletteOpen(false)
+      if (narrow) setDrawerOpen(false)
+      navigate(`/c/${encodeURIComponent(primary.id)}`, { state: { newBot: newBotNavState(prompt) } })
+    },
+    [conversations, agents, narrow, navigate, openNewBotForm],
+  )
+  const openNewBot = useCallback(() => startNewBot(''), [startNewBot])
   const openPalette = useCallback(() => {
     setSwitcherOpen(false)
     setPaletteOpen(true)
@@ -102,12 +121,11 @@ function Shell() {
       const action = commandAction(name, commandCtx, args)
       if (action.kind === 'unavailable') return action.reason
       setPaletteOpen(false)
-      // FE-5 turns `/new <text>` into the in-chat draft card; until then it opens the New bot form.
-      if (action.kind === 'new-bot') openNewBot()
+      if (action.kind === 'new-bot') startNewBot(action.args)
       else navigate(action.to)
       return null
     },
-    [commandCtx, navigate, openNewBot],
+    [commandCtx, navigate, startNewBot],
   )
 
   useEffect(() => {
@@ -129,9 +147,9 @@ function Shell() {
   const value = useMemo<ShellState>(
     () => ({
       listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher,
-      paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, unread,
+      paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, unread,
     }),
-    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, unread],
+    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, unread],
   )
 
   return (
@@ -145,7 +163,7 @@ function Shell() {
         </div>
       </div>
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <NewBotDialog open={newBotOpen} onClose={() => setNewBotOpen(false)} />
+      <NewBotDialog open={newBotOpen} prefill={newBotPrefill} onClose={() => setNewBotOpen(false)} />
     </ShellContext.Provider>
   )
 }

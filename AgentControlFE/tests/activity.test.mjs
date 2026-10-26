@@ -171,8 +171,10 @@ describe('activity card: component wiring', () => {
   })
   it('ConversationChat puts the card above the bubble and file cards below it', () => {
     const chat = readFileSync(new URL('../src/pages/ConversationChat.tsx', import.meta.url), 'utf8')
-    assert.match(chat, /\{before\}\s*\n\s*<div className=\{`cf-bub cf-bub--a/)
-    assert.match(chat, /\{after\}\s*\n\s*\{meta &&/)
+    // FE-5 moved BotRow/UserRow into components/shell/ChatRows.tsx (shared with the /new draft card).
+    const rows = readFileSync(new URL('../src/components/shell/ChatRows.tsx', import.meta.url), 'utf8')
+    assert.match(rows, /\{before\}\s*\n\s*<div className=\{`cf-bub cf-bub--a/)
+    assert.match(rows, /\{after\}\s*\n\s*\{meta &&/)
     assert.match(chat, /activityView\(m\.activity\)/)
   })
 })

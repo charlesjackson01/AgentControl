@@ -1,21 +1,21 @@
 import { useNavigate } from 'react-router-dom'
 import Dialog from './Dialog'
-import AgentProfile from './AgentProfile'
+import AgentProfile, { type AgentPrefill } from './AgentProfile'
 import { ErrorState, Skeleton } from './States'
 import { api } from '../lib/api'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
 
 /**
- * Interim "New bot" (keeps today's create form reachable after FE-1 removed
- * /agents/new). FE-5 replaces it with the /new draft card in chat.
+ * The full New bot form. FE-5: "Open full settings" / "＋ Browse" on the /new draft card open it
+ * prefilled from the card; it is also the fallback when there is no Primary chat to draft in.
  */
-export default function NewBotDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function NewBotDialog({ open, onClose, prefill }: { open: boolean; onClose: () => void; prefill?: AgentPrefill }) {
   if (!open) return null
-  return <NewBotBody onClose={onClose} />
+  return <NewBotBody onClose={onClose} prefill={prefill} />
 }
 
-function NewBotBody({ onClose }: { onClose: () => void }) {
+function NewBotBody({ onClose, prefill }: { onClose: () => void; prefill?: AgentPrefill }) {
   const navigate = useNavigate()
   const { agents, reload } = useConversations()
   const endpoints = useAsync(api.listEndpoints, [])
@@ -37,6 +37,7 @@ function NewBotBody({ onClose }: { onClose: () => void }) {
           endpoints={endpoints.data ?? []}
           skills={skills.data ?? []}
           defaultEndpointId={lead?.endpointId ?? null}
+          prefill={prefill}
           onSaved={(saved) => {
             reload()
             onClose()

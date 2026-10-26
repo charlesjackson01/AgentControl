@@ -15,8 +15,8 @@ export function agentPutBody(agent: Agent, change: Partial<Pick<AgentInput, 'ski
     instructions: agent.instructions,
     modelId: agent.modelId,
     endpointId: agent.endpointId,
-    // Only resend a temperature the agent has; omitted lets the BE keep its default.
-    ...(agent.temperature !== undefined ? { temperature: agent.temperature } : {}),
+    // No temperature: PUT keeps the stored value when it is omitted (BE-4 af197cd), and an
+    // unchanged temperature sends nothing. Clearing it is a PATCH { temperature: null }.
     skillIds: [...agent.skillIds],
     ...change,
   }

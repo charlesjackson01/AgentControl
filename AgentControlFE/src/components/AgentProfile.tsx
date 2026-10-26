@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react
 import { createSkillIds, newBotSkillIds } from '../lib/starter-skills'
 import { Link, useNavigate } from 'react-router-dom'
 import { AgentsIcon, ChevronLeftIcon } from './icons'
-import { agentAvatarUrl, api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS } from '../lib/api'
+import { agentAvatarUrl, api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, request } from '../lib/api'
 import AvatarPicker from './AvatarPicker'
 import { avatarBaseline, avatarDirty, avatarSavePlan, type AvatarDraft } from '../lib/avatar-draft'
 import {
@@ -20,7 +20,8 @@ import {
 } from '../lib/agent-profile'
 import type { Agent, AgentInput, Endpoint, PromptBudget, PromptBudgetInput, SkillSummary } from '../lib/types'
 import { budgetMemoryFields, describePromptBudget, grantedToolNames } from '../lib/prompt-budget'
-import { createLearnField } from '../lib/agent-patch'
+import { createLearnField, saveAgentEdit } from '../lib/agent-patch'
+import { TEMPERATURE_PLACEHOLDER, createTemperatureField, editTemperaturePatch, parseTemperature, temperatureText } from '../lib/temperature'
 import { matchesSkillQuery } from '../lib/skill-search'
 import { useAsync } from '../hooks/useAsync'
 import Dialog from './Dialog'
@@ -30,7 +31,7 @@ const MODELS_LOADING = 'Models are still loading — wait a moment.'
 /** Quiet period after the last endpoint/skills/instructions edit before the prompt-size preview refetches. */
 const BUDGET_DEBOUNCE_MS = 300
 
-const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', temperature: 0, skillIds: [], rules: [], color: null }
+const EMPTY: AgentInput = { name: '', role: '', description: '', instructions: '', modelId: '', endpointId: '', skillIds: [], rules: [], color: null }
 
 /** DD-7 bootstrap: the lead's identity is set up for the user, not asked. */
 const LEAD_INSTRUCTIONS =
@@ -45,7 +46,6 @@ function toInput(agent: Agent): AgentInput {
     instructions: agent.instructions,
     modelId: agent.modelId,
     endpointId: agent.endpointId,
-    temperature: agent.temperature ?? 0,
     skillIds: [...agent.skillIds],
     rules: [...(agent.rules ?? [])],
     color: agent.color ?? null,
@@ -110,7 +110,6 @@ export default function AgentProfile({
           // Team Lead's endpoint then becomes every later agent's default.
           endpointId: (endpoints.find((ep) => ep.baseUrl === DEFAULT_ENDPOINT_BASE_URL) ?? endpoints[0])?.id ?? '',
           instructions: LEAD_INSTRUCTIONS,
-          temperature: 0.7,
           // Pre-check the starter skills that exist in this workspace.
           // BE-7 defaults + the Team Lead's starters (core/deep-research, …), sent explicitly.
           skillIds: newBotSkillIds(skills, true),
@@ -118,6 +117,10 @@ export default function AgentProfile({
       : { ...EMPTY, endpointId: defaultEndpointId ?? '', skillIds: newBotSkillIds(skills, false) }
 
   const [draft, setDraft] = useState<AgentInput>(baseline)
+  // Temperature is optional (blank = endpoint default), so the field keeps its own text.
+  // The Team Lead preset stays 0.7.
+  const tempBaseline = initial ? temperatureText(initial.temperature) : isBootstrap ? '0.7' : ''
+  const [tempText, setTempText] = useState(tempBaseline)
   const [errors, setErrors] = useState<Partial<Record<'name' | 'modelId' | 'endpointId' | 'temperature', string>>>({})
   const [skillQuery, setSkillQuery] = useState('')
   const [saving, setSaving] = useState(false)
@@ -245,10 +248,8 @@ export default function AgentProfile({
         next.modelId = 'Pick a model from this endpoint.'
       }
     }
-    const temperature = draft.temperature
-    if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
-      next.temperature = 'Set temperature between 0 and 2.'
-    }
+    const tempCheck = parseTemperature(tempText)
+    if (tempCheck.error) next.temperature = tempCheck.error
     setErrors(next)
     if (next.endpointId || next.modelId || next.temperature) setAdvancedOpen(true)
     if (Object.keys(next).length > 0) {
@@ -259,6 +260,7 @@ export default function AgentProfile({
     setSaving(true)
     setSubmitError(null)
     try {
+      // draft carries no temperature (the field keeps its own text; see tempText).
       const payload: AgentInput = {
         ...draft,
         role: draft.role.trim(),
@@ -271,11 +273,20 @@ export default function AgentProfile({
       if (plan.avatar !== undefined) payload.avatar = plan.avatar
       if (initial && plan.deleteImage) await api.deleteAgentAvatar(initial.id)
       let saved: Agent
-      if (initial) saved = await api.updateAgent(initial.id, payload)
-      else {
+      if (initial) {
+        // PUT omits temperature (kept as stored); a change, or blank over a stored value
+        // (temperature: null = endpoint default), goes out as its own PATCH.
+        saved = await saveAgentEdit(request, initial.id, payload, editTemperaturePatch(initial.temperature, tempText))
+      } else {
         // memoryLearn only when the user turned it off, so the BE's default-on applies otherwise.
+        // Blank temperature: key omitted, nothing stored.
         const { skillIds: selected, memoryLearn, ...rest } = payload
-        saved = await api.createAgent({ ...rest, ...createLearnField(memoryLearn), ...createSkillIds({ selected, touched: skillsTouched, lead: isBootstrap }) })
+        saved = await api.createAgent({
+          ...rest,
+          ...createTemperatureField(tempText),
+          ...createLearnField(memoryLearn),
+          ...createSkillIds({ selected, touched: skillsTouched, lead: isBootstrap }),
+        })
       }
       if (plan.upload && avatarDraft.file) saved = await api.uploadAgentAvatar(saved.id, avatarDraft.file)
       if (onSaved) onSaved(saved)
@@ -292,7 +303,7 @@ export default function AgentProfile({
   }
 
   const leave = () => {
-    if (isDirty(draft, baseline) || avatarDirty(avatarDraft, avatarBaseline(initial?.avatar))) setConfirmDiscard(true)
+    if (isDirty(draft, baseline) || tempText.trim() !== tempBaseline || avatarDirty(avatarDraft, avatarBaseline(initial?.avatar))) setConfirmDiscard(true)
     else finish()
   }
 
@@ -667,7 +678,7 @@ export default function AgentProfile({
               <p className="formsection__hint">Control how the agent reasons on each run.</p>
               <div className="field">
                 <label className="field__label" htmlFor="af-temperature">
-                  Temperature <span className="field__req" aria-hidden="true">*</span>
+                  Temperature
                 </label>
                 <input
                   id="af-temperature"
@@ -676,16 +687,19 @@ export default function AgentProfile({
                   min={0}
                   max={2}
                   step={0.1}
-                  value={draft.temperature}
-                  onChange={(e) => set('temperature', Number(e.target.value))}
-                  placeholder="1.0"
+                  value={tempText}
+                  onChange={(e) => {
+                    setTempText(e.target.value)
+                    if (errors.temperature) setErrors((x) => ({ ...x, temperature: undefined }))
+                  }}
+                  placeholder={TEMPERATURE_PLACEHOLDER}
                   aria-invalid={Boolean(errors.temperature)}
                   aria-describedby={errors.temperature ? 'af-temperature-err' : undefined}
                 />
                 {errors.temperature ? (
                   <p className="field__err" id="af-temperature-err">{errors.temperature}</p>
                 ) : (
-                  <p className="field__hint">Sampling temperature (0 = deterministic, 2 = very creative).</p>
+                  <p className="field__hint">Optional, 0–2 (0 = deterministic, 2 = very creative). Blank uses the endpoint default.</p>
                 )}
               </div>
             </div>

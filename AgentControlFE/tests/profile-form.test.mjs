@@ -34,11 +34,11 @@ describe('profile form (03a)', () => {
     assert.ok(validateProfile({ ...d, rules: Array.from({ length: 21 }, (_, i) => `r${i}`) }, endpoints).rules)
   })
 
-  it('builds a full PUT body that keeps skillIds and temperature, trims, and drops blank rules', () => {
+  it('builds a full PUT body that keeps skillIds, trims, drops blank rules, and sends no temperature (kept as stored)', () => {
     const d = { ...profileDraftFrom(agent), name: ' Prime ', rules: ['  a ', '', 'b'], color: null, endpointId: 'cloud', modelId: 'big' }
     assert.deepEqual(profilePutBody(agent, d), {
       name: 'Prime', role: 'Team Lead', description: 'Your personal agent.', instructions: 'You are Primary.',
-      modelId: 'big', endpointId: 'cloud', temperature: 0.3, skillIds: ['core/a'], rules: ['a', 'b'], color: null,
+      modelId: 'big', endpointId: 'cloud', skillIds: ['core/a'], rules: ['a', 'b'], color: null,
     })
   })
 

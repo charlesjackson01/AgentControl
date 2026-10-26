@@ -42,17 +42,18 @@ describe('agent PUT body for one-field saves', () => {
   }
   it('resends the required core fields and skillIds (PUT would reset them)', () => {
     const body = agentPutBody(agent, { memoryLearn: false })
-    assert.deepEqual(body, { name: 'Primary', role: 'Team Lead', description: 'd', instructions: 'i', modelId: 'm', endpointId: 'e', temperature: 0.7, skillIds: ['x', 'y'], memoryLearn: false })
+    assert.deepEqual(body, { name: 'Primary', role: 'Team Lead', description: 'd', instructions: 'i', modelId: 'm', endpointId: 'e', skillIds: ['x', 'y'], memoryLearn: false })
   })
   it('omits optional profile fields so the BE keeps them', () => {
     const body = agentPutBody(agent, { skillIds: ['z'] })
     for (const k of ['rules', 'color', 'avatar', 'internetPolicy', 'isPrimary', 'slug']) assert.equal(k in body, false, k)
     assert.deepEqual(body.skillIds, ['z'])
   })
-  it('does not invent a temperature', () => {
-    const { temperature, ...rest } = agent
+  it('never sends temperature: unchanged sends nothing, PUT keeps the stored value (BE-4 af197cd)', () => {
+    assert.equal(agent.temperature, 0.7)
+    assert.equal('temperature' in agentPutBody(agent, {}), false)
+    const { temperature: _t, ...rest } = agent
     assert.equal('temperature' in agentPutBody(rest, {}), false)
-    assert.equal(temperature, 0.7)
   })
   it('does not share the skillIds array', () => {
     const body = agentPutBody(agent, {})

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Toggle from './Toggle'
 import { SearchIcon } from '../icons'
 import { agentChatFirstFields, botFolder } from '../../lib/agent-put'
-import type { AgentChange } from '../../lib/agent-patch'
+import { saveLearnToggle, type AgentChange } from '../../lib/agent-patch'
 import { friendlyError as friendly } from '../../lib/chat-format'
 import {
   MEMORY_CATEGORIES, MEMORY_MAX_CHARS, categoryLabel, dropMemory, memoryFooter, memorySourceLine, memoryView, upsertMemory, validateMemoryText,
@@ -43,14 +43,11 @@ export default function MemoryTab({ agent, load, api, onRetry, onItems, onAgentS
     setLearn(on)
     setLearnSaving(true)
     setLearnError(null)
-    try {
-      onAgentSaved((await saveChange(agent, { memoryLearn: on })).agent)
-    } catch (err) {
-      setLearn(!on)
-      setLearnError(friendly(err, 'Could not save the setting.'))
-    } finally {
-      setLearnSaving(false)
-    }
+    const res = await saveLearnToggle((change) => saveChange(agent, change), on, (err) => friendly(err, 'Could not save the setting.'))
+    setLearn(res.learn)
+    setLearnError(res.error)
+    if (res.agent) onAgentSaved(res.agent)
+    setLearnSaving(false)
   }
 
   const submitEdit = async () => {

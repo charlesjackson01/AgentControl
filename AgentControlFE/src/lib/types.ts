@@ -315,7 +315,8 @@ export type AgentInput = {
   modelId: string
   /** Required: the endpoint this agent runs on. */
   endpointId: string
-  temperature: number
+  /** 0–2. Omitted: create stores none (endpoint default), PUT keeps the stored value; null clears it (PATCH). */
+  temperature?: number | null
   skillIds: string[]
   /** Bootstrap only: set true when creating the first (Team Lead) agent. */
   isPrimary?: boolean

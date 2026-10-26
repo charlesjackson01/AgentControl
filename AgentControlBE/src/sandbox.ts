@@ -96,7 +96,7 @@ export function extractJson(text: string): unknown {
 
 export type DraftLog = (msg: string) => void
 
-export async function draftBot(store: WorkspaceStore, prompt: string, log: DraftLog = () => {}): Promise<BotDraft & { warning?: string }> {
+export async function draftBot(store: WorkspaceStore, prompt: string, log: DraftLog = () => {}, signal?: AbortSignal): Promise<BotDraft & { warning?: string }> {
   const blank = (warning: string, reason: string) => {
     log(`POST /api/agents/draft fell back to a blank draft: ${reason}`)
     return { ...BLANK_DRAFT, rules: [], warning }
@@ -116,7 +116,7 @@ export async function draftBot(store: WorkspaceStore, prompt: string, log: Draft
       DRAFT_MAX_TOKENS,
       undefined,
       0.2,
-      undefined,
+      signal,
       endpoint.proxyUrl,
       { disableThinking: endpoint.disableThinking === true },
     )
@@ -124,6 +124,7 @@ export async function draftBot(store: WorkspaceStore, prompt: string, log: Draft
     return blank("Primary couldn't write a draft right now. Fill it in by hand.", `upstream threw: ${err instanceof Error ? err.message : String(err)}`)
   }
   const where = `endpoint ${endpoint.id}, model ${primary.modelId}, ${result.latencyMs}ms, timeout ${timeoutMs}ms, finish_reason ${result.finishReason ?? 'none'}`
+  if (!result.ok && signal?.aborted) return blank('The draft was cancelled.', `cancelled by the client (${where})`)
   if (!result.ok) return blank("Primary couldn't write a draft right now. Fill it in by hand.", `${result.error ?? 'upstream error'} (${where})`)
   const json = extractJson(result.content)
   if (json === undefined) {
@@ -170,12 +171,20 @@ export function registerSandboxRoutes(app: FastifyInstance, store: WorkspaceStor
 
   app.get('/api/agents/defaults', async () => agentDefaults(store, deps.defaultSkillIds()))
 
-  app.post('/api/agents/draft', async (request) => {
+  app.post('/api/agents/draft', async (request, reply) => {
     const body = request.body
     if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object, e.g. {"prompt":"A bot that plans trips"}.')
     const prompt = (body as Record<string, unknown>).prompt
     if (typeof prompt !== 'string' || !prompt.trim()) fail(400, 'Describe the bot in "prompt".')
     if (prompt.length > MAX_DRAFT_PROMPT_CHARS) fail(400, `"prompt" can be at most ${MAX_DRAFT_PROMPT_CHARS} characters.`)
-    return draftBot(store, prompt.trim(), (msg) => request.log.warn(msg))
+    // FE-5 Cancel: when the client drops the request, stop the upstream call too.
+    const cancel = new AbortController()
+    const onClose = () => { if (!reply.raw.writableFinished) cancel.abort() }
+    reply.raw.on('close', onClose)
+    try {
+      return await draftBot(store, prompt.trim(), (msg) => request.log.warn(msg), cancel.signal)
+    } finally {
+      reply.raw.off('close', onClose)
+    }
   })
 }

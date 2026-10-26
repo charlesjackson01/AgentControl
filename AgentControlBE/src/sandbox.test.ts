@@ -214,6 +214,46 @@ describe('POST /api/agents/draft', () => {
     expect(logs.join('\n')).not.toContain('sandbox-test-secret')
   })
 
+  it('a cancelled draft aborts the upstream call and logs it', async () => {
+    await makePrimary()
+    let seen: AbortSignal | undefined
+    vi.stubGlobal('fetch', vi.fn((_u: string, init: { signal?: AbortSignal }) => {
+      seen = init.signal
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })))
+      })
+    }))
+    const cancel = new AbortController()
+    const logs: string[] = []
+    const pending = draftBot(store, 'x', (m) => logs.push(m), cancel.signal)
+    await new Promise((r) => setTimeout(r, 10))
+    cancel.abort()
+    const out = await pending
+    expect(seen?.aborted).toBe(true)
+    expect(out).toMatchObject({ name: '', warning: 'The draft was cancelled.' })
+    expect(logs.at(-1)).toContain('cancelled by the client')
+  })
+
+  it('the route aborts upstream when the client disconnects', async () => {
+    await makePrimary()
+    let aborted = false
+    vi.stubGlobal('fetch', vi.fn((_u: string, init: { signal?: AbortSignal }) => new Promise((_r, reject) => {
+      init.signal?.addEventListener('abort', () => { aborted = true; reject(Object.assign(new Error('aborted'), { name: 'AbortError' })) })
+    })))
+    await app.listen({ port: 0, host: '127.0.0.1' })
+    const port = (app.server.address() as { port: number }).port
+    const ac = new AbortController()
+    const { request } = await import('undici')
+    const call = request(`http://127.0.0.1:${port}/api/agents/draft`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ prompt: 'x' }), signal: ac.signal,
+    }).catch(() => null)
+    await new Promise((r) => setTimeout(r, 100))
+    ac.abort()
+    await call
+    for (let i = 0; i < 50 && !aborted; i++) await new Promise((r) => setTimeout(r, 20))
+    expect(aborted).toBe(true)
+  })
+
   it('400s on a missing, blank or too-long prompt', async () => {
     for (const payload of [{}, { prompt: '   ' }, { prompt: 3 }, { prompt: 'x'.repeat(2001) }]) {
       expect((await inject('POST', '/api/agents/draft', payload)).statusCode).toBe(400)

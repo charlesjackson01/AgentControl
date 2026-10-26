@@ -12,6 +12,7 @@ import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyRes
 import { fail, uid } from './http.js'
 import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent } from './files.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
+import { registerSandboxRoutes } from './sandbox.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
@@ -1288,6 +1289,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
 
   // BE-2: every existing bot gets its folder on boot.
   ensureAllBotFolders(store, (msg) => app.log.warn(msg))
+
+  registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
 
   return app
 }

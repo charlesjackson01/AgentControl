@@ -642,13 +642,13 @@ function extractEntities(text: string, kinds: readonly EntityKind[], ctx: ToolCo
 // --- diff_text and encode_text ---------------------------------------------------
 
 /**
- * A required content param after executeToolCall resolved "@input"/"@note:".
+ * A required content param after executeToolCall resolved "@input".
  * Unlike readString, "" is text (an empty message is still text). With
  * `maxLines`, a JSON list of lines is joined with "\n" once both caps pass.
  */
 function requiredText(args: Record<string, unknown>, key: string, max: number, example: Record<string, unknown>, maxLines?: number): string {
   const raw = Object.hasOwn(args, key) ? args[key] : undefined
-  if (raw === undefined || raw === null) throw argError(`"${key}" is required: literal text, "@input" or "@note:<title>".`, example)
+  if (raw === undefined || raw === null) throw argError(`"${key}" is required: literal text or "@input".`, example)
   let text: string
   if (typeof raw === 'string') {
     text = raw
@@ -1077,7 +1077,7 @@ function encodeText(operation: EncodeOperation, text: string, ctx: ToolContext):
 export const textTools: ToolEntry[] = [
   {
     name: 'text_stats', category: 'text', effect: 'read',
-    description: 'Count Unicode characters, words, lines and nonblank lines in up to 50,000 chars. Text defaults to @input; @note:<id> also works. Example: {"text":"@input"}',
+    description: 'Count Unicode characters, words, lines and nonblank lines in up to 50,000 chars. Text defaults to @input. Example: {"text":"@input"}',
     parameters: { type: 'object', properties: { text: { type: 'string' } } },
     contentParams: { names: ['text'], defaultParam: 'text' },
     handler(args) {
@@ -1130,7 +1130,7 @@ export const textTools: ToolEntry[] = [
   },
   {
     name: 'compare_text', category: 'text', effect: 'read',
-    description: 'Compare up to 50,000 chars and 3,000 lines per side. Reports positional line differences, not an edit script; excerpts may be clipped. Supports content refs. Example: {"left":"@input","right":"@note:Draft"}',
+    description: 'Compare up to 50,000 chars and 3,000 lines per side. Reports positional line differences, not an edit script; excerpts may be clipped. Supports content refs. Example: {"left":"@input","right":"Draft text"}',
     parameters: {
       type: 'object', properties: {
         left: { type: 'string' }, right: { type: 'string' },
@@ -1208,11 +1208,11 @@ export const textTools: ToolEntry[] = [
   },
   {
     name: 'diff_text', category: 'text', effect: 'read',
-    description: 'Line diff of two texts (max 400 lines, 50,000 chars each): unified hunks with 2 context lines plus added/removed/unchanged counts. Each side: text, "@input" or "@note:<title>". Example: {"before":"@note:Draft v1","after":"@input"}',
+    description: 'Line diff of two texts (max 400 lines, 50,000 chars each): unified hunks with 2 context lines plus added/removed/unchanged counts. Each side: text or "@input". Example: {"before":"Draft v1 text","after":"@input"}',
     parameters: {
       type: 'object', properties: {
-        before: { type: 'string', description: 'Original text, "@input" or "@note:<title>".' },
-        after: { type: 'string', description: 'Changed text, "@input" or "@note:<title>".' },
+        before: { type: 'string', description: 'Original text or "@input".' },
+        after: { type: 'string', description: 'Changed text or "@input".' },
       }, required: ['before', 'after'],
     },
     contentParams: { names: ['before', 'after'] },
@@ -1224,11 +1224,11 @@ export const textTools: ToolEntry[] = [
   },
   {
     name: 'encode_text', category: 'text', effect: 'read',
-    description: 'base64_encode, base64_decode (also base64url/JWT parts), url_encode, url_decode or sha256 (hex) of text: literal, "@input" or "@note:<title>". Example: {"operation":"base64_decode","text":"aGVsbG8="}',
+    description: 'base64_encode, base64_decode (also base64url/JWT parts), url_encode, url_decode or sha256 (hex) of text: literal or "@input". Example: {"operation":"base64_decode","text":"aGVsbG8="}',
     parameters: {
       type: 'object', properties: {
         operation: { type: 'string', enum: encodeOperations },
-        text: { type: 'string', description: 'Text, "@input" or "@note:<title>".' },
+        text: { type: 'string', description: 'Text or "@input".' },
       }, required: ['operation', 'text'],
     },
     contentParams: { names: ['text'] },

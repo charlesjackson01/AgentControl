@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentRun, ChatMessage, Conversation, ConversationSummary } from './shared/types.js'
+import type { AgentRun, AgentStatus, Attachment, ChatMessage, Conversation, ConversationSummary, DmConversation, GroupConversation, MessageActivity } from './shared/types.js'
+
+/** BE-5: which agent is writing a group reply right now, by conversation id (in memory only). */
+export const groupTyping = new Map<string, string>()
 
 /** The slice of the store this module touches (keeps it unit-testable). */
 export interface ConversationState {
-  agents: { id: string }[]
+  agents: { id: string; status?: AgentStatus }[]
   runs: AgentRun[]
   conversations: Conversation[]
   chatMessages: ChatMessage[]
@@ -11,11 +14,15 @@ export interface ConversationState {
 
 export const CONVERSATIONS_MIGRATION = 'conversations-from-runs-v1'
 
+export function dmOf(state: ConversationState, agentId: string): DmConversation | undefined {
+  return state.conversations.find((c): c is DmConversation => c.kind === 'dm' && c.agentId === agentId)
+}
+
 /** The agent's DM, created on first use. */
-export function ensureDm(state: ConversationState, agentId: string, now: string = new Date().toISOString()): Conversation {
-  const existing = state.conversations.find((c) => c.kind === 'dm' && c.agentId === agentId)
+export function ensureDm(state: ConversationState, agentId: string, now: string = new Date().toISOString()): DmConversation {
+  const existing = dmOf(state, agentId)
   if (existing) return existing
-  const conversation: Conversation = {
+  const conversation: DmConversation = {
     id: `conv-${randomUUID()}`,
     kind: 'dm',
     agentId,
@@ -33,7 +40,7 @@ export function ensureDm(state: ConversationState, agentId: string, now: string 
  * anything was added.
  */
 export function recordRunMessages(state: ConversationState, run: AgentRun): boolean {
-  if (run.projectId !== undefined) return false
+  if (run.projectId !== undefined || run.groupId !== undefined) return false
   if (!state.agents.some((a) => a.id === run.agentId)) return false
   if (state.chatMessages.some((m) => m.runId === run.id)) return false
   const conversation = ensureDm(state, run.agentId, run.startedAt)
@@ -60,6 +67,8 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
       content: reply,
       createdAt: replyAt,
       runId: run.id,
+      authorAgentId: run.agentId,
+      ...runActivity(run),
       ...(run.status === 'failed' ? { error: true as const } : {}),
     })
     newest = replyAt
@@ -75,14 +84,14 @@ export function recordRunMessages(state: ConversationState, run: AgentRun): bool
 export function migrateRunsToConversations(state: ConversationState, migrations: string[]): boolean {
   if (migrations.includes(CONVERSATIONS_MIGRATION)) return false
   const ordered = [...state.runs]
-    .filter((r) => r.projectId === undefined)
+    .filter((r) => r.projectId === undefined && r.groupId === undefined)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   const touched = new Set<string>()
   for (const run of ordered) {
     if (recordRunMessages(state, run)) touched.add(run.agentId)
   }
   for (const c of state.conversations) {
-    if (touched.has(c.agentId) && c.lastReadAt === null) c.lastReadAt = c.updatedAt
+    if (c.kind === 'dm' && touched.has(c.agentId) && c.lastReadAt === null) c.lastReadAt = c.updatedAt
   }
   migrations.push(CONVERSATIONS_MIGRATION)
   return true
@@ -98,14 +107,20 @@ export function summarize(state: ConversationState, c: Conversation): Conversati
   const messages = messagesOf(state, c.id)
   const lastMessage = messages.at(-1) ?? null
   const unreadCount = messages.filter(
-    (m) => m.role === 'assistant' && (c.lastReadAt === null || m.createdAt > c.lastReadAt),
+    (m) => m.role === 'assistant' && m.kind !== 'system' && (c.lastReadAt === null || m.createdAt > c.lastReadAt),
   ).length
-  return { ...c, lastMessage, unreadCount }
+  if (c.kind === 'group') {
+    const { archivedAt: _archived, ...group } = c
+    return { ...group, lastMessage, unreadCount, typingAgentId: groupTyping.get(c.id) ?? null }
+  }
+  // A DM is typing while its agent's run is in flight.
+  const typingAgentId = state.agents.some((a) => a.id === c.agentId && a.status === 'running') ? c.agentId : null
+  return { ...c, lastMessage, unreadCount, typingAgentId }
 }
 
 /** Drop a conversation's messages (and, with `dropConversation`, the conversation). */
 export function clearAgentConversations(state: ConversationState, agentId: string, dropConversation: boolean): void {
-  const ids = new Set(state.conversations.filter((c) => c.agentId === agentId).map((c) => c.id))
+  const ids = new Set(state.conversations.filter((c) => c.kind === 'dm' && c.agentId === agentId).map((c) => c.id))
   state.chatMessages = state.chatMessages.filter((m) => !ids.has(m.conversationId))
   if (dropConversation) state.conversations = state.conversations.filter((c) => !ids.has(c.id))
 }
@@ -115,7 +130,13 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
   if (!Array.isArray(raw)) return []
   const seen = new Set<string>()
   const out: Conversation[] = []
-  for (const c of raw as Partial<Conversation>[]) {
+  for (const c of raw as Partial<DmConversation>[]) {
+    if (c && (c as { kind?: unknown }).kind === 'group') {
+      const g = normalizeGroup(c as Partial<GroupConversation>, agentIds)
+      if (g && !out.some((o) => o.id === g.id)) out.push(g)
+      continue
+    }
+    if (c && c.kind !== undefined && c.kind !== 'dm') continue
     if (!c || typeof c.id !== 'string' || typeof c.agentId !== 'string' || !agentIds.has(c.agentId)) continue
     if (seen.has(c.agentId)) continue
     seen.add(c.agentId)
@@ -130,6 +151,76 @@ export function normalizeConversations(raw: unknown, agentIds: Set<string>): Con
     })
   }
   return out
+}
+
+function normalizeGroup(c: Partial<GroupConversation>, agentIds: Set<string>): GroupConversation | null {
+  if (typeof c.id !== 'string' || typeof c.name !== 'string' || typeof c.slug !== 'string' || !/^[a-z0-9-]{1,40}$/.test(c.slug)) return null
+  const members = Array.isArray(c.memberAgentIds)
+    ? [...new Set(c.memberAgentIds.filter((id): id is string => typeof id === 'string' && agentIds.has(id)))]
+    : []
+  const createdAt = typeof c.createdAt === 'string' ? c.createdAt : new Date(0).toISOString()
+  return {
+    id: c.id,
+    kind: 'group',
+    name: c.name,
+    slug: c.slug,
+    memberAgentIds: members,
+    // Re-pointed at the current Primary by syncGroupLeads once the store has loaded.
+    leadAgentId: typeof c.leadAgentId === 'string' ? c.leadAgentId : '',
+    memoryLearn: c.memoryLearn !== false,
+    createdAt,
+    updatedAt: typeof c.updatedAt === 'string' ? c.updatedAt : createdAt,
+    lastReadAt: typeof c.lastReadAt === 'string' ? c.lastReadAt : null,
+    ...(typeof c.archivedAt === 'string' ? { archivedAt: c.archivedAt } : {}),
+  }
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const strs = (o: Record<string, unknown>, keys: string[]) => keys.every((k) => typeof o[k] === 'string')
+
+/** Relative, forward-slash, non-empty, no '.', '..' or empty segments, no NUL or backslash. */
+function safeAttachmentPath(p: string): boolean {
+  return p.trim() !== '' && !p.startsWith('/') && !p.includes('\\') && !p.includes('\0') && !/^[A-Za-z]:/.test(p) &&
+    !p.split('/').some((s) => s === '' || s === '.' || s === '..')
+}
+
+/** Stored attachments with a relative path and the expected fields; absent when none survive. */
+function withAttachments(raw: unknown): { attachments?: Attachment[] } {
+  if (!Array.isArray(raw)) return {}
+  const list = raw.flatMap((a): Attachment[] =>
+    isObj(a) && (a.root === 'agent' || a.root === 'group') && strs(a, ['path', 'name', 'mime']) &&
+    typeof a.size === 'number' && safeAttachmentPath(a.path as string)
+      ? [{ root: a.root, path: a.path as string, name: a.name as string, size: a.size, mime: a.mime as string }]
+      : [])
+  return list.length > 0 ? { attachments: list } : {}
+}
+
+/** A reply's activity from its run: skill chips (BE-7) plus file steps and changes (BE-3). */
+export function runActivity(run: AgentRun): { activity?: MessageActivity } {
+  const skills = (run.activatedSkills ?? []).map((s) => ({ ...s }))
+  const steps = (run.activity?.steps ?? []).map((s) => ({ ...s }))
+  const filesChanged = (run.activity?.filesChanged ?? []).map((f) => ({ ...f }))
+  return skills.length + steps.length + filesChanged.length > 0 ? { activity: { skills, steps, filesChanged } } : {}
+}
+
+/** Stored run activity (skill chips, steps, files changed), dropping malformed entries. */
+function withActivity(raw: unknown): { activity?: MessageActivity } {
+  if (!isObj(raw)) return {}
+  const arr = (v: unknown) => (Array.isArray(v) ? v.filter(isObj) : [])
+  const skills = arr(raw.skills).filter((x) => strs(x, ['id', 'name', 'source']))
+    .map((x) => ({ id: x.id as string, name: x.name as string, source: x.source as string }))
+  const steps = arr(raw.steps).filter((x) => strs(x, ['tool', 'summary']) && typeof x.ok === 'boolean')
+    .slice(0, 20)
+    .map((x) => ({ tool: x.tool as string, summary: x.summary as string, ok: x.ok as boolean, ...(typeof x.path === 'string' ? { path: x.path } : {}) }))
+  const filesChanged = arr(raw.filesChanged).filter((x) => typeof x.path === 'string' && (x.change === 'added' || x.change === 'modified'))
+    .map((x) => ({
+      path: x.path as string,
+      change: x.change as 'added' | 'modified',
+      ...(typeof x.bytes === 'number' && Number.isFinite(x.bytes) && x.bytes >= 0 ? { bytes: x.bytes } : {}),
+      ...(typeof x.modifiedAt === 'string' && !Number.isNaN(Date.parse(x.modifiedAt)) ? { modifiedAt: x.modifiedAt } : {}),
+    }))
+  if (skills.length + steps.length + filesChanged.length === 0) return {}
+  return { activity: { skills, steps, filesChanged } }
 }
 
 export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>): ChatMessage[] {
@@ -150,6 +241,12 @@ export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>
           createdAt: m.createdAt,
           ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
           ...(m.error === true ? { error: true as const } : {}),
+          ...(m.kind === 'system' || m.kind === 'message' ? { kind: m.kind } : {}),
+          ...(typeof m.authorAgentId === 'string' ? { authorAgentId: m.authorAgentId } : {}),
+          ...(Array.isArray(m.skippedAgentIds) && m.skippedAgentIds.length > 0 && m.skippedAgentIds.every((id) => typeof id === 'string')
+            ? { skippedAgentIds: [...m.skippedAgentIds] } : {}),
+          ...withAttachments(m.attachments),
+          ...withActivity(m.activity),
         }]
       : [],
   )
@@ -162,6 +259,43 @@ export function backfillErrorFlags(state: ConversationState): boolean {
   for (const m of state.chatMessages) {
     if (m.role === 'assistant' && m.error !== true && m.runId !== undefined && failed.has(m.runId)) {
       m.error = true
+      changed = true
+    }
+  }
+  return changed
+}
+
+/** Set authorAgentId on DM assistant messages recorded before it existed. Returns whether any changed. */
+export function backfillAuthors(state: ConversationState): boolean {
+  const dmAgent = new Map<string, string>()
+  for (const c of state.conversations) if (c.kind === 'dm') dmAgent.set(c.id, c.agentId)
+  let changed = false
+  for (const m of state.chatMessages) {
+    const agentId = dmAgent.get(m.conversationId)
+    if (m.role === 'assistant' && m.authorAgentId === undefined && agentId !== undefined) {
+      m.authorAgentId = agentId
+      changed = true
+    }
+  }
+  return changed
+}
+
+/**
+ * BE-5: every group is led by the current Primary, who is always a member
+ * (listed first when added here). Returns whether anything changed.
+ */
+export function syncGroupLeads(conversations: Conversation[], agents: readonly { id: string; isPrimary?: boolean }[]): boolean {
+  const primary = agents.find((a) => a.isPrimary)
+  if (!primary) return false
+  let changed = false
+  for (const c of conversations) {
+    if (c.kind !== 'group') continue
+    if (c.leadAgentId !== primary.id) {
+      c.leadAgentId = primary.id
+      changed = true
+    }
+    if (!c.memberAgentIds.includes(primary.id)) {
+      c.memberAgentIds = [primary.id, ...c.memberAgentIds]
       changed = true
     }
   }

@@ -1,14 +1,12 @@
 /**
  * Run prompt planning: the system prompt and offered tools for an agent's
- * attached skills, shrunk to fit small context windows. The run route and
- * POST /api/prompt-budget both call planPrompt, so the budget preview is
- * exactly the plan a run would use.
+ * attached skills. The run route and POST /api/prompt-budget both call
+ * planPrompt, so the budget preview is exactly the plan a run would use.
  *
- * Full mode is the original construction, byte for byte, and is used whenever
- * it fits (prompt + RESPONSE_RESERVE within the window): anything a run
- * accepted before summaries existed is sent exactly as before. Only a prompt
- * that would be rejected has its largest skills turned into short summary
- * blocks, with get_skill offered so the model can read one on demand.
+ * BE-7 catalog mode: skill bodies never go into the prompt. Each enabled
+ * skill is one catalog line (`- <id>: <description clipped to 300>`) and the
+ * model loads a body on demand with activate_skill (files with
+ * read_skill_file). The catalog counts as 'too-large' past 25% of the window.
  */
 import type { PromptMode, Skill } from './shared/types.js'
 import { clipText } from './tools/limits.js'
@@ -22,16 +20,16 @@ export const RESPONSE_RESERVE = 4096
 export function replyReserve(endpoint: { maxOutputTokens?: number }): number {
   return endpoint.maxOutputTokens ?? RESPONSE_RESERVE
 }
-/**
- * Tokens a summarized plan aims to leave free for history turns and tool
- * results (so a summarized skill can actually be read). Full mode does not
- * need it: a full prompt that fits is never summarized.
- */
-export const SKILL_HEADROOM = 1024
-/** A summary block quotes at most this much of the skill's description. */
-const SUMMARY_DESCRIPTION_MAX = 300
-const GET_SKILL = 'get_skill'
-const SKILLS_HEADER = 'Skills:\n\n'
+
+/** A catalog line quotes at most this much of the skill's description. */
+export const CATALOG_DESCRIPTION_MAX = 300
+/** The catalog is 'too-large' when it takes more than this share of the window. */
+export const CATALOG_WINDOW_SHARE = 0.25
+export const ACTIVATE_SKILL = 'activate_skill'
+export const READ_SKILL_FILE = 'read_skill_file'
+export const CATALOG_HEADER = 'Skills (call activate_skill to use one):'
+/** Phase 1 only: vendored skills may name Claude Code tools (Task, TodoWrite, Bash). */
+export const FOREIGN_TOOLS_NOTE = "Skills may name tools you don't have; use your own tools instead."
 const BLOCK_SEPARATOR = '\n\n'
 
 export interface PromptPlanInput {
@@ -43,6 +41,10 @@ export interface PromptPlanInput {
   contextWindow: number
   /** Tokens kept free for the reply (replyReserve(endpoint)); defaults to RESPONSE_RESERVE. */
   responseReserve?: number
+  /** BE-4: the run scope's memory section (memoryPromptBlock); '' or unset when empty. */
+  memory?: string
+  /** BE-4: memory tools offered in this run (remember only when memoryLearn is on). */
+  memoryTools?: readonly string[]
 }
 
 export interface PromptPlan {
@@ -50,9 +52,11 @@ export interface PromptPlan {
   system: string
   /** Offered tools in the order sent upstream; empty means no `tools` key. */
   toolDeclarations: ToolDeclaration[]
-  /** Skills sent as summaries, in attachment order, each id once. */
-  summarizedSkillIds: string[]
+  /** Skills listed in the catalog, in attachment order, each id once. */
+  catalogSkillIds: string[]
   mode: PromptMode
+  /** chars/4 estimate of the catalog section alone (0 without skills). */
+  catalogTokens: number
   /** chars/4 estimate of system + input + tool schema JSON, as the run budget counts it. */
   estimatedTokens: number
 }
@@ -74,25 +78,22 @@ export function attachedSkills(skills: readonly Skill[], skillIds: readonly stri
   return out
 }
 
-function fullBlock(skill: Skill): string {
-  return `## ${skill.name}\n${skill.content}`
+/** One catalog line: `- <id>: <description>` (description on one line, clipped). */
+export function catalogLine(skill: Skill): string {
+  const description = clipText((skill.description ?? '').replace(/\s+/g, ' ').trim(), CATALOG_DESCRIPTION_MAX)
+  return description ? `- ${skill.id}: ${description}` : `- ${skill.id}`
 }
 
-/** `## name\ncontent`, measured without building it. */
-function fullBlockLength(skill: Skill): number {
-  return 4 + skill.name.length + skill.content.length
+/** The catalog section for these skills, each id once ('' without skills). */
+export function skillCatalog(skills: readonly Skill[]): string {
+  const unique = uniqueSkills(skills)
+  if (unique.length === 0) return ''
+  return [CATALOG_HEADER, ...unique.map(catalogLine), FOREIGN_TOOLS_NOTE].join('\n')
 }
 
-/** What a summarized skill leaves in the prompt: name, description and how to read the rest. */
-export function summaryBlock(skill: Skill): string {
-  const description = clipText((skill.description ?? '').trim(), SUMMARY_DESCRIPTION_MAX)
-  return [
-    `## ${skill.name} (summary)`,
-    description,
-    `The full procedure is not in this prompt. Read it with ${GET_SKILL} {"skill":${JSON.stringify(skill.id)}} before relying on it.`,
-  ]
-    .filter(Boolean)
-    .join('\n')
+function uniqueSkills(skills: readonly Skill[]): Skill[] {
+  const seen = new Set<string>()
+  return skills.filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)))
 }
 
 export const RULES_HEADER = '## Rules\nAlways follow these rules:\n'
@@ -100,7 +101,7 @@ export const RULES_HEADER = '## Rules\nAlways follow these rules:\n'
 /**
  * The agent's own part of the system prompt: its instructions plus, when it
  * has any, its standing rules as their own section. With no rules the result
- * is exactly `instructions`, so existing prompts stay byte-identical.
+ * is exactly `instructions`.
  */
 export function agentInstructions(instructions: string, rules?: readonly string[]): string {
   const list = (rules ?? []).map((r) => r.trim()).filter(Boolean)
@@ -109,110 +110,47 @@ export function agentInstructions(instructions: string, rules?: readonly string[
   return instructions ? `${instructions}${BLOCK_SEPARATOR}${section}` : section
 }
 
-/** System prompt = instructions + the attached skill blocks. */
-function buildSystem(instructions: string, blocks: string[]): string {
-  return [instructions, blocks.length > 0 ? `${SKILLS_HEADER}${blocks.join(BLOCK_SEPARATOR)}` : '']
-    .filter(Boolean)
-    .join(BLOCK_SEPARATOR)
-}
-
-/** buildSystem(instructions, blocks).length from the block lengths alone. */
-function systemLength(instructions: string, blockCount: number, blockChars: number): number {
-  if (blockCount === 0) return instructions.length
-  const skillsPart = SKILLS_HEADER.length + blockChars + BLOCK_SEPARATOR.length * (blockCount - 1)
-  return instructions ? instructions.length + BLOCK_SEPARATOR.length + skillsPart : skillsPart
-}
-
 /**
  * Offered tools: names declared by attached skills that exist in the built-in
  * registry, deduped, with the registry's CURRENT description and schema
- * (stored copies are display-only). Only these may execute.
+ * (stored copies are display-only), then activate_skill (and read_skill_file
+ * when a skill has files). Only these may execute.
  */
-function skillTools(skills: readonly Skill[]): ToolDeclaration[] {
+function offeredTools(skills: readonly Skill[], extra: readonly string[] = []): ToolDeclaration[] {
   const declarations: ToolDeclaration[] = []
   const seen = new Set<string>()
-  for (const s of skills) {
-    for (const t of s.tools ?? []) {
-      if (seen.has(t.name)) continue
-      seen.add(t.name)
-      const decl = toolDeclaration(t.name)
-      if (decl) declarations.push(decl)
-    }
+  const add = (name: string): void => {
+    if (seen.has(name)) return
+    seen.add(name)
+    const decl = toolDeclaration(name)
+    if (decl) declarations.push(decl)
   }
+  for (const s of skills) for (const t of s.tools ?? []) add(t.name)
+  if (skills.length > 0) add(ACTIVATE_SKILL)
+  if (skills.some((s) => (s.files ?? []).length > 0)) add(READ_SKILL_FILE)
+  for (const name of extra) add(name)
   return declarations
 }
 
-function schemaChars(tools: ToolDeclaration[]): number {
-  return tools.length > 0 ? JSON.stringify(tools).length : 0
-}
-
 /**
- * Plan a run prompt for this context window. Full mode whenever
- * estimate + RESPONSE_RESERVE fits (the hard limit the run route enforces).
- * Otherwise skills are summarized largest first (ties: attachment order) until
- * the plan also leaves SKILL_HEADROOM, blocks staying in attachment order, and
- * get_skill joins the offered tools (its schema counts). A skill whose summary
- * would not be shorter stays full, and a summary plan that is not smaller than
- * the full one is dropped. 'too-large' means the plan still breaks the hard
- * limit, so the run would be rejected.
+ * Plan a run prompt: instructions, then the skill catalog. 'too-large' means
+ * the catalog is over CATALOG_WINDOW_SHARE of the window, or the whole plan
+ * plus the reply reserve does not fit (the run route rejects that with 413).
  */
-export function planPrompt({ instructions, skills, input, contextWindow, responseReserve = RESPONSE_RESERVE }: PromptPlanInput): PromptPlan {
-  const hardLimit = contextWindow - responseReserve
-  const budget = hardLimit - SKILL_HEADROOM
-  const baseTools = skillTools(skills)
-  const getSkill = baseTools.some((t) => t.name === GET_SKILL) ? undefined : toolDeclaration(GET_SKILL)
-  const summaryTools = getSkill ? [...baseTools, getSkill] : baseTools
-
-  // Lengths only: nothing large is built until the plan is chosen.
-  const fullLengths = skills.map(fullBlockLength)
-  let blockChars = fullLengths.reduce((n, len) => n + len, 0)
-  const fullSchema = schemaChars(baseTools)
-  const summarySchema = schemaChars(summaryTools)
-  const estimate = (toolChars: number): number =>
-    estimateTokens(systemLength(instructions, skills.length, blockChars) + input.length + toolChars)
-
-  const fullEstimate = estimate(fullSchema)
-  const summaries = new Map<string, string>()
-  if (fullEstimate > hardLimit) {
-    // Each id is one candidate, ranked at its first attachment; a repeated id
-    // is summarized at every attachment.
-    const byId = new Map<string, { skill: Skill; index: number; count: number; fullChars: number }>()
-    skills.forEach((skill, index) => {
-      const seen = byId.get(skill.id)
-      if (seen) {
-        seen.count += 1
-        seen.fullChars += fullLengths[index] as number
-      } else {
-        byId.set(skill.id, { skill, index, count: 1, fullChars: fullLengths[index] as number })
-      }
-    })
-    const candidates = [...byId.values()].sort(
-      (a, b) => b.skill.content.length - a.skill.content.length || a.index - b.index,
-    )
-    for (const { skill, count, fullChars } of candidates) {
-      const summary = summaryBlock(skill)
-      // A summary that is not shorter cannot help the prompt fit.
-      if (summary.length >= fullBlockLength(skill)) continue
-      summaries.set(skill.id, summary)
-      blockChars -= fullChars - count * summary.length
-      if (estimate(summarySchema) <= budget) break
-    }
-  }
-
-  // Summaries plus the get_skill schema can outweigh what they save (small
-  // skills): then the full plan is the better one to send or to reject.
-  if (summaries.size > 0 && estimate(summarySchema) >= fullEstimate) summaries.clear()
-
-  const blocks = skills.map((s) => summaries.get(s.id) ?? fullBlock(s))
-  const system = buildSystem(instructions, blocks)
-  const toolDeclarations = summaries.size > 0 ? summaryTools : baseTools
-  const estimatedTokens = estimateTokens(system.length + input.length + schemaChars(toolDeclarations))
-  const mode: PromptMode = estimatedTokens > hardLimit ? 'too-large' : summaries.size > 0 ? 'summary' : 'full'
+export function planPrompt({ instructions, skills, input, contextWindow, responseReserve = RESPONSE_RESERVE, memory = '', memoryTools = [] }: PromptPlanInput): PromptPlan {
+  const catalog = skillCatalog(skills)
+  const system = [instructions, memory, catalog].filter(Boolean).join(BLOCK_SEPARATOR)
+  const toolDeclarations = offeredTools(skills, memoryTools)
+  const schema = toolDeclarations.length > 0 ? JSON.stringify(toolDeclarations).length : 0
+  const estimatedTokens = estimateTokens(system.length + input.length + schema)
+  const catalogTokens = estimateTokens(catalog.length)
+  const tooLarge = catalogTokens > contextWindow * CATALOG_WINDOW_SHARE || estimatedTokens > contextWindow - responseReserve
   return {
     system,
     toolDeclarations,
-    summarizedSkillIds: [...new Set(skills.map((s) => s.id))].filter((id) => summaries.has(id)),
-    mode,
+    catalogSkillIds: uniqueSkills(skills).map((s) => s.id),
+    mode: tooLarge ? 'too-large' : 'catalog',
+    catalogTokens,
     estimatedTokens,
   }
 }

@@ -4,7 +4,6 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
-import { planPrompt, RESPONSE_RESERVE, summaryBlock } from './prompt.js'
 import type { Agent, AgentRun, Endpoint, Skill } from './shared/types.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import { builtinTools, executeToolCall, toolDeclaration, type ToolContext } from './tools.js'
@@ -23,7 +22,7 @@ let store: WorkspaceStore
 
 const LEAD_INSTRUCTIONS =
   'You are the Team Lead. Coordinate the other agents, review their work, and keep projects moving.'
-const LEAD_SKILL_IDS = ['deep-research', 'summarization', 'multi-agent-orchestration']
+const LEAD_SKILL_IDS = ['core/deep-research', 'core/summarization', 'core/multi-agent-orchestration']
 
 async function inject(method: 'GET' | 'POST', url: string, payload?: unknown) {
   return app.inject({ method, url, payload: payload as object | undefined, headers: { 'content-type': 'application/json' } })
@@ -78,7 +77,7 @@ async function createEndpoint(contextWindow: number): Promise<string> {
 }
 
 function addSkill(id: string, contentChars: number, extra: Partial<Skill> = {}): Skill {
-  const skill: Skill = { id, name: id, description: `The ${id} procedure.`, tag: '', content: `# ${id}\n${'Step. '.repeat(contentChars)}`.slice(0, contentChars), tools: [], ...extra }
+  const skill: Skill = { id, name: id, description: `The ${id} procedure.`, tag: '', content: `# ${id}\n${'Step. '.repeat(contentChars)}`.slice(0, contentChars), tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false, ...extra }
   store.skills.push(skill)
   return skill
 }
@@ -108,38 +107,6 @@ afterEach(async () => {
   delete process.env.AGENTCONTROL_SECRET
 })
 
-describe('planPrompt keeps prompts that fit', () => {
-  it('sends a small skill in full when the prompt fits the hard limit, even without headroom', () => {
-    // Review repro: long instructions + one small skill. Master accepted this run.
-    const skill: Skill = { id: 'house-style', name: 'house-style', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(599), tools: [] }
-    const instructions = 'i'.repeat(4076 * 4 - 700)
-    const plan = planPrompt({ instructions, skills: [skill], input: '', contextWindow: 8192 })
-    expect(plan.estimatedTokens + RESPONSE_RESERVE).toBeLessThanOrEqual(8192)
-    expect(plan.mode).toBe('full')
-    expect(plan.summarizedSkillIds).toEqual([])
-    expect(plan.toolDeclarations).toEqual([])
-  })
-
-  it('never sends a summary plan that is not smaller than the full one', () => {
-    // The summary saves less than the get_skill schema costs.
-    const skill: Skill = { id: 'tiny', name: 'tiny', description: 'd'.repeat(250), tag: '', content: 'c'.repeat(500), tools: [] }
-    expect(summaryBlock(skill).length).toBeLessThan(`## tiny\n${skill.content}`.length)
-    const instructions = 'i'.repeat(20_000)
-    const plan = planPrompt({ instructions, skills: [skill], input: '', contextWindow: 8192 })
-    expect(plan.mode).toBe('too-large')
-    expect(plan.summarizedSkillIds).toEqual([])
-    expect(plan.system).toBe(`${instructions}\n\nSkills:\n\n## tiny\n${skill.content}`)
-    expect(plan.toolDeclarations).toEqual([])
-  })
-
-  it('keeps a single seed skill with its tools in full on the seeded 8192 endpoint', () => {
-    const debugging = store.skills.find((s) => s.id === 'debugging') as Skill
-    const plan = planPrompt({ instructions: 'You help debug failing services. Be concrete.', skills: [debugging], input: 'Why does it crash?', contextWindow: 8192 })
-    expect(plan.mode).toBe('full')
-    expect(plan.system).toContain(debugging.content)
-  })
-})
-
 describe('paged reads fit the room the run has left', () => {
   const ctxFor = (resultMaxChars?: number): ToolContext => ({
     store, agentId: 'nobody', runId: 'r', input: '', allowed: new Set(builtinTools.keys()),
@@ -149,7 +116,7 @@ describe('paged reads fit the room the run has left', () => {
   const call = (name: string, args: object, ctx: ToolContext) => executeToolCall({ id: 'c', name, arguments: JSON.stringify(args) }, ctx)
 
   it('get_skill shrinks its page to resultMaxChars and still chains nextOffset exactly', async () => {
-    const skill = store.skills.find((s) => s.id === 'deep-research') as Skill
+    const skill = store.skills.find((s) => s.id === 'core/deep-research') as Skill
     let offset: number | null = 0
     let text = ''
     for (let i = 0; offset !== null && i < 50; i++) {
@@ -164,20 +131,12 @@ describe('paged reads fit the room the run has left', () => {
     expect(text).toBe(skill.content)
   })
 
-  it('read_note shrinks its page the same way', async () => {
-    store.notes.push({ id: 'n1', title: 'Long', body: 'x'.repeat(9000), tags: [], authorAgentId: 'a', createdAt: '', updatedAt: '' } as never)
-    const out = await call('read_note', { note: 'Long' }, ctxFor(900))
-    expect(out.ok).toBe(true)
-    expect(out.content.length).toBeLessThanOrEqual(900)
-    expect((JSON.parse(out.content) as { nextOffset: number }).nextOffset).toBeGreaterThan(0)
-  })
-
   it('says the run is out of room instead of returning a sliver', async () => {
-    const out = await call('get_skill', { skill: 'deep-research' }, ctxFor(400))
+    const out = await call('get_skill', { skill: 'core/deep-research' }, ctxFor(400))
     expect(out.ok).toBe(false)
     expect(out.content).toContain('Not enough room left')
     // Unset means the normal cap.
-    const full = await call('get_skill', { skill: 'deep-research' }, ctxFor())
+    const full = await call('get_skill', { skill: 'core/deep-research' }, ctxFor())
     expect(full.ok).toBe(true)
     expect(full.content.length).toBeLessThanOrEqual(RESULT_MAX_CHARS)
   })
@@ -185,9 +144,9 @@ describe('paged reads fit the room the run has left', () => {
   it('a fresh Team Lead reads two summarized skills and pages on without any JSON cut mid-way', async () => {
     const agent = await createAgent({ name: 'Team Lead', instructions: LEAD_INSTRUCTIONS, skillIds: LEAD_SKILL_IDS, isPrimary: true })
     const mock = mockChatSequence([
-      toolCalls(['get_skill', { skill: 'deep-research' }]),
-      toolCalls(['get_skill', { skill: 'summarization' }]),
-      toolCalls(['get_skill', { skill: 'deep-research', offset: 2000 }]),
+      toolCalls(['get_skill', { skill: 'core/deep-research' }]),
+      toolCalls(['get_skill', { skill: 'core/summarization' }]),
+      toolCalls(['get_skill', { skill: 'core/deep-research', offset: 2000 }]),
       answer('Plan ready.'),
     ])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Plan the research.' })
@@ -205,25 +164,25 @@ describe('paged reads fit the room the run has left', () => {
   })
 })
 
-describe('a planner-offered get_skill reads only the agent\'s own skills', () => {
-  it('refuses a skill the agent does not have, and reads its own', async () => {
+describe('activate_skill reads only the agent\'s own skills', () => {
+  it('refuses a skill the agent does not have, reads its own, and records only that one', async () => {
     const endpointId = await createEndpoint(6000)
     addSkill('big-one', 9000)
     addSkill('big-two', 8000)
     const agent = await createAgent({ skillIds: ['big-one', 'big-two'] }, endpointId)
     const mock = mockChatSequence([
-      toolCalls(['get_skill', { skill: 'code-review' }], ['get_skill', { skill: 'big-two' }]),
+      toolCalls(['activate_skill', { id: 'core/code-review' }], ['activate_skill', { id: 'big-two' }]),
       answer('ok'),
     ])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
     const run = res.json() as AgentRun
     expect(run.status).toBe('succeeded')
-    expect(run.skillSnapshot?.some((s) => s.mode === 'summary')).toBe(true)
+    expect(run.skillSnapshot?.every((s) => s.mode === 'catalog')).toBe(true)
     const [other, own] = expectNoCutJson(lastRequest(mock))
     expect(run.toolCalls?.map((c) => c.ok)).toEqual([false, true])
-    expect(other?.content).toContain('No skill "code-review"')
-    expect(other?.content).not.toContain('Code Review')
-    expect(JSON.parse(own?.content ?? '{}')).toMatchObject({ id: 'big-two' })
+    expect(other?.content).toContain('No skill "core/code-review"')
+    expect(own?.content).toMatch(/^Skill big-two \(big-two\)\. chars 1-\d+ of 8000\. Next: activate_skill \{"id":"big-two","offset":\d+\}/)
+    expect(run.activatedSkills).toEqual([{ id: 'big-two', name: 'big-two', source: 'custom' }])
   })
 
   it('stays unscoped when an attached skill declares get_skill itself', async () => {
@@ -233,9 +192,83 @@ describe('a planner-offered get_skill reads only the agent\'s own skills', () =>
     addSkill('big-one', 9000, { tools: [decl] })
     addSkill('big-two', 8000)
     const agent = await createAgent({ skillIds: ['big-one', 'big-two'] }, endpointId)
-    const mock = mockChatSequence([toolCalls(['get_skill', { skill: 'code-review' }]), answer('ok')])
+    const mock = mockChatSequence([toolCalls(['get_skill', { skill: 'core/code-review' }]), answer('ok')])
     const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })).json() as AgentRun
     expect(run.toolCalls?.[0]?.ok).toBe(true)
-    expect(JSON.parse(expectNoCutJson(lastRequest(mock))[0]?.content ?? '{}')).toMatchObject({ id: 'code-review' })
+    expect(JSON.parse(expectNoCutJson(lastRequest(mock))[0]?.content ?? '{}')).toMatchObject({ id: 'core/code-review' })
+  })
+})
+
+describe('stored skillSnapshot modes across BE-7', () => {
+  it('reloads runs recorded as full, summary or catalog unchanged, with activatedSkills', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentcontrol-old-runs-'))
+    try {
+      const path = join(dir, 'store.json')
+      const first = createStore(path)
+      const base = { agentId: 'agt_old', startedAt: '2026-10-01T00:00:00.000Z', status: 'succeeded' as const, durationMs: 1, steps: 1, input: 'i', output: 'o', error: null }
+      first.runs.push(
+        { ...base, id: 'run_old_full', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900, mode: 'full' }] },
+        { ...base, id: 'run_old_summary', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900, mode: 'summary' }] },
+        { ...base, id: 'run_old_nomode', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900 }] },
+        { ...base, id: 'run_new', skillSnapshot: [{ id: 'core/code-review', name: 'Code Review', contentChars: 900, mode: 'catalog' }], activatedSkills: [{ id: 'core/code-review', name: 'Code Review', source: 'core' }] },
+      )
+      expect(first.save()).toBe(true)
+      const runs = new Map(createStore(path).runs.map((r) => [r.id, r]))
+      expect(runs.get('run_old_full')?.skillSnapshot?.[0]?.mode).toBe('full')
+      expect(runs.get('run_old_summary')?.skillSnapshot?.[0]?.mode).toBe('summary')
+      expect(runs.get('run_old_nomode')?.skillSnapshot?.[0]).not.toHaveProperty('mode')
+      expect(runs.get('run_new')?.skillSnapshot?.[0]?.mode).toBe('catalog')
+      expect(runs.get('run_new')?.activatedSkills).toEqual([{ id: 'core/code-review', name: 'Code Review', source: 'core' }])
+      expect(runs.get('run_old_full')).not.toHaveProperty('activatedSkills')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('stored chat message activity across a reopen', () => {
+  it('keeps activity and attachments, drops malformed entries, and survives a second save', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agentcontrol-activity-'))
+    try {
+      const path = join(dir, 'store.json')
+      const first = createStore(path)
+      first.agents.push({ id: 'agt_chips', name: 'Chips', slug: 'chips', isPrimary: false, description: '', instructions: '', modelId: 'm', endpointId: 'ep', skillIds: [], status: 'idle', createdAt: '2026-10-01T00:00:00.000Z' } as unknown as Agent)
+      const t = '2026-10-01T00:00:00.000Z'
+      first.conversations.push({ id: 'conv-chips', kind: 'dm', agentId: 'agt_chips', createdAt: t, updatedAt: t, lastReadAt: null } as never)
+      const activity = {
+        skills: [{ id: 'superpowers/systematic-debugging', name: 'systematic-debugging', source: 'superpowers' }, { id: 7 }],
+        steps: [{ tool: 'read_file', summary: 'Read notes.md', ok: true, path: 'notes.md' }, { tool: 'x' }],
+        filesChanged: [{ path: 'out.md', change: 'added' }, { path: 'bad.md', change: 'deleted' }],
+      }
+      const attachments = [
+        { root: 'agent', path: 'docs/a.md', name: 'a.md', size: 12, mime: 'text/markdown' },
+        { root: 'agent', path: '/etc/passwd', name: 'passwd', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '../x', name: 'x', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '..\\x', name: 'x', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: 'docs\\a.md', name: 'a.md', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '', name: 'empty', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: '  ', name: 'blank', size: 1, mime: 'text/plain' },
+        { root: 'agent', path: 'C:/x', name: 'x', size: 1, mime: 'text/plain' },
+      ]
+      first.chatMessages.push(
+        { id: 'm1', conversationId: 'conv-chips', role: 'assistant', content: 'done', createdAt: t, activity, attachments } as never,
+        { id: 'm2', conversationId: 'conv-chips', role: 'assistant', content: 'plain', createdAt: t },
+      )
+      expect(first.save()).toBe(true)
+      const expected = {
+        skills: [{ id: 'superpowers/systematic-debugging', name: 'systematic-debugging', source: 'superpowers' }],
+        steps: [{ tool: 'read_file', summary: 'Read notes.md', ok: true, path: 'notes.md' }],
+        filesChanged: [{ path: 'out.md', change: 'added' }],
+      }
+      const second = createStore(path)
+      const m1 = second.chatMessages.find((m) => m.id === 'm1')
+      expect(m1?.activity).toEqual(expected)
+      expect(m1?.attachments).toEqual([attachments[0]])
+      expect(second.chatMessages.find((m) => m.id === 'm2')).not.toHaveProperty('activity')
+      expect(second.save()).toBe(true)
+      expect(createStore(path).chatMessages.find((m) => m.id === 'm1')?.activity).toEqual(expected)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

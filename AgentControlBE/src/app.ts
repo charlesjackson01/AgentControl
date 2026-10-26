@@ -1,27 +1,24 @@
+import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
-import Fastify, { type FastifyInstance } from 'fastify'
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createStore, slugifyProjectName, type WorkspaceStore } from './store.js'
+import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
+import { NOTES_RETIRED, PROJECTS_RETIRED } from './archive.js'
+import { addMemory, deleteMemory, listMemory, memoryPromptBlock, parseCategory, parseText, sameScope, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
 import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
-import { fetchModels } from './upstream.js'
+import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
+import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent, type FileContent } from './files.js'
+import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
+import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
+import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
-import { clearAgentConversations, ensureDm, messagesOf, summarize } from './conversations.js'
-import {
-  appendProjectMessage,
-  applyTeamPlan,
-  cancelTask,
-  createTaskRunner,
-  pauseWork,
-  requestReview,
-  requestTeamPlan,
-  resumeWork,
-  retryTask,
-  stopWork,
-} from './projects.js'
+import { registerSandboxRoutes } from './sandbox.js'
+import { FILE_TOOL_NAMES } from './tools/files.js'
+import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
   MAX_CONVERSATION_PAGE_SIZE,
@@ -39,13 +36,21 @@ import {
   type EndpointInput,
   type EndpointKind,
   type PromptBudget,
-  type Project,
-  type ProjectInput,
-  type ProjectMessage,
+  INTERNET_POLICIES,
+  type InternetPolicy,
   type Skill,
   type SkillInput,
+  type SkillListResponse,
+  type SkillSourceId,
+  type SkillSourceInfo,
   type SkillTool,
+  SKILL_SOURCE_IDS,
 } from './shared/types.js'
+import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
+
+/** BE-6 fields for a skill the user creates or imports. */
+const CUSTOM_SKILL_FIELDS = { sourceId: 'custom', hasScripts: false, files: [] as string[], defaultOn: false } as const
+const VENDORED_READ_ONLY = 'Vendored skills are read-only.'
 
 function trimBase(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, '')
@@ -104,9 +109,36 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
     try {
       proxy = new URL(String(input.proxyUrl))
     } catch {
-      fail(400, 'Proxy must be a valid http(s) URL, e.g. http://localhost:1055.')
+      fail(400, 'Proxy must be a valid URL, e.g. socks5://localhost:1055 or http://localhost:8080.')
     }
-    if (proxy.protocol !== 'http:' && proxy.protocol !== 'https:') fail(400, 'Proxy must start with http:// or https://.')
+    if (!(PROXY_PROTOCOLS as readonly string[]).includes(proxy.protocol)) {
+      fail(400, 'Proxy must start with http://, https://, socks5:// or socks5h://.')
+    }
+    if (!proxy.hostname) fail(400, 'Proxy needs a host, e.g. socks5h://localhost:1055.')
+  }
+}
+
+/** Shown in place of a proxy password; sending it back keeps the stored one. */
+export const PROXY_PASSWORD_MASK = '***'
+
+/** The proxy URL with its password replaced by the mask (BE-11). */
+export function maskProxyUrl(proxyUrl: string): string {
+  try {
+    const url = new URL(proxyUrl)
+    if (!url.password) return proxyUrl
+    url.password = PROXY_PASSWORD_MASK
+    return url.toString().replace(/\/+$/, '')
+  } catch {
+    return proxyUrl
+  }
+}
+
+/** An endpoint as the API returns it: key flag set, proxy password masked. */
+function publicEndpoint(store: WorkspaceStore, endpoint: Endpoint): Endpoint {
+  return {
+    ...endpoint,
+    apiKeySet: Boolean(store.endpointKeys[endpoint.id]),
+    ...(endpoint.proxyUrl ? { proxyUrl: maskProxyUrl(endpoint.proxyUrl) } : {}),
   }
 }
 
@@ -114,51 +146,29 @@ function assertEndpointInput(input: EndpointInput, storedKey: string): void {
 function resolveProxy(raw: unknown, current: string | undefined): string | undefined {
   if (raw === undefined) return current
   if (raw === null || raw === '') return undefined
-  return String(raw).trim().replace(/\/+$/, '')
+  const next = String(raw).trim().replace(/\/+$/, '')
+  // The client sent the masked URL back: keep the stored password, but only
+  // for the same scheme, host, port and user, so the credential never goes to
+  // a proxy it wasn't saved for.
+  try {
+    const url = new URL(next)
+    if (url.password === PROXY_PASSWORD_MASK) {
+      if (!current) fail(400, 'Send the proxy password itself, not the mask.')
+      const saved = new URL(current)
+      if (saved.protocol !== url.protocol || saved.hostname !== url.hostname || saved.port !== url.port ||
+        saved.username !== url.username || !saved.password) {
+        fail(400, 'Re-enter the proxy password for the new host')
+      }
+      url.password = saved.password
+      return url.toString().replace(/\/+$/, '')
+    }
+  } catch (err) {
+    if ((err as { statusCode?: number }).statusCode) throw err
+  }
+  return next
 }
 
-/**
- * Validate a project create/patch body. `existing` is the record being
- * patched (name-uniqueness skips it) or null on create. Absent fields on a
- * patch come back as undefined and keep their stored value.
- */
-function parseProjectInput(store: WorkspaceStore, body: unknown, existing: Project | null): ProjectInput {
-  const raw = (body ?? {}) as Record<string, unknown>
-
-  let name: string | undefined
-  if (raw.name !== undefined) {
-    name = typeof raw.name === 'string' ? raw.name.trim() : ''
-    if (!name) fail(400, 'Give the project a name.')
-    if (name.length > 80) fail(400, 'Project name must be 80 characters or fewer.')
-    if (store.projects.some((p) => p.id !== existing?.id && p.name.toLowerCase() === name!.toLowerCase())) {
-      fail(409, `A project named "${name}" already exists.`)
-    }
-  } else if (existing === null) {
-    fail(400, 'Give the project a name.')
-  }
-
-  let desc: string | undefined
-  if (raw.desc !== undefined) {
-    if (typeof raw.desc !== 'string') fail(400, 'Description must be a string.')
-    desc = raw.desc.trim()
-  }
-
-  let teamAgentIds: string[] | undefined
-  if (raw.teamAgentIds !== undefined) {
-    if (!Array.isArray(raw.teamAgentIds) || !raw.teamAgentIds.every((s) => typeof s === 'string')) {
-      fail(400, 'teamAgentIds must be a list of agent ids.')
-    }
-    const ids = [...new Set(raw.teamAgentIds as string[])]
-    for (const id of ids) {
-      if (!store.agents.some((a) => a.id === id)) fail(400, `No agent with id "${id}". Pick agents from the library.`)
-    }
-    teamAgentIds = ids
-  }
-
-  return { ...(name !== undefined ? { name } : {}), ...(desc !== undefined ? { desc } : {}), ...(teamAgentIds !== undefined ? { teamAgentIds } : {}) } as ProjectInput
-}
-
-function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
+function parseAgentInput(store: WorkspaceStore, body: unknown, opts: { checkModel?: boolean } = {}): AgentInput {
   const raw = (body ?? {}) as Record<string, unknown>
   const name = typeof raw.name === 'string' ? raw.name.trim() : ''
   if (!name) fail(400, 'Give the agent a name.')
@@ -172,7 +182,7 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
   const modelId = typeof raw.modelId === 'string' ? raw.modelId.trim() : ''
   if (!modelId) fail(400, 'Pick a model to run this agent on.')
   const served = store.endpointModels[endpoint.id] ?? []
-  if (served.length > 0 && !served.includes(modelId) && modelId !== endpoint.defaultModel) {
+  if (opts.checkModel !== false && served.length > 0 && !served.includes(modelId) && modelId !== endpoint.defaultModel) {
     fail(400, `Model "${modelId}" is not served by this endpoint.`)
   }
 
@@ -180,8 +190,10 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     ? raw.skillIds.filter((s): s is string => typeof s === 'string')
     : []
 
-  let temperature: number | undefined
-  if (raw.temperature !== undefined && raw.temperature !== null) {
+  let temperature: number | null | undefined
+  if (raw.temperature === null) {
+    temperature = null
+  } else if (raw.temperature !== undefined) {
     const t = raw.temperature
     if (typeof t !== 'number' || !Number.isFinite(t) || t < 0 || t > 2) {
       fail(400, 'Temperature must be a number between 0 and 2.')
@@ -200,6 +212,26 @@ function parseAgentInput(store: WorkspaceStore, body: unknown): AgentInput {
     role: typeof raw.role === 'string' ? raw.role.trim() : '',
     ...(temperature !== undefined ? { temperature } : {}),
     skillIds,
+  }
+}
+
+const PATCH_STRING_FIELDS = ['name', 'description', 'instructions', 'modelId', 'endpointId', 'role'] as const
+
+/**
+ * PATCH is strict about types: PUT's parser coerces a wrong-typed field to its
+ * empty value (kept for existing PUT clients), which on a partial update would
+ * silently wipe it. Values are still validated by parseAgentInput afterwards.
+ */
+function checkPatchTypes(patch: Record<string, unknown>): void {
+  for (const key of PATCH_STRING_FIELDS) {
+    if (key in patch && typeof patch[key] !== 'string') fail(400, `"${key}" must be a string.`)
+  }
+  if ('skillIds' in patch && (!Array.isArray(patch.skillIds) || !patch.skillIds.every((s) => typeof s === 'string'))) {
+    fail(400, '"skillIds" must be a list of skill id strings.')
+  }
+  if ('isPrimary' in patch && typeof patch.isPrimary !== 'boolean') fail(400, '"isPrimary" must be true or false.')
+  if ('temperature' in patch && patch.temperature !== null && typeof patch.temperature !== 'number') {
+    fail(400, 'Temperature must be a number between 0 and 2.')
   }
 }
 
@@ -226,10 +258,16 @@ function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
     }
     out.color = raw.color === null ? null : (raw.color as string).toLowerCase()
   }
-  for (const key of ['pinned', 'hidden'] as const) {
+  for (const key of ['pinned', 'hidden', 'memoryLearn'] as const) {
     if (raw[key] === undefined) continue
     if (typeof raw[key] !== 'boolean') fail(400, `"${key}" must be true or false.`)
     out[key] = raw[key] as boolean
+  }
+  if (raw.internetPolicy !== undefined) {
+    if (!INTERNET_POLICIES.includes(raw.internetPolicy as InternetPolicy)) {
+      fail(400, '"internetPolicy" must be "ask", "always" or "never".')
+    }
+    out.internetPolicy = raw.internetPolicy as InternetPolicy
   }
   if (raw.avatar !== undefined) {
     if (raw.avatar === null) {
@@ -248,8 +286,10 @@ function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
 
 /** Apply an AgentInput onto an agent: null clears color/avatar, omitted keeps them. */
 function mergeAgent(current: Agent, input: AgentInput): Agent {
-  const { color, avatar, ...rest } = input
+  const { color, avatar, temperature, ...rest } = input
   const next: Agent = { ...current, ...rest }
+  if (temperature === null) delete next.temperature
+  else if (temperature !== undefined) next.temperature = temperature
   if (color === null) delete next.color
   else if (color !== undefined) next.color = color
   if (avatar === null) delete next.avatar
@@ -293,6 +333,11 @@ function slugify(name: string): string {
 
 const MAX_SKILL_TOOLS = 16
 const TOOL_NAME = /^[a-zA-Z0-9_-]{1,64}$/
+/** Every defaultOn skill id, in library order (core first). */
+export function defaultSkillIds(skills: readonly Skill[]): string[] {
+  return [...new Set(skills.filter((s) => s.defaultOn === true).map((s) => s.id))]
+}
+
 /** POST /api/prompt-budget plans at most this many attached skill ids. */
 const MAX_BUDGET_SKILL_IDS = 500
 
@@ -365,11 +410,12 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.setErrorHandler((error, _request, reply) => {
     const err = error as Error & { statusCode?: number }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
-    if (status >= 500) app.log.error(err)
+    const message = redactUrlCredentials(err.message ?? '')
+    if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
     void reply.status(status).send({
       statusCode: status,
       error: status >= 500 ? 'Internal Server Error' : 'Request Error',
-      message: err.message,
+      message,
     })
   })
 
@@ -386,206 +432,81 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     })
   }
 
-  // Project task queues. Tasks a previous process left queued or running are
-  // failed first (so they can be retried); closing the app waits for the
-  // task runs in flight and starts no new ones.
-  const tasks = createTaskRunner(store, (err) => app.log.error(err))
-  app.addHook('onClose', async () => {
-    await tasks.close()
-  })
-
   app.get('/health', async () => ({ status: 'ok' }))
-  app.get('/api/skills', async () => store.skills)
+  // BE-6: summaries (no bodies) with optional filters, plus one entry per source.
+  app.get('/api/skills', async (request): Promise<SkillListResponse> => {
+    const query = (request.query ?? {}) as { source?: unknown; q?: unknown; defaultOn?: unknown }
+    let source: SkillSourceId | undefined
+    if (query.source !== undefined && query.source !== '') {
+      if (typeof query.source !== 'string' || !(SKILL_SOURCE_IDS as readonly string[]).includes(query.source)) {
+        fail(400, `"source" must be one of: ${SKILL_SOURCE_IDS.join(', ')}.`)
+      }
+      source = query.source as SkillSourceId
+    }
+    let defaultOn: boolean | undefined
+    if (query.defaultOn !== undefined && query.defaultOn !== '') {
+      if (query.defaultOn !== 'true' && query.defaultOn !== 'false') fail(400, '"defaultOn" must be true or false.')
+      defaultOn = query.defaultOn === 'true'
+    }
+    const q = typeof query.q === 'string' ? query.q.trim().toLowerCase() : ''
+    const skills = store.skills
+      .filter((s) => source === undefined || s.sourceId === source)
+      .filter((s) => defaultOn === undefined || s.defaultOn === defaultOn)
+      .filter((s) => !q || [s.id, s.name, s.description, s.tag].some((v) => v.toLowerCase().includes(q)))
+      .map(({ content: _content, ...summary }) => summary)
+    const vendored = vendoredLibrary().sources
+    const count = (id: SkillSourceId): number => store.skills.filter((s) => s.sourceId === id).length
+    const sources: SkillSourceInfo[] = [
+      { id: 'core', repo: null, commit: null, license: null, count: count('core') },
+      ...vendored.map((v) => ({ ...v, count: count(v.id) })),
+      { id: 'custom', repo: null, commit: null, license: null, count: count('custom') },
+    ]
+    return { skills, sources }
+  })
   app.get('/api/tools', async () => listToolInfo())
 
-  // Notes: shared memory written by agents' notes tools. Users read and delete here.
-  const authorName = (agentId: string): string | null => store.agents.find((a) => a.id === agentId)?.name ?? null
-  app.get('/api/notes', async () =>
-    [...store.notes]
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-      .map((n) => ({
-        id: n.id,
-        title: n.title,
-        tags: n.tags,
-        authorAgentId: n.authorAgentId,
-        authorName: authorName(n.authorAgentId),
-        updatedByAgentId: n.updatedByAgentId,
-        runId: n.runId,
-        createdAt: n.createdAt,
-        updatedAt: n.updatedAt,
-        chars: n.body.length,
-        snippet: n.body.length > 160 ? `${n.body.slice(0, 159)}…` : n.body,
-      })),
-  )
-  app.get('/api/notes/:id', async (request) => {
-    const { id } = request.params as { id: string }
-    const note = store.notes.find((n) => n.id === id)
-    if (!note) fail(404, `No note with id "${id}"`)
-    return { ...note, authorName: authorName(note.authorAgentId) }
-  })
-  app.delete('/api/notes/:id', async (request, reply) => {
-    const { id } = request.params as { id: string }
-    if (!store.notes.some((n) => n.id === id)) fail(404, `No note with id "${id}"`)
-    const previous = store.notes
-    store.notes = store.notes.filter((n) => n.id !== id)
-    if (!store.save()) {
-      store.notes = previous
-      fail(500, 'The note could not be deleted from storage. Please retry.')
-    }
-    return reply.status(204).send()
-  })
-  app.get('/api/projects', async () => store.projects)
+  // Notes were folded into memory (BE-4, migration notes-to-memory-v1).
+  for (const url of ['/api/notes', '/api/notes/*']) {
+    app.all(url, async (_request, reply) =>
+      reply.status(410).send({ statusCode: 410, error: 'Request Error', message: NOTES_RETIRED }))
+  }
 
-  app.post('/api/projects', async (request, reply) => {
-    const input = parseProjectInput(store, request.body, null)
-    const id = uid('proj')
-    const now = new Date().toISOString()
-    // Folder name: slug of the project name, suffixed on collision with an
-    // existing project folder or a real directory on disk.
-    let folder = join(store.projectsRoot, slugifyProjectName(input.name))
-    for (let n = 2; store.projects.some((p) => p.folder === folder) || existsSync(folder); n++) {
-      folder = join(store.projectsRoot, `${slugifyProjectName(input.name)}-${n}`)
-    }
-    const project: Project = {
-      id,
-      name: input.name,
-      desc: input.desc ?? '',
-      folder,
-      teamAgentIds: input.teamAgentIds ?? [],
-      createdAt: now,
-      updatedAt: now,
-    }
-    try {
-      mkdirSync(folder, { recursive: true })
-    } catch (err) {
-      fail(500, `Could not create the project folder: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    store.projects = [...store.projects, project]
-    if (!store.save()) {
-      store.projects = store.projects.filter((p) => p.id !== id)
-      fail(500, 'The project could not be saved. Please retry.')
-    }
-    return reply.status(201).send(project)
-  })
-
-  app.patch('/api/projects/:id', async (request) => {
-    const { id } = request.params as { id: string }
-    const existing = store.projects.find((p) => p.id === id)
-    if (!existing) fail(404, `No project with id "${id}"`)
-    const input = parseProjectInput(store, request.body, existing)
-    const updated: Project = {
-      ...existing,
-      name: input.name ?? existing.name,
-      desc: input.desc !== undefined ? input.desc : existing.desc,
-      teamAgentIds: input.teamAgentIds !== undefined ? input.teamAgentIds : existing.teamAgentIds,
-      updatedAt: new Date().toISOString(),
-    }
-    // Rename never moves the folder; the folder is the stable identity on disk.
-    store.projects = store.projects.map((p) => (p.id === id ? updated : p))
-    if (!store.save()) {
-      store.projects = store.projects.map((p) => (p.id === id ? existing : p))
-      fail(500, 'The project could not be saved. Please retry.')
-    }
-    return updated
-  })
-
-  app.delete('/api/projects/:id', async (request, reply) => {
-    const { id } = request.params as { id: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    // The record and its chat go; the folder stays on disk (removal is an
-    // explicit user action, a later milestone). Its specialists stay in the
-    // library, untagged; its task queue starts nothing more.
-    // Its task runs go too: no route lists them once the project is gone, and
-    // agents could otherwise still read them through read_run_log.
-    const previousProjects = store.projects
-    const previousMessages = store.projectMessages
-    const previousRuns = store.runs
-    const tagged = store.agents.filter((a) => a.projectId === id)
-    store.projects = store.projects.filter((p) => p.id !== id)
-    store.projectMessages = store.projectMessages.filter((m) => m.projectId !== id)
-    store.runs = store.runs.filter((r) => r.projectId !== id)
-    for (const agent of tagged) delete agent.projectId
-    if (!store.save()) {
-      store.projects = previousProjects
-      store.projectMessages = previousMessages
-      store.runs = previousRuns
-      for (const agent of tagged) agent.projectId = id
-      fail(500, 'The project could not be deleted from storage. Please retry.')
-    }
-    tasks.stop(id)
-    return reply.status(204).send()
-  })
-
-  app.get('/api/projects/:id/messages', async (request) => {
-    const { id } = request.params as { id: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    return store.projectMessages
-      .filter((m) => m.projectId === id)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-  })
-
-  app.post('/api/projects/:id/messages', async (request, reply) => {
-    const { id } = request.params as { id: string }
-    // D-O11: mentions are resolved by the BE; tagging team members queues
-    // direct tasks (the user's own delegation). See appendProjectMessage.
-    const update = appendProjectMessage(store, id, request.body)
-    return reply.status(201).send(update)
-  })
-
-  // D-P1: team-plan returns Primary's PLAN and writes nothing; the user
-  // confirms it (or a part of it) and apply commits it. Cancel is client-side.
-  app.post('/api/projects/:id/team-plan', async (request) => {
-    const { id } = request.params as { id: string }
-    return requestTeamPlan(store, id, request.body)
-  })
-
-  app.post('/api/projects/:id/team-plan/apply', async (request) => {
-    const { id } = request.params as { id: string }
-    return applyTeamPlan(store, tasks, id, request.body)
-  })
-
-  // Part 5: review a settled round; writes nothing until the user applies.
-  app.post('/api/projects/:id/review', async (request) => {
-    const { id } = request.params as { id: string }
-    return requestReview(store, id, request.body)
-  })
-
-  app.post('/api/projects/:id/tasks/:messageId/retry', async (request) => {
-    const { id, messageId } = request.params as { id: string; messageId: string }
-    return retryTask(store, tasks, id, messageId)
-  })
-
-  app.post('/api/projects/:id/tasks/:messageId/cancel', async (request) => {
-    const { id, messageId } = request.params as { id: string; messageId: string }
-    return cancelTask(store, tasks, id, messageId)
-  })
-
-  // D-O5: pause starts nothing new; resume clears the flag and kicks; stop
-  // aborts the in-flight call and cancels queued tasks (retryable).
-  app.post('/api/projects/:id/work/pause', async (request) => {
-    const { id } = request.params as { id: string }
-    return pauseWork(store, id)
-  })
-
-  app.post('/api/projects/:id/work/resume', async (request) => {
-    const { id } = request.params as { id: string }
-    return resumeWork(store, tasks, id)
-  })
-
-  app.post('/api/projects/:id/work/stop', async (request) => {
-    const { id } = request.params as { id: string }
-    return stopWork(store, tasks, id)
-  })
-
-  // Part 6: one project task run (for "What it saw"). Chat-only runs and
-  // runs of other projects 404. The AgentRun shape never holds vault keys.
-  app.get('/api/projects/:id/runs/:runId', async (request) => {
-    const { id, runId } = request.params as { id: string; runId: string }
-    if (!store.projects.some((p) => p.id === id)) fail(404, `No project with id "${id}"`)
-    const run = store.runs.find((r) => r.id === runId)
-    if (!run || run.projectId !== id) fail(404, `No run with id "${runId}" in this project`)
-    return run
-  })
+  // BE-4 memory, under /api/agents/:id (a bot's) and /api/groups/:id (BE-5, a group's).
+  const agentScope = (id: string): MemoryScope => {
+    if (!store.agents.some((a) => a.id === id)) fail(404, `No agent with id "${id}"`)
+    return { kind: 'agent', agentId: id }
+  }
+  const groupScope = (id: string): MemoryScope => ({ kind: 'group', groupId: groupOr404(store, id).id })
+  for (const [base, scopeOf] of [['/api/agents', agentScope], ['/api/groups', groupScope]] as const) {
+    app.get(`${base}/:id/memory`, async (request) => {
+      const { id } = request.params as { id: string }
+      return listMemory(store, scopeOf(id), request.query as MemoryQuery)
+    })
+    app.post(`${base}/:id/memory`, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const scope = scopeOf(id)
+      const raw = (request.body ?? {}) as Record<string, unknown>
+      if (typeof raw !== 'object' || Array.isArray(raw)) fail(400, 'Send { text, category }.')
+      const text = parseText(raw.text, true)!
+      const category = parseCategory(raw.category, 'other')!
+      return reply.status(201).send(addMemory(store, scope, text, category, { kind: 'user' }))
+    })
+    app.patch(`${base}/:id/memory/:memoryId`, async (request) => {
+      const { id, memoryId } = request.params as { id: string; memoryId: string }
+      return updateMemory(store, scopeOf(id), memoryId, request.body)
+    })
+    app.delete(`${base}/:id/memory/:memoryId`, async (request, reply) => {
+      const { id, memoryId } = request.params as { id: string; memoryId: string }
+      deleteMemory(store, scopeOf(id), memoryId)
+      return reply.status(204).send()
+    })
+  }
+  // Projects were retired (BE-1): every old route answers 410. The data is in
+  // data/archive/projects-*.json; this lists those files (names only).
+  for (const url of ['/api/projects', '/api/projects/*']) {
+    app.all(url, async (_request, reply) => reply.status(410).send({ error: PROJECTS_RETIRED }))
+  }
+  app.get('/api/archive/projects', async () => ({ files: store.meta.archive }))
 
   app.get('/api/settings', async () => store.settings)
 
@@ -645,6 +566,16 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (raw.instructions !== undefined && typeof raw.instructions !== 'string') {
       fail(400, '"instructions" must be a string.')
     }
+    if (raw.memoryLearn !== undefined && typeof raw.memoryLearn !== 'boolean') {
+      fail(400, '"memoryLearn" must be true or false.')
+    }
+    if (raw.agentId !== undefined && typeof raw.agentId !== 'string') fail(400, '"agentId" must be a string.')
+    // A saved bot's preview counts its memory block and recall, as its DM run would.
+    const saved = typeof raw.agentId === 'string' ? store.agents.find((a) => a.id === raw.agentId) : undefined
+    if (typeof raw.agentId === 'string' && !saved) fail(404, `No agent with id "${raw.agentId.slice(0, 100)}"`)
+    const memoryScope: MemoryScope | undefined = saved ? { kind: 'agent', agentId: saved.id } : undefined
+    const learn = typeof raw.memoryLearn === 'boolean' ? raw.memoryLearn : (saved?.memoryLearn ?? true)
+    const hasMemory = memoryScope ? store.memories.some((m) => sameScope(m.scope, memoryScope)) : false
     const endpoint = store.endpoints.find((e) => e.id === endpointId)
     if (!endpoint) fail(400, `No endpoint with id "${endpointId.slice(0, 100)}". Pick an existing endpoint.`)
 
@@ -657,6 +588,9 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const plan = planPrompt({
       instructions: withRules,
       skills: attachedSkills(store.skills, skillIds),
+      // BE-4: remember like a run's (memoryLearn defaults on); a saved bot adds its memories and recall.
+      memory: memoryScope ? memoryPromptBlock(store, memoryScope) : '',
+      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
       input: '',
       contextWindow: endpoint.contextWindow,
       responseReserve: replyReserve(endpoint),
@@ -666,7 +600,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       responseReserve: replyReserve(endpoint),
       estimatedTokens: plan.estimatedTokens,
       mode: plan.mode,
-      summarizedSkillIds: plan.summarizedSkillIds,
+      catalogTokens: plan.catalogTokens,
+      summarizedSkillIds: [],
       toolNames: plan.toolDeclarations.map((t) => t.name),
       rulesTokens,
     }
@@ -678,28 +613,35 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (!agent) fail(404, `No agent with id "${id}"`)
     // The agent's own chat only: project task runs are kept apart.
     return store.runs
-      .filter((r) => r.agentId === id && r.projectId === undefined)
+      .filter((r) => r.agentId === id && r.projectId === undefined && r.groupId === undefined)
       .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
       .slice(0, RUNS_PER_SCOPE)
   })
 
   // Chat-first conversations. Every agent has a DM; it is created on first list.
   const conversationOr404 = (id: string) => {
-    const conversation = store.conversations.find((c) => c.id === id)
+    const conversation = store.conversations.find((c) => c.id === id && (c.kind !== 'group' || c.archivedAt === undefined))
     if (!conversation) fail(404, `No conversation with id "${id}"`)
     return conversation as Conversation
   }
 
+  app.get('/api/search', async (request) => {
+    const { q, limit } = parseSearchQuery(request.query as { q?: unknown; limit?: unknown })
+    return search(store, q, limit)
+  })
+
   app.get('/api/conversations', async () => {
     let created = false
     for (const agent of store.agents) {
-      if (!store.conversations.some((c) => c.agentId === agent.id)) {
+      if (!dmOf(store, agent.id)) {
         ensureDm(store, agent.id)
         created = true
       }
     }
+    if (syncGroupLeads(store.conversations, store.agents)) created = true
     if (created) store.save()
     return store.conversations
+      .filter((c) => c.kind !== 'group' || c.archivedAt === undefined)
       .map((c) => summarize(store, c))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   })
@@ -707,7 +649,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   app.get('/api/conversations/:id/messages', async (request) => {
     const { id } = request.params as { id: string }
     const conversation = conversationOr404(id)
-    const query = request.query as { before?: unknown; limit?: unknown }
+    const query = request.query as { before?: unknown; after?: unknown; limit?: unknown }
     let limit = CONVERSATION_PAGE_SIZE
     if (query.limit !== undefined) {
       const n = Number(query.limit)
@@ -717,6 +659,14 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       limit = n
     }
     let messages = messagesOf(store, conversation.id)
+    if (query.after !== undefined) {
+      // BE-5 polling: everything after a message id, oldest first, a page at a time.
+      if (query.before !== undefined) fail(400, 'Use either "before" or "after", not both.')
+      const index = typeof query.after === 'string' ? messages.findIndex((m) => m.id === query.after) : -1
+      if (index === -1) fail(400, `No message "${String(query.after)}" in this conversation.`)
+      const newer = messages.slice(index + 1)
+      return { conversation: summarize(store, conversation), messages: newer.slice(0, limit), hasMore: newer.length > limit }
+    }
     if (query.before !== undefined) {
       if (typeof query.before !== 'string' || Number.isNaN(Date.parse(query.before))) {
         fail(400, 'before must be an ISO timestamp')
@@ -724,21 +674,44 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       const before = query.before as string
       messages = messages.filter((m) => m.createdAt < before)
     }
-    return { conversation, messages: messages.slice(-limit), hasMore: messages.length > limit }
+    // BE-10: the first page carries the same summary as ?after= (unread count, typing).
+    return { conversation: summarize(store, conversation), messages: messages.slice(-limit), hasMore: messages.length > limit }
   })
 
   // Send in a DM: runs the agent (same as POST /api/agents/:id/runs) and
   // returns the turn's messages. A failed run still returns its user message
   // and, when there is one, the error as the assistant message.
-  app.post('/api/conversations/:id/messages', async (request) => {
+  app.post('/api/conversations/:id/messages', async (request, reply) => {
     const { id } = request.params as { id: string }
     const conversation = conversationOr404(id)
-    const agent = store.agents.find((a) => a.id === conversation.agentId)
+    // `content` is the Phase 1 field; `text` stays as an alias through
+    // Phase 1. When both are sent, `content` wins.
+    const body = (request.body ?? {}) as { content?: unknown; text?: unknown; attachments?: unknown }
+    const raw = typeof body.content === 'string' ? body.content : typeof body.text === 'string' ? body.text : ''
+    const text = raw.trim()
+    // BE-9: attachments must come from earlier uploads to this conversation.
+    const attachments = resolveAttachments(store, conversation, body.attachments)
+    if (!text && attachments.length === 0) fail(400, 'Provide a "content" string.')
+    if (conversation.kind === 'group') {
+      // BE-5: 202 with the user's message; replies arrive in the background (poll with ?after=).
+      const userMessage = postGroupMessage(store, groupOr404(store, conversation.id), text, attachments)
+      void reply.status(202)
+      return { conversation: summarize(store, conversation), messages: [userMessage] }
+    }
+    const agentId = conversation.agentId
+    const agent = store.agents.find((a) => a.id === agentId)
     if (!agent) fail(404, `No agent for conversation "${id}"`)
-    const body = (request.body ?? {}) as { text?: unknown }
-    const text = typeof body.text === 'string' ? body.text.trim() : ''
-    if (!text) fail(400, 'Provide a "text" string.')
-    const run = await runAgent(store, agent as Agent, text)
+    const note = attachmentPrompt(attachments)
+    const run = await runAgent(store, agent as Agent, note ? (text ? `${text}\n\n${note}` : note) : text)
+    if (attachments.length > 0) {
+      // The run's input carries the "User attached: …" line; the chat shows the user's own words plus the cards.
+      const userMessage = store.chatMessages.find((m) => m.runId === run.id && m.role === 'user')
+      if (userMessage) {
+        userMessage.content = text
+        userMessage.attachments = attachments
+        store.save()
+      }
+    }
     const messages = messagesOf(store, conversation.id).filter((m) => m.runId === run.id)
     return { conversation: summarize(store, conversation), messages, run: { id: run.id, status: run.status, error: run.error } }
   })
@@ -760,7 +733,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const agent = store.agents.find((a) => a.id === id)
     if (!agent) fail(404, `No agent with id "${id}"`)
     // Clears the agent's own chat; its project task runs stay (deleting the agent removes them).
-    store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined)
+    store.runs = store.runs.filter((r) => r.agentId !== id || r.projectId !== undefined || r.groupId !== undefined)
     clearAgentConversations(store, id, false)
     store.save()
     void reply.status(204)
@@ -775,36 +748,58 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     // Exactly one primary: honor the request, otherwise promote the first agent.
     const isPrimary = input.isPrimary === true || !hasPrimary
+    // BE-7: a new bot with no "skillIds" in the body gets every defaultOn skill.
+    const body = request.body as Record<string, unknown>
+    const skillIds = body.skillIds === undefined ? defaultSkillIds(store.skills) : input.skillIds
     const agent: Agent = mergeAgent(
       {
         id: uid('agt'),
         name: input.name,
         description: input.description,
-        instructions: input.instructions,
+        instructions: input.instructions ?? '',
         modelId: input.modelId,
         endpointId: input.endpointId,
         isPrimary,
         role: input.role,
-        skillIds: input.skillIds,
+        ...(typeof input.temperature === 'number' ? { temperature: input.temperature } : {}),
+        skillIds,
+        slug: assignAgentSlug(input.name, isPrimary, new Set(store.agents.map((a) => a.slug))),
+        internetPolicy: 'ask',
+        memoryLearn: true,
         status: 'idle',
         createdAt: new Date().toISOString(),
         lastRunAt: null,
         runCount: 0,
       },
-      { ...input, isPrimary },
+      { ...input, skillIds, isPrimary },
     )
     store.agents = [agent, ...store.agents]
     store.save()
+    try {
+      ensureBotFolder(store, agent)
+    } catch (err) {
+      request.log.warn(`[files] could not create the folder for ${agent.slug}: ${err instanceof Error ? err.message : String(err)}`)
+    }
     void reply.status(201)
     return agent
   })
 
-  app.put('/api/agents/:id', async (request) => {
+  // BE-7: merge every defaultOn skill into an existing bot (its own skills stay, in order).
+  app.post('/api/agents/:id/skills/defaults', async (request) => {
     const { id } = request.params as { id: string }
-    const index = store.agents.findIndex((a) => a.id === id)
-    if (index === -1) fail(404, `No agent with id "${id}"`)
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    const current = (agent as Agent).skillIds
+    const added = defaultSkillIds(store.skills).filter((s) => !current.includes(s))
+    if (added.length > 0) {
+      ;(agent as Agent).skillIds = [...current, ...added]
+      store.save()
+    }
+    return agent
+  })
+
+  const applyAgentUpdate = (index: number, input: AgentInput): Agent => {
     const current = store.agents[index] as Agent
-    const input = parseAgentInput(store, request.body)
     const transferPrimary = input.isPrimary === true
     // The primary flag never flips off here; transfer by promoting another agent.
     const next: Agent = { ...mergeAgent(current, input), isPrimary: transferPrimary || current.isPrimary }
@@ -816,7 +811,35 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       store.agents = store.agents.map((a, i) => (i === index ? next : a))
     }
     store.save()
+    try { ensureBotFolder(store, next) } catch { /* BOT.md catches up on the next change or boot */ }
     return next
+  }
+
+  app.put('/api/agents/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const index = store.agents.findIndex((a) => a.id === id)
+    if (index === -1) fail(404, `No agent with id "${id}"`)
+    return applyAgentUpdate(index, parseAgentInput(store, request.body))
+  })
+
+  // BE-4: any subset of the PUT fields, same rules; omitted fields keep their
+  // stored value. The model is re-checked only when modelId or endpointId changes.
+  app.patch('/api/agents/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const index = store.agents.findIndex((a) => a.id === id)
+    if (index === -1) fail(404, `No agent with id "${id}"`)
+    const body = request.body ?? {}
+    if (typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object with the fields to change.')
+    const patch = body as Record<string, unknown>
+    checkPatchTypes(patch)
+    const current = store.agents[index] as Agent
+    const base: Record<string, unknown> = {
+      name: current.name, description: current.description, instructions: current.instructions,
+      modelId: current.modelId, endpointId: current.endpointId, role: current.role,
+      skillIds: current.skillIds, ...(current.temperature !== undefined ? { temperature: current.temperature } : {}),
+    }
+    const checkModel = 'modelId' in patch || 'endpointId' in patch
+    return applyAgentUpdate(index, parseAgentInput(store, { ...base, ...patch }, { checkModel }))
   })
 
   // Image avatars: raw image body, stored as data/avatars/<agentId>.<ext>.
@@ -946,22 +969,194 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     if (agent.isPrimary) {
       fail(409, 'Move the Team Lead role to another agent before deleting it.')
     }
+    // BE-2: the folder is archived (never removed) before the bot goes away.
+    archiveBotFolder(store, agent)
     store.agents = store.agents.filter((a) => a.id !== id)
     store.runs = store.runs.filter((r) => r.agentId !== id)
+    // BE-4: the bot's private memory goes with it (memory/MEMORY.md is in the archived folder).
+    store.memories = store.memories.filter((m) => !(m.scope.kind === 'agent' && m.scope.agentId === id))
     removeAvatarFile(store, agent)
     clearAgentConversations(store, id, true)
-    // It leaves every project team too, so a team PATCH never trips on a stale id.
-    store.projects = store.projects.map((p) =>
-      p.teamAgentIds.includes(id) ? { ...p, teamAgentIds: p.teamAgentIds.filter((x) => x !== id) } : p,
-    )
+    removeAgentFromGroups(store, agent)
     store.save()
     void reply.status(204)
     return null
   })
 
-  app.get('/api/endpoints', async () =>
-    store.endpoints.map((e) => ({ ...e, apiKeySet: Boolean(store.endpointKeys[e.id]) })),
-  )
+  // --- BE-2: per-bot folders + Files API -------------------------------------
+  const sendFile = (reply: FastifyReply, file: FileContent, download: unknown) => {
+    const ascii = file.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+    void reply
+      .header('Content-Type', file.mime.startsWith('text/') ? `${file.mime}; charset=utf-8` : file.mime)
+      .header('Content-Length', String(file.size))
+      .header('X-Content-Type-Options', 'nosniff')
+      // Served files never run in the app's origin (HTML, SVG).
+      .header('Content-Security-Policy', "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'")
+      .header('Cache-Control', 'no-store')
+    if (download === '1' || download === 'true') {
+      void reply.header('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    } else {
+      void reply.header('Content-Disposition', `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(file.name)}`)
+    }
+    return reply.send(file.body)
+  }
+
+  const fileAgent = (id: string): Agent => {
+    const agent = store.agents.find((a) => a.id === id)
+    if (!agent) fail(404, `No agent with id "${id}"`)
+    return agent
+  }
+
+  app.get('/api/agents/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    return listFolder(store, fileAgent(id), path)
+  })
+
+  app.get('/api/agents/:id/files/shared', async (request) => {
+    const { id } = request.params as { id: string }
+    return listShared(store, fileAgent(id))
+  })
+
+  app.get('/api/agents/:id/files/content', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path, download } = (request.query ?? {}) as { path?: unknown; download?: unknown }
+    return sendFile(reply, await readContent(store, fileAgent(id), path), download)
+  })
+
+  // Raw uploads (any content type, up to 25 MiB) are parsed only in this scope.
+  app.register(async (scope) => {
+    scope.removeAllContentTypeParsers()
+    scope.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: MAX_UPLOAD_BYTES }, (_req, body, done) => done(null, body))
+    scope.put('/api/agents/:id/files/content', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const { path, overwrite } = (request.query ?? {}) as { path?: unknown; overwrite?: unknown }
+      const agent = fileAgent(id)
+      if (path === undefined || path === '') fail(400, '"path" is required.')
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
+      const entry = writeContent(store, agent, path, body, overwrite === '1' || overwrite === 'true')
+      void reply.status(201)
+      return entry
+    })
+    scope.put('/api/conversations/:id/uploads', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const { name } = (request.query ?? {}) as { name?: unknown }
+      const conversation = conversationOr404(id)
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
+      const attachment = uploadAttachment(store, conversation, name, body)
+      void reply.status(201)
+      return attachment
+    })
+    scope.put('/api/groups/:id/files/content', { bodyLimit: MAX_UPLOAD_BYTES }, async (request, reply) => {
+      const { id } = request.params as { id: string }
+      const { path, overwrite } = (request.query ?? {}) as { path?: unknown; overwrite?: unknown }
+      const group = groupOr404(store, id)
+      if (path === undefined || path === '') fail(400, '"path" is required.')
+      const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0)
+      const entry = writeGroupContent(store, group, path, body, overwrite === '1' || overwrite === 'true')
+      void reply.status(201)
+      return entry
+    })
+  })
+
+  app.post('/api/agents/:id/files/folders', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { path?: unknown }
+    const agent = fileAgent(id)
+    if (typeof body.path !== 'string' || body.path.trim() === '') fail(400, '"path" is required.')
+    const entry = makeFolder(store, agent, body.path)
+    void reply.status(201)
+    return entry
+  })
+
+  app.patch('/api/agents/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { from?: unknown; to?: unknown }
+    return movePath(store, fileAgent(id), body.from, body.to)
+  })
+
+  app.delete('/api/agents/:id/files', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    const agent = fileAgent(id)
+    if (path === undefined || path === '') fail(400, '"path" is required.')
+    trashPath(store, agent, path)
+    void reply.status(204)
+    return null
+  })
+
+  // --- BE-5: group chats ------------------------------------------------------
+  app.post('/api/groups', async (request, reply) => {
+    const group = createGroup(store, request.body)
+    store.save()
+    void reply.status(201)
+    return summarize(store, group)
+  })
+
+  app.get('/api/groups/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    return summarize(store, groupOr404(store, id))
+  })
+
+  app.patch('/api/groups/:id', async (request) => {
+    const { id } = request.params as { id: string }
+    const group = updateGroup(store, groupOr404(store, id), request.body)
+    store.save()
+    return summarize(store, group)
+  })
+
+  app.delete('/api/groups/:id', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    archiveGroup(store, groupOr404(store, id))
+    store.save()
+    void reply.status(204)
+    return null
+  })
+
+  app.get('/api/groups/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    return listGroupFolder(store, groupOr404(store, id), path)
+  })
+
+  app.get('/api/groups/:id/files/shared', async (request) => {
+    const { id } = request.params as { id: string }
+    return listGroupShared(store, groupOr404(store, id))
+  })
+
+  app.get('/api/groups/:id/files/content', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path, download } = (request.query ?? {}) as { path?: unknown; download?: unknown }
+    return sendFile(reply, await readGroupContent(store, groupOr404(store, id), path), download)
+  })
+
+  app.post('/api/groups/:id/files/folders', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { path?: unknown }
+    const group = groupOr404(store, id)
+    if (typeof body.path !== 'string' || body.path.trim() === '') fail(400, '"path" is required.')
+    const entry = makeGroupFolder(store, group, body.path)
+    void reply.status(201)
+    return entry
+  })
+
+  app.patch('/api/groups/:id/files', async (request) => {
+    const { id } = request.params as { id: string }
+    const body = (request.body ?? {}) as { from?: unknown; to?: unknown }
+    return moveGroupPath(store, groupOr404(store, id), body.from, body.to)
+  })
+
+  app.delete('/api/groups/:id/files', async (request, reply) => {
+    const { id } = request.params as { id: string }
+    const { path } = (request.query ?? {}) as { path?: unknown }
+    const group = groupOr404(store, id)
+    if (path === undefined || path === '') fail(400, '"path" is required.')
+    trashGroupPath(store, group, path)
+    void reply.status(204)
+    return null
+  })
+
+  app.get('/api/endpoints', async () => store.endpoints.map((e) => publicEndpoint(store, e)))
 
   app.post('/api/endpoints', async (request, reply) => {
     const raw = (request.body ?? {}) as Partial<EndpointInput>
@@ -1002,7 +1197,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     store.endpointModels[id] = [endpoint.defaultModel]
     store.save()
     void reply.status(201)
-    return endpoint
+    return publicEndpoint(store, endpoint)
   })
 
   app.patch('/api/endpoints/:id', async (request) => {
@@ -1052,7 +1247,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const models = store.endpointModels[id] ?? []
     if (!models.includes(next.defaultModel)) store.endpointModels[id] = [...models, next.defaultModel]
     store.save()
-    return next
+    return publicEndpoint(store, next)
   })
 
   app.delete('/api/endpoints/:id', async (request) => {
@@ -1115,7 +1310,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     endpoint.lastCheckedAt = new Date().toISOString()
     if (live.ok) store.endpointModels[id] = live.models
     store.save()
-    return { ok: live.ok, models: live.ok ? live.models : [], latencyMs: live.latencyMs }
+    return { ok: live.ok, models: live.ok ? live.models : [], latencyMs: live.latencyMs, ...(live.error ? { error: live.error } : {}) }
   })
 
   app.get('/api/skills/:id', async (request) => {
@@ -1131,6 +1326,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       id: uid('skl'),
       ...input,
       tools: input.tools ?? [],
+      ...CUSTOM_SKILL_FIELDS,
     }
     store.skills = [...store.skills, skill]
     store.save()
@@ -1164,6 +1360,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       tag: parsed.tag,
       content: parsed.content,
       tools,
+      ...(parsed.license ? { license: parsed.license } : {}),
+      ...(parsed.compatibility ? { compatibility: parsed.compatibility } : {}),
+      ...(parsed.metadata ? { metadata: parsed.metadata } : {}),
+      ...(parsed.allowedTools ? { allowedTools: parsed.allowedTools } : {}),
+      ...CUSTOM_SKILL_FIELDS,
     }
     store.skills = [...store.skills, skill]
     store.save()
@@ -1176,6 +1377,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const index = store.skills.findIndex((s) => s.id === id)
     if (index === -1) fail(404, `No skill with id "${id}"`)
     const current = store.skills[index] as Skill
+    if (isVendoredSkillId(current.id)) fail(403, VENDORED_READ_ONLY)
     const raw = (request.body ?? {}) as Record<string, unknown>
     const next: Skill = { ...current }
     if (raw.name !== undefined) {
@@ -1212,6 +1414,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     const { id } = request.params as { id: string }
     const skill = store.skills.find((s) => s.id === id)
     if (!skill) fail(404, `No skill with id "${id}"`)
+    if (isVendoredSkillId(id)) fail(403, VENDORED_READ_ONLY)
     // Same-transaction detach: strip the id from every agent before removal.
     store.detachSkill(id)
     store.skills = store.skills.filter((s) => s.id !== id)
@@ -1219,6 +1422,11 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     void reply.status(204)
     return null
   })
+
+  // BE-2: every existing bot gets its folder on boot.
+  ensureAllBotFolders(store, (msg) => app.log.warn(msg))
+
+  registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
 
   return app
 }

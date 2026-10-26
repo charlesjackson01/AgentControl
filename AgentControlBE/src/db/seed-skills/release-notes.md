@@ -1,7 +1,7 @@
 ---
 name: release-notes
 description: Draft a changelog or release notes from two versions of a document or a supplied list of changes, grounded in a local line diff. Use to explain what changed between drafts, versions, or releases for users or reviewers.
-tools: diff_text, extract_entities, read_note, save_note
+tools: diff_text, extract_entities
 ---
 
 # Release Notes
@@ -10,17 +10,17 @@ Write release notes only from changes you can see: a diff between two supplied v
 
 ## Workflow
 
-1. Identify the sources: the earlier and later version (literal text, `@input`, or `@note:<id>`), or a list of changes. Request a missing version instead of reconstructing it from memory. Read a note with `read_note` when its context matters.
+1. Identify the sources: the earlier and later version (literal text or `@input`), or a list of changes. Request a missing version instead of reconstructing it from memory.
 2. For two versions, call `diff_text` with `before` and `after`. Use its hunks and its added, removed and unchanged counts as the evidence for every entry.
 3. To collect issue links and dates mentioned in the changes, call `extract_entities` on the change text with `kinds` such as `["urls","dates"]`.
 4. Group entries under headings such as Added, Changed, Fixed, Removed, and Security, one change per bullet in plain user-facing language. Put breaking changes and required actions first. Mark a version, date, or impact the sources do not establish as unspecified.
-5. Return the draft. When the user asks to save it, call `save_note` with the draft as a literal body, a title such as `Release notes 2.4`, `mode:"create"` and a `release` tag. Report the save only after the tool succeeds.
+5. Return the draft in the reply so the user can copy or keep it.
 
 ## Example
 
 Call `diff_text` with `{"before":"Export to CSV\nDark mode (beta)","after":"Export to CSV and JSON\nDark mode\nKeyboard shortcuts"}`. From the returned hunk, draft "Added: JSON export; keyboard shortcuts. Changed: dark mode is no longer in beta."
 
-For a draft saved as a note and a new version in the run input, use `{"before":"@note:Changelog draft","after":"@input"}`.
+For an earlier draft pasted as text and a new version in the run input, use `{"before":"<earlier draft>","after":"@input"}`.
 
 ## Limits
 

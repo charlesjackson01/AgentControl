@@ -1,7 +1,6 @@
 // Registry facade first: it must load standalone (see registry.test.ts).
 import { executeToolCall } from '../tools.js'
 import { describe, expect, it } from 'vitest'
-import type { Note } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
 import { textTools } from './text.js'
 import type { ToolContext } from './types.js'
@@ -11,18 +10,13 @@ const PROTO_KEYS = ['__proto__', 'constructor', 'toString'] as const
 const TOOLS = ['process_lines', 'extract_entities'] as const
 const N = 200_000
 
-function note(id: string, title: string, body: string): Note {
-  return { id, title, body, tags: [], authorAgentId: 'agent', updatedByAgentId: 'agent', runId: 'run_old',
-    createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
-}
 
 const store = {
   endpointKeys: { ep_test: SECRET },
-  notes: [note('note_log', 'Server log', 'INFO start\nERROR disk full\nINFO retry\nerror disk full\n')],
 } as unknown as WorkspaceStore
 
 function context(overrides: Partial<ToolContext> = {}): ToolContext {
-  return { store, agentId: 'agent', runId: 'run', input: '', allowed: new Set<string>([...TOOLS, 'read_note']),
+  return { store, agentId: 'agent', runId: 'run', input: '', allowed: new Set<string>([...TOOLS]),
     now: () => new Date('2026-10-12T09:30:00Z'), timeZone: 'UTC', writes: { count: 0 }, ...overrides }
 }
 
@@ -241,14 +235,14 @@ describe('process_lines', () => {
     expect((op('sort', lines('b'.repeat(500), 'a'.repeat(500))).result as string[]).map((l) => l.length)).toEqual([200, 200])
   })
 
-  it('reads "@input" by default and notes through executeToolCall, and redacts secrets', async () => {
+  it('reads "@input" by default and explicitly through executeToolCall, and redacts secrets', async () => {
     const byDefault = await run('process_lines', { operation: 'dedupe' }, { input: 'a\nb\na' })
     expect(JSON.parse(byDefault.content)).toMatchObject({ result: ['a', 'b'], sources: { text: '@input' } })
     const explicit = await run('process_lines', { operation: 'count', text: '@input' }, { input: 'a\na' })
     expect(JSON.parse(explicit.content)).toMatchObject({ result: [{ line: 'a', count: 2 }], sources: { text: '@input' } })
 
-    const fromNote = await run('process_lines', { text: '@note:Server log', operation: 'count', match: 'error' })
-    expect(JSON.parse(fromNote.content)).toMatchObject({
+    const fromLog = await run('process_lines', { text: '@input', operation: 'count', match: 'error' }, { input: 'INFO start\nERROR disk full\nINFO retry\nerror disk full\n' })
+    expect(JSON.parse(fromLog.content)).toMatchObject({
       nonblank_lines: 4, matched: 2, result: [{ line: 'ERROR disk full', count: 1 }, { line: 'error disk full', count: 1 }],
     })
     const proto = await run('process_lines', '{"__proto__":{"operation":"sort"},"toString":1,"operation":"count","text":"a"}')
@@ -480,14 +474,15 @@ describe('adversarial max-size input through executeToolCall with "@input" (< 50
 // key cut by the 200-char clip leaked its first chars ("sk-or-v1-0123…") past both redaction passes.
 describe('redaction happens before clipping', () => {
   const key = 'sk-or-v1-0123456789abcdef0123456789abcdef'
-  const keyStore = { ...store, endpointKeys: { ep_or: key }, notes: [note('note_keys', 'Keys', `${'x'.repeat(185)} ${key}\nhttps://x.io/${'p'.repeat(170)}?k=${key}`)] } as unknown as WorkspaceStore
+  const keyStore = { ...store, endpointKeys: { ep_or: key } } as unknown as WorkspaceStore
+  const keyText = `${'x'.repeat(185)} ${key}\nhttps://x.io/${'p'.repeat(170)}?k=${key}`
 
   it('never returns a clipped prefix of a vault key from either tool', async () => {
-    for (const [name, args] of [['process_lines', { text: '@note:Keys', operation: 'sort' }], ['extract_entities', { text: '@note:Keys', kinds: 'urls' }]] as const) {
-      const outcome = await run(name, args, { store: keyStore })
+    for (const [name, args] of [['process_lines', { text: '@input', operation: 'sort' }], ['extract_entities', { text: '@input', kinds: 'urls' }]] as const) {
+      const outcome = await run(name, args, { store: keyStore, input: keyText })
       expect(outcome.ok, outcome.content).toBe(true)
       expect(outcome.content, name).not.toContain('sk-or-v1-0')
-      // Note text is redacted before the handler: lines keep the marker, and a
+      // Ref text is redacted before the handler: lines keep the marker, and a
       // URL ends where the redacted key began.
       if (name === 'process_lines') expect(outcome.content, name).toContain('[redacted]')
       else expect(outcome.content, name).toContain('?k="')

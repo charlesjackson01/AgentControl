@@ -10,6 +10,8 @@ export type ConversationsState = {
   reload: () => void
   /** Optimistically zero a row's unread badge, then take the BE's summary. */
   markRead: (id: string) => void
+  /** Per conversation: when the client first saw `typingAgentId` set for the current typing run (ISO). Held after typing stops. */
+  typingSince: Record<string, string>
   /** Replace a row with the server's copy. */
   upsert: (c: ConversationSummary) => void
 }

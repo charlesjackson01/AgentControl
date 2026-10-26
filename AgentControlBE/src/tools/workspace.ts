@@ -485,7 +485,7 @@ export const workspaceTools: ToolEntry[] = [
     category: 'workspace',
     effect: 'read',
     description:
-      'Read one skill by id or name: description, tool names and its full instructions in pages; pass nextOffset to continue. Example: {"skill":"code-review"}',
+      'Inspect any skill in the library as a record (for audits): description, tool names and its instructions in pages; pass nextOffset to continue. To follow one of your own skills, use activate_skill instead. Example: {"skill":"code-review"}',
     parameters: {
       type: 'object',
       properties: {
@@ -498,7 +498,7 @@ export const workspaceTools: ToolEntry[] = [
     handler: (args, ctx) => {
       const { store } = ctx
       const ref = readRef(args, SKILL_REF_KEYS, SKILL_EXAMPLE)
-      // Offered by the prompt planner, get_skill reads only the agent's own skills.
+      // An audit read of any library skill (skillScope is unset since BE-7); activate_skill loads the agent's own.
       const scope = ctx.skillScope
       const pool = scope ? store.skills.filter((s) => scope.has(s.id)) : store.skills
       const skill = ref ? findSkillIn(pool, ref) : undefined

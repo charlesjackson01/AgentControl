@@ -85,7 +85,7 @@ export type Endpoint = {
   status: EndpointStatus
   lastCheckedAt: string | null
   createdAt: string
-  /** Optional HTTP(S) proxy for every upstream call, e.g. http://localhost:1055. */
+  /** Optional HTTP(S) or SOCKS5 proxy for every upstream call. Read back with the password masked: user:***@host (BE-11). */
   proxyUrl?: string
   /** Sends chat_template_kwargs.enable_thinking=false on every upstream call. */
   disableThinking?: boolean
@@ -108,24 +108,9 @@ export type SkillTool = {
 }
 
 export type ToolInfo = SkillTool & {
-  category: 'workspace' | 'notes' | 'time' | 'math' | 'text' | 'data'
+  category: 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data'
   effect: 'read' | 'write'
 }
-
-export type Note = {
-  id: string
-  title: string
-  body: string
-  tags: string[]
-  authorAgentId: string
-  authorName: string | null
-  updatedByAgentId: string
-  runId: string
-  createdAt: string
-  updatedAt: string
-}
-
-export type NoteSummary = Omit<Note, 'body'> & { snippet: string; chars: number }
 
 export type Skill = {
   id: string
@@ -138,7 +123,27 @@ export type Skill = {
   tools: SkillTool[]
   /** Provenance, e.g. "seb1n/awesome-ai-agent-skills". */
   source?: string
+  /* BE-6 additions; optional until it lands. */
+  sourceId?: SkillSourceId
+  sourceRepo?: string
+  sourceCommit?: string
+  license?: string
+  compatibility?: string
+  metadata?: Record<string, string>
+  allowedTools?: string[]
+  hasScripts?: boolean
+  files?: string[]
+  defaultOn?: boolean
 }
+
+export type SkillSourceId = 'core' | 'superpowers' | 'anthropics' | 'ecc' | 'custom'
+
+/** BE-6 `GET /api/skills` rows: a Skill without its body; fetch `/api/skills/:id` for `content`. */
+export type SkillSummary = Omit<Skill, 'content'> & { content?: string }
+
+/** BE-6 `GET /api/skills` source row. */
+/** GET /api/skills `sources` entry (BE-6 sends null for unknown repo/commit/licence). */
+export type SkillSource = { id: string; repo?: string | null; commit?: string | null; license?: string | null; count: number }
 
 /** Body for POST /api/skills; PATCH /api/skills/:id takes a partial of it. */
 export type SkillInput = {
@@ -159,7 +164,7 @@ export type EndpointInput = {
   contextWindow: number
   /** Write-only. Omit to keep the stored key on update, "" to clear it. Never returned on read. */
   apiKey?: string
-  /** Optional http(s) proxy URL. Omit to keep on update; "" or null clears it. */
+  /** Optional proxy URL. Omit to keep on update; "" or null clears it. A `***` password keeps the stored one. */
   proxyUrl?: string | null
   /** Optional. Omit to keep on update; false clears it. */
   disableThinking?: boolean
@@ -182,26 +187,44 @@ export type AgentRun = {
   /** Exact system message the run sent upstream; absent on pre-audit runs/BEs. */
   systemPrompt?: string
   /**
-   * Skills injected into that prompt (content itself is never sent). `mode`
-   * 'summary' means only a short summary went in (the agent reads the full
-   * text with get_skill); absent on runs recorded before summaries existed.
+   * Skills attached to that prompt (content itself is never sent). `mode`: see
+   * SkillPromptMode; absent on runs recorded before modes existed.
    */
   skillSnapshot?: { id: string; name: string; contentChars: number; mode?: SkillPromptMode }[]
+  /** BE-7: skills the model loaded with activate_skill, in first-use order. */
+  activatedSkills?: ActivatedSkill[]
   /** Tool calls executed during the run; absent on pre-tool-execution runs/BEs. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
+  /** BE-3: file steps and files written this run (also copied onto the reply's `activity`). */
+  activity?: { steps: MessageActivity['steps']; filesChanged: FileChange[] }
+  /**
+   * BE-3 (5d5a864): files this run wrote, on every run (failed ones too); [] when none.
+   * Backfilled from `activity` for stored runs. The FE's source for file cards (lib/activity runFilesChanged).
+   */
+  filesChanged?: FileChange[]
   /** Set on runs made for a project task; the agent's own chat leaves them out. */
   projectId?: string
 }
 
-/** How one attached skill went into a run's system prompt. */
-export type SkillPromptMode = 'full' | 'summary'
+/** BE-3: one file a run wrote; `bytes`/`modifiedAt` (ISO) are the file after the write (optional on old runs). */
+export type FileChange = { path: string; change: 'added' | 'modified'; bytes?: number; modifiedAt?: string }
 
 /**
- * How a draft's prompt fits its endpoint: every skill in full, the largest
- * skills as summaries (read in full with get_skill), or over budget even then
- * (runs are rejected).
+ * How one attached skill went into a run's system prompt. 'catalog' (BE-7): one
+ * catalog line, body loaded on demand with activate_skill. 'full' (whole body)
+ * and 'summary' (short summary, read with get_skill) only on runs from before BE-7.
  */
-export type PromptBudgetMode = 'full' | 'summary' | 'too-large'
+export type SkillPromptMode = 'full' | 'summary' | 'catalog'
+
+/** A skill a run activated (BE-7 `activatedSkills`, message `activity.skills`). */
+export type ActivatedSkill = { id: string; name: string; source: string }
+
+/**
+ * How a draft's prompt fits its endpoint. BE-7: 'catalog' (skills listed one line
+ * each, loaded on demand) or 'too-large' (runs are rejected). 'full' and 'summary'
+ * only come from older backends.
+ */
+export type PromptBudgetMode = 'catalog' | 'too-large' | 'full' | 'summary'
 
 /** Body for POST /api/prompt-budget. Unknown skill ids are ignored. */
 export type PromptBudgetInput = {
@@ -210,6 +233,13 @@ export type PromptBudgetInput = {
   instructions?: string
   /** Chat-first Part 1: counted as the Rules prompt section (BE route accepts it). */
   rules?: string[]
+  /**
+   * BE-4 (4c35e03): a saved bot. The estimate adds its memory block and `recall`, and
+   * `memoryLearn` defaults to the bot's own setting. Left out for a new bot.
+   */
+  agentId?: string
+  /** BE-4: offers `remember` when on. Default: the saved bot's setting, else true. */
+  memoryLearn?: boolean
 }
 
 /** POST /api/prompt-budget response: the plan a run would use, with an empty message. */
@@ -220,12 +250,14 @@ export type PromptBudget = {
   /** chars/4 estimate of the system prompt + tool schemas. */
   estimatedTokens: number
   mode: PromptBudgetMode
-  /** Skills sent as summaries, in attachment order. */
+  /** @deprecated Always [] since BE-7; older backends listed skills sent as summaries. */
   summarizedSkillIds: string[]
   /** Tools a run would offer, in the order sent upstream. */
   toolNames: string[]
   /** Estimated tokens for the Rules section (header included); 0 when there are no rules. */
   rulesTokens?: number
+  /** BE-7: tokens for the one-line-per-skill catalog ("Skills (call activate_skill…)"). */
+  catalogTokens?: number
 }
 
 /** Body for POST /api/agents/:id/runs. */
@@ -277,6 +309,11 @@ export type Agent = {
   /** Chat-first: sidebar pinning / hiding (Part 2 uses these). */
   pinned?: boolean
   hidden?: boolean
+  /** Chat-first Phase 1 (BE-1): immutable folder name; 'primary' for Primary. Optional until BE-1 lands. */
+  slug?: string
+  internetPolicy?: InternetPolicy
+  /** "Learn from chat" toggle (BE-1/BE-4); default true. */
+  memoryLearn?: boolean
 }
 
 /** Everything the create/edit form owns. */
@@ -288,7 +325,8 @@ export type AgentInput = {
   modelId: string
   /** Required: the endpoint this agent runs on. */
   endpointId: string
-  temperature: number
+  /** 0–2. Omitted: create stores none (endpoint default), PUT keeps the stored value; null clears it (PATCH). */
+  temperature?: number | null
   skillIds: string[]
   /** Bootstrap only: set true when creating the first (Team Lead) agent. */
   isPrimary?: boolean
@@ -299,181 +337,32 @@ export type AgentInput = {
   hidden?: boolean
   /** Emoji only; images go through PUT /api/agents/:id/avatar. null clears it. */
   avatar?: { kind: 'emoji'; value: string } | null
-}
-
-/** A project: a folder owned by AgentControl plus its team of library agents. */
-export type Project = {
-  id: string
-  name: string
-  desc: string
-  /** Absolute path created by the BE under the projects root. */
-  folder: string
-  /** Library agents on this project's team. Empty is allowed. */
-  teamAgentIds: string[]
-  createdAt: string
-  updatedAt: string
-  /** D-O5 (orchestration Part 2): set while the user has paused this project's work. */
-  paused?: boolean
-}
-
-/** Body for POST /api/projects/:id/messages. */
-export type ProjectMessageInput = {
-  author: string
-  text: string
-  /** D-O11: agent ids the user picked with @ (Primary or team members). Tagging only team members also queues one task each. */
-  mentions?: string[]
-}
-
-/**
- * One message in a project's chat (handoff kinds). `author` is 'user' or an
- * agent id.
- * - 'message': plain text from the user or an agent. Primary's reply to a
- *   plan the user applied, and each task's result (author = the assignee,
- *   with `taskId`), are messages too.
- * - 'team-update': who joined the team or was created when a plan applied.
- * - 'task-assignment': one task for `assigneeId`, with its `taskStatus`.
- */
-export type ProjectMessage = {
-  id: string
-  projectId: string
-  author: string
-  text: string
-  kind: ProjectMessageKind
-  createdAt: string
-  /** Set when the BE changes the message after creation (task status). */
-  updatedAt?: string
-  /** Messages written when a plan applies: the user message the plan answered. */
-  replyTo?: string
-  /** task-assignment: who does the task. */
-  assigneeId?: string
-  /**
-   * task-assignment: queued → running → done | failed (the task now).
-   * A task's result message: 'done' or 'failed', the outcome of that attempt.
-   */
-  taskStatus?: TaskStatus
-  /** A task's result message: the task-assignment it answers. */
-  taskId?: string
-  /** A task's result message: the agent run that produced it. */
-  runId?: string
-  /**
-   * D-O11: agents tagged in `text` as @Name, as ids in order of first tag,
-   * deduped. The BE fills it on every write: from the ids the user picked
-   * (user messages) or by parsing the text (everything else).
-   */
-  mentions?: string[]
-  /** task-assignment: its label within its plan ("t2"). Orchestration Part 3. */
-  label?: string
-  /** task-assignment: earlier task-assignment ids whose results it receives (at most 3). Part 3. */
-  inputs?: string[]
-  /** Written by an apply: the round of its request (absent = 1). Part 5. */
-  round?: number
-  /** Primary's reply that closes a request: a final summary or a question for the user. Part 5. */
-  verdict?: 'done' | 'ask'
-  /** A task's result message: the inputs it received and how much of each was sent. Part 3. */
-  used?: { taskId: string; chars: number; sentChars: number }[]
-}
-
-/** 'progress': a status line the runner writes without a model call (Parts 2–3). */
-export type ProjectMessageKind = 'message' | 'team-update' | 'task-assignment' | 'progress'
-/** 'cancelled': the user cancelled or stopped the task; it can be retried (Part 2). */
-export type TaskStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
-
-/** A library agent Primary proposes to add to the team. */
-export type TeamPlanAdd = {
-  agentId: string
-  reason: string
-}
-
-/** A project-scoped specialist Primary proposes to create (D-P2: a library agent tagged with projectId). */
-export type TeamPlanCreate = {
-  name: string
-  role: string
-  instructions: string
-  /** Library skill ids to attach (unknown ids are dropped while validating). */
-  skillIds: string[]
-  reason: string
-}
-
-/** A task for a team member: `agent` is an agent id, or the name of an agent in `create`. */
-export type TeamPlanTask = {
-  agent: string
-  task: string
-  /** Hand-offs (Part 3): "t1" (an earlier task of this plan) or an earlier done task-assignment id; at most 3. */
-  inputs?: string[]
-}
-
-/** Primary's validated answer to a project prompt. */
-export type TeamPlan = {
-  /** What Primary tells the user (always shown). */
-  reply: string
-  add: TeamPlanAdd[]
-  create: TeamPlanCreate[]
-  tasks: TeamPlanTask[]
-  /** Entries the BE dropped while validating, in plain words. */
-  warnings: string[]
-  /** Review rounds (Part 5): keep going, finish with a summary, or ask the user. */
-  verdict?: 'continue' | 'done' | 'ask'
-}
-
-/**
- * Body for POST /api/projects/:id/team-plan. `messageId` names the user's
- * message in this project's chat that Primary answers (its text is the
- * prompt); `prompt` alone asks without one. At least one is required.
- */
-export type TeamPlanRequest = {
-  messageId?: string
-  prompt?: string
-}
-
-/** Response of POST /api/projects/:id/team-plan: a PLAN only; nothing is written (D-P1). */
-export type TeamPlanResult = {
-  plan: TeamPlan
-  /** The user message the plan answers, when the request named one. */
-  replyTo?: string
-}
-
-/**
- * Body for POST /api/projects/:id/team-plan/apply: the plan the user
- * confirmed (validated again, as untrusted input) and what to accept. Each
- * list selects agent ids from plan.add or indexes into plan.create /
- * plan.tasks; an omitted list accepts everything. Tasks for an agent whose
- * addition or creation was not accepted are dropped.
- */
-export type TeamPlanApply = {
-  plan: TeamPlan
-  replyTo?: string
-  add?: string[]
-  create?: number[]
-  tasks?: number[]
-  /** Review rounds (Part 5): the round this apply starts; the BE checks it is the next one. */
-  round?: number
-}
-
-/** Response of the review route (Part 5): Primary's next-round plan for a request; nothing is written. */
-export type ReviewResult = {
-  plan: TeamPlan
-  replyTo: string
-  round: number
-}
-
-/** Response of the apply and task-retry routes. */
-export type ProjectUpdate = {
-  project: Project
-  /** Messages created or changed by the call, oldest first. */
-  messages: ProjectMessage[]
-}
-
-/** Body for POST /api/projects; PATCH /api/projects/:id takes a partial of it. */
-export type ProjectInput = {
-  name: string
-  desc?: string
-  teamAgentIds?: string[]
+  /** BE-1: omitted keeps the stored value. */
+  internetPolicy?: InternetPolicy
+  memoryLearn?: boolean
 }
 
 /* ==========================================================================
    Chat-first Part 2: conversations. Mirrors BE shared/types.ts @ 8a9acd3
    (feat/chat-first-p2-be). One DM per agent, auto-created by GET /api/conversations.
    ========================================================================== */
+
+/* Chat-first Phase 1 shared contracts (phase1-tickets.md, BE shared/types.ts).
+   Fields a current BE does not send yet are optional here and the UI copes
+   without them; tighten them once BE-1/BE-5/BE-9 land. */
+
+export type InternetPolicy = 'ask' | 'always' | 'never'
+
+/** A file attached to a chat message (BE-9). Paths are relative, e.g. 'shared/x.png'. */
+export type Attachment = { root: 'agent' | 'group'; path: string; name: string; size: number; mime: string }
+
+/** What a run did (BE-3/BE-7); rendered by FE-7. BE-7 fills `skills`; `steps` and `filesChanged` are [] until BE-3. */
+export type MessageActivity = {
+  skills: ActivatedSkill[]
+  steps: { tool: string; summary: string; ok: boolean; path?: string }[]
+  /** Same entries as the run's top-level `filesChanged` (BE-3); `bytes`/`modifiedAt` optional on old messages. */
+  filesChanged: FileChange[]
+}
 
 /** One message in a chat-first conversation (independent of run pruning). */
 export type ChatMessage = {
@@ -486,13 +375,18 @@ export type ChatMessage = {
   runId?: string
   /** Assistant message stored for a failed run; `content` is the error text (BE fix/chat-error-flag). */
   error?: true
+  /** 'system' = "You created Harbor team…" lines (BE-5). */
+  kind?: 'message' | 'system'
+  /** Set on assistant messages (required in groups, BE-5). */
+  authorAgentId?: string
+  /** BE-5 d5e5a99: on the lead's reply, the @mentioned bots the 4-reply cap left out, in mention order (absent when none). */
+  skippedAgentIds?: string[]
+  attachments?: Attachment[]
+  activity?: MessageActivity
 }
 
-/** A 1:1 chat with one agent. One per agent, created lazily. */
-export type Conversation = {
+type ConversationBase = {
   id: string
-  kind: 'dm'
-  agentId: string
   createdAt: string
   /** Time of the newest message (or creation). */
   updatedAt: string
@@ -500,17 +394,40 @@ export type Conversation = {
   lastReadAt: string | null
 }
 
+/** A 1:1 chat with one agent. One per agent, created lazily. */
+export type DmConversation = ConversationBase & { kind: 'dm'; agentId: string }
+
+/** A group chat (BE-5). Primary is always a member and the lead. */
+export type GroupConversation = ConversationBase & {
+  kind: 'group'
+  name: string
+  slug: string
+  /** Includes the lead; 2-8 agents. */
+  memberAgentIds: string[]
+  leadAgentId: string
+  memoryLearn: boolean
+}
+
+export type Conversation = DmConversation | GroupConversation
+
 export type ConversationSummary = Conversation & {
   lastMessage: ChatMessage | null
   unreadCount: number
+  /** Agent currently producing a reply. Optional until BE-5 sends it. */
+  typingAgentId?: string | null
 }
 
 export const CONVERSATION_PAGE_SIZE = 50
 export const MAX_CONVERSATION_PAGE_SIZE = 200
 
-/** GET /api/conversations/:id/messages response (messages oldest -> newest). `hasMore` since BE 2a6078c. */
+/**
+ * GET /api/conversations/:id/messages response (messages oldest -> newest). `hasMore` since BE 2a6078c.
+ * `conversation` is the full ConversationSummary (unread, typing, lastMessage) on every page since
+ * BE-10 (085be14); before that only `?after=` pages carried it and the first page sent a plain Conversation.
+ * Read it with `pageSummary` (lib/conversations.ts), which returns null for the plain shape.
+ */
 export type ConversationMessagesResponse = {
-  conversation: Conversation
+  conversation: Conversation | ConversationSummary
   messages: ChatMessage[]
   hasMore?: boolean
 }
@@ -520,8 +437,22 @@ export type ConversationSendResult = {
   conversation: ConversationSummary
   /** This turn's messages (user, and assistant/error when there is one). */
   messages: ChatMessage[]
-  run: { id: string; status: AgentRun['status']; error?: string | null }
+  /** `filesChanged`: only if a server sends the run's top-level list here (5d5a864 does not yet). */
+  run: { id: string; status: AgentRun['status']; error?: string | null; filesChanged?: FileChange[] }
 }
+
+/** BE-5 e76bfaf: POST /api/conversations/:id/messages on a group -> 202. Replies arrive by `?after=` polling. */
+export type GroupSendResult = {
+  conversation: ConversationSummary
+  /** The user's message only. */
+  messages: ChatMessage[]
+}
+
+/** BE-5: POST /api/groups {name, memberAgentIds} (Primary is added and put first). */
+export type GroupCreateInput = { name: string; memberAgentIds: string[] }
+/** BE-5: PATCH /api/groups/:id; each field optional. */
+export type GroupPatch = { name?: string; memberAgentIds?: string[]; memoryLearn?: boolean }
+export type GroupSummary = GroupConversation & Omit<ConversationSummary, keyof Conversation>
 
 /** Normalized page for the thread view. */
 export type ChatMessagePage = Omit<ConversationMessagesResponse, 'hasMore'> & { hasMore: boolean }
@@ -538,4 +469,51 @@ export type UserProfile = {
 export type UserProfileInput = {
   name?: string
   avatar?: { kind: 'emoji'; value: string } | null
+}
+
+/* BE-4 memory (phase1-tickets.md shared contracts). */
+export type MemoryCategory = 'about-you' | 'preferences' | 'work' | 'other'
+export type MemoryItem = {
+  id: string
+  scope: { kind: 'agent'; agentId: string } | { kind: 'group'; groupId: string }
+  /** 1-500 chars. */
+  text: string
+  category: MemoryCategory
+  source: { kind: 'user' } | { kind: 'chat'; conversationId: string; runId: string; agentId: string }
+  createdAt: string
+  updatedAt: string
+}
+/** GET /api/agents/:id/memory */
+export type MemoryPage = { items: MemoryItem[]; total: number; promptTokens: number }
+
+/* BE-2 (c2257b1) per-bot files. */
+export type FileZone = 'shared' | 'workspace' | 'memory' | 'skills' | 'meta'
+
+export type FileEntry = {
+  path: string
+  name: string
+  kind: 'file' | 'dir'
+  size: number
+  mime?: string
+  modifiedAt: string
+  /** UI badges: workspace "scripts write", memory/meta "managed", skills "read-only". */
+  zone: FileZone
+  /** Files the user sent in chat (BE-9). */
+  sharedAt?: string
+  sharedInConversationId?: string
+  addedBy?: 'user' | string
+}
+
+export type FileListing = {
+  /** e.g. 'bots/primary/' */
+  root: string
+  path: string
+  entries: FileEntry[]
+  /** BE-3: `bytes` includes the bot's trash, which counts toward the quota; `trashBytes` is that part (absent before BE-3). */
+  usage: { bytes: number; quotaBytes: number; trashBytes?: number }
+  /**
+   * Optional (BE-2 follow-up): files (not folders, trash left out) in the whole bot folder,
+   * the same on every path's listing. The "Files N" tab count (03d).
+   */
+  totalFiles?: number
 }

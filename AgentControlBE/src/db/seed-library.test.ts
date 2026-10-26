@@ -7,31 +7,31 @@ import { createStore } from '../store.js'
 import type { Skill } from '../shared/types.js'
 import { listToolInfo, toolDeclaration } from '../tools.js'
 import { parseSkillMarkdown } from './skill-md.js'
-import { seedSkills, vendoredSeedSkills } from './seed.js'
+import { coreSkillId, seedSkills, vendoredSeedSkills } from './seed.js'
 
 /** Vendored seeds: bodies are pinned, so only the frontmatter tools line is ours. */
 const expectedVendoredTools: Record<string, string[]> = {
   'code-review': ['diff_text', 'process_lines', 'extract_entities'],
   debugging: ['process_lines', 'extract_entities', 'diff_text', 'read_run_log'],
-  'deep-research': ['list_notes', 'read_note', 'save_note', 'extract_entities'],
+  'deep-research': ['extract_entities'],
   'multi-agent-orchestration': ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log', 'get_skill'],
-  summarization: ['text_stats', 'read_note', 'save_note'],
-  'technical-writing': ['text_stats', 'diff_text', 'read_note', 'save_note'],
+  summarization: ['text_stats'],
+  'technical-writing': ['text_stats', 'diff_text'],
 }
 
 const expectedTools: Record<string, string[]> = {
   'calculation-checker': ['calculate'],
   'unit-conversion': ['convert_units', 'calculate'],
   'date-arithmetic': ['current_time', 'date_difference', 'add_date', 'resolve_date'],
-  'text-cleanup': ['text_stats', 'transform_text', 'read_note', 'process_lines', 'extract_entities'],
-  'text-comparison': ['diff_text', 'compare_text', 'read_note'],
-  'json-inspection': ['json_query', 'read_note'],
-  'csv-analysis': ['csv_summary', 'calculate', 'read_note'],
-  'notes-organizer': ['list_notes', 'read_note', 'save_note'],
-  'meeting-notes': ['list_notes', 'read_note', 'save_note'],
+  'text-cleanup': ['text_stats', 'transform_text', 'process_lines', 'extract_entities'],
+  'text-comparison': ['diff_text', 'compare_text'],
+  'json-inspection': ['json_query'],
+  'csv-analysis': ['csv_summary', 'calculate'],
+  'notes-organizer': [],
+  'meeting-notes': [],
   'workspace-audit': ['list_agents', 'list_skills', 'read_run_log', 'get_agent', 'workspace_overview', 'get_skill'],
-  'encoding-and-hashing': ['encode_text', 'read_note', 'save_note'],
-  'release-notes': ['diff_text', 'extract_entities', 'read_note', 'save_note'],
+  'encoding-and-hashing': ['encode_text'],
+  'release-notes': ['diff_text', 'extract_entities'],
 }
 
 const authored = seedSkills.filter((skill) => skill.source === 'AgentControl')
@@ -51,7 +51,7 @@ afterEach(() => {
 describe('vendored seed library', () => {
   it.each(Object.entries(expectedVendoredTools))('%s declares its tools in frontmatter only', (name, tools) => {
     const parsed = parseSkillMarkdown(markdown(name))
-    const seed = vendoredSeedSkills.find((skill) => skill.id === name)!
+    const seed = vendoredSeedSkills.find((skill) => skill.id === coreSkillId(name))!
     expect(parsed.tools).toEqual(tools)
     expect(seed.tools).toEqual(tools.map((tool) => toolDeclaration(tool)))
     expect(seed.content).toBe(parsed.content)
@@ -62,15 +62,16 @@ describe('vendored seed library', () => {
 
 describe('authored seed library', () => {
   it('adds exactly twelve distinct authored skills after the six vendored skills', () => {
-    expect(vendoredSeedSkills.map((skill) => skill.id)).toEqual(Object.keys(expectedVendoredTools))
+    expect(vendoredSeedSkills.map((skill) => skill.id)).toEqual(Object.keys(expectedVendoredTools).map(coreSkillId))
     expect(seedSkills).toHaveLength(18)
-    expect(authored.map((skill) => skill.id)).toEqual(Object.keys(expectedTools))
+    expect(authored.map((skill) => skill.id)).toEqual(Object.keys(expectedTools).map(coreSkillId))
     expect(new Set(seedSkills.map((skill) => skill.id)).size).toBe(seedSkills.length)
     expect(seedSkills.slice(0, 6)).toEqual(vendoredSeedSkills)
   })
 
   it('declares every registry tool an authored body tells the model to call', () => {
-    const registry = listToolInfo().map((tool) => tool.name)
+    // remember/recall are offered by the run itself (BE-4: memoryLearn and the scope decide), never by a skill.
+    const registry = listToolInfo().map((tool) => tool.name).filter((name) => name !== 'remember' && name !== 'recall')
     for (const skill of authored) {
       const mentioned = registry.filter((name) => skill.content.includes(`\`${name}\``) || skill.content.includes(`${name}(`))
       const declared = skill.tools.map((tool) => tool.name)
@@ -81,7 +82,7 @@ describe('authored seed library', () => {
   it.each(Object.entries(expectedTools))('%s imports with the same content and canonical tool declarations', async (name, tools) => {
     const source = markdown(name)
     const parsed = parseSkillMarkdown(source)
-    const seed = authored.find((skill) => skill.id === name)!
+    const seed = authored.find((skill) => skill.id === coreSkillId(name))!
     expect(parsed.name).toBe(name)
     expect(parsed.tools).toEqual(tools)
     expect(seed.tools).toEqual(tools.map((tool) => toolDeclaration(tool)))
@@ -108,7 +109,7 @@ describe('authored seed library', () => {
   it('upgrades a six-seed store once and preserves edited and deleted skills across reloads', () => {
     const path = join(dir, 'store.json')
     const edited = { ...structuredClone(vendoredSeedSkills[0]!), content: 'My custom review instructions', tools: [] }
-    const retained = [edited, ...structuredClone(vendoredSeedSkills.slice(1)).filter((skill) => skill.id !== 'debugging')]
+    const retained = [edited, ...structuredClone(vendoredSeedSkills.slice(1)).filter((skill) => skill.id !== 'core/debugging')]
     writeFileSync(path, JSON.stringify({
       skills: retained,
       meta: { migrations: ['seed-skill-tools-v1'], seededSkillIds: vendoredSeedSkills.map((skill) => skill.id) },
@@ -121,16 +122,16 @@ describe('authored seed library', () => {
 
     // A new seed the user edits stays edited, and a new seed the user deletes
     // stays absent; reloading never treats either as an unoffered seed.
-    const newEdited = upgraded.skills.find((skill) => skill.id === 'notes-organizer')!
+    const newEdited = upgraded.skills.find((skill) => skill.id === 'core/notes-organizer')!
     newEdited.content = 'Keep my local notes workflow'
     newEdited.tools = []
-    upgraded.skills = upgraded.skills.filter((skill) => skill.id !== 'csv-analysis')
+    upgraded.skills = upgraded.skills.filter((skill) => skill.id !== 'core/csv-analysis')
     expect(upgraded.save()).toBe(true)
     const reopened = createStore(path)
     expect(reopened.skills).toEqual(upgraded.skills)
-    expect(reopened.skills.find((skill) => skill.id === 'notes-organizer')).toMatchObject({
+    expect(reopened.skills.find((skill) => skill.id === 'core/notes-organizer')).toMatchObject({
       content: 'Keep my local notes workflow', tools: [],
     })
-    expect(reopened.skills.some((skill) => skill.id === 'csv-analysis' || skill.id === 'debugging')).toBe(false)
+    expect(reopened.skills.some((skill) => skill.id === 'core/csv-analysis' || skill.id === 'core/debugging')).toBe(false)
   })
 })

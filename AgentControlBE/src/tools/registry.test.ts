@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const CATEGORIES = new Set(['workspace', 'notes', 'time', 'math', 'text', 'data'])
+const CATEGORIES = new Set(['workspace', 'memory', 'time', 'math', 'text', 'data', 'files'])
 
 describe('tool registry', () => {
   it('keeps the original three tools first, in order', () => {

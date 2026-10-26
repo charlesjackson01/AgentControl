@@ -3,7 +3,6 @@ import { executeToolCall } from '../tools.js'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import type { Note } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
 import { textTools } from './text.js'
 import type { ToolContext } from './types.js'
@@ -14,24 +13,16 @@ const PROTO_KEYS = ['__proto__', 'constructor', 'toString'] as const
 const TOOLS = ['diff_text', 'encode_text'] as const
 const N = 200_000
 
-function note(id: string, title: string, body: string): Note {
-  return { id, title, body, tags: [], authorAgentId: 'agent', updatedByAgentId: 'agent', runId: 'run_old',
-    createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
-}
 
 const b64 = (s: string) => Buffer.from(s, 'utf8').toString('base64')
 const sha = (data: string | Buffer) => createHash('sha256').update(data).digest('hex')
 
 const store = {
   endpointKeys: { ep_test: SECRET },
-  notes: [
-    note('note_draft', 'Draft v1', 'alpha\nbeta\ngamma\n'),
-    note('note_encoded', 'Encoded', b64(`vault: ${SECRET}`)),
-  ],
 } as unknown as WorkspaceStore
 
 function context(overrides: Partial<ToolContext> = {}): ToolContext {
-  return { store, agentId: 'agent', runId: 'run', input: '', allowed: new Set<string>([...TOOLS, 'read_note']),
+  return { store, agentId: 'agent', runId: 'run', input: '', allowed: new Set<string>([...TOOLS]),
     now: () => new Date('2026-10-12T09:30:00Z'), timeZone: 'UTC', writes: { count: 0 }, ...overrides }
 }
 
@@ -209,13 +200,13 @@ describe('diff_text', () => {
     expect(diff('x\n'.repeat(400), 'x\n'.repeat(399))).toMatchObject({ removed: 1, unchanged: 399 })
   })
 
-  it('resolves "@note:" and "@input" for both sides, with no default', async () => {
-    const outcome = await run('diff_text', { before: '@note:Draft v1', after: '@input' }, { input: 'alpha\nBETA\ngamma' })
+  it('resolves "@input" on either side, with no default', async () => {
+    const outcome = await run('diff_text', { before: 'alpha\nbeta\ngamma\n', after: '@input' }, { input: 'alpha\nBETA\ngamma' })
     expect(outcome.ok).toBe(true)
     expect(JSON.parse(outcome.content)).toMatchObject({
       added: 1, removed: 1, unchanged: 2,
       diff: ['@@ -1,3 +1,3 @@', ' alpha', '-beta', '+BETA', ' gamma'],
-      sources: { before: '@note:note_draft', after: '@input' },
+      sources: { after: '@input' },
     })
     const noDefault = await run('diff_text', { before: 'a' }, { input: 'b' })
     expect(noDefault).toMatchObject({ ok: false, content: expect.stringMatching(/"after" is required/) })
@@ -335,11 +326,11 @@ describe('encode_text', () => {
       expect(result.result).not.toContain(SECRET.slice(0, 4))
       expect(result.result.endsWith('a') || result.result.includes('[')).toBe(true)
     }
-    // Through executeToolCall: a note holding a base64 key is not caught by ref redaction, only after decoding.
-    const outcome = await run('encode_text', { operation: 'base64_decode', text: '@note:Encoded' })
+    // Through executeToolCall: an @input holding a base64 key is not caught by ref redaction, only after decoding.
+    const outcome = await run('encode_text', { operation: 'base64_decode', text: '@input' }, { input: b64(`vault: ${SECRET}`) })
     expect(outcome.ok).toBe(true)
     expect(outcome.content).not.toContain(SECRET.slice(0, 4))
-    expect(JSON.parse(outcome.content)).toMatchObject({ result: 'vault: [redacted]', sources: { text: '@note:note_encoded' } })
+    expect(JSON.parse(outcome.content)).toMatchObject({ result: 'vault: [redacted]', sources: { text: '@input' } })
   })
 
   it('keeps max-size decodes within the result budget, counting JSON escapes', () => {

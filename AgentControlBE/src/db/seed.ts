@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Agent, AgentRun, Endpoint, Project, Skill, WorkspaceSettings } from '../shared/types.js'
+import type { Agent, AgentRun, Endpoint, Skill, WorkspaceSettings } from '../shared/types.js'
 import { DEFAULT_ENDPOINT_BASE_URL, OPENROUTER_DEFAULT_BASE_URL } from '../shared/types.js'
 import { resolveToolDeclarations } from '../tools.js'
 import { parseSkillMarkdown } from './skill-md.js'
@@ -46,16 +46,27 @@ const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
 
 const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')
 
+/** Core skills on by default for new bots (also listed in skills-vendor/manifest.json). */
+export const CORE_DEFAULT_SKILLS = ['summarization', 'deep-research', 'technical-writing', 'csv-analysis', 'meeting-notes', 'multi-agent-orchestration']
+
+/** `core/<name>`: core skill ids since vendor-skills-v1. */
+export const coreSkillId = (name: string): string => `core/${name}`
+
 export const seedSkills: Skill[] = SEED_SKILL_MANIFEST.map(({ file, tag, source }) => {
-  const parsed = parseSkillMarkdown(readFileSync(join(SEED_SKILLS_DIR, `${file}.md`), 'utf8'))
+  const parsed = parseSkillMarkdown(readFileSync(join(SEED_SKILLS_DIR, `${file}.md`), 'utf8'), { folder: file })
   return {
-    id: parsed.name,
+    id: coreSkillId(parsed.name),
     name: parsed.name,
     description: parsed.description,
     tag,
     content: parsed.content,
     tools: resolveToolDeclarations(parsed.tools, { strict: true }).tools,
     source,
+    sourceId: 'core',
+    ...(source === VENDORED_SOURCE ? { sourceRepo: VENDORED_SOURCE, license: 'MIT' } : {}),
+    hasScripts: false,
+    files: [],
+    defaultOn: CORE_DEFAULT_SKILLS.includes(parsed.name),
   }
 })
 
@@ -94,40 +105,6 @@ export const seedEndpointModels: Record<string, string[]> = {
   ep_local_llama: ['llama-3-8b', 'llama-3-70b'],
   ep_openrouter: ['anthropic/claude-sonnet-4', 'openai/gpt-5.2', 'meta-llama/llama-3-70b'],
 }
-
-/**
- * Seed projects. Folders live under the runtime projects root (resolved by
- * the store), so this is a function rather than a static list.
- */
-export const seedProjects = (projectsRoot: string): Project[] => [
-  {
-    id: 'proj-support-automation',
-    name: 'Support Automation',
-    desc: 'Triage and reply pipeline for inbound tickets.',
-    folder: join(projectsRoot, 'support-automation'),
-    teamAgentIds: [],
-    createdAt: daysAgo(7),
-    updatedAt: daysAgo(0),
-  },
-  {
-    id: 'proj-docs-refresh',
-    name: 'Docs Refresh',
-    desc: 'Rewrites stale guides from the product changelog.',
-    folder: join(projectsRoot, 'docs-refresh'),
-    teamAgentIds: [],
-    createdAt: daysAgo(7),
-    updatedAt: daysAgo(1),
-  },
-  {
-    id: 'proj-data-platform',
-    name: 'Data Platform',
-    desc: 'Nightly ETL plus schema drift monitoring.',
-    folder: join(projectsRoot, 'data-platform'),
-    teamAgentIds: [],
-    createdAt: daysAgo(7),
-    updatedAt: daysAgo(3),
-  },
-]
 
 // Fresh installs start empty: no agents and no runs. The first agent created
 // becomes the Team Lead (primary), and its endpoint is the workspace default.

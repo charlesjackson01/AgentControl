@@ -4,7 +4,7 @@
  * those, ignore unknown keys, and make every error end with a corrected
  * example so the model can fix the call within the loop's 4 iterations.
  */
-import type { Agent, Note, Skill } from '../shared/types.js'
+import type { Agent, Skill } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
 
 /** Error whose message ends with `Example: {...}` for the model to copy. */
@@ -142,10 +142,10 @@ export function findSkill(store: WorkspaceStore, ref: string): Skill | undefined
 
 /** findSkill over a given list (e.g. the skills a run may read). */
 export function findSkillIn(skills: readonly Skill[], ref: string): Skill | undefined {
-  return skills.find((s) => s.id === ref) ?? skills.find((s) => fold(s.name) === fold(ref))
-}
-
-/** Note by id or case-insensitive title. */
-export function findNote(store: WorkspaceStore, ref: string): Note | undefined {
-  return store.notes.find((n) => n.id === ref) ?? store.notes.find((n) => fold(n.title) === fold(ref))
+  const exact = skills.find((s) => s.id === ref) ?? skills.find((s) => fold(s.name) === fold(ref))
+  if (exact || ref.includes('/')) return exact
+  // BE-6 ids are <source>/<name>; a bare name a model copies resolves when only one source has it.
+  const suffix = `/${fold(ref)}`
+  const matches = skills.filter((s) => s.id.toLowerCase().endsWith(suffix))
+  return matches.length === 1 ? matches[0] : undefined
 }

@@ -6,10 +6,15 @@
  */
 import { recordRunMessages } from './conversations.js'
 import { fail, uid } from './http.js'
+import { dmOf } from './conversations.js'
+import { memoryPromptBlock, sameScope, type MemoryScope } from './memory.js'
 import { agentInstructions, attachedSkills, planPrompt, replyReserve } from './prompt.js'
 import type { Agent, AgentRun } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
-import { executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
+import { builtinTools, executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
+import { createFileService } from './file-service.js'
+import { FILE_TOOL_NAMES, recordStep } from './tools/files.js'
+import type { RunActivity } from './tools/types.js'
 import { chatCompletion, STOPPED_BY_YOU, type ChatMessage, type ChatResult, type ToolDeclaration } from './upstream.js'
 
 export interface RunOptions {
@@ -24,6 +29,13 @@ export interface RunOptions {
    * and keeps any toolCalls already recorded.
    */
   signal?: AbortSignal
+  /**
+   * BE-4 (wired by BE-5): set for a group run. Memory then comes from the
+   * group's scope and the bot's private memory is not injected.
+   */
+  group?: { id: string; memoryLearn: boolean; /** BE-3: the group's folder name (data/groups/<slug>/) for group:shared/ */ slug?: string }
+  /** Conversation the run belongs to (memory source); defaults to the agent's DM. */
+  conversationId?: string
 }
 
 /** Runs kept per agent and scope (its own chat, or one project). */
@@ -65,6 +77,23 @@ export async function executeRun(
   input: string,
   opts: RunOptions = {},
 ): Promise<RunOutcome> {
+  // 'running' while the run is in flight (drives ConversationSummary.typingAgentId).
+  // A run that throws before finishing (400/413) puts the previous status back.
+  const previous = agent.status
+  agent.status = 'running'
+  try {
+    return await executeRunInner(store, agent, input, opts)
+  } finally {
+    if (agent.status === 'running') agent.status = previous === 'running' ? 'idle' : previous
+  }
+}
+
+async function executeRunInner(
+  store: WorkspaceStore,
+  agent: Agent,
+  input: string,
+  opts: RunOptions,
+): Promise<RunOutcome> {
   if (!input) fail(400, 'Provide an "input" string to run the agent.')
   const projectId = opts.projectId
 
@@ -75,13 +104,20 @@ export async function executeRun(
   const apiKey = store.endpointKeys[endpoint.id]
   const timeoutMs = endpoint.timeoutMs ?? 30_000
 
-  // System prompt = instructions + the full CONTENT of attached skills, or,
-  // when that leaves too little of the window, summaries of the largest
-  // skills plus get_skill to read them (see planPrompt). Offered tools are
-  // the registry tools the skills declare; only these may execute.
-  // Empty => no `tools` key upstream (pre-tool runs stay byte-identical).
+  // System prompt = instructions + a one-line catalog of the attached skills
+  // (BE-7); the model loads a body with activate_skill. Offered tools are the
+  // registry tools the skills declare plus the skill tools; only these may
+  // execute. Empty => no `tools` key upstream.
   const injectedSkills = attachedSkills(store.skills, agent.skillIds)
+  // BE-4: a DM run uses the bot's memory; a group run only the group's.
+  const memoryScope: MemoryScope = opts.group ? { kind: 'group', groupId: opts.group.id } : { kind: 'agent', agentId: agent.id }
+  const memoryLearn = opts.group ? opts.group.memoryLearn : agent.memoryLearn
+  const conversationId = opts.conversationId ?? (opts.group ? opts.group.id : dmOf(store, agent.id)?.id)
+  const memory = memoryPromptBlock(store, memoryScope)
+  const hasMemory = store.memories.some((m) => sameScope(m.scope, memoryScope))
   const plan = planPrompt({
+    memory,
+    memoryTools: [...(memoryLearn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
     instructions: agentInstructions(agent.instructions, agent.rules),
     skills: injectedSkills,
     input,
@@ -91,11 +127,7 @@ export async function executeRun(
   const reserve = replyReserve(endpoint)
   const system = plan.system
   const toolDeclarations: ToolDeclaration[] = plan.toolDeclarations
-  const summarized = new Set(plan.summarizedSkillIds)
-  // get_skill the planner added (no attached skill declares it) reads only
-  // this agent's skills, not every skill in the workspace.
-  const plannerGetSkill =
-    summarized.size > 0 && !injectedSkills.some((s) => (s.tools ?? []).some((t) => t.name === 'get_skill'))
+  const activated = new Map<string, { id: string; name: string; source: string }>()
   const sendTools = toolDeclarations.length > 0 ? toolDeclarations : undefined
   const toolSchemaChars = sendTools ? JSON.stringify(sendTools).length : 0
 
@@ -103,11 +135,15 @@ export async function executeRun(
   // (oldest first). Placeholder seed runs with empty text are skipped. A
   // project task sees only runs of the same project; the agent's own chat
   // never sees project runs.
-  const history = store.runs
+  // BE-5: a group run gets the group transcript in its input instead, and
+  // group runs never become DM history.
+  const groupId = opts.group?.id
+  const history = groupId !== undefined ? [] : store.runs
     .filter(
       (r) =>
         r.agentId === agent.id &&
         r.projectId === projectId &&
+        r.groupId === undefined &&
         r.status === 'succeeded' &&
         r.input.trim() !== '' &&
         r.output.trim() !== '',
@@ -151,11 +187,13 @@ export async function executeRun(
   let steps = 0
   let exhausted = false
   let contextExhausted = false
+  let formatRetried = false
   let forceFinal = false
   let callsThisRun = 0
   let result: ChatResult | undefined
 
   const runId = uid('run')
+  const activity: RunActivity = { steps: [], filesChanged: [] }
   const toolCtx: ToolContext = {
     store,
     agentId: agent.id,
@@ -166,7 +204,15 @@ export async function executeRun(
     now: () => new Date(),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     writes: { count: 0 },
-    ...(plannerGetSkill ? { skillScope: new Set(injectedSkills.map((s) => s.id)) } : {}),
+    catalogSkillIds: new Set(plan.catalogSkillIds),
+    activatedSkills: activated,
+    memoryScope,
+    memoryLearn,
+    ...(conversationId !== undefined ? { conversationId } : {}),
+    memoryWrites: { count: 0 },
+    ...(opts.group?.slug ? { group: { id: opts.group.id, slug: opts.group.slug } } : {}),
+    files: createFileService(store, agent, opts.group?.slug ? { slug: opts.group.slug } : undefined),
+    activity,
   }
 
   const signal = opts.signal
@@ -217,7 +263,7 @@ export async function executeRun(
     messages.push({ role: 'user', content: input })
     messages.push(...loopMessages)
 
-    result = await chatCompletion(
+    const callUpstream = () => chatCompletion(
       baseUrl,
       apiKey,
       agent.modelId,
@@ -230,8 +276,18 @@ export async function executeRun(
       endpoint.proxyUrl,
       { disableThinking: endpoint.disableThinking === true },
     )
+    result = await callUpstream()
     steps += 1
     totalLatency += result.latencyMs
+    // A 500 for a badly formatted tool call (llama-swap: "does not match the
+    // expected ... format") is the model's output, not a down server: retry
+    // that call once per run. Other 5xx errors are left alone.
+    if (!result.ok && !formatRetried && !signal?.aborted && isToolFormatError(result.error)) {
+      formatRetried = true
+      console.warn(`Run ${runId} is retrying once: ${result.error}`)
+      result = await callUpstream()
+      totalLatency += result.latencyMs
+    }
 
     if (!result.ok) break
     if (result.toolCalls && result.toolCalls.length > 0) {
@@ -252,7 +308,8 @@ export async function executeRun(
         // What the context window still holds for this result. Paging tools
         // size their page to it; anything larger is clipped below.
         const remainingChars = (contextWindow - reserve - estimate([], true)) * 4
-        const limit = Math.min(TOOL_RESULT_MAX_CHARS, remainingChars - 400)
+        const toolMax = builtinTools.get(call.name)?.maxResultChars ?? TOOL_RESULT_MAX_CHARS
+        const limit = Math.min(toolMax, remainingChars - 400)
         toolCtx.resultMaxChars = limit
         let outcome: ToolOutcome
         if (callsThisTurn > MAX_CALLS_PER_TURN || callsThisRun >= MAX_CALLS_PER_RUN) {
@@ -278,6 +335,8 @@ export async function executeRun(
             content = `${content.slice(0, Math.max(0, limit - marker.length))}${marker}`
           }
         }
+        const entry = builtinTools.get(call.name)
+        if (entry && toolCtx.allowed.has(call.name)) recordStep(toolCtx, call.name, entry, parseArgs(call.arguments), ok)
         loopChars += content.length
         loopMessages.push({ role: 'tool', content, toolCallId: call.id })
         toolAudit.push({
@@ -321,17 +380,21 @@ export async function executeRun(
       id: s.id,
       name: s.name,
       contentChars: s.content.length,
-      mode: summarized.has(s.id) ? ('summary' as const) : ('full' as const),
+      mode: 'catalog' as const,
     })),
+    ...(activated.size > 0 ? { activatedSkills: [...activated.values()] } : {}),
     ...(toolAudit.length > 0 ? { toolCalls: toolAudit } : {}),
+    ...(activity.steps.length + activity.filesChanged.length > 0 ? { activity } : {}),
+    filesChanged: activity.filesChanged.map((f) => ({ ...f })),
     ...(projectId !== undefined ? { projectId } : {}),
+    ...(groupId !== undefined ? { groupId } : {}),
   }
 
   // Prepend, then trim this agent's runs in this scope (its own chat, or this
   // project) to the newest RUNS_PER_SCOPE, so project work never pushes the
   // agent's chat transcript out, nor one project another's.
   store.runs = [run, ...store.runs]
-  const scoped = store.runs.filter((r) => r.agentId === agent.id && r.projectId === projectId)
+  const scoped = store.runs.filter((r) => r.agentId === agent.id && r.projectId === projectId && r.groupId === groupId)
   if (scoped.length > RUNS_PER_SCOPE) {
     const drop = new Set(scoped.slice(RUNS_PER_SCOPE).map((r) => r.id))
     store.runs = store.runs.filter((r) => !drop.has(r.id))
@@ -342,4 +405,19 @@ export async function executeRun(
   agent.runCount += 1
   agent.status = run.status === 'succeeded' ? 'idle' : 'error'
   return { run, persisted: store.save() }
+}
+
+/** Tool-call arguments as an object for the activity line ({} when unparseable). */
+function parseArgs(raw: string): Record<string, unknown> {
+  try {
+    const v: unknown = JSON.parse(raw)
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Upstream 500 caused by the model's malformed tool-call output (e.g. llama-swap's peg-native parser). */
+export function isToolFormatError(error: string | undefined): boolean {
+  return typeof error === 'string' && /^Upstream responded 500\b/.test(error) && /does not match the expected .*format/i.test(error)
 }

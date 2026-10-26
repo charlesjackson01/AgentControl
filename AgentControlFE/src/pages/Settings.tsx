@@ -1,5 +1,4 @@
 import { useState, type FormEvent } from 'react'
-import PageShell from '../components/PageShell'
 import Dialog from '../components/Dialog'
 import { EmptyState, ErrorState, Skeleton } from '../components/States'
 import { useTheme, type Theme } from '../hooks/useTheme'
@@ -8,7 +7,7 @@ import { api, DEFAULT_ENDPOINT_BASE_URL, ENDPOINT_KIND_LABELS, ENDPOINT_STATUS_L
 import type { Endpoint, EndpointInput, EndpointKind } from '../lib/types'
 import { MAX_OUTPUT_TOKENS_HINT, MAX_OUTPUT_TOKENS_PLACEHOLDER, maxOutputTokensLabel, maxOutputTokensPatch, validateMaxOutputTokens, endpointServerErrorField } from '../lib/max-output-tokens'
 import { DISABLE_THINKING_HINT, disableThinkingPatch } from '../lib/run-reply'
-import { PROXY_URL_HINT, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
+import { MASKED_PROXY_HINT, PROXY_URL_HINT, endpointTestNote, isMaskedProxy, maskedProxyWarning, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
 import UserProfileForm from '../components/UserProfileForm'
 import { useProfile } from '../state/profile-context'
 
@@ -122,7 +121,7 @@ function EndpointForm({
         <label className="field__label" htmlFor="ep-name">
           Name
         </label>
-        <input id="ep-name" className={`input${errors.name ? ' input--invalid' : ''}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="Local llama.cpp" />
+        <input id="ep-name" data-autofocus className={`input${errors.name ? ' input--invalid' : ''}`} value={name} onChange={(e) => setName(e.target.value)} placeholder="Local llama.cpp" />
         {errors.name ? <p className="field__err">{errors.name}</p> : <p className="field__hint">Shown in the agent form picker.</p>}
       </div>
       <div className="field">
@@ -152,7 +151,13 @@ function EndpointForm({
       <div className="field">
         <label className="field__label" htmlFor="ep-proxy">Proxy URL</label>
         <input id="ep-proxy" className={`input${errors.proxyUrl ? ' input--invalid' : ''}`} value={proxyUrl} onChange={(e) => { setProxyUrl(e.target.value); setErrors((er) => ({ ...er, proxyUrl: undefined })) }} placeholder="http://localhost:1055" inputMode="url" aria-invalid={Boolean(errors.proxyUrl)} />
-        {errors.proxyUrl ? <p className="field__err">{errors.proxyUrl}</p> : <p className="field__hint">{PROXY_URL_HINT}</p>}
+        {errors.proxyUrl ? (
+          <p className="field__err">{errors.proxyUrl}</p>
+        ) : maskedProxyWarning(proxyUrl, initial?.proxyUrl) ? (
+          <p className="field__err" role="status">{maskedProxyWarning(proxyUrl, initial?.proxyUrl)}</p>
+        ) : (
+          <p className="field__hint">{isMaskedProxy(proxyUrl) ? MASKED_PROXY_HINT : PROXY_URL_HINT}</p>
+        )}
       </div>
       <div className="field">
         <label className="field__check" htmlFor="ep-disable-thinking">
@@ -225,7 +230,7 @@ function EndpointsSection() {
     setTestingId(id)
     try {
       const res = await api.testEndpoint(id)
-      setTestNote((n) => ({ ...n, [id]: res.ok ? `Reachable · ${res.latencyMs}ms · [${res.models.join(', ')}]` : 'Unreachable' }))
+      setTestNote((n) => ({ ...n, [id]: endpointTestNote(res) }))
       await endpoints.reload()
     } catch (err) {
       setTestNote((n) => ({ ...n, [id]: err instanceof Error ? err.message : 'Test failed' }))
@@ -358,7 +363,7 @@ function EndpointsSection() {
               </p>
             )}
             <div className="dialog__foot">
-              <button type="button" className="btn" onClick={() => setDialog(null)} disabled={deletingId === dialog.endpoint.id}>
+              <button type="button" className="btn" data-autofocus onClick={() => setDialog(null)} disabled={deletingId === dialog.endpoint.id}>
                 Cancel
               </button>
               <button type="button" className="btn btn--danger" onClick={() => void remove(dialog.endpoint)} disabled={deletingId === dialog.endpoint.id || isTeamLeadEndpoint(dialog.endpoint)}>
@@ -396,14 +401,23 @@ function EndpointsSection() {
   )
 }
 
-export default function Settings() {
+/** "Profile & endpoints" from the account menu (FE-1): today's Settings, as a modal. */
+export default function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} title="Profile & endpoints" subtitle="Your profile, model endpoints, and appearance." size="lg" onClose={onClose}>
+      {open && <SettingsContent />}
+    </Dialog>
+  )
+}
+
+function SettingsContent() {
   const { theme, setTheme } = useTheme()
   const [autoRun, setAutoRun] = useState(true)
   const [notify, setNotify] = useState(true)
   const [telemetry, setTelemetry] = useState(false)
 
   return (
-    <PageShell eyebrow="Workspace" title="Settings" subtitle="Workspace defaults, appearance, and runtime behavior.">
+    <div className="cf-settings">
       <ProfileSection />
       <EndpointsSection />
 
@@ -488,7 +502,7 @@ export default function Settings() {
           <div className="row">
             <div className="row__text">
               <p className="row__label">Reset workspace</p>
-              <p className="row__hint">Removes all agents, projects, and skills. This cannot be undone.</p>
+              <p className="row__hint">Removes all bots, chats, and skills. This cannot be undone.</p>
             </div>
             <div className="row__control">
               <button type="button" className="btn btn--danger">
@@ -498,6 +512,6 @@ export default function Settings() {
           </div>
         </div>
       </section>
-    </PageShell>
+    </div>
   )
 }

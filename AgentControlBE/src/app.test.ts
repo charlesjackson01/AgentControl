@@ -4,12 +4,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { catalogLine } from './prompt.js'
 import { buildApp } from './app.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import type { Agent, AgentRun, ChatMessage, Conversation, ConversationSummary, Endpoint, Note, Skill } from './shared/types.js'
 import { DEFAULT_ENDPOINT_BASE_URL } from './shared/types.js'
 import { seedEndpointModels, seedEndpoints, seedSkills, vendoredSeedSkills } from './db/seed.js'
 import { builtinTools, executeToolCall, toolDeclaration, type ToolEntry } from './tools.js'
+import { FILE_TOOL_NAMES } from './tools/files.js'
+
+/** BE-3: chars/4 of the file tools' schema JSON, which every run now carries. */
+const FILE_TOOL_TOKENS = Math.ceil(JSON.stringify(FILE_TOOL_NAMES.map((n) => toolDeclaration(n))).length / 4)
 
 /**
  * Hermetic HTTP tests via fastify.inject() — no sockets, no real network.
@@ -143,7 +148,7 @@ async function makeRunner() {
     instructions: 'Be brief.',
     modelId: 'test-model',
     endpointId: endpoint.id,
-    skillIds: ['summarization'],
+    skillIds: ['core/summarization'],
   })
   expect(ag.statusCode).toBe(201)
   return { endpoint, agent: ag.json() as Agent }
@@ -193,7 +198,7 @@ describe('agents CRUD', () => {
       instructions: 'i',
       modelId: 'crud-model',
       endpointId: endpoint.id,
-      skillIds: ['summarization'],
+      skillIds: ['core/summarization'],
     })
     expect(create.statusCode).toBe(201)
     const agent = create.json() as Agent
@@ -214,7 +219,7 @@ describe('agents CRUD', () => {
       instructions: 'i2',
       modelId: 'crud-model',
       endpointId: endpoint.id,
-      skillIds: ['summarization', 'debugging'],
+      skillIds: ['core/summarization', 'core/debugging'],
     })
     expect(upd.statusCode).toBe(200)
     expect((upd.json() as Agent).name).toBe('Crud Agent v2')
@@ -295,20 +300,22 @@ describe('POST /api/agents/:id/runs', () => {
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, {})).statusCode).toBe(400)
   })
 
-  it('injects skill content into the system prompt and never sends tools', async () => {
+  it('lists the skill in the catalog (never its body) and offers only activate_skill', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner() // attached: the real "summarization" seed
     // The seed now declares tools; with them cleared it is a content-only skill.
-    store.skills.find((s) => s.id === 'summarization')!.tools = []
+    store.skills.find((s) => s.id === 'core/summarization')!.tools = []
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
     expect(res.statusCode).toBe(200)
 
     const req = lastRequest(mock)
     const system = req.messages?.[0]?.content ?? ''
+    const skill = store.skills.find((s) => s.id === 'core/summarization') as Skill
     expect(system).toContain('Be brief.')
-    expect(system).toContain('## summarization')
-    expect(system).toContain('condense long-form text')
-    expect(req).not.toHaveProperty('tools')
+    expect(system).toContain('Skills (call activate_skill to use one):\n- core/summarization: ')
+    expect(system).toContain(catalogLine(skill))
+    expect(system).not.toContain(skill.content.slice(0, 120))
+    expect((req as { tools?: { function: { name: string } }[] }).tools?.map((t) => t.function.name)).toEqual(['activate_skill', 'remember', ...FILE_TOOL_NAMES])
   })
 })
 
@@ -320,12 +327,12 @@ describe('run audit fields', () => {
     expect(res.statusCode).toBe(200)
 
     const run = res.json() as AgentRun
-    const skill = store.skills.find((s) => s.id === 'summarization') as Skill
+    const skill = store.skills.find((s) => s.id === 'core/summarization') as Skill
     expect(run.systemPrompt).toContain('Be brief.')
-    expect(run.systemPrompt).toContain('## summarization')
-    expect(run.systemPrompt).toContain(skill.content.slice(0, 120))
+    expect(run.systemPrompt).toContain('- core/summarization: ')
+    expect(run.systemPrompt).not.toContain(skill.content.slice(0, 120))
     expect(run.skillSnapshot).toEqual([
-      { id: 'summarization', name: 'summarization', contentChars: skill.content.length, mode: 'full' },
+      { id: 'core/summarization', name: 'summarization', contentChars: skill.content.length, mode: 'catalog' },
     ])
 
     // Byte-identical to what went upstream.
@@ -398,7 +405,7 @@ describe('run audit fields', () => {
     const { agent } = await makeRunner()
     const run = (await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).json() as AgentRun
     expect(run.status).toBe('failed')
-    expect(run.systemPrompt).toContain('## summarization')
+    expect(run.systemPrompt).toContain('- core/summarization: ')
     expect(run.skillSnapshot).toHaveLength(1)
   })
 })
@@ -501,14 +508,17 @@ describe('context budget before upstream', () => {
       endpointId,
       skillIds: [],
     })
-    return (ag.json() as Agent).id
+    const id = (ag.json() as Agent).id
+    // Budget arithmetic only: keep the remember tool out of the prompt.
+    store.agents.find((a) => a.id === id)!.memoryLearn = false
+    return id
   }
 
   it('drops oldest history turns and keeps the newest', async () => {
     // 400-char turns => 200 tokens each. Window fits system+input+reserve plus
     // exactly two turns, so a five-turn history trims down to the two newest.
     const mock = mockChat('A'.repeat(400))
-    const agentId = await makeBudgetRunner(4600)
+    const agentId = await makeBudgetRunner(4600 + FILE_TOOL_TOKENS)
 
     const mk = (i: number): string => `u${i}`.padEnd(400, 'x')
     const hist: string[] = []
@@ -535,10 +545,11 @@ describe('context budget before upstream', () => {
     const agentId = await makeBudgetRunner(100)
     const res = await inject('POST', `/api/agents/${agentId}/runs`, { input: 'x'.repeat(1000) })
     expect(res.statusCode).toBe(413)
-    // ceil(1000 / 4) = 250 estimated, plus the reply reserve, against a 100-token window.
+    // ceil((1000 + file tool schema) / 4) estimated, plus the reply reserve, against a 100-token window.
     const { message } = res.json() as { message: string }
+    const schemaChars = JSON.stringify(FILE_TOOL_NAMES.map((n) => toolDeclaration(n))).length
     expect(message).toContain("Prompt too large for this endpoint's context window")
-    expect(message).toContain('about 250 tokens of prompt plus 4096 reserved for the reply exceed the 100-token window')
+    expect(message).toContain(`about ${Math.ceil((1000 + schemaChars) / 4)} tokens of prompt plus 4096 reserved for the reply exceed the 100-token window`)
   })
 
   it('sends an explicit max_tokens in the upstream payload', async () => {
@@ -569,11 +580,21 @@ describe('tool execution loop', () => {
     // registry's current description and schema (not the skill's stored copy).
     const first = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}') as ChatRequest
     const decl = toolDeclaration('list_skills')
+    const activate = toolDeclaration('activate_skill')
     expect(first.tools).toEqual([
       {
         type: 'function',
         function: { name: 'list_skills', description: decl?.description, parameters: decl?.parameters },
       },
+      {
+        type: 'function',
+        function: { name: 'activate_skill', description: activate?.description, parameters: activate?.parameters },
+      },
+      {
+        type: 'function',
+        function: { name: 'remember', description: toolDeclaration('remember')?.description, parameters: toolDeclaration('remember')?.parameters },
+      },
+      ...FILE_TOOL_NAMES.map((name) => ({ type: 'function', function: { name, description: toolDeclaration(name)?.description, parameters: toolDeclaration(name)?.parameters } })),
     ])
 
     // Call 2 carries the assistant tool_calls turn and the matching tool result.
@@ -583,7 +604,7 @@ describe('tool execution loop', () => {
     const toolMsg = req.messages?.find((m) => m.role === 'tool')
     expect(toolMsg?.tool_call_id).toBe('call_1')
     const listed = JSON.parse(toolMsg?.content ?? '[]') as { id: string }[]
-    expect(listed.some((s) => s.id === 'summarization')).toBe(true)
+    expect(listed.some((s) => s.id === 'core/summarization')).toBe(true)
 
     expect(run.toolCalls).toEqual([
       { name: 'list_skills', arguments: '{}', resultChars: expect.any(Number), ok: true },
@@ -630,12 +651,24 @@ describe('tool execution loop', () => {
     ])
   })
 
-  it('omits the tools key when no attached skill declares tools', async () => {
+  it('offers only the file tools when the agent has no skills and memory learning is off', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner()
-    store.skills.find((s) => s.id === 'summarization')!.tools = [] // the attached seed, tools cleared
+    const stored = store.agents.find((a) => a.id === agent.id)!
+    stored.skillIds = []
+    stored.memoryLearn = false
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
-    expect(lastRequest(mock)).not.toHaveProperty('tools')
+    const tools = (lastRequest(mock) as { tools?: { function: { name: string } }[] }).tools
+    expect(tools?.map((t) => t.function.name)).toEqual([...FILE_TOOL_NAMES])
+  })
+
+  it('offers remember and the file tools when the agent has no skills but memory learning is on', async () => {
+    const mock = mockChat('ok')
+    const { agent } = await makeRunner()
+    store.agents.find((a) => a.id === agent.id)!.skillIds = []
+    expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
+    const tools = (lastRequest(mock) as { tools?: { function: { name: string } }[] }).tools
+    expect(tools?.map((t) => t.function.name)).toEqual(['remember', ...FILE_TOOL_NAMES])
   })
 
   it('truncates tool results at 4,000 chars with a marker', async () => {
@@ -834,7 +867,7 @@ describe('fresh install', () => {
     expect(agents.statusCode).toBe(200)
     expect(agents.json()).toEqual([])
     expect((await inject('GET', '/api/endpoints')).json()).toHaveLength(2)
-    expect(((await inject('GET', '/api/skills')).json() as unknown[]).length).toBeGreaterThan(0)
+    expect(((await inject('GET', '/api/skills')).json() as { skills: unknown[] }).skills.length).toBeGreaterThan(0)
   })
 
   it('seeds the placeholder default endpoint first (OpenAI-compatible)', async () => {
@@ -852,31 +885,33 @@ describe('fresh install', () => {
 
 describe('skill seeds', () => {
   it('preserves the six vendored skills alongside the twelve authored skills', async () => {
-    const skills = (await inject('GET', '/api/skills')).json() as Skill[]
-    expect(skills).toHaveLength(18)
+    const listed = (await inject('GET', '/api/skills')).json() as { skills: Skill[] }
+    expect(listed.skills).toHaveLength(18)
+    const skills = await Promise.all(listed.skills.map(async (s) =>
+      (await inject('GET', `/api/skills/${encodeURIComponent(s.id)}`)).json() as Skill))
     const vendored = skills.filter((s) => s.source === 'seb1n/awesome-ai-agent-skills')
     const vendoredTools: Record<string, string[]> = {
       'code-review': ['diff_text', 'process_lines', 'extract_entities'],
       debugging: ['process_lines', 'extract_entities', 'diff_text', 'read_run_log'],
-      'deep-research': ['list_notes', 'read_note', 'save_note', 'extract_entities'],
+      'deep-research': ['extract_entities'],
       'multi-agent-orchestration': ['list_agents', 'get_agent', 'workspace_overview', 'read_run_log', 'get_skill'],
-      summarization: ['text_stats', 'read_note', 'save_note'],
-      'technical-writing': ['text_stats', 'diff_text', 'read_note', 'save_note'],
+      summarization: ['text_stats'],
+      'technical-writing': ['text_stats', 'diff_text'],
     }
     expect(vendored.map((s) => s.id)).toEqual([
-      'code-review',
-      'debugging',
-      'deep-research',
-      'multi-agent-orchestration',
-      'summarization',
-      'technical-writing',
+      'core/code-review',
+      'core/debugging',
+      'core/deep-research',
+      'core/multi-agent-orchestration',
+      'core/summarization',
+      'core/technical-writing',
     ])
     for (const s of vendored) {
       expect(s.content.length).toBeGreaterThan(100)
       expect(s.content).not.toMatch(/^---/)
       expect(s.source).toBe('seb1n/awesome-ai-agent-skills')
       // Bodies stay vendored; each declares its tools in frontmatter only.
-      expect(s.tools.map((t) => t.name)).toEqual(vendoredTools[s.id])
+      expect(s.tools.map((t) => t.name)).toEqual(vendoredTools[s.name])
     }
   })
 })
@@ -901,7 +936,7 @@ describe('skills CRUD', () => {
     expect((got.json() as Skill).name).toBe('Frobnicate')
 
     const list = await inject('GET', '/api/skills')
-    expect((list.json() as Skill[]).some((s) => s.id === skill.id)).toBe(true)
+    expect((list.json() as { skills: Skill[] }).skills.some((s) => s.id === skill.id)).toBe(true)
 
     const patch = await inject('PATCH', `/api/skills/${skill.id}`, { tag: 'Advanced', content: 'v2 content' })
     expect(patch.statusCode).toBe(200)
@@ -974,7 +1009,7 @@ describe('DELETE /api/skills/:id detaches from agents', () => {
       instructions: '',
       modelId: 'llama-3-8b',
       endpointId: 'ep_local_llama',
-      skillIds: [skillId, 'debugging'],
+      skillIds: [skillId, 'core/debugging'],
     })
     const leadId = (lead.json() as Agent).id
 
@@ -982,8 +1017,8 @@ describe('DELETE /api/skills/:id detaches from agents', () => {
     expect(res.statusCode).toBe(204)
 
     const got = await inject('GET', `/api/agents/${leadId}`)
-    expect((got.json() as Agent).skillIds).toEqual(['debugging'])
-    expect(store.agents.find((a) => a.id === leadId)?.skillIds).toEqual(['debugging'])
+    expect((got.json() as Agent).skillIds).toEqual(['core/debugging'])
+    expect(store.agents.find((a) => a.id === leadId)?.skillIds).toEqual(['core/debugging'])
   })
 })
 
@@ -1191,12 +1226,12 @@ describe('seed skill merge', () => {
 
     const merged = createStore(oldPath)
     expect(merged.skills.some((s) => s.id === 'web-research')).toBe(true)
-    expect(merged.skills.some((s) => s.id === 'summarization')).toBe(true)
-    expect(merged.skills.some((s) => s.id === 'multi-agent-orchestration')).toBe(true)
+    expect(merged.skills.some((s) => s.id === 'core/summarization')).toBe(true)
+    expect(merged.skills.some((s) => s.id === 'core/multi-agent-orchestration')).toBe(true)
 
     // The merge is persisted, so a reload sees the upgraded catalog too.
     const reloaded = JSON.parse(readFileSync(oldPath, 'utf8')) as { skills: { id: string }[] }
-    expect(reloaded.skills.some((s) => s.id === 'deep-research')).toBe(true)
+    expect(reloaded.skills.some((s) => s.id === 'core/deep-research')).toBe(true)
     expect(reloaded.skills.some((s) => s.id === 'web-research')).toBe(true)
 
     rmSync(oldDir, { recursive: true, force: true })
@@ -1229,7 +1264,9 @@ describe('legacy skills', () => {
     // And the API serves it in the shape the FE expects.
     const legacyApp = buildApp(loaded)
     const res = await legacyApp.inject({ method: 'GET', url: '/api/skills' })
-    for (const skill of res.json() as Skill[]) {
+    for (const summary of (res.json() as { skills: Skill[] }).skills) {
+      expect(summary).not.toHaveProperty('content')
+      const skill = (await legacyApp.inject({ method: 'GET', url: `/api/skills/${encodeURIComponent(summary.id)}` })).json() as Skill
       expect(typeof skill.content).toBe('string')
       expect(Array.isArray(skill.tools)).toBe(true)
     }
@@ -1484,9 +1521,9 @@ describe('tool plumbing', () => {
   it('executes nothing when the model calls tools no skill offered', async () => {
     const mock = mockChatSequence([toolCallResponse('list_agents'), contentResponse('ok')])
     const { agent } = await makeRunner()
-    store.skills.find((s) => s.id === 'summarization')!.tools = [] // the attached seed, tools cleared
+    store.skills.find((s) => s.id === 'core/summarization')!.tools = [] // the attached seed, tools cleared
     await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
-    expect(toolMessages(mock)[0]?.content).toContain('Available: none')
+    expect(toolMessages(mock)[0]?.content).toContain('Available: activate_skill')
   })
 
   it('answers every call but executes at most 8 per turn', async () => {
@@ -1574,7 +1611,7 @@ describe('tool plumbing', () => {
 
   it('saves a failed run instead of 413 when tool traffic overflows the window', async () => {
     const ep = await inject('POST', '/api/endpoints', {
-      kind: 'openai-compatible', name: 'Tiny', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 4400,
+      kind: 'openai-compatible', name: 'Tiny', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 4400 + FILE_TOOL_TOKENS,
     })
     const sk = await inject('POST', '/api/skills', {
       name: 'Tiny tools', content: 'Use tools.', tools: [{ name: 'list_skills', description: 'x' }],
@@ -1583,7 +1620,9 @@ describe('tool plumbing', () => {
       name: 'Tiny agent', description: '', instructions: '', modelId: 'm',
       endpointId: (ep.json() as Endpoint).id, skillIds: [(sk.json() as Skill).id],
     })).json() as Agent
-    const padded = JSON.stringify({ pad: 'x'.repeat(1200) })
+    store.agents.find((a) => a.id === agent.id)!.memoryLearn = false
+    // The tools-off final call drops the schemas, so the pad covers the file tools' share too.
+    const padded = JSON.stringify({ pad: 'x'.repeat(1200 + FILE_TOOL_TOKENS * 4) })
     const mock = mockChatSequence([toolCallResponse('list_skills', padded), contentResponse('never sent')])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
     expect(res.statusCode).toBe(200)
@@ -1597,42 +1636,23 @@ describe('tool plumbing', () => {
 })
 
 describe('tools and notes routes', () => {
-  it('runs the new tools with canonical schemas and persists notes through an agent run', async () => {
+  it('runs the new tools with canonical schemas and saves a memory through an agent run', async () => {
     const mock = mockChatSequence([
       toolCallResponse('calculate', '{"expression":"2 + 2"}', 'math'),
-      toolCallResponse('save_note', '{"title":"Verified answer","body":"4"}', 'note'),
-      contentResponse('Saved the verified answer.'),
+      toolCallResponse('remember', '{"text":"2 + 2 is 4.","category":"work"}', 'mem'),
+      contentResponse('Remembered the verified answer.'),
     ])
-    const { agent } = await makeToolRunner(['calculate', 'save_note'])
-    const response = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Calculate and save 2 + 2.' })
+    const { agent } = await makeToolRunner(['calculate'])
+    const response = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Calculate and remember 2 + 2.' })
     const run = response.json() as AgentRun
     expect(response.statusCode).toBe(200)
     expect(run.status).toBe('succeeded')
-    expect(run.toolCalls?.map((t) => [t.name, t.ok])).toEqual([['calculate', true], ['save_note', true]])
-    expect(store.notes[0]).toMatchObject({ title: 'Verified answer', body: '4', authorAgentId: agent.id, runId: run.id })
+    expect(run.toolCalls?.map((t) => [t.name, t.ok])).toEqual([['calculate', true], ['remember', true]])
+    expect(store.memories[0]).toMatchObject({ text: '2 + 2 is 4.', category: 'work', scope: { kind: 'agent', agentId: agent.id }, source: { kind: 'chat', runId: run.id, agentId: agent.id } })
     const sent = JSON.parse(mock.mock.calls[0]?.[1]?.body ?? '{}')
     expect(sent.tools[0].function).toEqual(toolDeclaration('calculate'))
-    expect((await inject('GET', '/api/notes')).json()[0]).toMatchObject({ title: 'Verified answer', authorName: agent.name })
-    expect(createStore(join(dir, 'store.json')).notes[0]?.body).toBe('4')
-  })
-
-  it('reports a failed note deletion and preserves the note for retry', async () => {
-    const { agent } = await makeToolRunner(['save_note'])
-    mockChatSequence([toolCallResponse('save_note', '{"title":"Keep me","body":"Saved"}'), contentResponse('ok')])
-    await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'Save note' })
-    const id = store.notes[0]!.id
-    const save = vi.spyOn(store, 'save').mockReturnValue(false)
-    expect((await inject('DELETE', `/api/notes/${id}`)).statusCode).toBe(500)
-    expect((await inject('GET', `/api/notes/${id}`)).statusCode).toBe(200)
-    save.mockRestore()
-    expect((await inject('DELETE', `/api/notes/${id}`)).statusCode).toBe(204)
-    expect(createStore(join(dir, 'store.json')).notes).toEqual([])
-  })
-
-  const note = (over: Partial<Note> = {}): Note => ({
-    id: 'note_1', title: 'Findings', body: 'b'.repeat(300), tags: ['research'], authorAgentId: 'agt_x',
-    updatedByAgentId: 'agt_x', runId: 'run_1', createdAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-02T00:00:00.000Z', ...over,
+    expect((await inject('GET', `/api/agents/${agent.id}/memory`)).json().items[0]).toMatchObject({ text: '2 + 2 is 4.' })
+    expect(createStore(join(dir, 'store.json')).memories[0]?.text).toBe('2 + 2 is 4.')
   })
 
   it('serves the registry with categories and effects', async () => {
@@ -1641,27 +1661,14 @@ describe('tools and notes routes', () => {
     expect(tools.every((t) => t.category && t.effect)).toBe(true)
   })
 
-  it('lists note previews newest first, reads one, deletes one', async () => {
-    store.notes = [note(), note({ id: 'note_2', title: 'Newer', updatedAt: '2026-02-01T00:00:00.000Z' })]
-    const list = (await inject('GET', '/api/notes')).json() as { id: string; snippet: string; chars: number }[]
-    expect(list.map((n) => n.id)).toEqual(['note_2', 'note_1'])
-    expect(list[0]?.snippet.length).toBeLessThanOrEqual(160)
-    expect(list[0]?.chars).toBe(300)
-    const one = (await inject('GET', '/api/notes/note_1')).json() as Note
-    expect(one.body).toHaveLength(300)
-    expect((await inject('DELETE', '/api/notes/note_1')).statusCode).toBe(204)
-    expect((await inject('GET', '/api/notes/note_1')).statusCode).toBe(404)
-    expect((await inject('DELETE', '/api/notes/note_1')).statusCode).toBe(404)
-  })
-
   it('gates the new routes behind the bearer token', async () => {
     process.env.AGENTCONTROL_AUTH_TOKEN = 'tok-123'
     const gated = buildApp(createStore(join(dir, 'store.json')))
     try {
-      for (const url of ['/api/tools', '/api/notes', '/api/notes/x']) {
+      for (const url of ['/api/tools', '/api/agents/x/memory', '/api/notes']) {
         expect((await gated.inject({ method: 'GET', url })).statusCode).toBe(401)
       }
-      expect((await gated.inject({ method: 'DELETE', url: '/api/notes/x' })).statusCode).toBe(401)
+      expect((await gated.inject({ method: 'DELETE', url: '/api/agents/x/memory/y' })).statusCode).toBe(401)
     } finally {
       await gated.close()
       delete process.env.AGENTCONTROL_AUTH_TOKEN
@@ -1676,7 +1683,7 @@ describe('tools and notes routes', () => {
     expect(body.tools.map((t) => t.name)).toEqual(['list_skills'])
     expect(body.tools[0]).toEqual(toolDeclaration('list_skills'))
     expect(body.ignoredTools).toEqual(['Read'])
-    const stored = ((await inject('GET', '/api/skills')).json() as Skill[]).find((s) => s.id === body.id)
+    const stored = ((await inject('GET', '/api/skills')).json() as { skills: Skill[] }).skills.find((s) => s.id === body.id)
     expect(stored).not.toHaveProperty('ignoredTools')
   })
 
@@ -1709,23 +1716,23 @@ describe('store meta migrations', () => {
   it('does not resurrect a seed skill the user deleted', () => {
     const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
     const path = join(d, 'store.json')
-    const kept = seedSkills.filter((s) => s.id !== 'debugging')
+    const kept = seedSkills.filter((s) => s.id !== 'core/debugging')
     writeFileSync(
       path,
       legacy({ skills: kept, meta: { migrations: ['seed-skill-tools-v1'], seededSkillIds: seedSkills.map((s) => s.id) } }),
       'utf8',
     )
-    expect(createStore(path).skills.some((s) => s.id === 'debugging')).toBe(false)
+    expect(createStore(path).skills.some((s) => s.id === 'core/debugging')).toBe(false)
     rmSync(d, { recursive: true, force: true })
   })
 
-  it('drops malformed notes on load and keeps good ones', () => {
+  it('drops malformed notes on load and migrates the good ones into memory', () => {
     const d = mkdtempSync(join(tmpdir(), 'agentcontrol-meta-'))
     const path = join(d, 'store.json')
     writeFileSync(path, legacy({ skills: [], notes: [{ id: 'n1', title: 't', body: 'b' }, { title: 'no id' }, 'junk'] }), 'utf8')
     const loaded = createStore(path)
-    expect(loaded.notes.map((n) => n.id)).toEqual(['n1'])
-    expect(loaded.notes[0]).toMatchObject({ tags: [], authorAgentId: '', runId: '' })
+    expect(loaded.notes).toEqual([])
+    expect(loaded.memories.map((m) => m.text)).toEqual(['t: b'])
     rmSync(d, { recursive: true, force: true })
   })
 
@@ -1739,12 +1746,12 @@ describe('store meta migrations', () => {
 describe('seed data integrity', () => {
   it('pins the vendored seed bodies (the tools migration compares content)', () => {
     const pinned: Record<string, string> = {
-      'code-review': '306c451504e224af7b2b02839e71c5c72ec9b7eb1734980e29a7b73c5db88af0',
-      debugging: 'e4163cedaecee9abf765750fe8813fea8569d969819eab30abd1e2a5800552c2',
-      'deep-research': 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67',
-      'multi-agent-orchestration': '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5',
-      summarization: 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a',
-      'technical-writing': '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229',
+      'core/code-review': '306c451504e224af7b2b02839e71c5c72ec9b7eb1734980e29a7b73c5db88af0',
+      'core/debugging': 'e4163cedaecee9abf765750fe8813fea8569d969819eab30abd1e2a5800552c2',
+      'core/deep-research': 'c1b37bd73105e2860955e19082f52555f6e72d8d2f338b0c7708e062e5080e67',
+      'core/multi-agent-orchestration': '519e7934e125feb8a3a8d2c56996a9c8e274207567a8115fc034387e312263a5',
+      'core/summarization': 'd0489707af6cd52a188e8b15dbec05c326894915a7641157d701a7e954a0485a',
+      'core/technical-writing': '385f4d1d0e3619a3b58df43393efc83c28c5c0502f121bbdebeb854327610229',
     }
     const actual = Object.fromEntries(
       vendoredSeedSkills.map((s) => [s.id, createHash('sha256').update(s.content).digest('hex')]),
@@ -1766,222 +1773,18 @@ describe('seed data integrity', () => {
   })
 })
 
-describe('projects CRUD', () => {
-  async function makeAgent(name: string) {
-    const res = await inject('POST', '/api/agents', {
-      name,
-      description: '',
-      instructions: '',
-      modelId: 'llama-3-8b',
-      endpointId: 'ep_local_llama',
-      skillIds: [],
-    })
-    expect(res.statusCode).toBe(201)
-    return res.json() as { id: string }
-  }
-
-  it('creates a project with a folder on disk and empty team by default', async () => {
-    const res = await inject('POST', '/api/projects', { name: 'Widget Lab' })
-    expect(res.statusCode).toBe(201)
-    const p = res.json() as { id: string; name: string; folder: string; teamAgentIds: string[]; createdAt: string; updatedAt: string }
-    expect(p.name).toBe('Widget Lab')
-    expect(p.teamAgentIds).toEqual([])
-    expect(p.folder).toBe(join(store.projectsRoot, 'widget-lab'))
-    expect(existsSync(p.folder)).toBe(true)
-    expect(p.createdAt).toBe(p.updatedAt)
-
-    const list = await inject('GET', '/api/projects')
-    const projects = list.json() as { id: string }[]
-    expect(projects.some((x) => x.id === p.id)).toBe(true)
-  })
-
-  it('accepts a team at creation and rejects unknown agent ids', async () => {
-    const a = await makeAgent('Coder One')
-    const ok = await inject('POST', '/api/projects', { name: 'Team Project', teamAgentIds: [a.id, a.id] })
-    expect(ok.statusCode).toBe(201)
-    expect((ok.json() as { teamAgentIds: string[] }).teamAgentIds).toEqual([a.id])
-
-    const bad = await inject('POST', '/api/projects', { name: 'Bad Team', teamAgentIds: ['agent_nope'] })
-    expect(bad.statusCode).toBe(400)
-    expect(bad.json().message).toMatch(/agent_nope/)
-  })
-
-  it('requires a name, rejects duplicates case-insensitively, and 409s', async () => {
-    const noName = await inject('POST', '/api/projects', {})
-    expect(noName.statusCode).toBe(400)
-
-    const first = await inject('POST', '/api/projects', { name: 'Dup Check' })
-    expect(first.statusCode).toBe(201)
-    const dup = await inject('POST', '/api/projects', { name: 'dup check' })
-    expect(dup.statusCode).toBe(409)
-  })
-
-  it('suffixes the folder on slug collision and keeps folders distinct', async () => {
-    const a = await inject('POST', '/api/projects', { name: 'Same Name!' })
-    const b = await inject('POST', '/api/projects', { name: 'Same Name?' })
-    expect(a.statusCode).toBe(201)
-    expect(b.statusCode).toBe(201)
-    const fa = (a.json() as { folder: string }).folder
-    const fb = (b.json() as { folder: string }).folder
-    expect(fa).toBe(join(store.projectsRoot, 'same-name'))
-    expect(fb).toBe(join(store.projectsRoot, 'same-name-2'))
-    expect(existsSync(fa) && existsSync(fb)).toBe(true)
-  })
-
-  it('patches name/desc/team, never moves the folder, and 404s on unknown id', async () => {
-    const created = await inject('POST', '/api/projects', { name: 'Rename Me', desc: 'old' })
-    const p = created.json() as { id: string; folder: string; updatedAt: string }
-    const a = await makeAgent('Patcher')
-
-    const patched = await inject('PATCH', `/api/projects/${p.id}`, { name: 'Renamed', desc: 'new', teamAgentIds: [a.id] })
-    expect(patched.statusCode).toBe(200)
-    const got = patched.json() as { name: string; desc: string; folder: string; teamAgentIds: string[]; updatedAt: string }
-    expect(got).toMatchObject({ name: 'Renamed', desc: 'new', folder: p.folder, teamAgentIds: [a.id] })
-    expect(got.updatedAt >= p.updatedAt).toBe(true)
-    // The old slug folder still exists; the folder never moves on rename.
-    expect(existsSync(p.folder)).toBe(true)
-
-    const missing = await inject('PATCH', '/api/projects/proj_nope', { desc: 'x' })
-    expect(missing.statusCode).toBe(404)
-  })
-
-  it('deletes the record but leaves the folder on disk', async () => {
-    const created = await inject('POST', '/api/projects', { name: 'Delete Me' })
-    const p = created.json() as { id: string; folder: string }
-    const del = await inject('DELETE', `/api/projects/${p.id}`)
-    expect(del.statusCode).toBe(204)
-    const list = await inject('GET', '/api/projects')
-    expect((list.json() as { id: string }[]).some((x) => x.id === p.id)).toBe(false)
-    expect(existsSync(p.folder)).toBe(true)
-
-    const again = await inject('DELETE', `/api/projects/${p.id}`)
-    expect(again.statusCode).toBe(404)
-  })
-
-  it('persists created projects across a store reload', async () => {
-    const created = await inject('POST', '/api/projects', { name: 'Persisted Project' })
-    const p = created.json() as { id: string }
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projects.some((x) => x.id === p.id)).toBe(true)
-  })
-
-  it('backfills folder/teamAgentIds/createdAt on legacy project rows', () => {
-    const oldDir = mkdtempSync(join(tmpdir(), 'agentcontrol-oldprojects-'))
-    const oldPath = join(oldDir, 'store.json')
-    writeFileSync(
-      oldPath,
-      JSON.stringify({
-        agents: [],
-        runs: [],
-        projects: [{ id: 'proj-legacy', name: 'Legacy One', desc: 'old shape', updatedAt: '2026-01-01T00:00:00.000Z' }],
-        endpoints: [],
-        endpointModels: {},
-        settings: { autoRun: true, notify: true, telemetry: false },
-        skills: [],
-      }),
-      'utf8',
-    )
-    const loaded = createStore(oldPath)
-    const legacy = loaded.projects.find((x) => x.id === 'proj-legacy')
-    expect(legacy).toMatchObject({
-      folder: join(oldDir, 'projects', 'legacy-one'),
-      teamAgentIds: [],
-      createdAt: '2026-01-01T00:00:00.000Z',
-    })
-    rmSync(oldDir, { recursive: true, force: true })
-  })
-
-  it('drops deleted agents from teams and clears tags of deleted projects on load', () => {
-    const d = mkdtempSync(join(tmpdir(), 'agentcontrol-dangling-'))
-    const path = join(d, 'store.json')
-    const s = createStore(path)
-    s.agents.push({
-      id: 'agt_spec', name: 'Spec', role: 'Specialist', description: '', instructions: '', modelId: 'llama-3-8b',
-      endpointId: 'ep_local_llama', isPrimary: false, skillIds: [], status: 'idle', createdAt: '', lastRunAt: null,
-      runCount: 0, projectId: 'proj_gone',
-    })
-    s.projects.push({
-      id: 'proj_live', name: 'Live', desc: '', folder: join(d, 'live'), teamAgentIds: ['agt_spec', 'agt_deleted'],
-      createdAt: '', updatedAt: '',
-    })
-    expect(s.save()).toBe(true)
-    const loaded = createStore(path)
-    expect(loaded.projects.find((x) => x.id === 'proj_live')?.teamAgentIds).toEqual(['agt_spec'])
-    expect(loaded.agents.find((a) => a.id === 'agt_spec')?.projectId).toBeUndefined()
-    rmSync(d, { recursive: true, force: true })
-  })
-})
-
-describe('project chat', () => {
-  async function makeProject(name = 'Chat Project') {
-    const res = await inject('POST', '/api/projects', { name })
-    expect(res.statusCode).toBe(201)
-    return res.json() as { id: string }
-  }
-
-  it('posts user and agent messages and lists them oldest first', async () => {
-    const p = await makeProject()
-    const a = await inject('POST', '/api/agents', {
-      name: 'Chatty',
-      description: '',
-      instructions: '',
-      modelId: 'llama-3-8b',
-      endpointId: 'ep_local_llama',
-      skillIds: [],
-    })
-    const agent = a.json() as { id: string }
-
-    const m1 = await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'first' })
-    expect(m1.statusCode).toBe(201)
-    const m2 = await inject('POST', `/api/projects/${p.id}/messages`, { author: agent.id, text: 'second' })
-    expect(m2.statusCode).toBe(201)
-    // D-O11: the route answers with the project and the messages it wrote.
-    expect((m2.json() as { messages: unknown[] }).messages).toMatchObject([
-      { projectId: p.id, author: agent.id, text: 'second', kind: 'message' },
-    ])
-
-    const list = await inject('GET', `/api/projects/${p.id}/messages`)
-    const msgs = list.json() as { text: string }[]
-    expect(msgs.map((m) => m.text)).toEqual(['first', 'second'])
-  })
-
-  it('rejects empty text, unknown authors, and unknown projects', async () => {
-    const p = await makeProject('Validation Chat')
-    expect((await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: '  ' })).statusCode).toBe(400)
-    expect((await inject('POST', `/api/projects/${p.id}/messages`, { author: 'agent_nope', text: 'x' })).statusCode).toBe(400)
-    expect((await inject('POST', `/api/projects/${p.id}/messages`, { text: 'x' })).statusCode).toBe(400)
-    expect((await inject('POST', '/api/projects/proj_nope/messages', { author: 'user', text: 'x' })).statusCode).toBe(404)
-    expect((await inject('GET', '/api/projects/proj_nope/messages')).statusCode).toBe(404)
-  })
-
-  it('keeps chats separate per project and deletes them with the project', async () => {
-    const a = await makeProject('Chat A')
-    const b = await makeProject('Chat B')
-    await inject('POST', `/api/projects/${a.id}/messages`, { author: 'user', text: 'in A' })
-    await inject('POST', `/api/projects/${b.id}/messages`, { author: 'user', text: 'in B' })
-
-    const listA = await inject('GET', `/api/projects/${a.id}/messages`)
-    expect((listA.json() as unknown[]).length).toBe(1)
-
-    await inject('DELETE', `/api/projects/${a.id}`)
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projectMessages.some((m) => m.projectId === a.id)).toBe(false)
-    expect(reloaded.projectMessages.some((m) => m.projectId === b.id)).toBe(true)
-  })
-
-  it('persists messages across a store reload', async () => {
-    const p = await makeProject('Persisted Chat')
-    await inject('POST', `/api/projects/${p.id}/messages`, { author: 'user', text: 'durable' })
-    const reloaded = createStore(join(dir, 'store.json'))
-    expect(reloaded.projectMessages.filter((m) => m.projectId === p.id).map((m) => m.text)).toEqual(['durable'])
-  })
-})
-
 describe('endpoint proxyUrl field', () => {
   it('stores, keeps, validates and clears proxyUrl', async () => {
     const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
-    const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'socks5://x:1' })
-    expect(bad.statusCode).toBe(400)
+    for (const proxyUrl of ['ftp://x:1', 'socks4://x:1', 'socks://x:1', 'not a url']) {
+      const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl })
+      expect(bad.statusCode, proxyUrl).toBe(400)
+    }
+    for (const proxyUrl of ['socks5://localhost:1055', 'socks5h://localhost:1055', 'https://proxy.example:443']) {
+      const ok = await inject('POST', '/api/endpoints', { ...base, proxyUrl })
+      expect(ok.statusCode, proxyUrl).toBe(201)
+      expect((ok.json() as Endpoint).proxyUrl).toBe(proxyUrl)
+    }
     const res = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'http://localhost:1055/' })
     expect(res.statusCode).toBe(201)
     const ep = res.json() as Endpoint
@@ -1990,6 +1793,51 @@ describe('endpoint proxyUrl field', () => {
     expect((kept.json() as Endpoint).proxyUrl).toBe('http://localhost:1055')
     const cleared = await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: '' })
     expect((cleared.json() as Endpoint).proxyUrl).toBeUndefined()
+  })
+
+  it('rejects a proxy with no host', async () => {
+    const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
+    for (const proxyUrl of ['socks5h://', 'socks5://', 'socks5h:', 'http://']) {
+      const bad = await inject('POST', '/api/endpoints', { ...base, proxyUrl })
+      expect(bad.statusCode, proxyUrl).toBe(400)
+    }
+  })
+
+  it('masks the proxy password and keeps the stored one when the mask comes back', async () => {
+    const base = { kind: 'openai-compatible', name: 'Proxied', baseUrl: 'http://100.79.242.24:8791', defaultModel: 'm', contextWindow: 8192 }
+    const res = await inject('POST', '/api/endpoints', { ...base, proxyUrl: 'socks5h://cole:s3cret@localhost:1055' })
+    expect(res.statusCode).toBe(201)
+    const ep = res.json() as Endpoint
+    expect(ep.proxyUrl).toBe('socks5h://cole:***@localhost:1055')
+    const listed = ((await inject('GET', '/api/endpoints')).json() as Endpoint[]).find((e) => e.id === ep.id)!
+    expect(listed.proxyUrl).toBe('socks5h://cole:***@localhost:1055')
+    expect(JSON.stringify((await inject('GET', '/api/endpoints')).json())).not.toContain('s3cret')
+    const stored = () => store.endpoints.find((e) => e.id === ep.id)!.proxyUrl
+    expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
+
+    // Sending the mask back (e.g. a form re-save) keeps the stored password.
+    const resent = await inject('PATCH', `/api/endpoints/${ep.id}`, { name: 'Again', proxyUrl: listed.proxyUrl })
+    expect(resent.statusCode).toBe(200)
+    expect((resent.json() as Endpoint).proxyUrl).toBe('socks5h://cole:***@localhost:1055')
+    expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
+    // The mask with any other scheme, host, port or user is refused, so the
+    // saved password never goes to a proxy it wasn't saved for.
+    for (const proxyUrl of [
+      'socks5h://cole:***@127.0.0.1:1055', 'socks5h://cole:***@localhost:1056',
+      'socks5://cole:***@localhost:1055', 'http://cole:***@localhost:1055', 'socks5h://other:***@localhost:1055',
+    ]) {
+      const moved = await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl })
+      expect(moved.statusCode, proxyUrl).toBe(400)
+      expect(moved.json()).toMatchObject({ message: 'Re-enter the proxy password for the new host' })
+      expect(stored()).toBe('socks5h://cole:s3cret@localhost:1055')
+    }
+    // A new host with a real password is fine.
+    await inject('PATCH', `/api/endpoints/${ep.id}`, { proxyUrl: 'socks5h://cole:n3w@127.0.0.1:1055' })
+    expect(stored()).toBe('socks5h://cole:n3w@127.0.0.1:1055')
+    // No stored proxy to take the password from: the mask is refused.
+    const fresh = await inject('POST', '/api/endpoints', { ...base, name: 'Fresh' })
+    const masked = await inject('PATCH', `/api/endpoints/${(fresh.json() as Endpoint).id}`, { proxyUrl: 'socks5h://cole:***@localhost:1055' })
+    expect(masked.statusCode).toBe(400)
   })
 })
 
@@ -2055,7 +1903,7 @@ describe('chat-first Part 1: agent profile fields', () => {
 
     await inject('PUT', `/api/agents/${agent.id}`, {
       name: 'Runner', description: '', instructions: 'Be brief.', modelId: 'test-model',
-      endpointId: endpoint.id, skillIds: ['summarization'], rules: ['Answer in English.'],
+      endpointId: endpoint.id, skillIds: ['core/summarization'], rules: ['Answer in English.'],
     })
     await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })
     const after = lastRequest(mock).messages?.[0]?.content ?? ''
@@ -2125,7 +1973,7 @@ describe('chat-first Part 1: agent profile fields', () => {
 describe('chat-first Part 2: conversations', () => {
   async function dmFor(agentId: string) {
     const list = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
-    const dm = list.find((c) => c.agentId === agentId)
+    const dm = list.find((c) => c.kind === 'dm' && c.agentId === agentId)
     expect(dm).toBeDefined()
     return dm as ConversationSummary
   }
@@ -2134,7 +1982,7 @@ describe('chat-first Part 2: conversations', () => {
     const res = await inject('GET', '/api/conversations')
     expect(res.statusCode).toBe(200)
     const list = res.json() as ConversationSummary[]
-    for (const agent of store.agents) expect(list.some((c) => c.agentId === agent.id && c.kind === 'dm')).toBe(true)
+    for (const agent of store.agents) expect(list.some((c) => c.kind === 'dm' && c.agentId === agent.id)).toBe(true)
     const times = list.map((c) => c.updatedAt)
     expect(times).toEqual([...times].sort().reverse())
     // Listing twice does not create duplicates.
@@ -2241,7 +2089,7 @@ describe('chat-first Part 2: conversations', () => {
       writeFileSync(path, JSON.stringify(raw))
 
       const first = createStore(path)
-      const dm = first.conversations.find((c) => c.agentId === agentId) as Conversation
+      const dm = first.conversations.find((c) => c.kind === 'dm' && c.agentId === agentId) as Conversation
       const msgs = first.chatMessages.filter((m) => m.conversationId === dm.id)
       expect(msgs.map((m) => m.content)).toEqual(['in r1', 'out r1', 'in r2', 'out r2'])
       expect(dm.lastReadAt).toBe(dm.updatedAt)
@@ -2280,6 +2128,23 @@ describe('chat-first Part 2: conversations', () => {
     expect(page.hasMore).toBe(true)
     const full = (await inject('GET', `/api/conversations/${dm.id}/messages`)).json() as { hasMore: boolean }
     expect(full.hasMore).toBe(false)
+  })
+
+  it('accepts `content` on the DM send, keeps `text` as an alias, and prefers `content`', async () => {
+    const { agent } = await makeRunner()
+    const dm = await dmFor(agent.id)
+    mockChat('one')
+    const a = (await inject('POST', `/api/conversations/${dm.id}/messages`, { content: ' hello ' })).json() as { messages: ChatMessage[] }
+    expect(a.messages[0]).toMatchObject({ role: 'user', content: 'hello' })
+    mockChat('two')
+    const b = (await inject('POST', `/api/conversations/${dm.id}/messages`, { content: 'wins', text: 'loses' })).json() as { messages: ChatMessage[] }
+    expect(b.messages[0]).toMatchObject({ role: 'user', content: 'wins' })
+    mockChat('three')
+    const c = (await inject('POST', `/api/conversations/${dm.id}/messages`, { text: 'alias' })).json() as { messages: ChatMessage[] }
+    expect(c.messages[0]).toMatchObject({ role: 'user', content: 'alias' })
+    const empty = await inject('POST', `/api/conversations/${dm.id}/messages`, { content: '  ', text: 'ignored' })
+    expect(empty.statusCode).toBe(400)
+    expect((empty.json() as { message: string }).message).toContain('content')
   })
 
   it('runs first-run profile setup and edits', async () => {
@@ -2376,7 +2241,7 @@ describe('chat error flag', () => {
     const { agent } = await makeRunner()
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down', json: async () => ({}) })))
     const list = (await inject('GET', '/api/conversations')).json() as ConversationSummary[]
-    const dm = list.find((c) => c.agentId === agent.id) as ConversationSummary
+    const dm = list.find((c) => c.kind === 'dm' && c.agentId === agent.id) as ConversationSummary
     const sent = (await inject('POST', `/api/conversations/${dm.id}/messages`, { text: 'hi' })).json() as { messages: ChatMessage[] }
     const reply = sent.messages.find((m) => m.role === 'assistant')
     expect(reply).toMatchObject({ error: true })

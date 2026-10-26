@@ -1,13 +1,13 @@
 /**
- * Content references: a text parameter may be literal text, "@input" (this
- * run's user message) or "@note:<id or title>". Resolving here means large
- * content never has to pass through the model's output tokens. JSON/CSV
+ * Content references: a text parameter may be literal text or "@input" (this
+ * run's user message). Resolving here means large content never has to pass
+ * through the model's output tokens. BE-4 retired "@note:" with the notes. JSON/CSV
  * params given "@input" take the message's first fenced code block, if any.
  */
-import { findNote } from './args.js'
 import type { ContentParams, ToolContext } from './types.js'
 
-const NOTE_REF = /^@note:(.{1,200})$/s
+/** Retired in BE-4; still caught so the model gets a clear error, not the literal string. */
+const NOTE_REF = /^@note:/
 
 /** Body of the first ``` fenced block, or undefined. */
 export function firstFencedBlock(text: string): string | undefined {
@@ -22,7 +22,7 @@ export function firstFencedBlock(text: string): string | undefined {
 
 export interface ResolvedRefs {
   args: Record<string, unknown>
-  /** param → "@input" | "@note:<id>" for every ref that was resolved. */
+  /** param → "@input" for every ref that was resolved. */
   sources: Record<string, string>
 }
 
@@ -49,15 +49,8 @@ export function resolveContentRefs(
       sources[name] = '@input'
       continue
     }
-    const ref = NOTE_REF.exec(trimmed)
-    if (ref?.[1]) {
-      if (!ctx.allowed.has('read_note')) {
-        throw new Error(`"@note:" references need the read_note tool, which this agent does not have. Paste the text instead.`)
-      }
-      const note = findNote(ctx.store, ref[1].trim())
-      if (!note) throw new Error(`No note "${ref[1].trim().slice(0, 80)}". Use list_notes to find the id or exact title.`)
-      next[name] = spec.structured ? (firstFencedBlock(note.body) ?? note.body) : note.body
-      sources[name] = `@note:${note.id}`
+    if (NOTE_REF.test(trimmed)) {
+      throw new Error('"@note:" references were retired with notes. Paste the text or pass "@input".')
     }
   }
   return { args: next, sources }

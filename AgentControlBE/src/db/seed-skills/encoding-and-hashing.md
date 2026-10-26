@@ -1,7 +1,7 @@
 ---
 name: encoding-and-hashing
 description: Decode or encode base64, base64url (JWT parts) and URL-encoded text, and compute SHA-256 checksums with a local tool. Use to read an encoded payload, inspect a JWT's header and claims, or verify text against a published checksum.
-tools: encode_text, read_note, save_note
+tools: encode_text
 ---
 
 # Encoding and Hashing
@@ -10,11 +10,11 @@ Decode, encode and hash exactly the text the user supplies with `encode_text` in
 
 ## Workflow
 
-1. Identify the operation: `base64_decode`, `base64_encode`, `url_decode`, `url_encode`, or `sha256`. Pass the text as a literal, `@input` for the whole run input, or `@note:<id>` for a saved note.
+1. Identify the operation: `base64_decode`, `base64_encode`, `url_decode`, `url_encode`, or `sha256`. Pass the text as a literal or `@input` for the whole run input.
 2. For a JWT, split the token at the dots and decode the first part (header) and the second part (claims) separately with `base64_decode`; base64url without padding is accepted. Do not decode or repeat the third part (signature): decoding never verifies a signature.
 3. To verify a checksum, call `encode_text` with `sha256` on the exact text and compare the returned hex with the expected value character for character. Whitespace and line endings change the hash, so say exactly which text was hashed.
 4. If decoded bytes are not text, the tool returns `binary: true` with the byte count and their SHA-256. Report that instead of inventing content.
-5. Report the result and what it means. Save it with `save_note` only when the user asks, and only when it contains no secrets.
+5. Report the result and what it means. Never save a decoded secret to memory.
 
 ## Examples
 

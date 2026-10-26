@@ -94,12 +94,15 @@ function makeAgent(partial: Partial<Agent> & { id: string; name: string }): Agen
     createdAt: '2026-10-01T00:00:00.000Z',
     lastRunAt: null,
     runCount: 0,
+    slug: partial.id,
+    internetPolicy: 'ask',
+    memoryLearn: true,
     ...partial,
   }
 }
 
 function makeSkill(partial: Partial<Skill> & { id: string; name: string }): Skill {
-  return { description: '', tag: 'Ops', content: '', tools: [], ...partial }
+  return { description: '', tag: 'Ops', content: '', tools: [], sourceId: 'custom', hasScripts: false, files: [], defaultOn: false, ...partial }
 }
 
 const toolDecl = (name: string) => ({ name, description: `${name} tool`, parameters: {} })

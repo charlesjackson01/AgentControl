@@ -35,81 +35,11 @@ export function AgentsIcon(props: IconProps) {
   )
 }
 
-export function ProjectsIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M3 7.5a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </Svg>
-  )
-}
-
-export function NotesIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M14 3H5a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9z" />
-      <path d="M14 3v6h6M8 13h8M8 17h6" />
-    </Svg>
-  )
-}
-
-export function SkillLibraryIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H9v16H5.5A1.5 1.5 0 0 1 4 18.5z" />
-      <path d="M9 4h4.5A1.5 1.5 0 0 1 15 5.5v13a1.5 1.5 0 0 1-1.5 1.5H9z" />
-      <path d="M18 7.5 20.2 9l-3.4 5.1-2.2-1.5z" />
-    </Svg>
-  )
-}
-
-export function SettingsIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M4 7h10M18 7h2M4 17h4M12 17h8" />
-      <circle cx="16" cy="7" r="2.2" />
-      <circle cx="10" cy="17" r="2.2" />
-    </Svg>
-  )
-}
-
-export function PanelIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <rect x="3" y="4" width="18" height="16" rx="3" />
-      <path d="M10 4v16" />
-    </Svg>
-  )
-}
-
-export function MenuIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M4 7h16M4 12h16M4 17h16" />
-    </Svg>
-  )
-}
-
-export function PlusIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="M12 5v14M5 12h14" />
-    </Svg>
-  )
-}
-
 export function SearchIcon(props: IconProps) {
   return (
     <Svg {...props}>
       <circle cx="11" cy="11" r="6.5" />
       <path d="m16 16 4 4" />
-    </Svg>
-  )
-}
-
-export function ChevronRightIcon(props: IconProps) {
-  return (
-    <Svg {...props}>
-      <path d="m9 5 7 7-7 7" />
     </Svg>
   )
 }

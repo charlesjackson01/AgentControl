@@ -1,14 +1,33 @@
-import { useEffect } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
-import Sidebar from './Sidebar'
-import { MenuIcon, PanelIcon, SearchIcon } from './icons'
-import { allNav, CHATS_LABEL } from '../lib/nav'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Outlet, useMatch, useNavigate } from 'react-router-dom'
+import ChatList from './shell/ChatList'
+import CommandPalette from './shell/CommandPalette'
+import NewBotDialog from './NewBotDialog'
+import NewGroupDialog from './shell/NewGroupDialog'
+import { useMutedGroups } from '../hooks/useMutedGroups'
+import type { AgentPrefill } from './AgentProfile'
+import { primaryConversation } from '../lib/conversations'
+import { newBotNavState } from '../lib/new-bot'
+import SettingsDialog from '../pages/Settings'
 import ConversationsProvider from '../state/ConversationsProvider'
 import ProfileProvider from '../state/ProfileProvider'
 import { useProfile } from '../state/profile-context'
+import { useConversations } from '../state/conversations-context'
+import { ShellContext, type ShellState } from '../state/shell-context'
 import { needsOnboarding } from '../lib/profile'
+import { commandAction, type CommandContext, type CommandName } from '../lib/commands'
+import { chatListUnread, readChatListOpen, shellShortcut, writeChatListOpen } from '../lib/shell'
+import { MOBILE_BACK_PATH, MOBILE_QUERY } from '../lib/mobile'
 import Onboarding from '../pages/Onboarding'
-import { useSidebar } from '../hooks/useSidebar'
+import '../shell.css'
+
+function storage(): Storage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
 
 export default function AppShell() {
   return (
@@ -21,63 +40,135 @@ export default function AppShell() {
 /** First-run setup before the app; never blocks when the BE has no profile route. */
 function OnboardingGate() {
   const { profile, setProfile } = useProfile()
-  if (profile === undefined) return <div className="shell" aria-busy="true" />
+  if (profile === undefined) return <div className="cf-shell" aria-busy="true" />
   if (profile && needsOnboarding(profile)) return <Onboarding profile={profile} onDone={setProfile} />
-  return <Shell />
+  return (
+    <ConversationsProvider>
+      <Shell />
+    </ConversationsProvider>
+  )
 }
 
+function useNarrow(): boolean {
+  const [narrow, setNarrow] = useState(() => window.matchMedia(MOBILE_QUERY).matches)
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_QUERY)
+    const onChange = (e: MediaQueryListEvent) => setNarrow(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  return narrow
+}
+
+/**
+ * FE-1: chat-only shell. Optional 308 px chat list (fully hidden when off) + the routed chat.
+ * FE-8 (<760 px, 05a/05b): no side panel; the list is its own screen at `/` and ‹ goes back to it.
+ */
 function Shell() {
-  const sidebar = useSidebar()
-  const { pathname } = useLocation()
-  const current = allNav.find((n) => pathname.startsWith(n.to))
-  const crumb = current?.label ?? (pathname === '/' || pathname.startsWith('/c/') ? CHATS_LABEL : 'Overview')
+  const narrow = useNarrow()
+  const [desktopOpen, setDesktopOpen] = useState(() => readChatListOpen(storage()))
+  const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [newBotOpen, setNewBotOpen] = useState(false)
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const muted = useMutedGroups()
+  const [newBotPrefill, setNewBotPrefill] = useState<AgentPrefill | undefined>(undefined)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const { conversations, agents } = useConversations()
+  const navigate = useNavigate()
+  const chatId = useMatch('/c/:conversationId')?.params.conversationId
+  const chatIsGroup = conversations?.find((c) => c.id === chatId)?.kind === 'group'
+  const commandCtx = useMemo<CommandContext>(() => ({ conversationId: chatId, isGroup: chatIsGroup }), [chatId, chatIsGroup])
+
+  const listOpen = narrow ? false : desktopOpen
+  const toggleList = useCallback(() => {
+    if (narrow) navigate(MOBILE_BACK_PATH)
+    else
+      setDesktopOpen((o) => {
+        writeChatListOpen(storage(), !o)
+        return !o
+      })
+  }, [narrow, navigate])
+  const closeListIfOverlay = useCallback(() => {}, [])
+
+  const openSwitcher = useCallback(() => setSwitcherOpen(true), [])
+  const closeSwitcher = useCallback(() => setSwitcherOpen(false), [])
+  const openSettings = useCallback(() => setSettingsOpen(true), [])
+  const openNewBotForm = useCallback((prefill?: AgentPrefill) => {
+    setSwitcherOpen(false)
+    setPaletteOpen(false)
+    setNewBotPrefill(prefill)
+    setNewBotOpen(true)
+  }, [])
+  // FE-5: `/new <text>` and "＋ New bot" draft in Primary's chat (router state starts the card there).
+  // No Primary chat yet: the full form.
+  const startNewBot = useCallback(
+    (prompt: string) => {
+      const primary = primaryConversation(conversations ?? [], agents)
+      if (!primary) return openNewBotForm()
+      setSwitcherOpen(false)
+      setPaletteOpen(false)
+      navigate(`/c/${encodeURIComponent(primary.id)}`, { state: { newBot: newBotNavState(prompt) } })
+    },
+    [conversations, agents, navigate, openNewBotForm],
+  )
+  const openNewBot = useCallback(() => startNewBot(''), [startNewBot])
+  const openNewGroup = useCallback(() => {
+    setSwitcherOpen(false)
+    setPaletteOpen(false)
+    setNewGroupOpen(true)
+  }, [])
+  const openPalette = useCallback(() => {
+    setSwitcherOpen(false)
+    setPaletteOpen(true)
+  }, [])
+  const closePalette = useCallback(() => setPaletteOpen(false), [])
+  const runCommand = useCallback(
+    (name: CommandName, args = '') => {
+      const action = commandAction(name, commandCtx, args)
+      if (action.kind === 'unavailable') return action.reason
+      setPaletteOpen(false)
+      if (action.kind === 'new-bot') startNewBot(action.args)
+      else if (action.kind === 'new-group') openNewGroup()
+      else navigate(action.to)
+      return null
+    },
+    [commandCtx, navigate, startNewBot, openNewGroup],
+  )
 
   useEffect(() => {
-    if (!sidebar.mobileOpen) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') sidebar.close()
+      const action = shellShortcut(e)
+      if (!action) return
+      e.preventDefault()
+      if (action === 'toggle-list') toggleList()
+      else openPalette()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [sidebar])
+  }, [toggleList, openPalette])
+
+  const unread = chatListUnread((conversations ?? []).filter((c) => !muted.has(c.id)), agents)
+  const value = useMemo<ShellState>(
+    () => ({
+      listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher,
+      paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, openNewGroup, unread,
+    }),
+    [listOpen, toggleList, closeListIfOverlay, narrow, switcherOpen, openSwitcher, closeSwitcher, paletteOpen, openPalette, closePalette, runCommand, openSettings, openNewBot, openNewBotForm, openNewGroup, unread],
+  )
 
   return (
-    <ConversationsProvider>
-    <div className="shell">
-      <Sidebar {...sidebar} />
-
-      {sidebar.mobileOpen && <div className="scrim" onClick={sidebar.close} />}
-
-      <div className="shell__main">
-        <header className="topbar">
-          <button
-            type="button"
-            className="btn btn--ghost btn--icon topbar__toggle"
-            onClick={sidebar.toggle}
-            aria-label={sidebar.isMobile ? 'Toggle navigation' : sidebar.collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-expanded={sidebar.isMobile ? sidebar.mobileOpen : !sidebar.collapsed}
-          >
-            {sidebar.isMobile ? <MenuIcon size={18} /> : <PanelIcon size={18} />}
-          </button>
-
-          <div className="crumbs">
-            <span>AgentControl</span>
-            <span className="crumbs__sep">/</span>
-            <span className="crumbs__current">{crumb}</span>
-          </div>
-
-          <div className="topbar__actions">
-            <button type="button" className="btn btn--ghost searchbtn">
-              <SearchIcon size={16} />
-              <span className="searchbtn__text">Search</span>
-              <kbd className="searchbtn__kbd">⌘K</kbd>
-            </button>
-          </div>
-        </header>
-
-        <Outlet />
+    <ShellContext.Provider value={value}>
+      <div className={`cf-shell${listOpen ? ' cf-shell--list' : ''}${narrow ? ' cf-shell--narrow' : ''}`}>
+        {listOpen && <ChatList />}
+        <div className="cf-chatcol">
+          <Outlet />
+          {paletteOpen && <CommandPalette ctx={commandCtx} />}
+        </div>
       </div>
-    </div>
-    </ConversationsProvider>
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <NewBotDialog open={newBotOpen} prefill={newBotPrefill} onClose={() => setNewBotOpen(false)} />
+      <NewGroupDialog open={newGroupOpen} onClose={() => setNewGroupOpen(false)} />
+    </ShellContext.Provider>
   )
 }

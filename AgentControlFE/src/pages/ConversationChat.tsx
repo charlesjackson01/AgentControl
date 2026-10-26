@@ -1,31 +1,47 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import Avatar from '../components/Avatar'
-import { Bubble, TypingBubble } from '../components/ChatBubble'
-import { ProfilePanel } from '../components/ProfilePanel'
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { BotRow, TypingDots, UserRow } from '../components/shell/ChatRows'
+import ChatHeader from '../components/shell/ChatHeader'
+import BotSettingsPanel from '../components/settings/BotSettingsPanel'
+import { settingsOpen, settingsTab, withSettingsTab, withoutPanel } from '../lib/settings-tabs'
+import { filesPanelOpen, filesPathParam, withFilesPath } from '../lib/files'
 import { ErrorState, Skeleton } from '../components/States'
-import { StatusPill } from '../components/StatusPill'
 import { api } from '../lib/api'
-import { friendlyError as friendly, turnTime } from '../lib/chat-format'
-import { mergeMessages, olderCursor } from '../lib/conversations'
-import type { ChatMessage } from '../lib/types'
+import { friendlyError as friendly } from '../lib/chat-format'
+import { dmAgentId, mergeMessages, olderCursor, pageSummary } from '../lib/conversations'
+import { clockTime, threadItems, typingSeenFor } from '../lib/thread'
+import type { Agent, Attachment, ChatMessage } from '../lib/types'
 import { useAsync } from '../hooks/useAsync'
 import { useConversations } from '../state/conversations-context'
+import { useShell } from '../state/shell-context'
+import { matchCommands, parseSlash, slashPrefix, type CommandDef } from '../lib/commands'
+import { moveActive } from '../lib/search'
 import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
+import { activityView, runFilesChanged } from '../lib/activity'
+import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
+import { Markdown } from '../components/Markdown'
+import { NewBotTurn } from '../components/shell/NewBotFlow'
+import { useNewBot } from '../hooks/useNewBot'
+import { composerLocked, createBody, createFailureText, newBotApi, newCommandPrompt, placeholderFor, profilePrefill, readNewBotNav, tooLongNotice } from '../lib/new-bot'
+import { request } from '../lib/api'
+import { AttachButton, AttachmentCards, AttachTray } from '../components/shell/Attachments'
+import { useFileDrop } from '../hooks/useFileDrop'
+import { useAttachments } from '../hooks/useAttachments'
+import { sendFailureHint, type Chip } from '../lib/attachments'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
-/** Show a time divider when consecutive messages are this far apart. */
-const DIVIDER_GAP_MS = 10 * 60_000
 
-type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: string }
+type Pending = { text: string; ts: string; status: 'typing' | 'error'; error?: string; attachments?: Attachment[] }
 
-/** Chat-first Part 2: one conversation's thread (Primary's 1:1 is the landing page). */
+/** FE-1 thread for one conversation: bottom-anchored, day separators, a time under each bubble. */
 export default function ConversationChat() {
   const { conversationId = '' } = useParams()
-  const { conversations, agents, loaded, markRead, upsert, reload: reloadSidebar } = useConversations()
+  const { conversations, agents, loaded, markRead, upsert, reload: reloadSidebar, typingSince } = useConversations()
   const conversation = conversations?.find((c) => c.id === conversationId)
-  const agent = conversation ? agents.find((a) => a.id === conversation.agentId) : undefined
+  const agentId = conversation ? dmAgentId(conversation) : undefined
+  const agent = agentId ? agents.find((a) => a.id === agentId) : undefined
+  const isGroup = conversation?.kind === 'group'
 
   const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined)
   const [hasMore, setHasMore] = useState(false)
@@ -35,9 +51,26 @@ export default function ConversationChat() {
   const [attempt, setAttempt] = useState(0)
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState<Pending | null>(null)
-  const [profileOpen, setProfileOpen] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
+  /** BE-3: top-level `filesChanged` of runs sent from this screen, by run id (when the send result carries it). */
+  const [runFiles, setRunFiles] = useState<Record<string, unknown[]>>({})
   const [shownFor, setShownFor] = useState(conversationId)
+  const shell = useShell()
+  // Deep links: `?m=<messageId>` (palette → message) and `?panel=settings[&tab=…]` (FE-3 picks the tab).
+  const [params, setParams] = useSearchParams()
+  const jumpId = params.get('m')
+  const [slashActive, setSlashActive] = useState(0)
+  const [slashClosedFor, setSlashClosedFor] = useState<string | null>(null)
+  const [cmdNotice, setCmdNotice] = useState<string | null>(null)
+  const jumpTries = useRef(0)
+  // FE-5: the /new draft card, only in Primary's DM.
+  const nbs = useNewBot(conversationId)
+  const isPrimaryDm = Boolean(agent?.isPrimary) && !isGroup
+  const location = useLocation()
+  const navigate = useNavigate()
+  // FE-7: files picked with ＋ or dropped on the chat, uploaded before the message is sent.
+  const att = useAttachments(conversationId)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   // Reset per conversation during render (no effect), so a switch never flashes the old thread.
   if (shownFor !== conversationId) {
@@ -49,10 +82,20 @@ export default function ConversationChat() {
     setPending(null)
     setRunError(null)
     setDraft('')
+    setCmdNotice(null)
+    setSendError(null)
+    nbs.setSession(null)
   }
 
+  // "＋ New bot" / palette /new land here with router state; start the card once, then drop the state.
+  const navNewBot = readNewBotNav(location.state)
+  useEffect(() => {
+    if (!navNewBot || !agent) return
+    if (isPrimaryDm) nbs.start(navNewBot.prompt)
+    navigate({ pathname: location.pathname, search: location.search }, { replace: true, state: null })
+  }, [navNewBot?.nonce, agent?.id, isPrimaryDm]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const endpoints = useAsync(api.listEndpoints, [])
-  const skills = useAsync(api.listSkills, [])
 
   // First page.
   useEffect(() => {
@@ -61,6 +104,10 @@ export default function ConversationChat() {
     api.listConversationMessages(conversationId).then(
       (page) => {
         if (!active) return
+        // BE-10: the first page carries the summary, so typing/unread (and a chat the sidebar
+        // hasn't listed yet) show now rather than at the next sidebar poll. Older servers: null.
+        const summary = pageSummary(page.conversation)
+        if (summary) upsert(summary)
         setMessages((prev) => mergeMessages(prev ?? [], page.messages))
         setHasMore(page.hasMore)
         setLoadError(undefined)
@@ -72,7 +119,7 @@ export default function ConversationChat() {
     return () => {
       active = false
     }
-  }, [conversationId, attempt])
+  }, [conversationId, attempt, upsert])
 
   // Pick up messages that arrive while open (e.g. an agent finishing a turn).
   useEffect(() => {
@@ -80,12 +127,16 @@ export default function ConversationChat() {
     const timer = setInterval(() => {
       if (document.visibilityState !== 'visible') return
       api.listConversationMessages(conversationId).then(
-        (page) => setMessages((prev) => (prev ? mergeMessages(prev, page.messages) : prev)),
+        (page) => {
+          const summary = pageSummary(page.conversation)
+          if (summary) upsert(summary)
+          setMessages((prev) => (prev ? mergeMessages(prev, page.messages) : prev))
+        },
         () => {},
       )
     }, THREAD_POLL_MS)
     return () => clearInterval(timer)
-  }, [conversationId])
+  }, [conversationId, upsert])
 
   // Mark read on open and whenever a new message lands while the thread is open.
   const newestId = messages?.[messages.length - 1]?.id
@@ -108,9 +159,11 @@ export default function ConversationChat() {
     } else {
       el.scrollTop = el.scrollHeight
     }
-  }, [newestId, messages?.length, pending])
+    if (jumpId) el.querySelector(`[data-mid="${CSS.escape(jumpId)}"]`)?.scrollIntoView({ block: 'center' })
+    // FE-5: re-anchor per /new turn (not on every keystroke in the card).
+  }, [newestId, messages?.length, pending, jumpId, nbs.session?.turn, nbs.session?.phase.kind, nbs.session?.userTs])
 
-  const loadOlder = useCallback(async () => {
+  const loadOlder = async () => {
     const before = olderCursor(messages ?? [])
     if (!before || loadingOlder) return
     setLoadingOlder(true)
@@ -126,18 +179,41 @@ export default function ConversationChat() {
     } finally {
       setLoadingOlder(false)
     }
-  }, [conversationId, loadingOlder, messages])
+  }
+
+  // Jump target not loaded yet: page back (at most 10 pages), then drop the param once shown.
+  const jumpFound = Boolean(jumpId && messages?.some((m) => m.id === jumpId))
+  useEffect(() => {
+    if (!jumpId || !messages) return
+    if (jumpFound || !hasMore || jumpTries.current >= 10) {
+      const t = setTimeout(() => {
+        jumpTries.current = 0
+        setParams((p) => {
+          p.delete('m')
+          return p
+        }, { replace: true })
+      }, jumpFound ? 2500 : 0)
+      return () => clearTimeout(t)
+    }
+    if (loadingOlder) return
+    jumpTries.current += 1
+    const t = setTimeout(() => void loadOlder(), 0)
+    return () => clearTimeout(t)
+  }, [jumpId, jumpFound, messages, hasMore, loadingOlder]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const sending = pending?.status === 'typing'
-  const send = async (raw: string) => {
+  const send = useCallback(async (raw: string, attachments: Attachment[] = [], taken: Chip[] = []) => {
     const text = raw.trim()
-    if (!text || sending) return
-    setPending({ text, ts: new Date().toISOString(), status: 'typing' })
+    if ((!text && attachments.length === 0) || sending) return
+    setPending({ text, ts: new Date().toISOString(), status: 'typing', attachments })
     setDraft('')
+    setSendError(null)
     try {
-      if (!agent) throw new Error('This chat has no agent.')
-      const result = await api.sendConversationMessage(conversationId, agent.id, text)
+      if (!agent) throw new Error('This chat has no bot.')
+      const result = await api.sendConversationMessage(conversationId, agent.id, text, attachments)
       setMessages((prev) => mergeMessages(prev ?? [], result.messages))
+      const changed = runFilesChanged(result.run)
+      if (changed) setRunFiles((prev) => ({ ...prev, [result.run.id]: changed }))
       if (result.conversation) upsert(result.conversation)
       // A flagged failed reply renders as its own error bubble; otherwise surface run.error once.
       const outcome = liveRunOutcome(result.run, result.messages)
@@ -149,180 +225,372 @@ export default function ConversationChat() {
         setRunError(outcome.kind === 'banner' ? (outcome.text ?? 'The run failed.') : null)
       }
     } catch (err) {
-      setPending({ text, ts: new Date().toISOString(), status: 'error', error: friendly(err, 'The message could not be sent.') })
+      const error = friendly(err, 'The message could not be sent.')
+      if (taken.length) {
+        // GAP-A6: a send with files that failed (e.g. a 400 for a file no longer in shared/):
+        // the text and the files go back to the composer, the named file marked, to fix and resend.
+        setPending(null)
+        att.restore(taken, error)
+        setDraft((d) => d || text)
+        setSendError(sendFailureHint(taken, error))
+        return
+      }
+      setPending({ text, ts: new Date().toISOString(), status: 'error', error, attachments })
     }
-  }
+  }, [sending, agent, conversationId, upsert, att])
 
 
-  if (loaded && conversations && !conversation) {
+  const authorOf = (m: ChatMessage): Agent | undefined =>
+    (m.authorAgentId ? agents.find((a) => a.id === m.authorAgentId) : undefined) ?? agent
+  const typingAgent =
+    !pending && conversation?.typingAgentId ? agents.find((a) => a.id === conversation.typingAgentId) : undefined
+  const canSend = Boolean(conversation) && !isGroup
+  // FE-7: ＋ and drop work whenever a plain message could be sent (not during a /new draft).
+  const nbActive = isPrimaryDm ? nbs.session : null
+  const canAttach = !sending && canSend && !composerLocked(nbActive?.phase ?? null) && !nbActive
+  const drop = useFileDrop(att, canAttach)
+
+  // "Read" before a reply exists: when typing was first seen for this chat (held by the provider).
+  const typingSeen = messages && !pending ? typingSeenFor(messages, typingSince[conversationId]) : null
+
+  // Not in the sidebar list: wait for the first page (BE-10 adds the chat from its summary), then say not found.
+  if (loaded && conversations && !conversation && (messages !== undefined || loadError)) {
     return (
-      <main className="page">
-        <div className="page__inner">
-          <ErrorState title="Chat not found" error={new Error('This conversation does not exist or was removed.')} onRetry={reloadSidebar} />
-          <p className="field__hint" style={{ marginTop: 12 }}>
-            <Link to="/agents">Go to agents</Link>
-          </p>
-        </div>
-      </main>
+      <>
+        <ChatHeader />
+        <main className="cf-main">
+          <div className="cf-empty">
+            <ErrorState title="Chat not found" error={new Error('This conversation does not exist or was removed.')} onRetry={reloadSidebar} />
+            <Link to="/" className="cf-btn">
+              Go to your latest chat
+            </Link>
+          </div>
+        </main>
+      </>
     )
   }
 
-  return (
-    <main className="page page--chat">
-      <div className="page__inner">
-        <header className="chat__header">
-          <div className="chat__header__left">
-            {agent && (
-              <button
-                type="button"
-                className="chat__header__avatar"
-                onClick={() => setProfileOpen(true)}
-                aria-label={`Open ${agent.name}'s profile`}
-              >
-                <Avatar name={agent.name} agentId={agent.id} avatar={agent.avatar} color={agent.color} size="md" decorative />
-              </button>
-            )}
-            <div className="chat__header__id">
-              <h1 className="chat__header__name">{agent?.name ?? ''}</h1>
-              {agent?.role && <p className="chat__header__role">{agent.role}</p>}
-            </div>
-            {agent && (
-              <span className="chat__header__status">
-                <StatusPill status={agent.status} />
-              </span>
-            )}
-            {agent?.isPrimary && <span className="pill pill--lead">Primary</span>}
-          </div>
-          {agent && (
-            <div className="chat__header__right">
-              <button type="button" className="btn" onClick={() => setProfileOpen(true)} aria-label="Agent profile">
-                Profile
-              </button>
-            </div>
-          )}
-        </header>
+  // Bot settings (FE-3) live in the URL: ?panel=settings[&tab=…]. Closing drops panel/tab/path.
+  // FE-4: ?panel=files&path=… opens the same panel on Files at that folder.
+  const panelOpen = settingsOpen(params) || filesPanelOpen(params)
+  const panelTab = filesPanelOpen(params) ? 'files' : settingsTab(params)
+  const openSettings = () => setParams((p) => withSettingsTab(p, 'profile'))
+  const closeProfile = () => setParams((p) => withoutPanel(p), { replace: true })
 
-        <section className="chat__thread" aria-label="Conversation" ref={threadRef}>
-          {loadError && !messages ? (
-            <div className="chat__thread__error">
-              <ErrorState title="Could not load the conversation" error={loadError} onRetry={() => setAttempt((n) => n + 1)} />
-            </div>
-          ) : !messages ? (
-            <div className="chat__thread__placeholder">
-              <Skeleton height={12} width="30%" />
-              <Skeleton height={64} width="70%" />
-              <Skeleton height={64} width="55%" />
-            </div>
-          ) : (
-            <>
-              {hasMore && (
-                <div className="chat__older">
-                  <button type="button" className="btn btn--sm" onClick={() => void loadOlder()} disabled={loadingOlder}>
-                    {loadingOlder && <span className="spinner" aria-hidden="true" />}
-                    {loadingOlder ? 'Loading…' : 'Load earlier messages'}
-                  </button>
-                  {olderError && <p className="field__err" role="alert">{olderError}</p>}
-                </div>
-              )}
-              {messages.length === 0 && !pending && (
-                <p className="chat__empty">{agent ? `Say hi to ${agent.name}.` : 'No messages yet.'}</p>
-              )}
-              {messages.map((m, i) => {
-                const lastErrorIdx = messages.length - 1
-                const prev = messages[i - 1]
-                const view = chatMessageView(m)
-                const retryText = view.kind === 'error' ? retryTextBefore(messages, i) : undefined
-                const gap = prev ? new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() : Infinity
-                return (
-                  <div className="chat__turn" key={m.id}>
-                    {gap > DIVIDER_GAP_MS && (
-                      <div className="chat__ts">
-                        <span>{turnTime(m.createdAt)}</span>
-                      </div>
-                    )}
-                    {view.kind === 'error' ? (
-                      <Bubble kind="error">
-                        <div className="bubble__body">{view.text}</div>
-                        {retryText !== undefined && i === lastErrorIdx && (
-                          <button type="button" className="chat__retry" onClick={() => void send(retryText)} disabled={sending}>
-                            Retry
-                          </button>
-                        )}
-                      </Bubble>
-                    ) : (
-                      <Bubble kind={view.kind}>
-                        <div className="bubble__body">{view.text}</div>
-                      </Bubble>
-                    )}
+  // Slash autocomplete: open while the draft is `/` + letters, until Esc for that draft.
+  const slash = slashPrefix(draft)
+  const slashItems = slash !== null && slashClosedFor !== draft && canSend ? matchCommands(slash) : []
+  const slashIdx = Math.min(slashActive, Math.max(0, slashItems.length - 1))
+  const runSlash = (def: CommandDef, args = '') => {
+    const reason = shell.runCommand(def.name, args)
+    if (reason) setCmdNotice(`/${def.name}: ${reason}`)
+    else setDraft('')
+  }
+  const nbSession = isPrimaryDm ? nbs.session : null
+  const nbPhase = nbSession?.phase ?? null
+  // S7: the description's raw length (what POST /api/agents/draft counts), for /new and for replies to the card.
+  const slashNew = newCommandPrompt(draft)
+  const limitText = slashNew !== null ? slashNew : nbPhase?.kind === 'ask' || nbPhase?.kind === 'card' ? draft : ''
+  const tooLong = canSend ? tooLongNotice(limitText) : null
+  const locked = composerLocked(nbPhase)
+
+  const submit = (text: string) => {
+    if (tooLong || locked) return
+    const parsed = parseSlash(text)
+    if (parsed?.command.name === 'new') {
+      const raw = newCommandPrompt(text) ?? parsed.args
+      if (isPrimaryDm) {
+        setDraft('')
+        setCmdNotice(null)
+        nbs.start(raw)
+      } else runSlash(parsed.command, raw)
+      return
+    }
+    if (parsed) return runSlash(parsed.command, parsed.args)
+    if (!att.canSend(text)) return
+    if (att.chips.length > 0 && !nbSession) {
+      const ready = att.ready
+      void send(text, ready, att.take())
+      return
+    }
+    if (!text.trim()) return
+    if (nbPhase?.kind === 'ask') {
+      setDraft('')
+      return nbs.answer(text)
+    }
+    if (nbPhase?.kind === 'card') {
+      setDraft('')
+      return nbs.reply(text)
+    }
+    if (nbSession) nbs.end()
+    void send(text)
+  }
+
+  const createBot = async () => {
+    const s = nbs.session
+    if (!s?.card || s.phase.kind !== 'card' || s.phase.creating) return
+    const card = s.card
+    nbs.setSession((x) => (x ? { ...x, phase: { kind: 'card', warning: s.phase.kind === 'card' ? s.phase.warning : undefined, creating: true } } : x))
+    let saved: Agent
+    try {
+      saved = await newBotApi(request).create<Agent>(createBody(card, nbs.extras.defaults))
+    } catch (err) {
+      nbs.setSession((x) => (x ? { ...x, phase: { kind: 'card', warning: s.phase.kind === 'card' ? s.phase.warning : undefined, error: createFailureText(card.name, err) } } : x))
+      return
+    }
+    // The bot exists now; a failed picture upload leaves the emoji (or initials) and still opens its chat.
+    if (nbs.file) await api.uploadAgentAvatar(saved.id, nbs.file.file).catch(() => undefined)
+    nbs.end()
+    reloadSidebar()
+    navigate(`/agents/${encodeURIComponent(saved.id)}`)
+  }
+
+  const onComposerKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing) return
+    if (slashItems.length) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashActive((i) => Math.max(0, moveActive(i, e.key === 'ArrowDown' ? 1 : -1, slashItems.length)))
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setSlashClosedFor(draft)
+        return
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault()
+        runSlash(slashItems[slashIdx])
+        return
+      }
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      submit(draft)
+    }
+  }
+
+  const items = messages ? threadItems(messages, { typingSeen }) : []
+  const lastIdx = (messages?.length ?? 0) - 1
+
+  return (
+    <>
+      <ChatHeader conversation={conversation} agent={agent} sending={sending} onInfo={agent ? openSettings : undefined} />
+      <main className="cf-main" {...drop.handlers}>
+        <section className="cf-thread" aria-label="Conversation" ref={threadRef}>
+          <div className="cf-thread__inner">
+            {loadError && !messages ? (
+              <div className="cf-empty">
+                <ErrorState title="Could not load the conversation" error={loadError} onRetry={() => setAttempt((n) => n + 1)} />
+              </div>
+            ) : !messages ? (
+              <div className="cf-thread--placeholder">
+                <Skeleton height={12} width="30%" />
+                <Skeleton height={48} width="60%" />
+                <Skeleton height={48} width="45%" />
+              </div>
+            ) : (
+              <>
+                {hasMore && (
+                  <div className="cf-older">
+                    <button type="button" className="cf-btn" onClick={() => void loadOlder()} disabled={loadingOlder}>
+                      {loadingOlder && <span className="spinner" aria-hidden="true" />}
+                      {loadingOlder ? 'Loading…' : 'Load earlier messages'}
+                    </button>
+                    {olderError && <p className="field__err" role="alert">{olderError}</p>}
                   </div>
-                )
-              })}
-              {runError && !pending && (
-                <p className="chat__runerr" role="alert">Last run failed: {runError}</p>
-              )}
-              {pending && (
-                <div className="chat__turn">
-                  <Bubble kind="user">
-                    <div className="bubble__body">{pending.text}</div>
-                  </Bubble>
-                  {pending.status === 'typing' ? (
-                    <TypingBubble label={`${agent?.name ?? 'Agent'} is typing`} />
-                  ) : (
-                    <Bubble kind="error">
-                      <div className="bubble__body">{pending.error}</div>
-                      <button type="button" className="chat__retry" onClick={() => void send(pending.text)}>
-                        Retry
-                      </button>
-                    </Bubble>
-                  )}
-                </div>
-              )}
-            </>
-          )}
+                )}
+                {messages.length === 0 && !pending && (
+                  <p className="cf-thread__empty">{agent ? `Say hi to ${agent.name}.` : 'No messages yet.'}</p>
+                )}
+                {items.map((item) => {
+                  if (item.type === 'day') return <div key={item.key} className="cf-daysep">{item.label}</div>
+                  const m = item.message
+                  if (m.kind === 'system') return <p key={item.key} className="cf-system">{m.content}</p>
+                  const view = chatMessageView(m)
+                  if (view.kind === 'user') {
+                    const files = m.attachments ?? []
+                    return (
+                      <UserRow
+                        key={item.key}
+                        meta={item.meta}
+                        mid={m.id}
+                        hit={m.id === jumpId}
+                        before={<AttachmentCards attachments={files} ctx={{ agentId }} />}
+                        bare={files.length > 0 && !view.text.trim()}
+                      >
+                        {view.text}
+                      </UserRow>
+                    )
+                  }
+                  const retryText = view.kind === 'error' ? retryTextBefore(messages, item.index) : undefined
+                  const act = activityView(m.activity, undefined, (m.runId && runFiles[m.runId]) || null)
+                  return (
+                    <BotRow
+                      key={item.key}
+                      author={authorOf(m)}
+                      meta={item.meta}
+                      error={view.kind === 'error'}
+                      mid={m.id}
+                      hit={m.id === jumpId}
+                      before={act && <ActivityCard view={act} />}
+                      after={act && <FileCards files={act.files} conversationId={conversationId} />}
+                    >
+                      {view.kind === 'assistant' ? <Markdown text={view.text} /> : view.text}
+                      {view.kind === 'error' && retryText !== undefined && item.index === lastIdx && canSend && (
+                        <button type="button" className="chat__retry" onClick={() => void send(retryText)} disabled={sending}>
+                          Retry
+                        </button>
+                      )}
+                    </BotRow>
+                  )
+                })}
+                {runError && !pending && (
+                  <p className="chat__runerr" role="alert">Last run failed: {runError}</p>
+                )}
+                {pending && (
+                  <>
+                    <UserRow
+                      meta={clockTime(pending.ts)}
+                      before={<AttachmentCards attachments={pending.attachments ?? []} ctx={{ agentId }} />}
+                      bare={Boolean(pending.attachments?.length) && !pending.text}
+                    >
+                      {pending.text}
+                    </UserRow>
+                    {pending.status === 'typing' ? (
+                      <BotRow author={agent}>
+                        <span className="sr-only">{`${agent?.name ?? 'Bot'} is typing`}</span>
+                        <TypingDots />
+                      </BotRow>
+                    ) : (
+                      <BotRow author={agent} error>
+                        {pending.error}
+                        <button type="button" className="chat__retry" onClick={() => void send(pending.text, pending.attachments)}>
+                          Retry
+                        </button>
+                      </BotRow>
+                    )}
+                  </>
+                )}
+                {typingAgent && (
+                  <BotRow author={typingAgent}>
+                    <span className="sr-only">{`${typingAgent.name} is typing`}</span>
+                    <TypingDots />
+                  </BotRow>
+                )}
+                {nbSession && (
+                  <NewBotTurn
+                    nbs={nbs}
+                    primary={agent}
+                    onCreate={() => void createBot()}
+                    onOpenFull={() => nbs.session?.card && shell.openNewBotForm(profilePrefill(nbs.session.card, nbs.extras.defaults))}
+                  />
+                )}
+              </>
+            )}
+          </div>
         </section>
 
-        <div className="chat__composer">
-          <div className="chat__composer__input">
+        <div className="cf-compwrap">
+          {slashItems.length > 0 && (
+            <div className="cf-pop cf-slash" role="listbox" id="cf-slash" aria-label="Commands">
+              <p className="cf-sec">Commands</p>
+              <ul>
+                {slashItems.map((def, i) => {
+                  const reason = def.unavailable({ conversationId, isGroup })
+                  return (
+                    <li key={def.name}>
+                      <button
+                        type="button"
+                        role="option"
+                        id={`cf-slash-${i}`}
+                        aria-selected={i === slashIdx}
+                        aria-disabled={reason !== null || undefined}
+                        className={`cf-it${i === slashIdx ? ' cf-it--on' : ''}${reason ? ' cf-it--off' : ''}`}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onMouseMove={() => i !== slashIdx && setSlashActive(i)}
+                        onClick={() => runSlash(def)}
+                      >
+                        <span className="cf-pal__ic cf-pal__ic--cmd" aria-hidden="true">/</span>
+                        <span className="cf-it__col">
+                          <span className="cf-it__t">
+                            <span className="cf-mono">/{def.name}</span>
+                            <span className="cf-pal__lbl">{def.label}</span>
+                          </span>
+                          <span className="cf-it__s">{reason ?? def.hint}</span>
+                        </span>
+                        {i === slashIdx && <kbd className="cf-it__k">↵</kbd>}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            </div>
+          )}
+          <AttachTray att={att} disabled={sending} />
+          <div className={`cf-comp${drop.over ? ' cf-comp--drop' : ''}`} data-gap={drop.over ? 'GAP-A2' : undefined}>
+            <AttachButton att={att} disabled={!canAttach} />
             <textarea
-              className="textarea"
+              className="cf-comp__input"
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  void send(draft)
-                }
+              onChange={(e) => {
+                setDraft(e.target.value)
+                setSlashActive(0)
+                setCmdNotice(null)
               }}
-              placeholder={agent ? `Message ${agent.name}…` : 'Message…'}
+              onKeyDown={onComposerKey}
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={slashItems.length > 0}
+              aria-controls={slashItems.length > 0 ? 'cf-slash' : undefined}
+              aria-activedescendant={slashItems.length > 0 ? `cf-slash-${slashIdx}` : undefined}
+              placeholder={isGroup ? 'Opening the group…' : agent ? placeholderFor(nbPhase, agent.name) : 'Message…'}
               rows={1}
-              disabled={sending || !conversation}
+              disabled={sending || !canSend || locked}
               aria-label="Message"
             />
-            <div className="chat__composer__actions">
-              <button type="button" className="btn btn--primary" onClick={() => void send(draft)} disabled={sending || !draft.trim() || !conversation}>
-                {sending && <span className="spinner" aria-hidden="true" />}
-                {sending ? 'Sending…' : 'Send'}
-              </button>
-            </div>
+            <button type="button" className="cf-cbtn cf-cbtn--skills" disabled title="Skills aren't available here yet" aria-label="Skills">
+              ✦
+            </button>
+            <button
+              type="button"
+              className="cf-send"
+              onClick={() => submit(draft)}
+              disabled={sending || !att.canSend(draft) || !canSend || locked || tooLong !== null}
+              aria-label={sending ? 'Sending' : 'Send'}
+            >
+              {sending ? <span className="spinner" aria-hidden="true" /> : '↑'}
+            </button>
           </div>
-          <p className="chat__composer__hint">Enter to send · Shift+Enter for a new line</p>
+          {drop.over ? (
+            <p className="cf-hint cf-hint--drop">Drop to attach. Files you send are saved in this bot&apos;s folder</p>
+          ) : sendError ? (
+            <p className="cf-hint cf-hint--err" role="alert" data-gap="GAP-A6">Not sent: {sendError}</p>
+          ) : tooLong || cmdNotice ? (
+            <p className="cf-hint cf-hint--notice" role="status">{tooLong ?? cmdNotice}</p>
+          ) : (
+            <p className="cf-hint">Enter to send · / for commands · Files you send are saved in this bot&apos;s folder</p>
+          )}
         </div>
-      </div>
+      </main>
 
-      {agent && (
-        <ProfilePanel
-          open={profileOpen}
+      {agent && panelOpen && (
+        <BotSettingsPanel
           agent={agent}
           endpoints={endpoints.data ?? []}
-          skills={skills.data ?? []}
-          onClose={() => setProfileOpen(false)}
+          tab={panelTab}
+          onTab={(t) => setParams((p) => withSettingsTab(p, t), { replace: true })}
+          filesPath={filesPathParam(params)}
+          onFilesPath={(path) => setParams((p) => withFilesPath(p, path), { replace: true })}
+          onClose={closeProfile}
           onSaved={reloadSidebar}
+          onDeleted={reloadSidebar}
           onCleared={() => {
             setMessages([])
             reloadSidebar()
           }}
         />
       )}
-    </main>
+    </>
   )
 }

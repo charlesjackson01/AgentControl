@@ -1,6 +1,10 @@
 import { MAX_AVATAR_BYTES } from './types'
-import { CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary } from './types'
-import type { Agent, AgentInput, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, Note, NoteSummary, Project, ProjectInput, ProjectMessage, ProjectMessageInput, ProjectUpdate, PromptBudget, PromptBudgetInput, ReviewResult, Skill, SkillInput, TeamPlanApply, TeamPlanRequest, TeamPlanResult, ToolInfo } from './types'
+import type { EndpointTestResult } from './endpoint-proxy'
+import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
+import { normalizeSkillsResponse, skillPath, type SkillsResponse } from './skills-catalog'
+import { CONVERSATION_PAGE_SIZE, MAX_CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary, type GroupCreateInput, type GroupPatch, type GroupSendResult, type GroupSummary } from './types'
+import type { SkillSummary } from './types'
+import type { Agent, AgentInput, Attachment, AgentRun, AgentRunInput, AgentStatus, Endpoint, EndpointInput, EndpointKind, EndpointModel, EndpointStatus, PromptBudget, PromptBudgetInput, Skill, SkillInput, ToolInfo } from './types'
 
 /* ==========================================================================
    Live API (replaces the former localStorage mock).
@@ -62,17 +66,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Deletes answer 204 with no body.
   if (res.status === 204) return undefined as T
   if (!res.ok) {
-    let message = 'Request failed'
+    let message = DEFAULT_ERROR_MESSAGE
     try {
-      const body: unknown = await res.json()
-      if (
-        typeof body === 'object' &&
-        body !== null &&
-        'message' in body &&
-        typeof (body as { message?: unknown }).message === 'string'
-      ) {
-        message = (body as { message: string }).message
-      }
+      message = errorMessageFrom(await res.json())
     } catch {
       // Non-JSON error body (e.g. upstream gateway HTML): keep the default.
     }
@@ -125,14 +121,58 @@ export async function putAvatarImage<T>(path: string, file: Blob): Promise<T> {
   if (!res.ok) {
     let serverMessage: string | null = null
     try {
-      const body = (await res.json()) as { message?: unknown }
-      if (typeof body.message === 'string') serverMessage = body.message
+      const parsed = errorMessageFrom(await res.json())
+      if (parsed !== DEFAULT_ERROR_MESSAGE) serverMessage = parsed
     } catch {
       // keep default
     }
     throw new ApiError(avatarUploadMessage(res.status, serverMessage), res.status)
   }
   return (await res.json()) as T
+}
+
+/** Raw PUT for BE-2 file uploads (Content-Type = the file's type); the caller reads status and body. */
+export function putRaw(url: string, body: Blob): Promise<Response> {
+  const headers: Record<string, string> = { 'Content-Type': body.type || 'application/octet-stream' }
+  if (AUTH_TOKEN) headers.Authorization = `Bearer ${AUTH_TOKEN}`
+  return fetch(apiUrl(url), { method: 'PUT', headers, body })
+}
+
+/**
+ * FE-7 (BE-9): PUT one chat upload with XHR, for upload progress (fetch has none).
+ * Resolves with the BE's Attachment (201); rejects with ApiError(status, server text) — status 0 for a
+ * network failure or abort. `abort()` cancels it (a removed chip).
+ */
+export function uploadChatFile(path: string, file: Blob, onProgress: (fraction: number) => void): { promise: Promise<Attachment>; abort: () => void } {
+  const xhr = new XMLHttpRequest()
+  const promise = new Promise<Attachment>((resolve, reject) => {
+    xhr.open('PUT', apiUrl(path))
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
+    if (AUTH_TOKEN) xhr.setRequestHeader('Authorization', `Bearer ${AUTH_TOKEN}`)
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      let body: unknown = null
+      try {
+        body = JSON.parse(xhr.responseText)
+      } catch {
+        // non-JSON body (proxy error page)
+      }
+      if (xhr.status >= 200 && xhr.status < 300 && body && typeof body === 'object') resolve(body as Attachment)
+      else reject(new ApiError(serverMessage(body) ?? '', xhr.status))
+    }
+    xhr.onerror = () => reject(new ApiError('', 0))
+    xhr.onabort = () => reject(new ApiError('aborted', 0))
+    xhr.send(file)
+  })
+  return { promise, abort: () => xhr.abort() }
+}
+
+/** The server's own error text, or null when it sent only a generic one. */
+export function serverMessage(body: unknown): string | null {
+  const m = errorMessageFrom(body)
+  return m === DEFAULT_ERROR_MESSAGE ? null : m
 }
 
 function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
@@ -164,27 +204,62 @@ export const api = {
   },
 
   /**
-   * Send in a DM: POST /api/conversations/:id/messages {text} -> {conversation, messages, run}.
+   * Send in a DM: POST /api/conversations/:id/messages {content} -> {conversation, messages, run}.
+   * Final Phase 1 send shape is { content, attachments? }; clients send `content` only (BE a30a385).
    * The only place the chat screen sends from. Falls back to the agent run route
    * (+ refetch) when the BE predates the send route (404 with no conversation match).
    */
-  async sendConversationMessage(conversationId: string, agentId: string, text: string): Promise<ConversationSendResult> {
+  async sendConversationMessage(conversationId: string, agentId: string, text: string, attachments: readonly Attachment[] = []): Promise<ConversationSendResult> {
     try {
       return await request<ConversationSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(attachments.length ? { content: text, attachments } : { content: text }),
       })
     } catch (err) {
-      if (!(err instanceof ApiError) || (err.status !== 404 && err.status !== 405) || !/^Route /.test(err.message)) throw err
+      // The pre-BE-1 run-route fallback can't carry attachments.
+      if (attachments.length || !(err instanceof ApiError) || (err.status !== 404 && err.status !== 405) || !/^Route /.test(err.message)) throw err
       const run = await api.runAgent(agentId, text)
       const page = await api.listConversationMessages(conversationId)
       const [summary] = (await api.listConversations()).filter((c) => c.id === conversationId)
       return {
         conversation: summary,
         messages: page.messages.filter((m) => m.runId === run.id),
-        run: { id: run.id, status: run.status, error: run.error },
+        // The run route returns the whole run, so its top-level filesChanged (BE-3) comes along.
+        run: { id: run.id, status: run.status, error: run.error, ...(Array.isArray(run.filesChanged) ? { filesChanged: run.filesChanged } : {}) },
       }
     }
+  },
+
+  /** BE-5: messages newer than `after` (oldest -> newest), for the group poll. */
+  async listMessagesAfter(id: string, after: string, limit = MAX_CONVERSATION_PAGE_SIZE): Promise<ChatMessagePage> {
+    const qs = new URLSearchParams({ after, limit: String(limit) })
+    const body = await request<ConversationMessagesResponse>(`/api/conversations/${encodeURIComponent(id)}/messages?${qs}`)
+    return { conversation: body.conversation, messages: body.messages, hasMore: body.hasMore ?? false }
+  },
+
+  /** BE-5 group send: 202 with the user's message; the lead and mentioned bots reply in the background. */
+  async sendGroupMessage(conversationId: string, text: string, attachments: readonly Attachment[] = []): Promise<GroupSendResult> {
+    return request<GroupSendResult>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(attachments.length ? { content: text, attachments } : { content: text }),
+    })
+  },
+
+  async createGroup(input: GroupCreateInput): Promise<GroupSummary> {
+    return request<GroupSummary>('/api/groups', { method: 'POST', body: JSON.stringify(input) })
+  },
+
+  async getGroup(id: string): Promise<GroupSummary> {
+    return request<GroupSummary>(`/api/groups/${encodeURIComponent(id)}`)
+  },
+
+  async updateGroup(id: string, patch: GroupPatch): Promise<GroupSummary> {
+    return request<GroupSummary>(`/api/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
+  },
+
+  /** BE-5: 204; archives the group (it leaves GET /api/conversations). */
+  async deleteGroup(id: string): Promise<void> {
+    await request<unknown>(`/api/groups/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   async markConversationRead(id: string): Promise<ConversationSummary> {
@@ -212,24 +287,22 @@ export const api = {
     return request<Agent>(`/api/agents/${encodeURIComponent(id)}`)
   },
 
-  async listSkills(): Promise<Skill[]> {
-    return request<Skill[]>('/api/skills')
+  async listSkills(): Promise<SkillSummary[]> {
+    return normalizeSkillsResponse(await request<unknown>('/api/skills')).skills
+  },
+
+  /** One skill with its `content` (BE-6 list rows leave it out). Ids like `core/x` are encoded. */
+  async getSkill(id: string): Promise<Skill> {
+    return request<Skill>(skillPath(id))
+  },
+
+  /** Today's Skill[] or BE-6's { skills, sources }; `legacy` marks the former. */
+  async listSkillCatalog(): Promise<SkillsResponse> {
+    return normalizeSkillsResponse(await request<unknown>('/api/skills'))
   },
 
   async listTools(): Promise<ToolInfo[]> {
     return request<ToolInfo[]>('/api/tools')
-  },
-
-  async listNotes(): Promise<NoteSummary[]> {
-    return request<NoteSummary[]>('/api/notes')
-  },
-
-  async getNote(id: string): Promise<Note> {
-    return request<Note>(`/api/notes/${encodeURIComponent(id)}`)
-  },
-
-  async deleteNote(id: string): Promise<void> {
-    return request<void>(`/api/notes/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
 
   async createSkill(input: SkillInput): Promise<Skill> {
@@ -266,7 +339,8 @@ export const api = {
     })
   },
 
-  async createAgent(input: AgentInput): Promise<Agent> {
+  /** Leave `skillIds` out to get the backend's defaults (BE-7: every defaultOn skill). */
+  async createAgent(input: Omit<AgentInput, 'skillIds'> & { skillIds?: string[] }): Promise<Agent> {
     return request<Agent>('/api/agents', { method: 'POST', body: JSON.stringify(input) })
   },
 
@@ -326,141 +400,9 @@ export const api = {
     return body.models
   },
 
-  /* -- Projects: a project owns a folder under the BE projects root and a team
-     of library agents. Rename never moves the folder; delete leaves it on disk. */
-
-  async listProjects(): Promise<Project[]> {
-    return request<Project[]>('/api/projects')
-  },
-
-  /** There is no GET /api/projects/:id: read the list and pick the project (404 when it is gone). */
-  async getProject(id: string): Promise<Project> {
-    const project = (await request<Project[]>('/api/projects')).find((p) => p.id === id)
-    if (!project) throw new ApiError(`No project with id "${id}"`, 404)
-    return project
-  },
-
-  async createProject(input: ProjectInput): Promise<Project> {
-    return request<Project>('/api/projects', { method: 'POST', body: JSON.stringify(input) })
-  },
-
-  async updateProject(id: string, patch: Partial<ProjectInput>): Promise<Project> {
-    return request<Project>(`/api/projects/${encodeURIComponent(id)}`, {
-      method: 'PATCH',
-      body: JSON.stringify(patch),
-    })
-  },
-
-  /** 204; the folder stays on disk. */
-  async deleteProject(id: string): Promise<void> {
-    await request<void>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  },
-
-  async listProjectMessages(id: string): Promise<ProjectMessage[]> {
-    return request<ProjectMessage[]>(`/api/projects/${encodeURIComponent(id)}/messages`)
-  },
-
-  /** D-O11: answers with the project and every message the write created
-     (the message plus any direct tasks the user's @tags queued). */
-  async postProjectMessage(id: string, input: ProjectMessageInput): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(id)}/messages`, {
-      method: 'POST',
-      body: JSON.stringify(input),
-    })
-  },
-
-  /* -- Project team plans and tasks (D-P1). POST team-plan only returns
-     Primary's plan; nothing is stored until the user applies it, so Cancel is
-     local. Apply and retry answer with the project and the messages they
-     created or changed. */
-
-  /**
-   * Ask Primary for a plan: `messageId` names the user's message it answers,
-   * or `prompt` asks without one. 400 when the message is not a user message
-   * of this project, 409 without a Team Lead, 413 when the prompt cannot fit,
-   * 502 when Primary's answer is unusable. Writes nothing.
-   */
-  async requestTeamPlan(projectId: string, body: TeamPlanRequest): Promise<TeamPlanResult> {
-    return request<TeamPlanResult>(`/api/projects/${encodeURIComponent(projectId)}/team-plan`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  },
-
-  /**
-   * Commit a plan the user confirmed: the BE validates `plan` again against
-   * the current library and team, creates and adds the accepted agents, then
-   * queues the accepted tasks. 400 for a bad selection, 409 when a new
-   * specialist's name is taken. Pass `round` when applying a review (Part 5).
-   */
-  async applyTeamPlan(projectId: string, body: TeamPlanApply): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/team-plan/apply`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  },
-
-  /**
-   * Ask Primary to review a settled round (Part 5). Writes nothing; returns
-   * the next-round plan (or a closing summary/question). 409 when there is no
-   * Primary, the round is still open, or the request is closed.
-   */
-  async requestReview(projectId: string, body: { promptId: string }): Promise<ReviewResult> {
-    return request<ReviewResult>(`/api/projects/${encodeURIComponent(projectId)}/review`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    })
-  },
-
-  /**
-   * One project task run (Part 6 "What it saw"). 404 when the run is missing,
-   * belongs to another project, or is a chat-only run (no projectId).
-   */
-  async getProjectRun(projectId: string, runId: string): Promise<AgentRun> {
-    return request<AgentRun>(
-      `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`,
-    )
-  },
-
-  /** 409 unless the task failed or was cancelled; re-queues it. */
-  async retryProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(
-      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/retry`,
-      { method: 'POST' },
-    )
-  },
-
-  /** Cancel a task and its non-done dependents. 409 when the task is already done. */
-  async cancelProjectTask(projectId: string, messageId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(
-      `/api/projects/${encodeURIComponent(projectId)}/tasks/${encodeURIComponent(messageId)}/cancel`,
-      { method: 'POST' },
-    )
-  },
-
-  /** Pause: start nothing new; the in-flight call keeps going. */
-  async pauseProjectWork(projectId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/pause`, {
-      method: 'POST',
-    })
-  },
-
-  /** Resume: clear pause and kick the queue. */
-  async resumeProjectWork(projectId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/resume`, {
-      method: 'POST',
-    })
-  },
-
-  /** Stop: abort the in-flight call and cancel every queued/running task. */
-  async stopProjectWork(projectId: string): Promise<ProjectUpdate> {
-    return request<ProjectUpdate>(`/api/projects/${encodeURIComponent(projectId)}/work/stop`, {
-      method: 'POST',
-    })
-  },
-
-  async testEndpoint(id: string): Promise<{ ok: boolean; models: string[]; latencyMs: number }> {
-    return request<{ ok: boolean; models: string[]; latencyMs: number }>(
+  /** `error` (BE-11) explains a failed test, e.g. "fetch failed (ECONNREFUSED: ...)". */
+  async testEndpoint(id: string): Promise<EndpointTestResult> {
+    return request<EndpointTestResult>(
       `/api/endpoints/${encodeURIComponent(id)}/test`,
       { method: 'POST' },
     )

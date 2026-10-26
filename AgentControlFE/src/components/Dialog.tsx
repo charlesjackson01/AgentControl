@@ -1,56 +1,22 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { useDialogFocus } from '../hooks/useDialogFocus'
 
 type DialogProps = {
   open: boolean
   title: string
   subtitle?: string
-  size?: 'sm' | 'md'
+  size?: 'sm' | 'md' | 'lg'
   onClose: () => void
   footer?: ReactNode
   children: ReactNode
+  /** Focus target on close when the opener is gone (see useDialogFocus). */
+  returnFocus?: () => HTMLElement | null
 }
 
-export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children }: DialogProps) {
+export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children, returnFocus }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-        return
-      }
-      // Keep Tab inside the dialog.
-      if (e.key !== 'Tab' || !panelRef.current) return
-      const focusable = panelRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      )
-      if (focusable.length === 0) return
-      const first = focusable[0]
-      const last = focusable[focusable.length - 1]
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault()
-        last.focus()
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault()
-        first.focus()
-      }
-    }
-
-    document.addEventListener('keydown', onKey)
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-
-    const target = panelRef.current?.querySelector<HTMLElement>('[data-autofocus]')
-    target?.focus()
-
-    return () => {
-      document.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previousOverflow
-    }
-  }, [open, onClose])
+  useDialogFocus(open, panelRef, onClose, returnFocus)
 
   if (!open) return null
 
@@ -58,10 +24,13 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
     <div
       className="dialog-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target !== e.currentTarget) return
+        // Don't let the press blur to <body> after close restored focus to the opener.
+        e.preventDefault()
+        onClose()
       }}
     >
-      <div className={`dialog${size === 'sm' ? ' dialog--sm' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef}>
+      <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef} tabIndex={-1}>
         <div className="dialog__head">
           <div>
             <p className="dialog__title">{title}</p>

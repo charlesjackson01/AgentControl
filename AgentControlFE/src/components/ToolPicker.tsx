@@ -18,7 +18,7 @@ export default function ToolPicker({ selected, registry, loading, error, disable
   return (
     <div className="field">
       <p className="field__label">Tools <span className="pill">{selected.length} / {MAX_SKILL_TOOLS}</span></p>
-      <p className="field__hint">Select the built-in capabilities agents can call with this skill. Write tools can change workspace notes.</p>
+      <p className="field__hint">Select the built-in capabilities agents can call with this skill. Write tools can change files or the bot&apos;s memory.</p>
       {selected.length > 0 && (
         <div className="chips" aria-label="Selected tools">
           {selected.map((tool) => {

@@ -10,12 +10,12 @@ const markdown = (header) => `---\nname: sample\ndescription: a skill\n${header}
 describe('SKILL.md import preview matches backend parsing', () => {
   const cases = [
     ['', []],
-    ['tools: [save_note, "list_notes", save_note]', ['save_note', 'list_notes']],
-    ['tools: save_note list_notes, custom_tool', ['save_note', 'list_notes', 'custom_tool']],
-    ['tools:\n  - save_note\n  - list_notes\nmetadata:\n  - hidden_tool', ['save_note', 'list_notes']],
-    ['tools: [save_note, list_notes] # trailing ignored_tool', ['save_note', 'list_notes']],
-    ['tools: # block comment\n  - save_note # item comment\n# full-line comment\n\n  - list_notes', ['save_note', 'list_notes']],
-    ['tools # comment: save_note', []],
+    ['tools: [remember, "recall", remember]', ['remember', 'recall']],
+    ['tools: remember recall, custom_tool', ['remember', 'recall', 'custom_tool']],
+    ['tools:\n  - remember\n  - recall\nmetadata:\n  - hidden_tool', ['remember', 'recall']],
+    ['tools: [remember, recall] # trailing ignored_tool', ['remember', 'recall']],
+    ['tools: # block comment\n  - remember # item comment\n# full-line comment\n\n  - recall', ['remember', 'recall']],
+    ['tools # comment: remember', []],
     ['tools: ["hash#tool", \'other#tool\', embedded#hash] # ignored', ['hash#tool', 'other#tool', 'embedded#hash']],
     ['metadata:\n  tools: hidden_tool\n__proto__: ignored', []],
   ]
@@ -27,7 +27,7 @@ describe('SKILL.md import preview matches backend parsing', () => {
     })
   }
   it('handles CRLF, quoted comments, and double quote escapes identically', () => {
-    const input = markdown('description: "A \\"quote\\" # literal" # ignored\ntools: save_note').replaceAll('\n', '\r\n')
+    const input = markdown('description: "A \\"quote\\" # literal" # ignored\ntools: remember').replaceAll('\n', '\r\n')
     assert.deepEqual(parsePreview(input), parseSkillMarkdown(input))
   })
   it('reports invalid frontmatter without prototype-key interference', () => {
@@ -42,8 +42,49 @@ describe('SKILL.md import preview matches backend parsing', () => {
   })
 })
 
+describe('SKILL.md import preview warnings match backend parsing (long skills)', () => {
+  const longDescription = 'Summarize the data carefully. '.repeat(40).trim() // 1199 characters, over 1024
+  const longCompatibility = 'Requires python3 and network access. '.repeat(15).trim() // 554 characters, over 500
+  const longBody = Array.from({ length: 520 }, (_, i) => `${i + 1}. Step.`).join('\n') // 520 lines, over 500
+  const skill = (header, body = 'Follow these instructions.') => `---\nname: sample\n${header}\n---\n\n${body}\n`
+  const cases = [
+    ['a description over the limit', skill(`description: ${longDescription}`), ['description is 1199 characters (spec limit 1024)']],
+    ['compatibility over the limit', skill(`description: a skill\ncompatibility: ${longCompatibility}`), ['compatibility is 554 characters (spec limit 500)']],
+    ['a body over the line limit', skill('description: a skill', longBody), ['body is 520 lines (spec recommends under 500)']],
+    [
+      'all three with valid YAML',
+      skill(`description: ${longDescription}\ncompatibility: ${longCompatibility}`, longBody),
+      ['description is 1199 characters (spec limit 1024)', 'compatibility is 554 characters (spec limit 500)', 'body is 520 lines (spec recommends under 500)'],
+    ],
+    [
+      'all three plus invalid YAML',
+      skill(`description: ${longDescription}\ncompatibility: ${longCompatibility}\nbroken: [unclosed`, longBody),
+      [
+        'frontmatter is not valid YAML; read line by line',
+        'description is 1199 characters (spec limit 1024)',
+        'compatibility is 554 characters (spec limit 500)',
+        'body is 520 lines (spec recommends under 500)',
+      ],
+    ],
+  ]
+  for (const [label, input, expected] of cases) {
+    it(`warns for ${label} like the backend`, () => {
+      const preview = parsePreview(input)
+      const backend = parseSkillMarkdown(input)
+      assert.deepEqual(preview.warnings, backend.warnings)
+      assert.deepEqual(backend.warnings, expected)
+      assert.deepEqual(preview, backend)
+    })
+  }
+  it('measures the fixtures as intended', () => {
+    assert.equal(longDescription.length, 1199)
+    assert.equal(longCompatibility.length, 554)
+    assert.equal(longBody.split('\n').length, 520)
+  })
+})
+
 describe('tool selection and import', () => {
-  const known = { name: 'save_note', description: 'Save a note.', parameters: { type: 'object' }, category: 'notes', effect: 'write' }
+  const known = { name: 'remember', description: 'Save one short lasting fact.', parameters: { type: 'object' }, category: 'memory', effect: 'write' }
   const legacy = { name: 'custom_legacy', description: 'Original declaration', parameters: { retained: true } }
   it('retains unknown declarations while adding a canonical built-in, without storing registry metadata', () => {
     const selected = toggleTool([legacy], known)
@@ -79,7 +120,7 @@ describe('SKILL.md export round-trips through the import parser', () => {
       tools: [tool('csv_summary'), tool('read_note')],
     }
     const { markdown, parsed } = roundTrip(skill)
-    assert.deepEqual(parsed, { name: skill.name, description: skill.description, tag: 'Data', content: skill.content, tools: ['csv_summary', 'read_note'] })
+    assert.deepEqual(parsed, { name: skill.name, description: skill.description, tag: 'Data', content: skill.content, tools: ['csv_summary', 'read_note'], warnings: [] })
     assert.match(markdown, /^---\nname: csv-analysis\ndescription: .+\ntag: Data\ntools: csv_summary, read_note\n---\n\n# CSV Analysis/)
   })
 
@@ -112,7 +153,7 @@ describe('SKILL.md export round-trips through the import parser', () => {
   })
 
   it('keeps a body that looks like frontmatter, normalizing CRLF', () => {
-    const content = '---\nname: evil\ndescription: injected\ntools: save_note\n---\n\n  indented line\r\nlast # line'
+    const content = '---\nname: evil\ndescription: injected\ntools: remember\n---\n\n  indented line\r\nlast # line'
     const { parsed } = roundTrip({ name: 'body', description: 'Body test.', tag: '', content, tools: [] })
     assert.equal(parsed.name, 'body')
     assert.deepEqual(parsed.tools, [])
@@ -120,8 +161,8 @@ describe('SKILL.md export round-trips through the import parser', () => {
   })
 
   it('writes each valid tool name once, in order', () => {
-    const tools = [tool('save_note'), tool('list_notes'), tool('save_note'), tool('bad name'), tool('a,b'), tool('get_skill')]
-    assert.deepEqual(roundTrip({ name: 'tools', description: 'Tools.', content: 'Body.', tools }).parsed.tools, ['save_note', 'list_notes', 'get_skill'])
+    const tools = [tool('remember'), tool('recall'), tool('remember'), tool('bad name'), tool('a,b'), tool('get_skill')]
+    assert.deepEqual(roundTrip({ name: 'tools', description: 'Tools.', content: 'Body.', tools }).parsed.tools, ['remember', 'recall', 'get_skill'])
   })
 
   it('names the file after the id, filename-safe', () => {
@@ -142,16 +183,16 @@ describe('SKILL.md export round-trips through the import parser', () => {
 
 describe('skill library search', () => {
   const skills = [
-    { id: 'csv', name: 'CSV Analysis', description: 'Summarize CSV files.', tag: 'Data', tools: [{ name: 'csv_summary' }, { name: 'read_note' }] },
-    { id: 'notes', name: 'Notes Organizer', description: 'Tidy shared notes.', tag: 'Notes', tools: [{ name: 'save_note' }, { name: 'read_note' }] },
+    { id: 'csv', name: 'CSV Analysis', description: 'Summarize CSV files.', tag: 'Data', tools: [{ name: 'csv_summary' }, { name: 'recall' }] },
+    { id: 'notes', name: 'Notes Organizer', description: 'Tidy shared notes.', tag: 'Notes', tools: [{ name: 'remember' }, { name: 'recall' }] },
     { id: 'legacy', name: 'Legacy', description: '', tag: '' },
   ]
   const ids = (list) => list.map((s) => s.id)
 
   it('matches declared tool names as well as name, description, and tag', () => {
     assert.deepEqual(ids(filterSkills(skills, 'csv_summary')), ['csv'])
-    assert.deepEqual(ids(filterSkills(skills, ' READ_NOTE ')), ['csv', 'notes'])
-    assert.deepEqual(ids(filterSkills(skills, 'save_')), ['notes'])
+    assert.deepEqual(ids(filterSkills(skills, ' RECALL ')), ['csv', 'notes'])
+    assert.deepEqual(ids(filterSkills(skills, 'remem')), ['notes'])
     assert.deepEqual(ids(filterSkills(skills, 'tidy')), ['notes'])
     assert.deepEqual(ids(filterSkills(skills, 'data')), ['csv'])
     assert.deepEqual(ids(filterSkills(skills, '')), ['csv', 'notes', 'legacy'])
@@ -160,7 +201,7 @@ describe('skill library search', () => {
   })
 
   it('applies tag filters before the query', () => {
-    assert.deepEqual(ids(filterSkills(skills, 'read_note', ['Notes'])), ['notes'])
+    assert.deepEqual(ids(filterSkills(skills, 'recall', ['Notes'])), ['notes'])
     assert.deepEqual(ids(filterSkills(skills, '', ['Data', 'Notes'])), ['csv', 'notes'])
     assert.deepEqual(filterSkills(skills, 'csv_summary', ['Notes']), [])
   })

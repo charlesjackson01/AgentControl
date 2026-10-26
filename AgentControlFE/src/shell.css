@@ -480,3 +480,23 @@ button.cf-act__head:focus-visible { outline: 2px solid var(--c-accent-ring); out
 .cf-fmenu__list > *:hover, .cf-fmenu__list > *:focus-visible { background: var(--c-bg-sunk); }
 .cf-set__tab:disabled { opacity: 0.5; cursor: default; }
 .cf-set__tab:disabled:hover { color: var(--c-text-2); }
+
+/* FE-9 safe markdown in assistant replies (lib/markdown.ts). v3 mockup 04: paragraphs 8px apart, <b> bold, sunk inline code. */
+.cf-md { white-space: normal; }
+/* Block margins: none except 8px between siblings (mockup .bub p+p). Same specificity, so order decides. */
+.cf-md :where(p, pre, ul, ol) { margin: 0; }
+.cf-md > * + *, .cf-md li > * + * { margin-top: 8px; }
+.cf-md strong { font-weight: 600; }
+.cf-md__code { font-family: var(--font-mono); font-size: 12px; background: var(--c-bg-sunk); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+/* GAP-M1: fenced code block — the mockups have none; same sunk surface as inline code, scrolls sideways. */
+.cf-md__pre { padding: 9px 11px; background: var(--c-bg-sunk); border-radius: var(--r-sm); overflow-x: auto; white-space: pre; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; }
+.cf-md__pre code { font: inherit; }
+/* GAP-M2: lists — not in the mockups; plain markers, small indent. */
+.cf-md__list { padding-left: 22px; }
+ul.cf-md__list { list-style: disc; }
+ul.cf-md__list ul.cf-md__list { list-style: circle; }
+ol.cf-md__list { list-style: decimal; }
+.cf-md__list li + li { margin-top: 2px; }
+/* GAP-M3: links — not in the mockups; accent colour, underlined. */
+.cf-md__a { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.cf-md__a:hover { color: var(--c-text); }

@@ -19,6 +19,7 @@ import { moveActive } from '../lib/search'
 import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
 import { activityView } from '../lib/activity'
 import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
+import { Markdown } from '../components/Markdown'
 
 /** New-message check while the thread is open and the tab visible. */
 const THREAD_POLL_MS = 10_000
@@ -355,7 +356,7 @@ export default function ConversationChat() {
                       before={act && <ActivityCard view={act} />}
                       after={act && <FileCards files={act.files} conversationId={conversationId} />}
                     >
-                      {view.text}
+                      {view.kind === 'assistant' ? <Markdown text={view.text} /> : view.text}
                       {view.kind === 'error' && retryText !== undefined && item.index === lastIdx && canSend && (
                         <button type="button" className="chat__retry" onClick={() => void send(retryText)} disabled={sending}>
                           Retry

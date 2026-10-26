@@ -32,3 +32,18 @@ describe('thread layout', () => {
     assert.equal(inner['justify-content'], 'flex-end')
   })
 })
+
+describe('FE-9 markdown in replies', () => {
+  it('lists get markers back (the global ul reset removes them)', () => {
+    assert.equal(rule('ul.cf-md__list')['list-style'], 'disc')
+    assert.equal(rule('ol.cf-md__list')['list-style'], 'decimal')
+  })
+  it('code blocks keep whitespace and scroll sideways instead of widening the bubble', () => {
+    const pre = rule('.cf-md__pre')
+    assert.equal(pre['white-space'], 'pre')
+    assert.equal(pre['overflow-x'], 'auto')
+  })
+  it('the block reset is zero-specificity (:where) so the 8px sibling gap wins', () => {
+    assert.equal(rule('.cf-md :where(p, pre, ul, ol)').margin, '0')
+  })
+})

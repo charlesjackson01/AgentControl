@@ -192,11 +192,13 @@ describe('groups: sending and replies', () => {
     const g = await makeGroup()
     const sent = await send(g.id, 'What did the 2019 proposal say about the pier?')
     expect(sent.status).toBe(202)
+    expect(sent.body.conversation.typingAgentId).toBe(primary.id)
     expect(sent.body.messages).toHaveLength(1)
     expect(sent.body.messages[0]).toMatchObject({ role: 'user', content: 'What did the 2019 proposal say about the pier?' })
     expect(sent.body.conversation.id).toBe(g.id)
     const out = replies(g.id)
     expect(out.map((m) => m.authorAgentId)).toEqual([primary.id, researcher.id, summarizer.id, primary.id])
+    expect(out.some((m) => m.skippedAgentIds)).toBe(false)
     expect(out.map((m) => m.content)).toEqual([
       "I'll split this: @Researcher find the 2019 pier figures, then @Summarizer turn them into 3 bullets.",
       'The 2019 proposal put the pier at 240 ft.', '- The pier grows', "That's everything.",
@@ -253,7 +255,13 @@ describe('groups: sending and replies', () => {
     })
     const g = await makeGroup('Big', [researcher.id, summarizer.id, ...extra.map((a) => a.id)])
     await send(g.id, 'go')
-    expect(replies(g.id).map((m) => m.authorAgentId)).toEqual([primary.id, researcher.id, summarizer.id, primary.id])
+    const out = replies(g.id)
+    expect(out.map((m) => m.authorAgentId)).toEqual([primary.id, researcher.id, summarizer.id, primary.id])
+    // The lead's reply names who the cap left out, in mention order; it survives a restart.
+    expect(out[0]!.skippedAgentIds).toEqual(extra.map((a) => a.id))
+    expect(out.slice(1).some((m) => m.skippedAgentIds)).toBe(false)
+    const again = createStore(join(dir, 'store.json'))
+    expect(again.chatMessages.find((m) => m.id === out[0]!.id)?.skippedAgentIds).toEqual(extra.map((a) => a.id))
   })
 
   it('a failed reply becomes an error message and the queue goes on', async () => {

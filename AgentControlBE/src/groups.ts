@@ -177,13 +177,18 @@ export function postGroupMessage(store: WorkspaceStore, group: GroupConversation
   // The sender has read everything up to their own message.
   group.lastReadAt = message.createdAt
   store.save()
+  // The lead always answers first, so it is "typing" from the 202 on (unless a turn is already running).
+  if (!groupTyping.has(group.id)) groupTyping.set(group.id, group.leadAgentId)
   const previous = turnChains.get(group.id) ?? Promise.resolve()
   const next = previous.then(() => runGroupTurn(store, group.id, message)).catch((err: unknown) => {
     console.error(`Group ${group.id} turn failed:`, err instanceof Error ? err.message : err)
   })
   turnChains.set(group.id, next)
   void next.finally(() => {
-    if (turnChains.get(group.id) === next) turnChains.delete(group.id)
+    if (turnChains.get(group.id) === next) {
+      turnChains.delete(group.id)
+      groupTyping.delete(group.id)
+    }
   })
   return message
 }
@@ -271,8 +276,13 @@ async function runGroupTurn(store: WorkspaceStore, groupId: string, userMessage:
   const fromLead = leadReply.error ? [] : resolveMentions(leadReply.content, candidates()).ids
   const queue = [...new Set([...fromUser, ...fromLead])]
   // Leave room for the lead's wrap-up when the lead handed work out.
-  const room = MAX_GROUP_REPLIES - replies - (fromLead.length > 0 ? 1 : 0)
-  for (const id of queue.slice(0, Math.max(0, room))) {
+  const room = Math.max(0, MAX_GROUP_REPLIES - replies - (fromLead.length > 0 ? 1 : 0))
+  const skipped = queue.slice(room)
+  if (skipped.length > 0) {
+    leadReply.skippedAgentIds = skipped
+    store.save()
+  }
+  for (const id of queue.slice(0, room)) {
     if (!current()) return
     const agent = store.agents.find((a) => a.id === id && group.memberAgentIds.includes(a.id))
     if (!agent) continue

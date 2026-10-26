@@ -442,6 +442,8 @@ export interface ChatMessage {
   kind?: 'message' | 'system'
   /** The agent that wrote an assistant message (required in groups). */
   authorAgentId?: string
+  /** BE-5: on the lead's reply, the @mentioned bots left out by the 4-reply cap, in mention order. */
+  skippedAgentIds?: string[]
   attachments?: Attachment[]
   activity?: MessageActivity
 }

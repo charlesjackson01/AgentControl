@@ -243,6 +243,8 @@ export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>
           ...(m.error === true ? { error: true as const } : {}),
           ...(m.kind === 'system' || m.kind === 'message' ? { kind: m.kind } : {}),
           ...(typeof m.authorAgentId === 'string' ? { authorAgentId: m.authorAgentId } : {}),
+          ...(Array.isArray(m.skippedAgentIds) && m.skippedAgentIds.length > 0 && m.skippedAgentIds.every((id) => typeof id === 'string')
+            ? { skippedAgentIds: [...m.skippedAgentIds] } : {}),
           ...withAttachments(m.attachments),
           ...withActivity(m.activity),
         }]

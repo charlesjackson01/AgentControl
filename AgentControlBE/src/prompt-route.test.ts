@@ -9,6 +9,7 @@ import type { Agent, AgentRun, Endpoint, PromptBudget, Skill } from './shared/ty
 import { createStore, type WorkspaceStore } from './store.js'
 import { toolDeclaration } from './tools.js'
 import { SKILL_PAGE_CHARS } from './tools/skills.js'
+import { FILE_TOOL_NAMES } from './tools/files.js'
 
 /**
  * Skills on small context windows, end to end through fastify.inject() with a
@@ -111,7 +112,7 @@ const catalogSystem = (skills: Skill[]): string => `${LEAD_INSTRUCTIONS}\n\n${sk
 
 /** Tools the attached skills declare, deduped in order, then activate_skill, then remember (BE-4; memoryLearn defaults on). */
 const offeredTools = (skills: Skill[]): string[] => [
-  ...new Set([...skills.flatMap((s) => s.tools.map((t) => t.name)).filter((name) => toolDeclaration(name)), 'activate_skill', 'remember']),
+  ...new Set([...skills.flatMap((s) => s.tools.map((t) => t.name)).filter((name) => toolDeclaration(name)), 'activate_skill', 'remember', ...FILE_TOOL_NAMES]),
 ]
 
 beforeEach(() => {
@@ -260,16 +261,17 @@ describe('POST /api/prompt-budget', () => {
       contextWindow: 8192,
       responseReserve: RESPONSE_RESERVE,
       rulesTokens: 0,
-      estimatedTokens: 0,
+      // BE-3: the file tools are always offered.
+      estimatedTokens: Math.ceil(JSON.stringify(FILE_TOOL_NAMES.map((n) => toolDeclaration(n))).length / 4),
       catalogTokens: 0,
       mode: 'catalog',
       summarizedSkillIds: [],
-      toolNames: [],
+      toolNames: [...FILE_TOOL_NAMES],
     })
     // BE-4: memoryLearn defaults on, so a skill-less draft still offers remember.
     const learning = (await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', skillIds: [] })).json() as PromptBudget
-    expect(learning.toolNames).toEqual(['remember'])
-    expect(learning.estimatedTokens).toBe(Math.ceil(JSON.stringify([toolDeclaration('remember')]).length / 4))
+    expect(learning.toolNames).toEqual(['remember', ...FILE_TOOL_NAMES])
+    expect(learning.estimatedTokens).toBe(Math.ceil(JSON.stringify(['remember', ...FILE_TOOL_NAMES].map((n) => toolDeclaration(n))).length / 4))
     const bad = await inject('POST', '/api/prompt-budget', { endpointId: 'ep_local_llama', memoryLearn: 'yes' })
     expect(bad.statusCode).toBe(400)
   })

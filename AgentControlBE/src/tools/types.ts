@@ -3,10 +3,10 @@
  * import store/app/upstream types only (`import type`) so the registry can be
  * loaded first without cycles (seed.ts resolves declarations at module load).
  */
-import type { MemoryItem } from '../shared/types.js'
+import type { FileChange, MemoryItem } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
 
-export type ToolCategory = 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data'
+export type ToolCategory = 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data' | 'files'
 export type ToolEffect = 'read' | 'write'
 
 export interface ToolContext {
@@ -57,6 +57,35 @@ export interface ToolContext {
   conversationId?: string
   /** BE-4: remember calls this run (capped per run). */
   memoryWrites?: { count: number }
+  /** BE-3: set for a group run; file tools then also see the group's shared/ as `group:shared/...`. */
+  group?: { id: string; slug: string }
+  /** BE-3: this run's files (src/file-service.ts). Unset: file tools refuse. */
+  files?: FileService
+  /** BE-3: what this run did with files (shown on the reply's activity). */
+  activity?: RunActivity
+}
+
+export interface FileItem { path: string; kind: 'file' | 'folder'; size?: number; modifiedAt: string }
+export interface SearchHit { path: string; match: 'name' | 'text'; line?: number; text?: string }
+
+/**
+ * BE-3: what file tools may do on disk. Paths are the model's relative paths
+ * ('workspace/a.md', 'group:shared/a.md'); errors are thrown as plain Error
+ * messages meant for the model. Tests can pass a fake.
+ */
+export interface FileService {
+  list(path: unknown, opts: { recursive: boolean; max: number }): { path: string; entries: FileItem[]; truncated: boolean }
+  /** text is null for binary files and files over the read cap (tooLarge). */
+  read(path: unknown): { path: string; size: number; mime: string; modifiedAt: string; text: string | null; tooLarge: boolean }
+  search(query: string, path: unknown, opts: { maxHits: number }): { hits: SearchHit[]; truncated: boolean }
+  write(path: unknown, content: string, mode: 'create' | 'overwrite' | 'append'): FileChange & { bytes: number; modifiedAt: string }
+  makeFolder(path: unknown): { path: string; created: boolean }
+}
+
+/** BE-3: per-run activity the file tools add to (steps by the run loop, filesChanged by write tools). */
+export interface RunActivity {
+  steps: { tool: string; summary: string; ok: boolean; path?: string }[]
+  filesChanged: FileChange[]
 }
 
 /**
@@ -85,4 +114,6 @@ export interface ToolEntry {
   maxResultChars?: number
   /** Return a JSON-serializable value or a string; throw Error('…') for bad input. */
   handler(args: Record<string, unknown>, ctx: ToolContext): unknown
+  /** BE-3: a step line for the reply's activity (e.g. "Read shared/x.pdf"); tools without it add no step. */
+  activity?(args: Record<string, unknown>): { summary: string; path?: string }
 }

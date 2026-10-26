@@ -196,6 +196,8 @@ export interface AgentRun {
   activatedSkills?: { id: string; name: string; source: string }[]
   /** Per-tool-call audit for runs that used the tool loop. */
   toolCalls?: { name: string; arguments: string; resultChars: number; ok: boolean }[]
+  /** BE-3: file steps and files written this run (copied onto the reply's activity). */
+  activity?: { steps: MessageActivity['steps']; filesChanged: FileChange[] }
   /**
    * Set on runs made for a project task. Such runs only see earlier runs of
    * the same project as history, and the agent's own chat never sees them.
@@ -409,7 +411,15 @@ export interface MessageActivity {
   skills: { id: string; name: string; source: string }[]
   /** At most 20, server-written, redacted. */
   steps: { tool: string; summary: string; ok: boolean; path?: string }[]
-  filesChanged: { path: string; change: 'added' | 'modified' }[]
+  filesChanged: FileChange[]
+}
+
+/** BE-3: one file a run wrote. bytes/modifiedAt are the file after the write (optional on old messages). */
+export interface FileChange {
+  path: string
+  change: 'added' | 'modified'
+  bytes?: number
+  modifiedAt?: string
 }
 
 /** One message in a chat-first conversation (independent of run pruning). */
@@ -490,7 +500,10 @@ export interface FileListing {
   root: string
   path: string
   entries: FileEntry[]
-  usage: { bytes: number; quotaBytes: number }
+  /** bytes includes the bot's trash (BE-3), which also counts toward the quota; trashBytes is that part. */
+  usage: { bytes: number; quotaBytes: number; trashBytes: number }
+  /** Files in the whole bot folder (not folders, not trash); the same for every path. */
+  totalFiles: number
 }
 
 export type MemoryCategory = 'about-you' | 'preferences' | 'work' | 'other'

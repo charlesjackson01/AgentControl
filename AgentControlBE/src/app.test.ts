@@ -11,6 +11,10 @@ import type { Agent, AgentRun, ChatMessage, Conversation, ConversationSummary, E
 import { DEFAULT_ENDPOINT_BASE_URL } from './shared/types.js'
 import { seedEndpointModels, seedEndpoints, seedSkills, vendoredSeedSkills } from './db/seed.js'
 import { builtinTools, executeToolCall, toolDeclaration, type ToolEntry } from './tools.js'
+import { FILE_TOOL_NAMES } from './tools/files.js'
+
+/** BE-3: chars/4 of the file tools' schema JSON, which every run now carries. */
+const FILE_TOOL_TOKENS = Math.ceil(JSON.stringify(FILE_TOOL_NAMES.map((n) => toolDeclaration(n))).length / 4)
 
 /**
  * Hermetic HTTP tests via fastify.inject() — no sockets, no real network.
@@ -311,7 +315,7 @@ describe('POST /api/agents/:id/runs', () => {
     expect(system).toContain('Skills (call activate_skill to use one):\n- core/summarization: ')
     expect(system).toContain(catalogLine(skill))
     expect(system).not.toContain(skill.content.slice(0, 120))
-    expect((req as { tools?: { function: { name: string } }[] }).tools?.map((t) => t.function.name)).toEqual(['activate_skill', 'remember'])
+    expect((req as { tools?: { function: { name: string } }[] }).tools?.map((t) => t.function.name)).toEqual(['activate_skill', 'remember', ...FILE_TOOL_NAMES])
   })
 })
 
@@ -514,7 +518,7 @@ describe('context budget before upstream', () => {
     // 400-char turns => 200 tokens each. Window fits system+input+reserve plus
     // exactly two turns, so a five-turn history trims down to the two newest.
     const mock = mockChat('A'.repeat(400))
-    const agentId = await makeBudgetRunner(4600)
+    const agentId = await makeBudgetRunner(4600 + FILE_TOOL_TOKENS)
 
     const mk = (i: number): string => `u${i}`.padEnd(400, 'x')
     const hist: string[] = []
@@ -541,10 +545,11 @@ describe('context budget before upstream', () => {
     const agentId = await makeBudgetRunner(100)
     const res = await inject('POST', `/api/agents/${agentId}/runs`, { input: 'x'.repeat(1000) })
     expect(res.statusCode).toBe(413)
-    // ceil(1000 / 4) = 250 estimated, plus the reply reserve, against a 100-token window.
+    // ceil((1000 + file tool schema) / 4) estimated, plus the reply reserve, against a 100-token window.
     const { message } = res.json() as { message: string }
+    const schemaChars = JSON.stringify(FILE_TOOL_NAMES.map((n) => toolDeclaration(n))).length
     expect(message).toContain("Prompt too large for this endpoint's context window")
-    expect(message).toContain('about 250 tokens of prompt plus 4096 reserved for the reply exceed the 100-token window')
+    expect(message).toContain(`about ${Math.ceil((1000 + schemaChars) / 4)} tokens of prompt plus 4096 reserved for the reply exceed the 100-token window`)
   })
 
   it('sends an explicit max_tokens in the upstream payload', async () => {
@@ -589,6 +594,7 @@ describe('tool execution loop', () => {
         type: 'function',
         function: { name: 'remember', description: toolDeclaration('remember')?.description, parameters: toolDeclaration('remember')?.parameters },
       },
+      ...FILE_TOOL_NAMES.map((name) => ({ type: 'function', function: { name, description: toolDeclaration(name)?.description, parameters: toolDeclaration(name)?.parameters } })),
     ])
 
     // Call 2 carries the assistant tool_calls turn and the matching tool result.
@@ -645,23 +651,24 @@ describe('tool execution loop', () => {
     ])
   })
 
-  it('omits the tools key when the agent has no skills and memory learning is off', async () => {
+  it('offers only the file tools when the agent has no skills and memory learning is off', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner()
     const stored = store.agents.find((a) => a.id === agent.id)!
     stored.skillIds = []
     stored.memoryLearn = false
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
-    expect(lastRequest(mock)).not.toHaveProperty('tools')
+    const tools = (lastRequest(mock) as { tools?: { function: { name: string } }[] }).tools
+    expect(tools?.map((t) => t.function.name)).toEqual([...FILE_TOOL_NAMES])
   })
 
-  it('offers only remember when the agent has no skills but memory learning is on', async () => {
+  it('offers remember and the file tools when the agent has no skills but memory learning is on', async () => {
     const mock = mockChat('ok')
     const { agent } = await makeRunner()
     store.agents.find((a) => a.id === agent.id)!.skillIds = []
     expect((await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'hi' })).statusCode).toBe(200)
     const tools = (lastRequest(mock) as { tools?: { function: { name: string } }[] }).tools
-    expect(tools?.map((t) => t.function.name)).toEqual(['remember'])
+    expect(tools?.map((t) => t.function.name)).toEqual(['remember', ...FILE_TOOL_NAMES])
   })
 
   it('truncates tool results at 4,000 chars with a marker', async () => {
@@ -1604,7 +1611,7 @@ describe('tool plumbing', () => {
 
   it('saves a failed run instead of 413 when tool traffic overflows the window', async () => {
     const ep = await inject('POST', '/api/endpoints', {
-      kind: 'openai-compatible', name: 'Tiny', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 4400,
+      kind: 'openai-compatible', name: 'Tiny', baseUrl: 'http://127.0.0.1:9', defaultModel: 'm', contextWindow: 4400 + FILE_TOOL_TOKENS,
     })
     const sk = await inject('POST', '/api/skills', {
       name: 'Tiny tools', content: 'Use tools.', tools: [{ name: 'list_skills', description: 'x' }],
@@ -1614,7 +1621,8 @@ describe('tool plumbing', () => {
       endpointId: (ep.json() as Endpoint).id, skillIds: [(sk.json() as Skill).id],
     })).json() as Agent
     store.agents.find((a) => a.id === agent.id)!.memoryLearn = false
-    const padded = JSON.stringify({ pad: 'x'.repeat(1200) })
+    // The tools-off final call drops the schemas, so the pad covers the file tools' share too.
+    const padded = JSON.stringify({ pad: 'x'.repeat(1200 + FILE_TOOL_TOKENS * 4) })
     const mock = mockChatSequence([toolCallResponse('list_skills', padded), contentResponse('never sent')])
     const res = await inject('POST', `/api/agents/${agent.id}/runs`, { input: 'go' })
     expect(res.statusCode).toBe(200)

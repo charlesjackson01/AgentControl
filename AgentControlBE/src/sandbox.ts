@@ -5,7 +5,7 @@
 import { existsSync } from 'node:fs'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { botRoot, folderBytes } from './files.js'
+import { botRoot, folderUsage } from './files.js'
 import { fail } from './http.js'
 import { INTERNET_POLICIES, MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES, type Agent, type InternetPolicy, type Skill } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
@@ -28,7 +28,7 @@ export function sandboxInfo(store: WorkspaceStore, agent: Agent): SandboxInfo {
     internetPolicy: agent.internetPolicy,
     vm: VM_NOT_AVAILABLE,
     limits: SANDBOX_LIMITS,
-    usage: { bytes: existsSync(root) ? folderBytes(root) : 0 },
+    usage: { bytes: existsSync(root) ? folderUsage(store, agent).bytes : 0 },
     runs: [],
   }
 }

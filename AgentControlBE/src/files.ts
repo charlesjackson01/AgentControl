@@ -15,6 +15,7 @@ import { fail } from './http.js'
 import type { Agent, FileEntry, FileListing, FileZone, Skill } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { skillFolder } from './tools/skills.js'
+import { archiveShares, moveShares, readShares, withShares } from './share-records.js'
 
 export const BOT_QUOTA_BYTES = 500 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -178,6 +179,7 @@ export function archiveBotFolder(store: WorkspaceStore, agent: Agent, at = new D
   mkdirSync(dir, { recursive: true })
   const target = freeName(dir, `${agent.slug}-${archiveStamp(at)}`)
   renameSync(root, target)
+  archiveShares(root, target)
   return relative(join(store.dataDir, 'archive'), target).split(sep).join('/')
 }
 
@@ -430,7 +432,7 @@ export function listFolder(store: WorkspaceStore, agent: Agent, rawPath: unknown
     if (name.endsWith('.tmp') && name.startsWith('.')) continue
     entries.push(entryFor([...parts, name], st, zone))
   }
-  return listing(entries)
+  return listing(withShares(entries, readShares(root)))
 }
 
 /** Every file under shared/, flat, newest first. */
@@ -448,7 +450,7 @@ export function listShared(store: WorkspaceStore, agent: Agent): { entries: File
   }
   walk(['shared'])
   out.sort((a, b) => (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : a.modifiedAt < b.modifiedAt ? 1 : -1))
-  return { entries: out }
+  return { entries: withShares(out, readShares(root)) }
 }
 
 export interface FileContent {
@@ -544,7 +546,8 @@ export function movePath(store: WorkspaceStore, agent: Agent, rawFrom: unknown, 
   if (info.isDirectory() && (dst + sep).startsWith(src + sep)) fail(400, 'A folder cannot be moved inside itself.')
   mkdirsGuarded(root, to.slice(0, -1))
   renameSync(src, dst)
-  return entryFor(to, statSync(dst), to[0] as FileZone)
+  moveShares(root, from.join('/'), to.join('/'))
+  return withShares([entryFor(to, statSync(dst), to[0] as FileZone)], readShares(root))[0]!
 }
 
 /** Move a file or folder to data/archive/trash/<slug>/<ts>/<path>. Never removed. */
@@ -559,5 +562,6 @@ export function trashPath(store: WorkspaceStore, agent: Agent, rawPath: unknown,
   const dest = join(freeName(trash, archiveStamp(at)), ...parts)
   mkdirSync(dirname(dest), { recursive: true })
   renameSync(src, dest)
+  moveShares(root, parts.join('/'), null)
 }
 

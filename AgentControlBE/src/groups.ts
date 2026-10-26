@@ -10,7 +10,8 @@ import { archiveGroupFolder, ensureGroupFolder } from './group-files.js'
 import { fail } from './http.js'
 import { resolveMentions } from './mentions.js'
 import { executeRun } from './runs.js'
-import type { Agent, ChatMessage, GroupConversation } from './shared/types.js'
+import { attachmentPrompt } from './attachments.js'
+import type { Agent, Attachment, ChatMessage, GroupConversation } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 
 export const MIN_GROUP_MEMBERS = 2
@@ -172,8 +173,8 @@ export function groupIdle(groupId: string): Promise<void> {
   return turnChains.get(groupId) ?? Promise.resolve()
 }
 
-export function postGroupMessage(store: WorkspaceStore, group: GroupConversation, content: string): ChatMessage {
-  const message = pushMessage(store, group, { role: 'user', content })
+export function postGroupMessage(store: WorkspaceStore, group: GroupConversation, content: string, attachments: Attachment[] = []): ChatMessage {
+  const message = pushMessage(store, group, { role: 'user', content, ...(attachments.length > 0 ? { attachments } : {}) })
   // The sender has read everything up to their own message.
   group.lastReadAt = message.createdAt
   store.save()
@@ -199,7 +200,8 @@ function transcript(store: WorkspaceStore, group: GroupConversation): string {
   for (const m of messagesOf(store, group.id).reverse()) {
     if (lines.length >= TRANSCRIPT_MESSAGES) break
     const who = m.kind === 'system' ? '(group)' : m.role === 'user' ? 'User' : nameOf(store, m.authorAgentId ?? '')
-    const line = `${who}: ${m.error ? '(reply failed)' : m.content}`
+    const attached = m.role === 'user' && m.attachments?.length ? `${m.content ? '\n' : ''}${attachmentPrompt(m.attachments)}` : ''
+    const line = `${who}: ${m.error ? '(reply failed)' : m.content}${attached}`
     if (chars + line.length > TRANSCRIPT_CHARS && lines.length > 0) break
     lines.push(line.length > TRANSCRIPT_CHARS ? `${line.slice(0, TRANSCRIPT_CHARS)}…` : line)
     chars += line.length

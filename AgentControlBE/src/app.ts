@@ -18,6 +18,7 @@ import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attach
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
+import { checkVolume } from './storage/index.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
@@ -415,7 +416,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   })
 
   app.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number }
+    const err = error as Error & { statusCode?: number; reason?: unknown }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
     const message = redactUrlCredentials(err.message ?? '')
     if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
@@ -423,6 +424,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       statusCode: status,
       error: status >= 500 ? 'Internal Server Error' : 'Request Error',
       message,
+      // BE-P2-6: 409/410 carry a machine-readable reason (e.g. 'files_missing').
+      ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
     })
   })
 
@@ -1432,7 +1435,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   })
 
   // BE-2: every existing bot gets its folder on boot.
-  ensureAllBotFolders(store, (msg) => app.log.warn(msg))
+  // BE-P2-6: check the files volume marker first. A missing or foreign volume
+  // is files_missing: nothing is created or re-initialized; chats keep working
+  // and file operations answer 409 { reason: 'files_missing' }.
+  if (checkVolume(store, (msg) => app.log.warn(msg)) === 'ok') ensureAllBotFolders(store, (msg) => app.log.warn(msg))
 
   registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
 

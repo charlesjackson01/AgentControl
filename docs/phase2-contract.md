@@ -61,3 +61,9 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 |---|---|---|---|
 | GET | `/api/permissions?status=pending&agentId=&conversationId=` | `PermissionListResponse` | |
 | POST | `/api/permissions/:requestId` `PermissionAnswer` + header `x-agentcontrol-confirm: 1` (`PERMISSION_CSRF_HEADER`) | `PermissionRequest` | 400 wrong decision for the type, 403 header missing, 404, 409 already resolved |
+
+## Files volume (BE-P2-6, live on `p2/be-6-storage`; additive)
+- The server keeps a marker file `.ac-volume-id` at the root of the bots' files and its id in `settings.vm.volumeId` (server-only; never served). The first start writes both.
+- If the marker is missing, or holds another id, the files are `files_missing`: chats, bots and groups keep working, but every bot or group file route (list, read, upload, write, folder, move, delete) and `PUT /api/conversations/:id/uploads` answer **409 with `reason: 'files_missing'`** and a plain-language message. The bots' file tools give the same message. Nothing is re-created; the state clears on the next start once the right files are back.
+- The error body is the existing one plus `reason`: `{ statusCode: 409, error: 'Request Error', message, reason: 'files_missing' }`. Show `message`.
+- M1 has no Start empty or Restore (M3).

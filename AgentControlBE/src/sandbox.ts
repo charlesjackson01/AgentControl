@@ -2,10 +2,10 @@
  * BE-8: sandbox settings stub (the bot VM arrives in Phase 2) and the setup
  * helpers behind the /new bot card: creation defaults and a model-written draft.
  */
-import { existsSync } from 'node:fs'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { botRoot, folderUsage } from './files.js'
+import { botVol, folderUsage } from './files.js'
+import { filesMissing, storageFor } from './storage/index.js'
 import { fail } from './http.js'
 import { VM_LIMITS, INTERNET_POLICIES, MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES, type Agent, type InternetPolicy, type Skill } from './shared/types.js'
 import { assignAgentSlug, type WorkspaceStore } from './store.js'
@@ -24,12 +24,13 @@ export interface SandboxInfo {
 }
 
 export function sandboxInfo(store: WorkspaceStore, agent: Agent): SandboxInfo {
-  const root = botRoot(store, agent)
+  // BE-P2-6: 0 while the bots' files are missing (the usage can't be measured).
+  const measurable = !filesMissing(store) && storageFor(store).backend.existsAt(botVol(agent))
   return {
     internetPolicy: agent.internetPolicy,
     vm: VM_NOT_AVAILABLE,
     limits: SANDBOX_LIMITS,
-    usage: { bytes: existsSync(root) ? folderUsage(store, agent).bytes : 0 },
+    usage: { bytes: measurable ? folderUsage(store, agent).bytes : 0 },
     runs: [],
   }
 }

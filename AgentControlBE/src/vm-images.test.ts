@@ -276,6 +276,7 @@ describe('botvm-browser layer', () => {
     expect(BROWSER_LAUNCH_NOTE).toContain('p.chromium.launch(channel="chromium")')
     expect(BROWSER_LAUNCH_NOTE).toContain("chromium.launch({ channel: 'chromium' })")
     expect(BROWSER_LAUNCH_NOTE).toContain('a plain chromium.launch() also works')
+    expect(BROWSER_LAUNCH_NOTE).toContain('Use the preinstalled Playwright; do not install, upgrade or pin another Playwright version')
   })
 })
 

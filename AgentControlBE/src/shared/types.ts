@@ -710,7 +710,13 @@ export interface ScriptRun {
 /** Run history row (GET /api/agents/:id/runs and VmInfo.runs). */
 export type ScriptRunSummary = Pick<ScriptRun,
   'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId'
-> & { filesChangedCount: number; groupId?: string }
+> & {
+  filesChangedCount: number
+  groupId?: string
+  /** Optional split of filesChangedCount for history rows. */
+  files?: { added: number; modified: number; deleted: number }
+  network?: ScriptRun['network']
+}
 
 /** The small run summary a kind 'run' ChatMessage carries. */
 export interface ChatRunSummary {

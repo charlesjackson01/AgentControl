@@ -53,6 +53,7 @@ function setup(o: { scripts?: Script[]; events?: string[]; runtime?: ResolvedRun
     exec,
     now: () => new Date(t),
     env: {},
+    sleep: async () => {},
     ...o.deps,
   })
   return { runner, streamed, commands, botEnv, advance: (ms: number) => (t += ms), now: () => t }
@@ -165,6 +166,27 @@ describe('createContainerRunner', () => {
     expect(await s.runner.run(req())).toMatchObject({ exitCode: 137, oomKilled: true, error: 'The script ran out of memory (the 4 GB limit) and was stopped.' })
     expect(await s.runner.run(req())).toMatchObject({ exitCode: 1, pidsLimited: true, error: 'The script hit the 256-process limit (exit code 1).' })
     expect((await s.runner.run(req())).error).toMatch(/exit code 137\), most likely because it ran out of memory/)
+  })
+
+  it('process limit still saturated after the run: retries the read, then counts it as the limit and stops the container', async () => {
+    const full = { code: 126, stdout: '', stderr: 'crun: fork: Resource temporarily unavailable' }
+    const other = { code: 125, stdout: '', stderr: 'Error: no such container' }
+    const cases: { after: { code: number; stdout: string; stderr: string }[]; limited: boolean }[] = [
+      { after: [full, full, full, full], limited: true },
+      { after: [full, { code: 0, stdout: EV(0, 2), stderr: '' }], limited: true },
+      { after: [other, other, other, other], limited: false },
+    ]
+    for (const c of cases) {
+      const waits: number[] = []
+      const s = setup({ scripts: [{ code: 1 }], deps: { sleep: async (ms) => void waits.push(ms) } })
+      const replies = [{ code: 0, stdout: EV(0, 0), stderr: '' }, ...c.after]
+      ;(s.botEnv.exec as unknown as ReturnType<typeof vi.fn>).mockImplementation(async () => replies.shift() ?? other)
+      const r = await s.runner.run(req())
+      expect(r.pidsLimited ?? false).toBe(c.limited)
+      expect(r.error).toBe(c.limited ? 'The script hit the 256-process limit (exit code 1).' : 'The script exited with code 1.')
+      expect(s.botEnv.stop).toHaveBeenCalledTimes(c.limited ? 1 : 0)
+      expect(waits).toEqual(c.limited ? [500, 1000, 2000].slice(0, c.after.length - 1) : [])
+    }
   })
 
   it('timeout stops the container and reports timed_out', async () => {

@@ -102,7 +102,7 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
       enforceLimits: () => probe.standard?.limitsAccepted ?? true,
       activeRuns: (id) => runner.activeRuns(id),
     })
-    runner = createContainerRunner({ botEnv, engine: async () => ENGINE, getAgent: () => agent, runtime: () => rt, idleStopMs: 1 })
+    runner = createContainerRunner({ botEnv, engine: async () => ENGINE, getAgent: () => agent, runtime: () => rt, idleStopMs: 1, log: (m) => console.log(`[be8 runner] ${m}`) })
   }, 240_000)
   afterAll(() => {
     if (savedOverride === undefined) delete process.env[ALLOW_UNLIMITED_RUNS_ENV]

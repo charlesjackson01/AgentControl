@@ -28,6 +28,9 @@ export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
 export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
 /** Test-only override for the limits block. Never set by default, never exposed in the API/UI. */
 export const ALLOW_UNLIMITED_RUNS_ENV = 'AC_ALLOW_UNLIMITED_RUNS'
+/** What podman/crun/sh print when no new process can be started in the container. */
+const PIDS_FULL_RE = /resource temporarily unavailable|cannot fork|can't fork|EAGAIN/i
+export const EVENTS_RETRY_DELAYS_MS = [500, 1000, 2000]
 
 /** Reads the cgroup event counters inside the container (fixed script, no user input). */
 export const CGROUP_EVENTS_ARGV = ['sh', '-c', 'for f in memory.events pids.events; do echo "== $f"; cat /sys/fs/cgroup/$f 2>/dev/null; done']
@@ -85,6 +88,8 @@ export interface ContainerRunnerDeps {
   log?: (msg: string) => void
   /** Environment to read the test-only AC_ALLOW_UNLIMITED_RUNS override from (default process.env, read per run). */
   env?: NodeJS.ProcessEnv
+  /** For tests: the wait between event-counter retries. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 export interface ContainerRunner extends Runner {
@@ -111,6 +116,7 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
   const idleMs = deps.idleStopMs ?? IDLE_STOP_MS
   const now = deps.now ?? (() => new Date())
   const log = deps.log ?? (() => {})
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const queues = new Map<string, Promise<unknown>>()
   const counts = new Map<string, number>()
   const active = new Map<string, Active>()
@@ -122,13 +128,31 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     status: 'error', outcome: 'failed', error: message, durationMs: Date.now() - t0, stdout: '', stderr: message, filesChanged: [], ...extra,
   })
 
-  async function readEvents(agent: Agent): Promise<CgroupEvents> {
+  /** `pidsFull`: the read itself couldn't start a process (the container is at its process limit). */
+  async function readEvents(agent: Agent): Promise<CgroupEvents & { pidsFull: boolean }> {
     try {
       const r = await deps.botEnv.exec(agent, CGROUP_EVENTS_ARGV, { timeoutMs: 15_000 })
-      return parseCgroupEvents(r.stdout)
-    } catch {
-      return { oomKill: null, pidsMax: null }
+      if (r.code !== 0) log(`runner: reading cgroup events for ${agent.slug} failed (${r.code}): ${r.stderr.trim().split('\n').pop() ?? ''}`)
+      return { ...parseCgroupEvents(r.stdout), pidsFull: r.code !== 0 && PIDS_FULL_RE.test(`${r.stderr}\n${r.stdout}`) }
+    } catch (x) {
+      return { oomKill: null, pidsMax: null, pidsFull: PIDS_FULL_RE.test(String((x as Error)?.message ?? x)) }
     }
+  }
+
+  /**
+   * After a run: leftover processes (e.g. a fork bomb's children) can keep the container at its
+   * process limit, so the read can't even start. Retry a few times (only then), and treat a read that keeps
+   * failing for lack of processes as hitting the limit.
+   */
+  async function readEventsAfter(agent: Agent): Promise<CgroupEvents & { pidsFull: boolean }> {
+    let r = await readEvents(agent)
+    let full = r.pidsFull
+    for (let i = 0; i < EVENTS_RETRY_DELAYS_MS.length && r.pidsMax === null && r.pidsFull; i++) {
+      await sleep(EVENTS_RETRY_DELAYS_MS[i]!)
+      r = await readEvents(agent)
+      full ||= r.pidsFull
+    }
+    return { ...r, pidsFull: full }
   }
 
   async function runOne(agent: Agent, req: RunScriptRequest, rt: ResolvedRuntime, cwd: string, timeoutSec: number, t0: number): Promise<RunScriptResult> {
@@ -195,9 +219,16 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     if (stopping) await stopping
     lastActivity.set(agent.id, now().getTime())
 
-    const after = ended ? { oomKill: null, pidsMax: null } : await readEvents(agent)
+    const after = ended ? { oomKill: null, pidsMax: null, pidsFull: false } : await readEventsAfter(agent)
     const oomKilled = before.oomKill !== null && after.oomKill !== null && after.oomKill > before.oomKill
-    const pidsLimited = before.pidsMax !== null && after.pidsMax !== null && after.pidsMax > before.pidsMax
+    const pidsLimited =
+      (before.pidsMax !== null && after.pidsMax !== null && after.pidsMax > before.pidsMax) ||
+      (after.pidsMax === null && after.pidsFull && exit.code !== 0)
+    if (pidsLimited) {
+      // Clear leftover processes so the next run doesn't start at the limit; it restarts lazily.
+      log(`runner: ${agent.slug} hit the process limit; stopping its container to clear leftover processes`)
+      await deps.botEnv.stop(agent).catch((x: unknown) => log(`runner: stop after the process limit failed: ${(x as Error).message}`))
+    }
     const base = {
       exitCode: exit.code,
       durationMs: Date.now() - t0,

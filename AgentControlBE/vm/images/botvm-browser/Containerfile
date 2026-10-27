@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
 # BE-P2-3: agentcontrol/botvm-browser — the shared, read-only browser layer
-# (plan §2.2, §9). FROM the botvm base plus Playwright and headless Chromium.
+# (plan §2.2, §9). FROM the botvm base plus Playwright and full Chromium.
 # Used only by bots whose Browser permission is on; never counted in a bot's 10 GB.
-# Chromium runs headless with --no-sandbox (the container is the sandbox).
+# Only full Chromium is installed (`--no-shell`: no chromium-headless-shell), so
+# launch with channel 'chromium' (new headless mode) and --no-sandbox (the container
+# is the sandbox): Python `chromium.launch(channel="chromium", args=["--no-sandbox"])`.
 # Browsers live read-only in /opt/ms-playwright; downloads into volumes are blocked.
 
 ARG BOTVM_IMAGE=localhost/agentcontrol/botvm:1.0.0
@@ -12,7 +14,7 @@ ARG BOTVM_VERSION=1.0.0
 ARG PLAYWRIGHT_VERSION=1.64.1
 
 LABEL org.opencontainers.image.title="agentcontrol/botvm-browser" \
-      org.opencontainers.image.description="AgentControl bot VM browser layer: botvm + Playwright + headless Chromium" \
+      org.opencontainers.image.description="AgentControl bot VM browser layer: botvm + Playwright + Chromium (new headless)" \
       org.opencontainers.image.version="${BOTVM_VERSION}" \
       org.opencontainers.image.licenses="Apache-2.0" \
       io.agentcontrol.image="botvm-browser" \
@@ -35,7 +37,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN export HOME=/root PIP_USER=0 NPM_CONFIG_PREFIX=/usr/local \
  && npm install -g --no-fund --no-audit --no-bin-links "playwright@${PLAYWRIGHT_VERSION}" \
  && pip install --no-cache-dir --root-user-action=ignore "playwright==${PLAYWRIGHT_VERSION}" \
- && python3 -m playwright install --with-deps chromium \
+ && python3 -m playwright install --with-deps --no-shell chromium \
  && rm -rf /var/lib/apt/lists/* /root/.cache /root/.npm \
  && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 

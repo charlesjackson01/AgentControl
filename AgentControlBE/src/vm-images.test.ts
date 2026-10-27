@@ -12,6 +12,7 @@ import {
   BOT_PATHS,
   IMAGE_LABELS,
   PLAYWRIGHT_BROWSERS_PATH,
+  CHROMIUM_LAUNCH_OPTIONS,
   SHARED_IMAGE_KINDS,
   baseImageFor,
   botContainerName,
@@ -216,7 +217,9 @@ describe('botvm-browser layer', () => {
     expect(env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1')
     expect(env.NODE_PATH!.split(':')).toEqual(['/home/bot/.local/lib/node_modules', '/usr/local/lib/node_modules'])
     const run = of('botvm-browser', 'RUN').find((i) => i.args.includes('playwright install'))!
-    expect(run.args).toMatch(/playwright install --with-deps chromium(\s|$)/)
+    // Full Chromium only: --no-shell skips chromium-headless-shell, so bots launch with channel 'chromium'.
+    expect(run.args).toMatch(/playwright install --with-deps --no-shell chromium(\s|$)/)
+    expect(run.args).not.toMatch(/headless[-_]shell|chromium-headless-shell/)
     expect(run.args).toContain('"playwright==${PLAYWRIGHT_VERSION}"')
     expect(run.args).toContain('"playwright@${PLAYWRIGHT_VERSION}"')
     expect(run.args).toContain('chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"')
@@ -232,6 +235,12 @@ describe('botvm-browser layer', () => {
 
   it('runs Chromium without its own sandbox (the container is the sandbox)', () => {
     expect(pairs('botvm-browser', 'ENV').PLAYWRIGHT_CHROMIUM_ARGS).toBe('--no-sandbox')
+  })
+
+  it('launches full Chromium headless through channel chromium (there is no headless shell)', () => {
+    expect(CHROMIUM_LAUNCH_OPTIONS).toEqual({ channel: 'chromium', headless: true, args: ['--no-sandbox'] })
+    const cf = readFileSync(containerfilePath('botvm-browser'), 'utf8')
+    expect(cf).toContain('chromium.launch(channel="chromium", args=["--no-sandbox"])')
   })
 })
 
@@ -295,6 +304,11 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
       expect(s).toContain('id\\ -u')
     }
     expect(smokes[1]).toContain('chromium.launch')
+    // The browser smoke launches full Chromium headless through channel 'chromium' and
+    // fails if a headless shell was installed.
+    expect(smokes[1]).toMatch(/launch\\\(channel=[\\"]*chromium[\\"]*\\,\\ headless=True/)
+    expect(smokes[1]).toContain('chromium_headless_shell-')
+    expect(smokes[1]).toContain('chromium-\\*/chrome-linux\\*/chrome')
   })
 
   it('supports docker, a podman connection and --only, and never uses podman-machine-default', () => {
@@ -339,7 +353,11 @@ describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', (
     const out = execFileSync('bash', [path.join(vmDir(), 'build-images.sh'), '--engine', engine!], { encoding: 'utf8', timeout: 30 * 60_000 })
     expect(out).toMatch(/Python 3\.12\./)
     expect(out).toMatch(/v22\./)
-    // The browser smoke prints Chromium's version after launching it as uid 1000.
+    // No headless shell in the image; the full Chromium binary is there.
+    expect(out).toMatch(/^headless shell: none$/m)
+    expect(out).toMatch(new RegExp(`^${PLAYWRIGHT_BROWSERS_PATH}/chromium-\\d+/chrome-linux(64)?/chrome$`, 'm'))
+    // The browser smoke prints Chromium's version after launching it headless as uid 1000
+    // with channel 'chromium' (the launch would fail if it needed the missing headless shell).
     expect(out).toMatch(/^\d+\.\d+\.\d+\.\d+$/m)
   }, 30 * 60_000)
 })

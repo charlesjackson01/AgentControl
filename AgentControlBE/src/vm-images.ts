@@ -2,7 +2,8 @@
  * BE-P2-3: the shared bot images (plan §2.2) and the per-bot image layer names.
  *
  * - `localhost/agentcontrol/botvm:<ver>`: Debian slim, Python 3.12, Node 22, uid 1000.
- * - `localhost/agentcontrol/botvm-browser:<ver>`: botvm + Playwright + headless Chromium.
+ * - `localhost/agentcontrol/botvm-browser:<ver>`: botvm + Playwright + full Chromium (no headless shell;
+ *   launch with `CHROMIUM_LAUNCH_OPTIONS`, i.e. channel 'chromium' in new headless mode).
  * - `localhost/ac-bot-<slug>:<gen>`: the bot's own layer (FROM one of the above + vm.packages),
  *   built by BotEnvService (BE-P2-4) from `botLayerContainerfile()`.
  *
@@ -45,16 +46,22 @@ export const BOT_PATHS = {
 } as const
 /** Where the browser image keeps Chromium (read-only at run time). */
 export const PLAYWRIGHT_BROWSERS_PATH = '/opt/ms-playwright'
+/**
+ * How code in botvm-browser launches Chromium. The image has only full Chromium (installed
+ * with `--no-shell`), so `channel: 'chromium'` is required: it runs full Chromium in the new
+ * headless mode; the default (headless shell) would fail. `--no-sandbox`: the container is the sandbox.
+ */
+export const CHROMIUM_LAUNCH_OPTIONS = { channel: 'chromium', headless: true, args: ['--no-sandbox'] } as const
 
 /** Image label keys AgentControl sets and reads back (e.g. to detect a stale base). */
 export const IMAGE_LABELS = { image: 'io.agentcontrol.image', version: 'io.agentcontrol.version', agent: 'io.agentcontrol.agent', generation: 'io.agentcontrol.generation' } as const
 
 /**
  * Approximate sizes for the VM tab and Settings › VMs until the engine reports real ones.
- * Measured on the first real Podman build of 1.0.0 (linux/amd64): 430.7 MB and 1628.7 MB
- * (the browser size includes botvm).
+ * Measured on the real Podman build of 1.0.0 (linux/amd64, 2026-10-27): 430.7 MB and 1343.3 MB
+ * (the browser size includes botvm; full Chromium only, installed with `--no-shell`).
  */
-export const SHARED_IMAGE_APPROX_BYTES: Record<SharedImageKind, number> = { botvm: 430 * 1000 ** 2, 'botvm-browser': 1630 * 1000 ** 2 }
+export const SHARED_IMAGE_APPROX_BYTES: Record<SharedImageKind, number> = { botvm: 431 * 1000 ** 2, 'botvm-browser': 1343 * 1000 ** 2 }
 
 export function sharedImageRef(kind: SharedImageKind, version: string = BOTVM_VERSION): string {
   return `${BOTVM_REPO}/${kind}:${version}`

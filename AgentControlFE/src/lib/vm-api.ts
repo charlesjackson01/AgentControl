@@ -132,12 +132,18 @@ export function undoErrorOf(err: unknown): UndoError {
   const message = err instanceof Error ? err.message : String(err)
   const status = isObj(err) && typeof err.status === 'number' ? err.status : undefined
   const body = isObj(err) && isObj(err.body) ? err.body : undefined
+  // BE eb1d418: 409/410 come in Fastify's shape {statusCode, error, message, reason}; `message` is the
+  // readable text and `error` only the status phrase ("Gone"), so the typed bodies are read by `message`.
+  const own = (b: { message?: unknown }) => (typeof b.message === 'string' && b.message.trim() ? b.message.trim() : message)
   if (status === 409 && body) {
     const b = body as Partial<UndoConflict>
-    if (b.reason === 'run_active') return { kind: 'run_active', message }
-    if (b.reason === 'conflicts') return { kind: 'conflicts', message, conflicts: Array.isArray(b.conflicts) ? b.conflicts : [] }
+    if (b.reason === 'run_active') return { kind: 'run_active', message: own(b) }
+    if (b.reason === 'conflicts') return { kind: 'conflicts', message: own(b), conflicts: Array.isArray(b.conflicts) ? b.conflicts : [] }
   }
-  if (status === 410 && body && typeof body.reason === 'string') return { kind: 'gone', message, reason: body.reason as UndoGone['reason'] }
+  if (status === 410 && body && typeof body.reason === 'string') {
+    const b = body as Partial<UndoGone>
+    return { kind: 'gone', message: own(b), reason: body.reason as UndoGone['reason'] }
+  }
   return status === undefined ? { kind: 'other', message } : { kind: 'other', message, status }
 }
 

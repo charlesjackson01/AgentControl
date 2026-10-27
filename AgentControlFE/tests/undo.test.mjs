@@ -229,4 +229,16 @@ describe('BE 77cc66e: preview sizes, group names, budget, machine_restored', () 
     assert.equal(undoGoneText('machine_restored'), "This bot's computer was restored from a backup, so this run can't be undone.")
     assert.equal(undoGoneText('machine_restored', { error: 'Restored on Oct 2.' }), 'Restored on Oct 2.')
   })
+  it("BE eb1d418 Fastify shape: the 410 shows `message`, never the 'Gone' status phrase", () => {
+    const body = { statusCode: 410, error: 'Gone', message: "This bot's computer was restored from a backup, so this run can't be undone.", reason: 'machine_restored' }
+    const e = undoErrorOf(apiErr(410, body, 'Gone'))
+    assert.deepEqual(e, { kind: 'gone', message: body.message, reason: 'machine_restored' })
+    const gone = undoReducer(initialUndoPhase, { type: 'preview_failed', error: e })
+    const html = render(gone)
+    assert.ok(html.includes("This bot&#x27;s computer was restored from a backup, so this run can&#x27;t be undone."))
+    assert.ok(!html.includes('>Gone<'))
+    // 409 bodies read `message` too; an empty one falls back to the ApiError text.
+    assert.equal(undoErrorOf(apiErr(409, { statusCode: 409, error: 'Conflict', message: 'A run is still going.', reason: 'run_active' }, 'Conflict')).message, 'A run is still going.')
+    assert.equal(undoErrorOf(apiErr(409, { statusCode: 409, error: 'Conflict', message: ' ', reason: 'conflicts', conflicts: [] }, 'Fallback')).message, 'Fallback')
+  })
 })

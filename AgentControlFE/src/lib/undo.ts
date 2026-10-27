@@ -49,7 +49,7 @@ export function undoReasonText(reason: UndoUnavailableReason, ctx: UndoReasonCon
 
 /**
  * "Undo no longer available: <reason>." (the run card's line, §12 v2). machine_restored uses the
- * BE's own sentence (the 410's error text when given, else UNDO_MACHINE_RESTORED_TEXT, Team lead's wording).
+ * BE's own sentence (the 410 body's `message` when given, else UNDO_MACHINE_RESTORED_TEXT, Team lead's wording).
  */
 export function undoGoneText(reason: UndoUnavailableReason, ctx: UndoReasonContext & { error?: string } = {}): string {
   if (reason === 'machine_restored') return ctx.error?.trim() || UNDO_MACHINE_RESTORED_TEXT
@@ -170,7 +170,7 @@ export type UndoPhase =
   /** 409 run_active: blocked while the bot has an active run (§7.3.4). GAP. */
   | { kind: 'run_active'; preview?: UndoPreview }
   /**
-   * 410: the snapshot is gone, with why (§7.4). GAP. `error`: the 410's text (machine_restored shows it as is);
+   * 410: the snapshot is gone, with why (§7.4). GAP. `error`: the 410 body's `message` (machine_restored shows it as is);
    * `budgetBytes`: the preview's budget.limitBytes when a preview had loaded.
    */
   | { kind: 'gone'; reason: UndoUnavailableReason; error?: string; budgetBytes?: number }

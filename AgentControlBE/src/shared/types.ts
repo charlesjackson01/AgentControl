@@ -432,6 +432,11 @@ export interface FileChange {
   change: 'added' | 'modified' | 'deleted'
   bytes?: number
   modifiedAt?: string
+  /** Phase 2 run diffs: which folder `path` is relative to. Missing means the bot's own files (Phase 1 shape). */
+  scope?: 'workspace' | 'group'
+  /** scope 'group': the group the file belongs to, and its display name. */
+  groupId?: string
+  groupName?: string
 }
 
 export type ChatMessageKind = 'message' | 'system' | 'run' | 'permission'
@@ -641,6 +646,8 @@ export interface ScriptRunUndo {
   /** 'available' while the snapshot is kept, 'unavailable' once evicted (with reason), 'done' after an undo. */
   state: 'available' | 'unavailable' | 'done'
   reason?: UndoUnavailableReason
+  /** reason 'too_large': how many bytes the run changed (over the snapshot budget). */
+  changedBytes?: number
   /** When it became unavailable or was undone. */
   at?: string
   /** state 'done': the undo run that reversed this one. */
@@ -715,6 +722,10 @@ export interface ChatRunSummary {
   undo: ScriptRunUndo
   queuePosition?: number
   exitCode?: number
+  /** The script's file name (argv[1] or argv[0]) for the card title; `name` stays the skill. */
+  scriptName?: string
+  durationMs?: number
+  runtime?: ContainerRuntime | null
 }
 
 export interface PermissionRequest {

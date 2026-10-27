@@ -61,6 +61,10 @@ export function botMounts(store: WorkspaceStore, agent: Agent): BotMount[] {
 export interface BotEnvRouteDeps {
   botEnv: BotEnvService
   hostInfo: () => Promise<VmHostInfo>
+  /** BE-P2-8: the bot's resolved runtime (plan §4 table + limitsEnforced). */
+  runtime?: (agent: Agent) => VmInfo['runtime']
+  /** BE-P2-8: stop/reset end the bot's runs; idleStopAt for VmInfo. */
+  runner?: { stopRuns(agentId: string): void; idleStopAt(agentId: string): string | undefined }
 }
 
 export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore, deps: BotEnvRouteDeps): void {
@@ -96,14 +100,14 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const memory = folderBytes(path.join(root, 'memory'))
     const breakdown = { workspace, inputs, memory, tools: 0, opt: 0, imageLayer: 0 }
     const globalMode = store.settings.vm?.gvisor ?? 'auto'
+    const idleStopAt = deps.runner?.idleStopAt(agent.id)
     const vm = agent.vm
     return {
       agentId: agent.id,
       state,
       ...(stateMessage ? { stateMessage } : {}),
       host: { engine: host?.engine ?? null, provider: host?.provider ?? 'native', ...(host?.machine ? { machine: host.machine.name } : {}) },
-      runtime: {
-        // BE-P2-7 owns the gVisor probe; until then nothing is claimed as active.
+      runtime: deps.runtime?.(agent) ?? {
         effective: null,
         status: vm.gvisor === 'force_off' || (vm.gvisor === 'inherit' && globalMode === 'force_off') ? 'forced_off' : 'not_installed',
         mode: vm.gvisor,
@@ -123,6 +127,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       packages: vm.packages,
       ...(vm.tools ? { tools: vm.tools } : {}),
       image: vm.image,
+      ...(idleStopAt && state === 'running' ? { idleStopAt } : {}),
       storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root },
       runs: [],
       runsHasMore: false,
@@ -188,6 +193,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
   app.post('/api/agents/:id/vm/stop', async (request) => {
     const agent = agentOf(idOf(request))
     if (filesMissing(agent)) failWithReason(409, 'files_missing', 'The bot\'s files folder is missing.')
+    deps.runner?.stopRuns(agent.id)
     await botEnv.stop(agent)
     return vmInfo(agent)
   })
@@ -197,6 +203,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const body = request.body as { confirm?: unknown } | null | undefined
     if (!body || typeof body !== 'object' || body.confirm !== true) fail(400, 'Send {"confirm": true} to reset the bot\'s VM.')
     if (filesMissing(agent)) failWithReason(409, 'files_missing', 'The bot\'s files folder is missing.')
+    deps.runner?.stopRuns(agent.id)
     await botEnv.reset(agent)
     return vmInfo(agentOf(agent.id))
   })

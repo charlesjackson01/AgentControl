@@ -19,7 +19,9 @@ import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFro
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
 import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
-import { createBotEnvService, type BotEnvService } from './bot-env.js'
+import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
+import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
+import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
@@ -394,6 +396,18 @@ export interface BuildAppOptions {
   vmHost?: VmHostService
   /** BE-P2-4: per-bot containers, volumes and image layers; tests inject one with a fake CommandRunner. */
   botEnv?: BotEnvService
+  /** BE-P2-8: runtime/limits probe; tests inject one with a fake CommandRunner. */
+  runtimeProbe?: RuntimeProbe
+  /** BE-P2-8: run the probe when the server is ready (index.ts; off in tests). */
+  probeOnStart?: boolean
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** BE-P2-8: the VM script runner (BE-P2-12's RunService drives it). */
+    vmRunner: ContainerRunner
+    vmRuntimeProbe: RuntimeProbe
+  }
 }
 
 export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOptions = {}): FastifyInstance {
@@ -1464,22 +1478,71 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     return vmHost.grow(body && typeof body === 'object' ? body.toGb : undefined)
   })
 
+  const engineRef = async (): Promise<EngineRef | null> => {
+    const host = await vmHost.hostInfo()
+    if (!host.engine) return null
+    // Mac/Windows: always the dedicated machine, never podman-machine-default.
+    const globalArgs = host.engine === 'podman' && host.os !== 'linux' ? ['--connection', MACHINE_NAME] : []
+    return { cli: host.engine, globalArgs }
+  }
+
+  // BE-P2-8: which runtime each bot gets, and whether limits are really enforced.
+  const runtimeProbe = opts.runtimeProbe ?? createRuntimeProbe({ engine: engineRef, log: (msg) => app.log.info(msg) })
+  const runtimeOf = (agent: Agent): ResolvedRuntime =>
+    resolveRuntime(store.settings.vm?.gvisor ?? 'auto', agent.vm.gvisor, runtimeProbe.current(), agent.name)
+  registerProbeRoutes(app, runtimeProbe)
+  if (opts.probeOnStart) {
+    app.addHook('onReady', async () => {
+      void runtimeProbe.ensureFresh().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
+    })
+  }
+
   // BE-P2-4: each bot's container, tools volumes and image layer.
+  let runner: ContainerRunner | null = null
   const botEnv =
     opts.botEnv ??
     createBotEnvService({
-      engine: async () => {
-        const host = await vmHost.hostInfo()
-        if (!host.engine) return null
-        // Mac/Windows: always the dedicated machine, never podman-machine-default.
-        const globalArgs = host.engine === 'podman' && host.os !== 'linux' ? ['--connection', MACHINE_NAME] : []
-        return { cli: host.engine, globalArgs }
-      },
+      engine: engineRef,
       mounts: (agent) => botMounts(store, agent),
       saveVm: storeSaveVm(store),
+      // Only gVisor is named explicitly; the standard runtime stays the engine default (no recreate).
+      runtime: (agent) => (runtimeOf(agent).effective === 'runsc' ? 'runsc' : null),
+      runtimeFlags: (agent) => {
+        const r = runtimeOf(agent)
+        return r.effective === 'runsc' ? (r.flags ?? []) : []
+      },
+      enforceLimits: () => runtimeProbe.current()?.standard?.limitsAccepted ?? true,
+      activeRuns: (agentId) => runner?.activeRuns(agentId) ?? 0,
       log: (msg) => app.log.info(msg),
     })
-  registerBotEnvRoutes(app, store, { botEnv, hostInfo: () => vmHost.hostInfo() })
+
+  // BE-P2-8: script runs in the bot's container (Podman or Docker).
+  runner = createContainerRunner({
+    botEnv,
+    engine: engineRef,
+    getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
+    runtime: runtimeOf,
+    log: (msg) => app.log.info(msg),
+  })
+  app.decorate('vmRunner', runner)
+  app.decorate('vmRuntimeProbe', runtimeProbe)
+  let stopIdle: (() => void) | null = null
+  app.addHook('onReady', async () => {
+    stopIdle = runner?.startIdleTimer() ?? null
+  })
+  app.addHook('onClose', async () => {
+    stopIdle?.()
+  })
+
+  registerBotEnvRoutes(app, store, {
+    botEnv,
+    hostInfo: () => vmHost.hostInfo(),
+    runtime: (agent) => {
+      const { flags: _flags, ...r } = runtimeOf(agent)
+      return r
+    },
+    runner,
+  })
 
   return app
 }

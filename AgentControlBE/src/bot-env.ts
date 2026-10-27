@@ -64,6 +64,11 @@ export interface EngineRef {
   cli: EngineCli
   /** Global args before the verb, e.g. ['--connection', 'agentcontrol'] (Mac/Windows) or a test --root. */
   globalArgs: string[]
+  /**
+   * Program to run when it isn't `cli` itself (BE-P2-8, tests): e.g. command 'sudo' with
+   * globalArgs ['-n', 'podman', '--root', …]. `cli` still names the engine type.
+   */
+  command?: string
 }
 
 export interface BotMount {
@@ -225,10 +230,15 @@ export interface BotEnvDeps {
   baseVersion?: () => string
   /** Bind mounts for the bot (workspace rw, inputs ro, groups rw, skills ro). */
   mounts: (agent: Agent) => BotMount[]
-  /** False only when the engine can't enforce cgroup limits (BE-P2-6 decides; default true). */
+  /** False only when the engine refuses the cgroup limit flags (BE-P2-8 probe: limitsAccepted; default true). */
   enforceLimits?: () => boolean
   runtime?: (agent: Agent) => ContainerRuntime | null
   usernsArgs?: (agent: Agent) => string[]
+  /**
+   * Runtime flags passed as engine global args on start/stop/exec (BE-P2-8: runsc variants such
+   * as --runtime-flag=ignore-cgroups). Podman doesn't store them in the container.
+   */
+  runtimeFlags?: (agent: Agent) => string[]
   /** Network for tool builds (apt). Never 'host'. M1: 'none' (no internet yet). */
   buildNetwork?: () => 'none' | 'default'
   /** Persist a changed Agent.vm; false when the save failed. */
@@ -304,6 +314,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
   const now = deps.now ?? (() => new Date())
   const log = deps.log ?? (() => {})
   const locks = new Map<string, Promise<unknown>>()
+  const rtFlags = (agent: Agent) => deps.runtimeFlags?.(agent) ?? []
 
   /** One engine operation at a time per bot. */
   function serial<T>(slug: string, fn: () => Promise<T>): Promise<T> {
@@ -321,7 +332,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
   }
   async function cli(args: string[], timeoutMs = 60_000): Promise<CommandResult> {
     const e = await engine()
-    const r = await run(e.cli, [...e.globalArgs, ...args], { timeoutMs })
+    const r = await run(e.command ?? e.cli, [...e.globalArgs, ...args], { timeoutMs })
     if (r.code === 127) failWithReason(409, 'engine_missing', 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.')
     return r
   }
@@ -378,7 +389,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
       const args = ['build', '--file', file, '--tag', botImageRef(slug, generation), ...(net === 'none' ? ['--network', 'none'] : [])]
       if (e.cli === 'podman') args.push('--pull=never')
       args.push(dir)
-      const r = await run(e.cli, [...e.globalArgs, ...args], { timeoutMs: BUILD_TIMEOUT_MS })
+      const r = await run(e.command ?? e.cli, [...e.globalArgs, ...args], { timeoutMs: BUILD_TIMEOUT_MS })
       const out = tail(`${r.stdout}${r.stderr ? `\n${r.stderr}` : ''}`)
       if (r.code !== 0) {
         await removeImage(botImageRef(slug, generation))
@@ -473,12 +484,12 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
       await must(argv, 'create the bot\'s VM')
       await pruneImages(slug, [agent.vm.image.generation, agent.vm.image.previous])
     }
-    if (start && st.state !== 'running') await must(['start', botContainerName(slug)], 'start the bot\'s VM')
+    if (start && st.state !== 'running') await must([...rtFlags(agent), 'start', botContainerName(slug)], 'start the bot\'s VM')
     return agent.vm
   }
 
   async function exec(agent: Agent, argv: string[], opts: { cwd?: string; timeoutMs?: number; extraEnv?: EnvVar[] } = {}): Promise<CommandResult> {
-    return cli(execArgv({ slug: agent.slug, argv, env: agent.vm.env, extraEnv: opts.extraEnv, cwd: opts.cwd }), opts.timeoutMs ?? 60_000)
+    return cli([...rtFlags(agent), ...execArgv({ slug: agent.slug, argv, env: agent.vm.env, extraEnv: opts.extraEnv, cwd: opts.cwd })], opts.timeoutMs ?? 60_000)
   }
 
   return {
@@ -488,7 +499,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     stop: (agent) =>
       serial(agent.slug, async () => {
         const st = await containerStatus(agent.slug)
-        if (st.state === 'running') await must(['stop', '--time', '10', botContainerName(agent.slug)], 'stop the bot\'s VM', 30_000)
+        if (st.state === 'running') await must([...rtFlags(agent), 'stop', '--time', '10', botContainerName(agent.slug)], 'stop the bot\'s VM', 30_000)
       }),
     exec,
 

@@ -171,6 +171,37 @@ describe('BotEnvService (fake engine)', () => {
     expect(e.calls.length).toBeGreaterThan(3)
   })
 
+  it('BE-P2-8: runtime flags go as global args on start, stop and exec (not create)', async () => {
+    const e = fakeEngine()
+    const seen: string[][] = []
+    const FLAGS = ['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none']
+    const exec: CommandRunner = async (cmd, args) => {
+      seen.push([...args])
+      return e.exec(cmd, args.filter((x) => !x.startsWith('--runtime-flag=')))
+    }
+    const svc = service(e, { exec, runtime: () => 'runsc', runtimeFlags: () => FLAGS })
+    await svc.start(agent())
+    await svc.exec(agent(), ['true'])
+    await svc.stop(agent())
+    const withFlags = seen.filter((a) => a[0] === FLAGS[0]).map((a) => a[2])
+    expect(withFlags).toEqual(['start', 'exec', 'stop'])
+    const create = seen.find((a) => a[0] === 'create')!
+    expect(create.join(' ')).toContain('--runtime runsc')
+    expect(create.join(' ')).not.toContain('--runtime-flag')
+  })
+
+  it('BE-P2-8: EngineRef.command runs another program (e.g. sudo -n podman) with the global args', async () => {
+    const e = fakeEngine()
+    const exec: CommandRunner = async (cmd, args) => {
+      expect(cmd).toBe('sudo')
+      expect(args.slice(0, 2)).toEqual(['-n', 'podman'])
+      return e.exec('podman', args.slice(2))
+    }
+    const svc = service(e, { exec, engine: async () => ({ cli: 'podman', command: 'sudo', globalArgs: ['-n', 'podman'] }) })
+    await svc.start(agent())
+    expect(e.calls.some((x) => x[0] === 'start')).toBe(true)
+  })
+
   it('engine missing → 409 engine_missing; missing base image → 409 image_missing', async () => {
     const e = fakeEngine()
     await expect(service(e, { engine: async () => null }).start(agent())).rejects.toMatchObject({ statusCode: 409, reason: 'engine_missing' })

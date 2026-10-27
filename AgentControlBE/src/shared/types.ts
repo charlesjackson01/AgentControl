@@ -768,6 +768,10 @@ export interface VmInfo {
     checkedAt?: string
     mode: RuntimeMode
     globalMode: GlobalRuntimeMode
+    /** BE-P2-8 (additive): false when the runtime in use can't enforce the memory/process limits. Absent: unknown. */
+    limitsEnforced?: boolean
+    /** BE-P2-8 (additive): why, when limitsEnforced is false (starts with "limits can't be enforced"). */
+    limitsReason?: string
   }
   internetPolicy: InternetPolicy
   permissions: { browser: boolean; browserState: BrowserState; /** 0–1 while downloading */ progress?: number }
@@ -956,6 +960,18 @@ export interface VmProbeResult {
   checkedAt: string | null
   /** The cache key parts, for display/debug. */
   versions: { engine: string | null; runsc: string | null; image: string | null }
+  /** BE-P2-8 (additive): the standard runtime (crun/runc) probed with the same test container. */
+  standard?: {
+    runtime: ContainerRuntime | null
+    version: string | null
+    /** Memory and process limits really stopped an over-limit allocation and fork. */
+    limitsEnforced: boolean
+    /** The engine accepted the limit flags (false: containers are created without them). */
+    limitsAccepted: boolean
+    checks: ProbeCheck[]
+  } | null
+  /** BE-P2-8 (additive): runtime flags runsc needed to start, e.g. ["--runtime-flag=ignore-cgroups", "--runtime-flag=network=none"]. */
+  runscFlags?: string[]
 }
 
 /** GET /api/permissions?status=pending[&agentId=][&conversationId=]: newest first. */

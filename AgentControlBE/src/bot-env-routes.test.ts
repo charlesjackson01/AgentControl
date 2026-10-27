@@ -10,6 +10,7 @@ import { botRoot } from './files.js'
 import { createStore } from './store.js'
 import type { Agent, VmHostInfo } from './shared/types.js'
 import type { VmHostService } from './vm-host.js'
+import type { RuntimeProbe, RuntimeProbeResult } from './runtime-probe.js'
 
 /** BE-P2-4: /api/agents/:id/vm routes with a fake engine. */
 
@@ -25,6 +26,8 @@ let app: ReturnType<typeof buildApp>
 let engine: ReturnType<typeof fakeEngine>
 let host: VmHostInfo
 let runs = 0
+let probeResult: RuntimeProbeResult | null = null
+const fakeProbe: RuntimeProbe = { current: () => probeResult, refresh: async () => probeResult!, ensureFresh: async () => probeResult! }
 
 beforeEach(() => {
   vi.stubEnv('AGENTCONTROL_SECRET', 'be4-test-secret')
@@ -34,6 +37,7 @@ beforeEach(() => {
   engine = fakeEngine()
   host = hostInfo()
   runs = 0
+  probeResult = null
   const vmHost: VmHostService = { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host }
   const botEnv = createBotEnvService({
     exec: engine.exec,
@@ -42,7 +46,7 @@ beforeEach(() => {
     saveVm: storeSaveVm(store),
     activeRuns: () => runs,
   })
-  app = buildApp(store, { vmHost, botEnv })
+  app = buildApp(store, { vmHost, botEnv, runtimeProbe: fakeProbe })
 })
 afterEach(async () => {
   await app.close()
@@ -181,5 +185,49 @@ describe('start / stop / reset / tools', () => {
     expect(mounts).toContainEqual(expect.objectContaining({ target: `/bot/groups/${slug}`, readonly: false }))
     const lone = await makeAgent('Lone')
     expect(botMounts(store, stored(lone.id)).some((m) => m.target.startsWith('/bot/groups/'))).toBe(false)
+  })
+})
+
+describe('BE-P2-8: runtime, limits and runs in VmInfo', () => {
+  const probe = (over: Partial<RuntimeProbeResult> = {}): RuntimeProbeResult => ({
+    runsc: { installed: true, version: '2024' },
+    checks: [{ id: 'start', status: 'pass' }, { id: 'cgroup_limits', status: 'fail', message: "limits can't be enforced (memory.max reads \"max\")" }],
+    compatible: false, uidMapping: null, snapshotDriver: null, checkedAt: '2026-10-27T18:00:00.000Z',
+    versions: { engine: '5.4.2', runsc: '2024', image: 'abc' },
+    standard: { runtime: 'crun', version: '1.21', limitsEnforced: false, limitsAccepted: true, checks: [{ id: 'cgroup_limits', status: 'fail', message: "limits can't be enforced (crun)" }] },
+    runscFlags: ['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none'],
+    ...over,
+  })
+
+  it('before the probe: placeholder; after: resolved runtime with limitsEnforced and reason', async () => {
+    const a = await makeAgent()
+    expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toEqual({ effective: null, status: 'not_installed', mode: 'inherit', globalMode: 'auto', reason: "The runtime check hasn't run yet." })
+    probeResult = probe()
+    expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toEqual({
+      effective: 'crun', status: 'incompatible_fallback', reason: "limits can't be enforced", checkedAt: '2026-10-27T18:00:00.000Z',
+      mode: 'inherit', globalMode: 'auto', limitsEnforced: false, limitsReason: "limits can't be enforced (crun)",
+    })
+    await inject('PATCH', `/api/agents/${a.id}/vm`, { gvisor: 'force_on' })
+    const forced = (await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime
+    expect(forced).toMatchObject({ effective: null, status: 'required_unavailable' })
+    expect(forced.reason).toBe("gVisor is required for Analyst but isn't available (limits can't be enforced). Turn off Force on or fix gVisor.")
+    expect(forced.flags).toBeUndefined()
+  })
+
+  it('GET /api/vm/probe returns the probe result; a compatible runsc is active with limits enforced', async () => {
+    probeResult = probe({ compatible: true, checks: [{ id: 'start', status: 'pass' }], runscFlags: [] })
+    expect((await inject('GET', '/api/vm/probe')).json().runsc.installed).toBe(true)
+    const a = await makeAgent()
+    expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toMatchObject({ effective: 'runsc', status: 'active', limitsEnforced: true })
+  })
+
+  it('stop and reset stop the bot\'s runs first', async () => {
+    const a = await makeAgent()
+    const spy = vi.spyOn(app.vmRunner, 'stopRuns')
+    await inject('POST', `/api/agents/${a.id}/vm/start`)
+    await inject('POST', `/api/agents/${a.id}/vm/stop`)
+    await inject('POST', `/api/agents/${a.id}/vm/reset`, { confirm: true })
+    expect(spy).toHaveBeenCalledTimes(2)
+    expect(spy).toHaveBeenCalledWith(stored(a.id).id)
   })
 })

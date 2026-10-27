@@ -881,7 +881,11 @@ export interface UndoResult {
  * plain-language text, `error` is only the HTTP status phrase ("Request Error").
  */
 export interface UndoConflict {
+  statusCode: number
+  /** The HTTP status phrase (e.g. "Request Error"), not for display; the readable text is in `message`. */
   error: string
+  /** Plain-language text the FE shows as is. */
+  message: string
   reason: 'run_active' | 'conflicts'
   conflicts?: UndoPreview['conflicts']
 }
@@ -890,7 +894,11 @@ export interface UndoConflict {
  * text (UNDO_MACHINE_RESTORED_TEXT for 'machine_restored'), `error` is the HTTP status phrase.
  */
 export interface UndoGone {
+  statusCode: number
+  /** The HTTP status phrase (e.g. "Request Error"), not for display; the readable text is in `message`. */
   error: string
+  /** Plain-language text the FE shows as is (UNDO_MACHINE_RESTORED_TEXT for 'machine_restored'). */
+  message: string
   reason: UndoUnavailableReason
 }
 

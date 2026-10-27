@@ -26,8 +26,8 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 | GET | `/api/runs/:runId` | `ScriptRun` | 404 |
 | GET | `/api/runs/:runId/output?stream=stdout\|stderr` | text/plain full log | 404, 410 log evicted |
 | POST | `/api/runs/:runId/stop` | `ScriptRun` | 409 not active |
-| GET | `/api/runs/:runId/undo/preview` | `UndoPreview` | 409 `UndoConflict{reason:'run_active'}`, 410 `UndoGone` (both error bodies: text in `message`) |
-| POST | `/api/runs/:runId/undo` `UndoRequest{force?}` | `UndoResult` | 409 `UndoConflict` (`run_active`, or `conflicts` with the list), 410 `UndoGone{reason}` (both error bodies: text in `message`) |
+| GET | `/api/runs/:runId/undo/preview` | `UndoPreview` | 409 `UndoConflict{statusCode, error, message, reason:'run_active'}`, 410 `UndoGone{statusCode, error, message, reason}` (show `message`; `error` is the status phrase) |
+| POST | `/api/runs/:runId/undo` `UndoRequest{force?}` | `UndoResult` | 409 `UndoConflict` (`run_active`, or `conflicts` with the list), 410 `UndoGone{statusCode, error, message, reason}` (show `message`; `error` is the status phrase) |
 
 **Undo preview (additive, agreed 2026-10-27):** each `changes[]` entry may carry `beforeBytes?`/`afterBytes?` (number, or null for the side that doesn't exist: added files have `beforeBytes:null`, deleted files `afterBytes:null`) and `groupName?` beside `groupId`; `conflicts[]` may carry `groupName?`. `UndoPreview.budget?: {usedBytes, limitBytes}` mirrors the bot's snapshot budget from VmInfo. For a 410 with `reason:'machine_restored'` the `message` text is exactly "This bot's computer was restored from a backup, so this run can't be undone." (`UNDO_MACHINE_RESTORED_TEXT`); the FE shows the body's `message` as is. File reads by later runs aren't tracked in M1.
 

@@ -226,7 +226,7 @@ describe('runCardView: GAP states', () => {
     assert.equal(view(cleanSales).truncated, null)
   })
   it('caps the file list', () => {
-    const files = Array.from({ length: FILES_SHOWN + 3 }, (_, i) => ({ path: `shared/f${i}.txt`, change: 'added', bytes: 1, scope: 'group', groupId: 'g1' }))
+    const files = Array.from({ length: FILES_SHOWN + 3 }, (_, i) => ({ path: `shared/f${i}.txt`, change: 'added', bytes: 1, root: 'group', groupId: 'g1' }))
     const v = view(run('f', { status: 'succeeded', filesChanged: files }))
     assert.equal(v.files.length, FILES_SHOWN)
     assert.equal(v.moreFiles, 3)
@@ -353,12 +353,12 @@ describe('BE 146cd18: summary fields, file scopes, too_large bytes', () => {
   it('no scriptName (older messages): the summary name', () => {
     assert.equal(runCardView({ summary: { status: 'succeeded', kind: 'script', name: 'report.py', files: { added: 0, modified: 0, deleted: 0 }, undo: { state: 'available' } } }).name, 'report.py')
   })
-  it('paths are shown as is (no "group:" stripping); scope group names the folder', () => {
+  it('paths are shown as is (no "group:" stripping); root group names the folder', () => {
     const v = runCardView({ run: run('g', { status: 'succeeded', filesChanged: [
       { path: 'group:odd.txt', change: 'added', bytes: 1 },
-      { path: 'shared/plan.md', change: 'modified', bytes: 1, scope: 'group', groupId: 'g1', groupName: 'TL-1 Launch Room' },
-      { path: 'shared/b.md', change: 'modified', bytes: 1, scope: 'group', groupId: 'g2' },
-      { path: 'workspace/a.csv', change: 'modified', bytes: 1, scope: 'workspace' },
+      { path: 'shared/plan.md', change: 'modified', bytes: 1, root: 'group', groupId: 'g1', groupName: 'TL-1 Launch Room' },
+      { path: 'shared/b.md', change: 'modified', bytes: 1, root: 'group', groupId: 'g2' },
+      { path: 'workspace/a.csv', change: 'modified', bytes: 1, root: 'agent' },
     ] }), groupNames: { g2: 'Research' } })
     assert.deepEqual(v.files.map((f) => [f.path, f.folder]), [['group:odd.txt', null], ['shared/plan.md', 'TL-1 Launch Room group folder'], ['shared/b.md', 'Research group folder'], ['workspace/a.csv', null]])
     assert.match(renderToStaticMarkup(renderRunCard(v)), /<span class="rc-folder">TL-1 Launch Room group folder<\/span>/)
@@ -375,9 +375,14 @@ describe('sidebar preview of a run message', () => {
     const m = (content, scriptRun) => ({ role: 'assistant', content, kind: 'run', scriptRun })
     assert.equal(previewText(m('Ran report.py', summary({ status: 'failed', scriptName: 'x.py' }))), 'Ran report.py')
     assert.equal(previewText(m('', summary({ status: 'succeeded', name: 'csv-tools', scriptName: 'report.py' }))), 'Ran report.py')
-    assert.equal(previewText(m('', summary({ status: 'failed', name: 'report.py' }))), 'Ran report.py · failed')
+    assert.equal(previewText(m('', summary({ status: 'failed', name: 'report.py' }))), 'Ran report.py (failed)')
     assert.equal(previewText(m('', summary({ status: 'running', name: 'report.py' }))), 'Running report.py')
-    assert.equal(runPreview(undefined), 'Ran a script')
+    assert.equal(runPreview(undefined), 'Ran script')
+    assert.equal(runPreview(summary({ status: 'queued', name: 'r.py' })), 'Queued r.py')
+    assert.equal(runPreview(summary({ status: 'undone', name: 'r.py' })), 'Ran r.py (undone)')
+    assert.equal(runPreview(summary({ kind: 'undo', status: 'succeeded', name: 'r.py' })), 'Undid r.py')
+    assert.equal(runPreview(summary({ kind: 'undo', status: 'running', name: 'r.py' })), 'Undoing r.py')
+    assert.equal(runPreview(summary({ kind: 'undo', status: 'failed', name: 'r.py' })), 'Undo of r.py (failed)')
     assert.equal(previewText({ role: 'assistant', content: '' }), '…', 'not a run: unchanged')
     const { previewLine } = await import('../src/lib/shell.ts')
     const last = { ...m('', summary({ status: 'succeeded', name: 'report.py' })), authorAgentId: 'a1' }

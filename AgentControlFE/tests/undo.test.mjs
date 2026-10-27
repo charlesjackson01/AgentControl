@@ -81,9 +81,9 @@ describe('rows', () => {
       ['restore', 'workspace/old.csv', 'deleted by this run', null],
     ])
   })
-  it('group rows name the group folder (§7.3.5); the run record matches by scope + groupId, not a "group:" prefix', () => {
+  it('group rows name the group folder (§7.3.5); the run record matches by root + groupId, not a "group:" prefix', () => {
     const p = preview({ changes: [{ path: 'shared/pier.md', action: 'restore', root: 'group', groupId: 'g1' }, { path: 'x.md', action: 'delete', root: 'group', groupId: 'g9' }] })
-    const rows = undoRows(p, { filesChanged: [{ path: 'shared/pier.md', change: 'deleted', scope: 'group', groupId: 'g1' }] }, { groupNames: { g1: 'TL-1 Launch Room' } })
+    const rows = undoRows(p, { filesChanged: [{ path: 'shared/pier.md', change: 'deleted', root: 'group', groupId: 'g1' }] }, { groupNames: { g1: 'TL-1 Launch Room' } })
     assert.equal(undoRows(p, { filesChanged: [{ path: 'group:shared/pier.md', change: 'deleted' }] })[0].note, 'modified by this run', 'no prefix fallback')
     assert.equal(undoRows(p, { filesChanged: [{ path: 'shared/pier.md', change: 'deleted' }] })[0].note, 'modified by this run', 'workspace file of the same path is another file')
     assert.deepEqual(rows.map((r) => [r.note, r.folder]), [['deleted by this run', 'TL-1 Launch Room group folder'], ['added by this run', 'group folder']])

@@ -54,18 +54,26 @@ export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null 
 }
 
 /** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
-const RUN_ENDED: Partial<Record<ScriptRunStatus, string>> = { failed: 'failed', timed_out: 'timed out', stopped: 'stopped', denied: 'denied' }
+const RUN_ENDED: Partial<Record<ScriptRunStatus, string>> = { failed: 'failed', timed_out: 'timed out', stopped: 'stopped', denied: 'denied', undone: 'undone' }
 
 /**
- * A run message's preview when its content is empty: "Ran report.py", "Ran report.py · failed",
- * "Running report.py". The message's own content wins whenever it has any (shown as is).
+ * A run message's preview when its content is empty (older messages): the same words as BE 3a70c34's
+ * runMessageContent(), e.g. "Running report.py", "Ran report.py (failed)", "Undid report.py".
+ * The message's own content (BE fills it from the summary) wins whenever it has any, shown as is.
  */
-export function runPreview(run: Pick<ChatRunSummary, 'name' | 'scriptName' | 'status'> | undefined): string {
-  const name = run?.scriptName || run?.name || 'a script'
+export function runPreview(run: Pick<ChatRunSummary, 'kind' | 'name' | 'scriptName' | 'status'> | undefined): string {
+  const name = run?.scriptName?.trim() || run?.name?.trim() || 'script'
   if (!run) return `Ran ${name}`
-  if (run.status === 'queued' || run.status === 'running' || run.status === 'waiting_permission') return `Running ${name}`
+  const active = run.status === 'queued' || run.status === 'running' || run.status === 'waiting_permission'
+  if (run.kind === 'undo') {
+    if (run.status === 'succeeded') return `Undid ${name}`
+    if (active) return `Undoing ${name}`
+    return `Undo of ${name} (${RUN_ENDED[run.status] ?? run.status})`
+  }
+  if (run.status === 'queued') return `Queued ${name}`
+  if (active) return `Running ${name}`
   const ended = RUN_ENDED[run.status]
-  return ended ? `Ran ${name} · ${ended}` : `Ran ${name}`
+  return ended ? `Ran ${name} (${ended})` : `Ran ${name}`
 }
 
 export function previewText(

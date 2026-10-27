@@ -119,11 +119,11 @@ function folderOf(root: 'agent' | 'group', groupId: string | undefined, groupNam
   return name ? `${name} group folder` : 'group folder'
 }
 
-/** The run's own record of a preview path (same folder: scope 'group' + groupId ↔ root 'group' + groupId; BE 146cd18). */
+/** The run's own record of a preview path (same folder: root + groupId, the UndoPreview shape; BE 3a70c34). */
 function changeOf(run: Pick<ScriptRun, 'filesChanged'> | undefined, c: Pick<UndoPreviewChange, 'path' | 'root' | 'groupId'>) {
   const files = run?.filesChanged ?? []
   const group = c.root === 'group'
-  return files.find((f) => f.path === c.path && (f.scope === 'group') === group && (!group || f.groupId === c.groupId))?.change
+  return files.find((f) => f.path === c.path && (f.root === 'group') === group && (!group || f.groupId === c.groupId))?.change
 }
 
 /**

@@ -239,16 +239,16 @@ function sourceOf(input: RunCardInput, name: string): string | null {
 }
 
 /** A group-scoped file's folder ("TL-1 Launch Room group folder"); the bot's own files have none. */
-export function fileFolder(f: Pick<FileChange, 'scope' | 'groupId' | 'groupName'>, groupNames?: Readonly<Record<string, string>>): string | null {
-  if (f.scope !== 'group') return null
+export function fileFolder(f: Pick<FileChange, 'root' | 'groupId' | 'groupName'>, groupNames?: Readonly<Record<string, string>>): string | null {
+  if (f.root !== 'group') return null
   const name = f.groupName || (f.groupId ? groupNames?.[f.groupId] : undefined)
   return name ? `${name} group folder` : 'group folder'
 }
 
-/** BE 146cd18: `path` is relative to its scope's folder, with no prefix; it's shown as is. */
+/** BE 3a70c34: `path` is relative to its root's folder, with no prefix; it's shown as is. */
 function fileRows(files: readonly FileChange[], groupNames?: Readonly<Record<string, string>>): RunFileRow[] {
   return files.map((f, i) => ({
-    key: `${i}:${f.scope ?? 'workspace'}:${f.groupId ?? ''}:${f.path}`,
+    key: `${i}:${f.root ?? 'agent'}:${f.groupId ?? ''}:${f.path}`,
     change: f.change,
     path: f.path,
     size: f.change === 'deleted' ? null : humanSize(f.bytes),

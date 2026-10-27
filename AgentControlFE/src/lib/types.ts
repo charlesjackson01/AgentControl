@@ -215,9 +215,9 @@ export type FileChange = {
   change: 'added' | 'modified' | 'deleted'
   bytes?: number
   modifiedAt?: string
-  /** Phase 2 run diffs (BE 146cd18): which folder `path` is relative to. Missing means the bot's own files (Phase 1 shape). */
-  scope?: 'workspace' | 'group'
-  /** scope 'group': the group the file belongs to, and its display name. */
+  /** Phase 2 run diffs (BE 3a70c34): which folder `path` is relative to (same shape as UndoPreview). Missing means 'agent' (Phase 1 shape). */
+  root?: 'agent' | 'group'
+  /** root 'group': the group the file belongs to, and its display name. */
   groupId?: string
   groupName?: string
 }
@@ -546,7 +546,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 146cd18 (BE-P2-1), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ 3a70c34 (BE-P2-1), section "Phase 2",
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */

@@ -4,10 +4,10 @@ import { describe, it } from 'node:test'
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  caveatText, conflictRows, initialUndoPhase, runWhen, undoFooter, undoGoneText, undoReasonText, undoReducer, undoRows, undoSubtitle,
+  caveatText, conflictRows, initialUndoPhase, undoRowNote, runWhen, undoFooter, undoGoneText, undoReasonText, undoReducer, undoRows, undoSubtitle,
 } from '../src/lib/undo.ts'
 import { renderUndoBody } from '../src/lib/undo-render.ts'
-import { UNDO_UNAVAILABLE_REASONS } from '../src/lib/types.ts'
+import { UNDO_MACHINE_RESTORED_TEXT, UNDO_UNAVAILABLE_REASONS } from '../src/lib/types.ts'
 import { undoErrorOf } from '../src/lib/vm-api.ts'
 import { run } from './live-fixtures.mjs'
 
@@ -114,10 +114,10 @@ describe('phases', () => {
   })
   it('409 run_active and 410 gone, from the preview or the POST', () => {
     assert.equal(step({ type: 'preview_failed', error: undoErrorOf(apiErr(409, { error: 'x', reason: 'run_active' })) }).kind, 'run_active')
-    assert.deepEqual(step({ type: 'preview_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'budget_bot' })) }), { kind: 'gone', reason: 'budget_bot' })
+    assert.deepEqual(step({ type: 'preview_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'budget_bot' })) }), { kind: 'gone', reason: 'budget_bot', error: 'x' })
     const sub = step({ type: 'preview', preview: preview() }, { type: 'submit' })
     assert.equal(undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(409, { error: 'x', reason: 'run_active' })) }).kind, 'run_active')
-    assert.deepEqual(undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'expired' })) }), { kind: 'gone', reason: 'expired' })
+    assert.deepEqual(undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'expired' })) }), { kind: 'gone', reason: 'expired', error: 'x' })
   })
   it('other failures: the preview → error; the POST → back to confirm with the message', () => {
     assert.deepEqual(step({ type: 'preview_failed', error: undoErrorOf(new Error('Boom')) }), { kind: 'error', message: 'Boom' })
@@ -181,5 +181,50 @@ describe('body markup (renderToStaticMarkup)', () => {
     assert.ok(render({ kind: 'ready', preview: preview({ changes: [] }) }).includes('nothing to undo'))
     assert.ok(render({ kind: 'ready', preview: preview(), error: 'Disk error' }).includes('notice notice--warn undo-err" role="alert">Disk error'))
     assert.equal(render({ kind: 'done' }), '<div></div>')
+  })
+})
+
+describe('BE 77cc66e: preview sizes, group names, budget, machine_restored', () => {
+  it('"151 KB → 158 KB original" from afterBytes → beforeBytes (mockup d)', () => {
+    assert.equal(undoRowNote({ action: 'restore', afterBytes: 151 * 1024, beforeBytes: 158 * 1024 }), '151 KB → 158 KB original')
+    const rows = undoRows(preview({ changes: [
+      { path: 'workspace/sales.clean.csv', action: 'delete', root: 'agent', afterBytes: 148 * 1024, beforeBytes: null },
+      { path: 'workspace/sales.csv', action: 'restore', root: 'agent', afterBytes: 151 * 1024, beforeBytes: 158 * 1024 },
+    ] }), cleanSales)
+    assert.deepEqual(rows.map((r) => r.note), ['added by this run', '151 KB → 158 KB original'])
+  })
+  it('null on the side that does not exist: added → "added by this run", deleted → "deleted by this run · N original"', () => {
+    assert.equal(undoRowNote({ action: 'delete', afterBytes: 2048, beforeBytes: null }), 'added by this run')
+    assert.equal(undoRowNote({ action: 'restore', afterBytes: null, beforeBytes: 2048 }), 'deleted by this run · 2 KB original')
+    assert.equal(undoRowNote({ action: 'restore', afterBytes: null, beforeBytes: null }), 'deleted by this run')
+    assert.equal(undoRowNote({ action: 'restore', afterBytes: null }), 'deleted by this run')
+  })
+  it('no sizes (older BE): falls back to the run\'s filesChanged', () => {
+    assert.equal(undoRowNote({ action: 'restore' }, 'modified'), 'modified by this run')
+    assert.equal(undoRowNote({ action: 'restore' }, 'deleted'), 'deleted by this run')
+    assert.equal(undoRowNote({ action: 'restore', afterBytes: 10 }), 'modified by this run', 'one side only: no arrow')
+  })
+  it('groupName wins over the caller map, which stays as the fallback', () => {
+    const p = preview({ changes: [
+      { path: 'shared/a.md', action: 'restore', root: 'group', groupId: 'g1', groupName: 'Launch Room' },
+      { path: 'shared/b.md', action: 'restore', root: 'group', groupId: 'g1' },
+    ], conflicts: [{ path: 'shared/a.md', root: 'group', groupId: 'g1', groupName: 'Launch Room' }] })
+    const ctx = { groupNames: { g1: 'Old Name' } }
+    assert.deepEqual(undoRows(p, undefined, ctx).map((r) => r.folder), ['Launch Room group folder', 'Old Name group folder'])
+    assert.equal(conflictRows(p.conflicts, ctx)[0].folder, 'Launch Room group folder')
+  })
+  it('budget_bot after a loaded preview: the preview budget beats budgetBytes', () => {
+    const sub = undoReducer(undoReducer(initialUndoPhase, { type: 'preview', preview: preview({ budget: { usedBytes: GB, limitBytes: 3 * GB } }) }), { type: 'submit' })
+    const gone = undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'budget_bot' })) })
+    assert.equal(gone.budgetBytes, 3 * GB)
+    assert.match(render(gone, { botName: 'Analyst', budgetBytes: 2 * GB }), /Analyst&#x27;s 3 GB undo space/)
+    const fromPreview = undoReducer(initialUndoPhase, { type: 'preview_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'budget_bot' })) })
+    assert.match(render(fromPreview, { botName: 'Analyst', budgetBytes: 2 * GB }), /Analyst&#x27;s 2 GB undo space/, 'no preview: budgetBytes')
+  })
+  it('machine_restored shows the 410 text as is, else Team lead\'s sentence', () => {
+    const gone = undoReducer(initialUndoPhase, { type: 'preview_failed', error: undoErrorOf(apiErr(410, { error: UNDO_MACHINE_RESTORED_TEXT, reason: 'machine_restored' }, UNDO_MACHINE_RESTORED_TEXT)) })
+    assert.ok(render(gone).includes("This bot&#x27;s computer was restored from a backup, so this run can&#x27;t be undone."))
+    assert.equal(undoGoneText('machine_restored'), "This bot's computer was restored from a backup, so this run can't be undone.")
+    assert.equal(undoGoneText('machine_restored', { error: 'Restored on Oct 2.' }), 'Restored on Oct 2.')
   })
 })

@@ -6,7 +6,7 @@
  */
 import { humanSize } from './file-format.ts'
 import { scriptName } from './live-store.ts'
-import type { ScriptRun, UndoPreview, UndoUnavailableReason } from './types.ts'
+import { UNDO_MACHINE_RESTORED_TEXT, type ScriptRun, type UndoPreview, type UndoPreviewChange, type UndoUnavailableReason } from './types.ts'
 import type { UndoError } from './vm-api.ts'
 
 /* ---- copy ---- */
@@ -22,7 +22,7 @@ export type UndoReasonContext = {
 
 /**
  * Why undo is gone, §7.4's wording; reused by the run card (FE-P2-2) and run history (FE-P2-5).
- * machine_restored has no copy in the plan: this one is a GAP.
+ * machine_restored is a full sentence (BE UNDO_MACHINE_RESTORED_TEXT): see undoGoneText.
  */
 export function undoReasonText(reason: UndoUnavailableReason, ctx: UndoReasonContext = {}): string {
   switch (reason) {
@@ -41,14 +41,18 @@ export function undoReasonText(reason: UndoUnavailableReason, ctx: UndoReasonCon
       return size ? `it changed ${size}, more than the undo space` : 'it changed more than the undo space'
     }
     case 'machine_restored':
-      return "the bot's machine was restored from a backup"
+      return "this bot's computer was restored from a backup"
     default:
       return 'its undo copy was removed'
   }
 }
 
-/** "Undo no longer available: <reason>." (the run card's line, §12 v2). */
-export function undoGoneText(reason: UndoUnavailableReason, ctx: UndoReasonContext = {}): string {
+/**
+ * "Undo no longer available: <reason>." (the run card's line, §12 v2). machine_restored uses the
+ * BE's own sentence (the 410's error text when given, else UNDO_MACHINE_RESTORED_TEXT, Team lead's wording).
+ */
+export function undoGoneText(reason: UndoUnavailableReason, ctx: UndoReasonContext & { error?: string } = {}): string {
+  if (reason === 'machine_restored') return ctx.error?.trim() || UNDO_MACHINE_RESTORED_TEXT
   return `Undo no longer available: ${undoReasonText(reason, ctx)}.`
 }
 
@@ -108,9 +112,10 @@ export type UndoRowContext = {
   groupNames?: Readonly<Record<string, string>>
 }
 
-function folderOf(root: 'agent' | 'group', groupId: string | undefined, ctx: UndoRowContext): string | null {
+/** The preview's own groupName (BE 77cc66e) first, then the caller's groupId → name map. */
+function folderOf(root: 'agent' | 'group', groupId: string | undefined, groupName: string | undefined, ctx: UndoRowContext): string | null {
   if (root !== 'group') return null
-  const name = groupId ? ctx.groupNames?.[groupId] : undefined
+  const name = groupName || (groupId ? ctx.groupNames?.[groupId] : undefined)
   return name ? `${name} group folder` : 'group folder'
 }
 
@@ -121,22 +126,33 @@ function changeOf(run: Pick<ScriptRun, 'filesChanged'> | undefined, path: string
 }
 
 /**
- * Preview changes → rows (mockup d): delete (red) "added by this run"; restore "modified by this run"
- * or "deleted by this run" (from the run's filesChanged). Sizes ("151 KB → 158 KB original") are not
- * in UndoPreview, so they aren't shown (contract GAP).
+ * The row's grey note (mockup d). delete: "added by this run". restore of a modified file:
+ * "151 KB → 158 KB original" (afterBytes → beforeBytes, BE 77cc66e). restore of a file the run
+ * deleted (afterBytes null): "deleted by this run · 158 KB original". Without sizes (older BE):
+ * "modified by this run" / "deleted by this run" from the run's filesChanged.
  */
+export function undoRowNote(c: Pick<UndoPreviewChange, 'action' | 'afterBytes' | 'beforeBytes'>, change?: 'added' | 'modified' | 'deleted'): string {
+  if (c.action === 'delete') return 'added by this run'
+  const before = typeof c.beforeBytes === 'number' ? humanSize(c.beforeBytes) : null
+  const deleted = c.afterBytes === null || (c.afterBytes === undefined && change === 'deleted')
+  if (deleted) return before ? `deleted by this run · ${before} original` : 'deleted by this run'
+  const after = typeof c.afterBytes === 'number' ? humanSize(c.afterBytes) : null
+  if (after && before) return `${after} → ${before} original`
+  return 'modified by this run'
+}
+
+/** Preview changes → rows (mockup d): delete (red) or restore, with undoRowNote's note. */
 export function undoRows(preview: Pick<UndoPreview, 'changes'>, run?: Pick<ScriptRun, 'filesChanged'>, ctx: UndoRowContext = {}): UndoRow[] {
   return preview.changes.map((c, i) => {
-    const change = changeOf(run, c.path)
-    const note = c.action === 'delete' ? 'added by this run' : change === 'deleted' ? 'deleted by this run' : 'modified by this run'
-    return { key: `${i}:${c.root}:${c.groupId ?? ''}:${c.path}`, action: c.action, path: c.path, note, folder: folderOf(c.root, c.groupId, ctx) }
+    const note = undoRowNote(c, changeOf(run, c.path))
+    return { key: `${i}:${c.root}:${c.groupId ?? ''}:${c.path}`, action: c.action, path: c.path, note, folder: folderOf(c.root, c.groupId, c.groupName, ctx) }
   })
 }
 
 export type ConflictRow = { key: string; path: string; folder: string | null }
 
 export function conflictRows(conflicts: UndoPreview['conflicts'], ctx: UndoRowContext = {}): ConflictRow[] {
-  return conflicts.map((c, i) => ({ key: `${i}:${c.root}:${c.groupId ?? ''}:${c.path}`, path: c.path, folder: folderOf(c.root, c.groupId, ctx) }))
+  return conflicts.map((c, i) => ({ key: `${i}:${c.root}:${c.groupId ?? ''}:${c.path}`, path: c.path, folder: folderOf(c.root, c.groupId, c.groupName, ctx) }))
 }
 
 /* ---- phases ---- */
@@ -152,8 +168,11 @@ export type UndoPhase =
   | { kind: 'submitting'; preview: UndoPreview; conflicts: UndoPreview['conflicts']; force: boolean }
   /** 409 run_active: blocked while the bot has an active run (§7.3.4). GAP. */
   | { kind: 'run_active'; preview?: UndoPreview }
-  /** 410: the snapshot is gone, with why (§7.4). GAP. */
-  | { kind: 'gone'; reason: UndoUnavailableReason }
+  /**
+   * 410: the snapshot is gone, with why (§7.4). GAP. `error`: the 410's text (machine_restored shows it as is);
+   * `budgetBytes`: the preview's budget.limitBytes when a preview had loaded.
+   */
+  | { kind: 'gone'; reason: UndoUnavailableReason; error?: string; budgetBytes?: number }
   /** The preview call failed otherwise. GAP. */
   | { kind: 'error'; message: string }
   /** Undone: the caller closes the dialog. */
@@ -181,7 +200,7 @@ export function undoReducer(phase: UndoPhase, action: UndoAction): UndoPhase {
     case 'preview_failed': {
       const e = action.error
       if (e.kind === 'run_active') return { kind: 'run_active' }
-      if (e.kind === 'gone') return { kind: 'gone', reason: e.reason }
+      if (e.kind === 'gone') return { kind: 'gone', reason: e.reason, error: e.message }
       return { kind: 'error', message: e.message }
     }
     case 'submit':
@@ -193,7 +212,10 @@ export function undoReducer(phase: UndoPhase, action: UndoAction): UndoPhase {
       if (phase.kind !== 'submitting') return phase
       const e = action.error
       if (e.kind === 'run_active') return { kind: 'run_active', preview: phase.preview }
-      if (e.kind === 'gone') return { kind: 'gone', reason: e.reason }
+      if (e.kind === 'gone') {
+        const budgetBytes = phase.preview.budget?.limitBytes
+        return { kind: 'gone', reason: e.reason, error: e.message, ...(budgetBytes !== undefined ? { budgetBytes } : {}) }
+      }
       // Someone changed files between the preview and the click: show them and offer Undo anyway.
       if (e.kind === 'conflicts') return withConflicts(phase.preview, e.conflicts.length > 0 ? e.conflicts : phase.conflicts)
       return withConflicts(phase.preview, phase.conflicts, e.message)

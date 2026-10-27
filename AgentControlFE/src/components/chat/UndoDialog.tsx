@@ -23,7 +23,7 @@ type UndoDialogProps = {
   botName?: string
   /** groupId → name, so group-folder rows say which folder (§7.3.5). */
   groupNames?: Readonly<Record<string, string>>
-  /** The bot's undo budget (VmInfo usage.snapshots.budgetBytes), for the budget_bot reason. */
+  /** Fallback undo budget (VmInfo usage.snapshots.budgetBytes) for budget_bot; the preview's budget.limitBytes wins. */
   budgetBytes?: number
   onClose: () => void
   /** 200: the caller puts result.run and result.undoRun into the live store (putRun). */

@@ -19,7 +19,7 @@ export const RUN_CARD_GAPS = {
   denied: 'GAP-R4: denied (failed-card pattern; M2 only)',
   undone: 'GAP-R5: undone (grey "Undone" pill + "Undone at …" note)',
   toolBuild: 'GAP-R6: tool-build card ("⚙ Tool build" pill, no Undo)',
-  undoRun: 'GAP-R7: undo-of-a-run card ("↶ Undo" pill, "undo of <name>")',
+  undoRun: 'GAP-R7: undo-of-a-run card ("↶ Undo" pill, "Undo of <name>", collapsed or expanded)',
   tooLarge: 'GAP-R8: too-large output note (outputTruncated)',
   runtime: 'GAP-R9: runtime label placement (last item of the meta line)',
   group: 'GAP-R10: group placement (author line above the card, like a reply)',
@@ -221,7 +221,7 @@ function nameOf(input: RunCardInput): string {
   const { run, summary } = input
   const kind = run?.kind ?? summary?.kind ?? 'script'
   // BE be7afe4: summary.undoOfName names the reversed run, so a collapsed card needs no fetch.
-  if (kind === 'undo') return `undo of ${summary?.undoOfName?.trim() || input.undoOfName || 'a run'}`
+  if (kind === 'undo') return `Undo of ${summary?.undoOfName?.trim() || input.undoOfName || 'a run'}`
   if (run?.argv.length && (kind === 'tool_build' || run.skillId)) return scriptName(run)
   // BE 146cd18: scriptName is the card title; name stays the skill's display name.
   if (summary?.scriptName) return summary.scriptName

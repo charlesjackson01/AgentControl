@@ -116,7 +116,7 @@ describe('Phase 1 data loads with VM defaults', () => {
         { id: 'm2', conversationId: 'conv-a', role: 'assistant', content: '', createdAt: t, kind: 'permission', permissionRequestId: 'perm_1', authorAgentId: 'agt_a' },
         { id: 'm3', conversationId: 'conv-a', role: 'assistant', content: 'x', createdAt: t, kind: 'run', authorAgentId: 'agt_a' },
         { id: 'm4', conversationId: 'conv-a', role: 'assistant', content: 'x', createdAt: t, authorAgentId: 'agt_a',
-          activity: { skills: [], steps: [], filesChanged: [{ path: 'workspace/old.csv', change: 'deleted' }, { path: 'notes.md', change: 'added', scope: 'group', groupId: 'grp_1', groupName: 'Ops', bogus: 1 }, { path: 'x.txt', change: 'modified', scope: 'elsewhere', groupId: 'grp_2' }] } },
+          activity: { skills: [], steps: [], filesChanged: [{ path: 'workspace/old.csv', change: 'deleted' }, { path: 'notes.md', change: 'added', root: 'group', groupId: 'grp_1', groupName: 'Ops', bogus: 1 }, { path: 'x.txt', change: 'modified', root: 'elsewhere', groupId: 'grp_2' }] } },
       ],
     }))
     const store = createStore(path)
@@ -126,7 +126,7 @@ describe('Phase 1 data loads with VM defaults', () => {
     expect(byId('m3').kind).toBeUndefined()
     expect(byId('m4').activity?.filesChanged).toEqual([
       { path: 'workspace/old.csv', change: 'deleted' },
-      { path: 'notes.md', change: 'added', scope: 'group', groupId: 'grp_1', groupName: 'Ops' },
+      { path: 'notes.md', change: 'added', root: 'group', groupId: 'grp_1', groupName: 'Ops' },
       { path: 'x.txt', change: 'modified' },
     ])
   })

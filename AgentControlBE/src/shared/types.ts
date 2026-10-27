@@ -432,9 +432,9 @@ export interface FileChange {
   change: 'added' | 'modified' | 'deleted'
   bytes?: number
   modifiedAt?: string
-  /** Phase 2 run diffs: which folder `path` is relative to. Missing means the bot's own files (Phase 1 shape). */
-  scope?: 'workspace' | 'group'
-  /** scope 'group': the group the file belongs to, and its display name. */
+  /** Phase 2 run diffs: which folder `path` is relative to (same shape as UndoPreview). Missing means 'agent' (Phase 1 shape). */
+  root?: 'agent' | 'group'
+  /** root 'group': the group the file belongs to, and its display name. */
   groupId?: string
   groupName?: string
 }

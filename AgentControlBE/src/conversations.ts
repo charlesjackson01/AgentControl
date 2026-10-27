@@ -218,9 +218,9 @@ function withActivity(raw: unknown): { activity?: MessageActivity } {
       change: x.change as FileChange['change'],
       ...(typeof x.bytes === 'number' && Number.isFinite(x.bytes) && x.bytes >= 0 ? { bytes: x.bytes } : {}),
       ...(typeof x.modifiedAt === 'string' && !Number.isNaN(Date.parse(x.modifiedAt)) ? { modifiedAt: x.modifiedAt } : {}),
-      ...(x.scope === 'workspace' || x.scope === 'group' ? { scope: x.scope as FileChange['scope'] } : {}),
-      ...(x.scope === 'group' && typeof x.groupId === 'string' ? { groupId: x.groupId } : {}),
-      ...(x.scope === 'group' && typeof x.groupName === 'string' ? { groupName: x.groupName } : {}),
+      ...(x.root === 'agent' || x.root === 'group' ? { root: x.root as FileChange['root'] } : {}),
+      ...(x.root === 'group' && typeof x.groupId === 'string' ? { groupId: x.groupId } : {}),
+      ...(x.root === 'group' && typeof x.groupName === 'string' ? { groupName: x.groupName } : {}),
     }))
   if (skills.length + steps.length + filesChanged.length === 0) return {}
   return { activity: { skills, steps, filesChanged } }

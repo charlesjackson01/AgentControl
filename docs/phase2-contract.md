@@ -67,3 +67,8 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 - If the marker is missing, or holds another id, the files are `files_missing`: chats, bots and groups keep working, but every bot or group file route (list, read, upload, write, folder, move, delete) and `PUT /api/conversations/:id/uploads` answer **409 with `reason: 'files_missing'`** and a plain-language message. The bots' file tools give the same message. Nothing is re-created; the state clears on the next start once the right files are back.
 - The error body is the existing one plus `reason`: `{ statusCode: 409, error: 'Request Error', message, reason: 'files_missing' }`. Show `message`.
 - M1 has no Start empty or Restore (M3).
+- Approved decisions (Team lead, 2026-10-27): on `files_missing` **reads are blocked too** (list and read answer the same 409, not just writes), and an **existing marker with no saved id is adopted**: its id is saved to `settings.vm.volumeId` and the files are treated as fine.
+- **Known limitations (M1):**
+  - `WslFs` is synchronous: each call blocks on one `podman exec` into the machine.
+  - `WslFs` isn't selected yet: the server uses `LocalFs` on every OS.
+  - File search and skills still read host paths directly, not through the storage backend.

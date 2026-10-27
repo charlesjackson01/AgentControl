@@ -32,6 +32,8 @@ export interface RunScriptResult {
   outcome?: 'succeeded' | 'failed' | 'timed_out' | 'stopped'
   /** Plain-language reason when not succeeded. */
   error?: string
+  /** Machine-readable reason when the run was refused before starting (e.g. 'limits_unenforced'). */
+  reason?: string
   /** Bytes the script wrote (both streams, counted up to the cap). */
   outputBytes?: number
   outputTruncated?: boolean

@@ -11,6 +11,10 @@
  * The limit tests (memory.max/pids.max, OOM at 5 GB, fork bomb) skip with the probe's reason when
  * the runtime in use can't enforce limits (rootless crun/runsc on cgroupfs). Everything runs with
  * --network none; everything created is removed at the end.
+ *
+ * Runs are blocked where limits can't be enforced (reason 'limits_unenforced'). So that the other
+ * tests still run there (rootless here), this file sets the test-only AC_ALLOW_UNLIMITED_RUNS=1
+ * itself, only in that case, and restores it afterwards. Where limits are enforced it is not set.
  */
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -19,7 +23,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { execCommandRunner } from './command-runner.js'
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
-import { createContainerRunner, OUTPUT_CAP_BYTES, type ContainerRunner } from './podman-runner.js'
+import { ALLOW_UNLIMITED_RUNS_ENV, createContainerRunner, LIMITS_UNENFORCED_MESSAGE, OUTPUT_CAP_BYTES, type ContainerRunner } from './podman-runner.js'
 import { createRuntimeProbe, LIMITS_NOT_ENFORCED, PROBE_LABEL, resolveRuntime, type ResolvedRuntime, type RuntimeProbeResult } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import { defaultAgentVm } from './vm-defaults.js'
@@ -60,6 +64,7 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
   let rt: ResolvedRuntime
   let botEnv: BotEnvService
   let runner: ContainerRunner
+  const savedOverride = process.env[ALLOW_UNLIMITED_RUNS_ENV]
   const agent = { id: 'ag_be8vm', slug: SLUG, name: 'BE8 VM test', internetPolicy: 'ask', vm: { ...defaultAgentVm(), env: [{ name: 'BE8', value: 'yes' }] } } as unknown as Agent
   const run = (argv: string[], over: Partial<RunScriptRequest> = {}) =>
     runner.run({ agentId: agent.id, context: { kind: 'dm' }, argv, cwd: 'workspace', timeoutSec: 120, network: 'off', ...over })
@@ -82,6 +87,7 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
     rt = resolveRuntime(globalMode, 'inherit', probe, agent.name)
     console.log(`[be8 probe] ${JSON.stringify({ standard: probe.standard, runsc: probe.runsc, runscFlags: probe.runscFlags, compatible: probe.compatible, checks: probe.checks, versions: probe.versions })}`)
     console.log(`[be8 resolved] ${JSON.stringify(rt)}`)
+    if (!rt.limitsEnforced) process.env[ALLOW_UNLIMITED_RUNS_ENV] = '1'
 
     botEnv = createBotEnvService({
       exec: execCommandRunner,
@@ -99,6 +105,8 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
     runner = createContainerRunner({ botEnv, engine: async () => ENGINE, getAgent: () => agent, runtime: () => rt, idleStopMs: 1 })
   }, 240_000)
   afterAll(() => {
+    if (savedOverride === undefined) delete process.env[ALLOW_UNLIMITED_RUNS_ENV]
+    else process.env[ALLOW_UNLIMITED_RUNS_ENV] = savedOverride
     cleanup()
     if (dir) rmSync(dir, { recursive: true, force: true })
   }, 120_000)
@@ -119,6 +127,13 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
     expect(JSON.stringify(probe)).not.toContain('network=host')
     expect(pm('ps', '-a', '--filter', `label=${PROBE_LABEL}=1`, '--format', '{{.ID}}')).toBe('')
   })
+
+  it('without the override, runs are blocked where limits are not enforced (and allowed where they are)', async () => {
+    const strict = createContainerRunner({ botEnv, engine: async () => ENGINE, getAgent: () => agent, runtime: () => rt, env: {} })
+    const r = await strict.run({ agentId: agent.id, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 30, network: 'off' })
+    if (rt.limitsEnforced) expect(r.outcome).toBe('succeeded')
+    else expect(r).toMatchObject({ outcome: 'failed', reason: 'limits_unenforced', error: LIMITS_UNENFORCED_MESSAGE })
+  }, 120_000)
 
   it('exit codes, stdout/stderr, env, uid 1000, no network', async () => {
     const okRun = await run(['sh', '-c', 'echo "$BE8 $(id -u)"; echo oops >&2; cat /proc/net/dev | tail -n +3 | cut -d: -f1 | tr -d " "'], { runId: 'run_be8' })
@@ -179,12 +194,14 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
   it('limits: memory.max is 4 GB and pids.max 256 inside the container', async (ctx) => {
     limitsSkip(ctx.skip)
     const r = await run(['sh', '-c', 'cat /sys/fs/cgroup/memory.max /sys/fs/cgroup/pids.max'])
+    console.log(`[be8 limits] memory.max/pids.max: ${JSON.stringify(r.stdout.trim().split('\n'))} outcome=${r.outcome}`)
     expect(r.stdout.split('\n').filter(Boolean)).toEqual([String(VM_LIMITS.memoryMb * 1024 * 1024), String(VM_LIMITS.pids)])
   }, 60_000)
 
   it('limits: a 5 GB allocation is OOM-killed with a clear status', async (ctx) => {
     limitsSkip(ctx.skip)
     const r = await py('b = bytearray(5 * 1024 ** 3)\nfor i in range(0, len(b), 4096): b[i] = 1\nprint("survived")')
+    console.log(`[be8 oom] outcome=${r.outcome} exit=${r.exitCode} oomKilled=${r.oomKilled ?? false} error=${JSON.stringify(r.error)} stdout=${JSON.stringify(r.stdout.slice(-200))}`)
     expect(r.stdout).not.toContain('survived')
     expect(r.outcome).toBe('failed')
     expect(r.oomKilled === true || r.exitCode === 137).toBe(true)
@@ -207,6 +224,7 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
       '    sys.exit(1)',
       'print(n)',
     ].join('\n'))
+    console.log(`[be8 forks] forked=${r.stdout.trim()} outcome=${r.outcome} exit=${r.exitCode} pidsLimited=${r.pidsLimited ?? false} error=${JSON.stringify(r.error)}`)
     expect(Number(r.stdout.trim())).toBeLessThan(VM_LIMITS.pids)
     expect(r).toMatchObject({ outcome: 'failed', pidsLimited: true })
     expect(r.error).toMatch(/256-process limit/)

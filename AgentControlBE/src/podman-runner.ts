@@ -5,8 +5,9 @@
  *
  * Limits (4 GB, no swap, 256 pids) are set on the container by BotEnvService; this runner reads
  * memory.events / pids.events before and after to tell OOM and the process limit apart.
- * When the probe says the runtime can't enforce limits, runs still go (BE-P2-8 decision,
- * flagged for Team lead) and VmInfo.runtime.limitsEnforced is false.
+ * When the runtime can't enforce limits (or the probe hasn't confirmed it yet), runs are
+ * blocked with reason 'limits_unenforced' (Team lead, 2026-10-27). AC_ALLOW_UNLIMITED_RUNS=1
+ * is a test-only override: off by default, never set by any config or script, never exposed.
  */
 import path from 'node:path'
 import type { Agent } from './shared/types.js'
@@ -23,6 +24,10 @@ export const TAIL_BYTES = 64 * 1024
 export const IDLE_STOP_MS = 10 * 60 * 1000
 export const IDLE_SWEEP_MS = 60 * 1000
 export const NETWORK_UNAVAILABLE = 'Internet access isn\'t available yet.'
+export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
+export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
+/** Test-only override for the limits block. Never set by default, never exposed in the API/UI. */
+export const ALLOW_UNLIMITED_RUNS_ENV = 'AC_ALLOW_UNLIMITED_RUNS'
 
 /** Reads the cgroup event counters inside the container (fixed script, no user input). */
 export const CGROUP_EVENTS_ARGV = ['sh', '-c', 'for f in memory.events pids.events; do echo "== $f"; cat /sys/fs/cgroup/$f 2>/dev/null; done']
@@ -78,6 +83,8 @@ export interface ContainerRunnerDeps {
   idleStopMs?: number
   now?: () => Date
   log?: (msg: string) => void
+  /** Environment to read the test-only AC_ALLOW_UNLIMITED_RUNS override from (default process.env, read per run). */
+  env?: NodeJS.ProcessEnv
 }
 
 export interface ContainerRunner extends Runner {
@@ -233,6 +240,9 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     }
     const rt = deps.runtime(agent)
     if (rt.status === 'required_unavailable') return Promise.resolve(err(t0, rt.reason ?? 'gVisor is required but isn\'t available.', { runtime: null }))
+    if (rt.limitsEnforced !== true && (deps.env ?? process.env)[ALLOW_UNLIMITED_RUNS_ENV] !== '1') {
+      return Promise.resolve(err(t0, LIMITS_UNENFORCED_MESSAGE, { reason: LIMITS_UNENFORCED_REASON, runtime: rt.effective }))
+    }
     const timeoutSec = Math.min(Math.max(1, Math.floor(Number(req.timeoutSec) || VM_LIMITS.timeoutSec)), VM_LIMITS.timeoutSec)
 
     // One run at a time per bot; queued runs wait their turn.

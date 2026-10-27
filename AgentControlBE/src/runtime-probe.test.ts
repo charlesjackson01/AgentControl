@@ -219,7 +219,13 @@ describe('GET/POST /api/vm/probe', () => {
     registerProbeRoutes(app, p)
     const before = (await app.inject({ method: 'GET', url: '/api/vm/probe' })).json()
     expect(before).toMatchObject({ checkedAt: null, checks: null, standard: null })
-    const post = await app.inject({ method: 'POST', url: '/api/vm/probe' })
+    for (const headers of [{}, { 'x-agentcontrol-confirm': '0' }, { 'x-agentcontrol-confirm': 'yes' }]) {
+      const denied = await app.inject({ method: 'POST', url: '/api/vm/probe', headers })
+      expect(denied.statusCode).toBe(403)
+      expect(denied.json()).toMatchObject({ message: 'Re-checking the VM runtime needs the x-agentcontrol-confirm: 1 header.' })
+    }
+    expect(p.current()).toBeNull()
+    const post = await app.inject({ method: 'POST', url: '/api/vm/probe', headers: { 'x-agentcontrol-confirm': '1' } })
     expect(post.statusCode).toBe(200)
     expect(post.json().standard.limitsEnforced).toBe(false)
     expect((await app.inject({ method: 'GET', url: '/api/vm/probe' })).json().checkedAt).toBe(post.json().checkedAt)

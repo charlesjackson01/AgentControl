@@ -217,6 +217,11 @@ describe('BE-P2-8: runtime, limits and runs in VmInfo', () => {
   it('GET /api/vm/probe returns the probe result; a compatible runsc is active with limits enforced', async () => {
     probeResult = probe({ compatible: true, checks: [{ id: 'start', status: 'pass' }], runscFlags: [] })
     expect((await inject('GET', '/api/vm/probe')).json().runsc.installed).toBe(true)
+    const noHeader = await app.inject({ method: 'POST', url: '/api/vm/probe' })
+    expect(noHeader.statusCode).toBe(403)
+    expect(noHeader.json()).toMatchObject({ reason: 'confirm_required' })
+    const ok = await app.inject({ method: 'POST', url: '/api/vm/probe', headers: { 'x-agentcontrol-confirm': '1' } })
+    expect(ok.statusCode).toBe(200)
     const a = await makeAgent()
     expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toMatchObject({ effective: 'runsc', status: 'active', limitsEnforced: true })
   })

@@ -16,6 +16,8 @@ import type { FastifyInstance } from 'fastify'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
 import { BOT_GID, BOT_UID, sharedImageRef } from './vm-images.js'
+import { failWithReason } from './http.js'
+import { PERMISSION_CSRF_HEADER } from './shared/types.js'
 import type {
   ContainerRuntime,
   GlobalRuntimeMode,
@@ -428,5 +430,9 @@ export function registerProbeRoutes(app: FastifyInstance, probe: RuntimeProbe): 
   app.get('/api/vm/probe', async (): Promise<RuntimeProbeResult> =>
     probe.current() ?? { runsc: { installed: false }, checks: null, compatible: false, uidMapping: null, snapshotDriver: null, checkedAt: null, versions: { engine: null, runsc: null, image: null }, standard: null, runscFlags: [] },
   )
-  app.post('/api/vm/probe', async () => probe.refresh())
+  // Mutating: needs the confirm header (PERMISSION_CSRF_HEADER), 403 reason 'confirm_required' without it.
+  app.post('/api/vm/probe', async (request) => {
+    if (request.headers[PERMISSION_CSRF_HEADER] !== '1') failWithReason(403, 'confirm_required', `Re-checking the VM runtime needs the ${PERMISSION_CSRF_HEADER}: 1 header.`)
+    return probe.refresh()
+  })
 }

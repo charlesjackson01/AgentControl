@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
-import { createContainerRunner, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
+import { createContainerRunner, LIMITS_UNENFORCED_MESSAGE, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
 import type { ResolvedRuntime } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { StreamRunner } from './stream-runner.js'
@@ -9,7 +9,7 @@ import { defaultAgentVm } from './vm-defaults.js'
 import type { Agent } from './shared/types.js'
 
 const agent = { id: 'ag1', slug: 'analyst', name: 'Analyst', vm: { ...defaultAgentVm(), env: [{ name: 'FOO', value: 'bar' }] } } as unknown as Agent
-const crun: ResolvedRuntime = { effective: 'crun', status: 'incompatible_fallback', mode: 'inherit', globalMode: 'auto', limitsEnforced: false }
+const crun: ResolvedRuntime = { effective: 'crun', status: 'incompatible_fallback', mode: 'inherit', globalMode: 'auto', limitsEnforced: true }
 
 interface Script {
   chunks?: { stream: 'stdout' | 'stderr'; data: string | Buffer }[]
@@ -52,6 +52,7 @@ function setup(o: { scripts?: Script[]; events?: string[]; runtime?: ResolvedRun
     stream,
     exec,
     now: () => new Date(t),
+    env: {},
     ...o.deps,
   })
   return { runner, streamed, commands, botEnv, advance: (ms: number) => (t += ms), now: () => t }
@@ -67,6 +68,42 @@ describe('parseCgroupEvents', () => {
 })
 
 describe('createContainerRunner', () => {
+  it('blocks runs when limits are not enforced (or not confirmed), unless AC_ALLOW_UNLIMITED_RUNS=1', async () => {
+    const unlimited: ResolvedRuntime = { ...crun, limitsEnforced: false, limitsReason: "limits can't be enforced" }
+    for (const runtime of [unlimited, { ...crun, limitsEnforced: undefined }]) {
+      for (const env of [{}, { AC_ALLOW_UNLIMITED_RUNS: '0' }, { AC_ALLOW_UNLIMITED_RUNS: 'true' }]) {
+        const { runner, streamed, botEnv } = setup({ runtime, deps: { env } })
+        const r = await runner.run(req())
+        expect(r).toMatchObject({ status: 'error', outcome: 'failed', reason: 'limits_unenforced', error: LIMITS_UNENFORCED_MESSAGE, runtime: 'crun' })
+        expect(LIMITS_UNENFORCED_MESSAGE).toBe("This computer can't limit bot scripts safely, so scripts can't run here.")
+        expect(streamed).toEqual([])
+        expect(botEnv.ensure).not.toHaveBeenCalled()
+        expect(runner.activeRuns('ag1')).toBe(0)
+      }
+    }
+    const { runner, streamed } = setup({ runtime: unlimited, deps: { env: { AC_ALLOW_UNLIMITED_RUNS: '1' } } })
+    const r = await runner.run(req())
+    expect(r).toMatchObject({ outcome: 'succeeded', exitCode: 0 })
+    expect(r.reason).toBeUndefined()
+    expect(streamed).toHaveLength(1)
+  })
+
+  it('the override is read from process.env by default and is off when unset', async () => {
+    const saved = process.env.AC_ALLOW_UNLIMITED_RUNS
+    try {
+      delete process.env.AC_ALLOW_UNLIMITED_RUNS
+      const unlimited: ResolvedRuntime = { ...crun, limitsEnforced: false }
+      const a = setup({ runtime: unlimited, deps: { env: undefined } })
+      expect((await a.runner.run(req())).reason).toBe('limits_unenforced')
+      process.env.AC_ALLOW_UNLIMITED_RUNS = '1'
+      const b = setup({ runtime: unlimited, deps: { env: undefined } })
+      expect((await b.runner.run(req())).outcome).toBe('succeeded')
+    } finally {
+      if (saved === undefined) delete process.env.AC_ALLOW_UNLIMITED_RUNS
+      else process.env.AC_ALLOW_UNLIMITED_RUNS = saved
+    }
+  })
+
   it('runs with exec in the started container: global args, workdir, env, AC_RUN_ID; tails and bytes', async () => {
     const s = setup({ scripts: [{ chunks: [{ stream: 'stdout', data: 'hello\n' }, { stream: 'stderr', data: 'warn\n' }], code: 0 }] })
     const chunks: string[] = []
@@ -104,7 +141,7 @@ describe('createContainerRunner', () => {
   })
 
   it('runsc flags go before exec as global args (podman only)', async () => {
-    const rt: ResolvedRuntime = { effective: 'runsc', status: 'active', mode: 'inherit', globalMode: 'auto', flags: ['--runtime-flag=ignore-cgroups'] }
+    const rt: ResolvedRuntime = { effective: 'runsc', status: 'active', mode: 'inherit', globalMode: 'auto', limitsEnforced: true, flags: ['--runtime-flag=ignore-cgroups'] }
     const s = setup({ runtime: rt })
     await s.runner.run(req())
     expect(s.streamed[0]!.slice(0, 5)).toEqual(['podman', '--root', '/r', '--runtime-flag=ignore-cgroups', 'exec'])

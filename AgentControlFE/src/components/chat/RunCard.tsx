@@ -44,7 +44,12 @@ export default function RunCard({ message, botName, agentId, groupNames, client 
   const undoOf = run?.kind === 'undo' && run.undoOfRunId ? state.runs[run.undoOfRunId] : undefined
   const budgetBytes = agentId ? state.vms[agentId]?.usage.snapshots.budgetBytes : undefined
 
-  const [open, setOpen] = useState(true)
+  const status = run?.status ?? summary?.status
+  const active = status === 'queued' || status === 'waiting_permission' || status === 'running'
+  // Contract 146cd18: the card renders from the message's summary; GET /api/runs/:id only once the
+  // details or the full output are opened. A run that's going on opens (live output); others start
+  // collapsed (GAP-R15).
+  const [open, setOpen] = useState(active)
   const [now, setNow] = useState(() => Date.now())
   const [loadError, setLoadError] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
@@ -55,9 +60,6 @@ export default function RunCard({ message, botName, agentId, groupNames, client 
   const outputBtn = useRef<HTMLButtonElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
 
-  const status = run?.status ?? summary?.status
-  const active = status === 'queued' || status === 'waiting_permission' || status === 'running'
-
   const load = useCallback(() => {
     if (!runId) return
     void loadRun(runId).then((r) => setLoadError(r ? null : DETAILS_ERROR))
@@ -67,11 +69,11 @@ export default function RunCard({ message, botName, agentId, groupNames, client 
     load()
   }
 
-  // The message only carries a summary; the card needs the run (argv, meta, files, output tails).
+  // The details need the run (argv, meta, files, output tails): fetched when the card is open.
   const haveRun = Boolean(run)
   useEffect(() => {
-    if (!haveRun) load()
-  }, [haveRun, load])
+    if (open && !haveRun) load()
+  }, [open, haveRun, load])
 
   // Active runs: make sure a reconnect's resync covers this one even before it's loaded.
   useEffect(() => {
@@ -130,6 +132,7 @@ export default function RunCard({ message, botName, agentId, groupNames, client 
     undoOfName: undoOf ? scriptName(undoOf) : undefined,
     botName,
     budgetBytes,
+    groupNames,
   })
 
   // Focus goes back to the button that opened a dialog, or the card's header when that button is gone (undone).

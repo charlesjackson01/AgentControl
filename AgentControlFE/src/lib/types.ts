@@ -210,7 +210,17 @@ export type AgentRun = {
  * BE-3: one file a run wrote; `bytes`/`modifiedAt` (ISO) are the file after the write (optional on old runs).
  * Phase 2 (BE-P2-1): script runs and undo also report 'deleted' (bytes/modifiedAt then absent).
  */
-export type FileChange = { path: string; change: 'added' | 'modified' | 'deleted'; bytes?: number; modifiedAt?: string }
+export type FileChange = {
+  path: string
+  change: 'added' | 'modified' | 'deleted'
+  bytes?: number
+  modifiedAt?: string
+  /** Phase 2 run diffs (BE 146cd18): which folder `path` is relative to. Missing means the bot's own files (Phase 1 shape). */
+  scope?: 'workspace' | 'group'
+  /** scope 'group': the group the file belongs to, and its display name. */
+  groupId?: string
+  groupName?: string
+}
 
 /**
  * How one attached skill went into a run's system prompt. 'catalog' (BE-7): one
@@ -536,7 +546,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 77cc66e (BE-P2-1), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ 146cd18 (BE-P2-1), section "Phase 2",
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -612,6 +622,8 @@ export interface ScriptRunUndo {
   /** 'available' while the snapshot is kept, 'unavailable' once evicted (with reason), 'done' after an undo. */
   state: 'available' | 'unavailable' | 'done'
   reason?: UndoUnavailableReason
+  /** reason 'too_large': how many bytes the run changed (over the snapshot budget). */
+  changedBytes?: number
   /** When it became unavailable or was undone. */
   at?: string
   /** state 'done': the undo run that reversed this one. */
@@ -686,6 +698,10 @@ export interface ChatRunSummary {
   undo: ScriptRunUndo
   queuePosition?: number
   exitCode?: number
+  /** The script's file name (argv[1] or argv[0]) for the card title; `name` stays the skill. */
+  scriptName?: string
+  durationMs?: number
+  runtime?: ContainerRuntime | null
 }
 
 export interface PermissionRequest {

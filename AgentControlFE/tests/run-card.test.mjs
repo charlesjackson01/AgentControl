@@ -226,11 +226,12 @@ describe('runCardView: GAP states', () => {
     assert.equal(view(cleanSales).truncated, null)
   })
   it('caps the file list', () => {
-    const files = Array.from({ length: FILES_SHOWN + 3 }, (_, i) => ({ path: `group:shared/f${i}.txt`, change: 'added', bytes: 1 }))
+    const files = Array.from({ length: FILES_SHOWN + 3 }, (_, i) => ({ path: `shared/f${i}.txt`, change: 'added', bytes: 1, scope: 'group', groupId: 'g1' }))
     const v = view(run('f', { status: 'succeeded', filesChanged: files }))
     assert.equal(v.files.length, FILES_SHOWN)
     assert.equal(v.moreFiles, 3)
     assert.equal(v.files[0].path, 'shared/f0.txt')
+    assert.equal(v.files[0].folder, 'group folder')
     assert.equal(v.note, `Undo restores the ${FILES_SHOWN + 3} files above`)
   })
   it('summary only (details loading): head from the summary', () => {
@@ -338,5 +339,48 @@ describe('wiring', () => {
     assert.match(src, /putRun\(result\.run\)\s+putRun\(result\.undoRun\)/)
     assert.match(src, /<UndoDialog/)
     assert.match(src, /client\.stopRun\(runId\)/)
+  })
+})
+
+describe('BE 146cd18: summary fields, file scopes, too_large bytes', () => {
+  it('a collapsed card renders from the summary alone (scriptName, durationMs)', () => {
+    const v = runCardView({ summary: { status: 'failed', kind: 'script', name: 'csv-tools', scriptName: 'clean_sales.py', durationMs: 1100, exitCode: 1, files: { added: 0, modified: 0, deleted: 0 }, undo: { state: 'available' } } })
+    assert.equal(v.name, 'clean_sales.py')
+    assert.equal(v.source, 'csv-tools')
+    assert.equal(v.statusText, 'Failed · exit 1 · 1.1 s')
+    assert.equal(v.loading, true)
+  })
+  it('no scriptName (older messages): the summary name', () => {
+    assert.equal(runCardView({ summary: { status: 'succeeded', kind: 'script', name: 'report.py', files: { added: 0, modified: 0, deleted: 0 }, undo: { state: 'available' } } }).name, 'report.py')
+  })
+  it('paths are shown as is (no "group:" stripping); scope group names the folder', () => {
+    const v = runCardView({ run: run('g', { status: 'succeeded', filesChanged: [
+      { path: 'group:odd.txt', change: 'added', bytes: 1 },
+      { path: 'shared/plan.md', change: 'modified', bytes: 1, scope: 'group', groupId: 'g1', groupName: 'TL-1 Launch Room' },
+      { path: 'shared/b.md', change: 'modified', bytes: 1, scope: 'group', groupId: 'g2' },
+      { path: 'workspace/a.csv', change: 'modified', bytes: 1, scope: 'workspace' },
+    ] }), groupNames: { g2: 'Research' } })
+    assert.deepEqual(v.files.map((f) => [f.path, f.folder]), [['group:odd.txt', null], ['shared/plan.md', 'TL-1 Launch Room group folder'], ['shared/b.md', 'Research group folder'], ['workspace/a.csv', null]])
+    assert.match(renderToStaticMarkup(renderRunCard(v)), /<span class="rc-folder">TL-1 Launch Room group folder<\/span>/)
+  })
+  it('too_large uses undo.changedBytes', () => {
+    const v = runCardView({ run: run('t', { status: 'succeeded', filesChanged: [{ path: 'a', change: 'added', bytes: 1 }], undo: { state: 'unavailable', reason: 'too_large', changedBytes: 6.2 * 1024 ** 3 } }) })
+    assert.equal(v.note, "Undo isn't available for this run: it changed 6.2 GB, more than the undo space.")
+  })
+})
+
+describe('sidebar preview of a run message', () => {
+  it('content as is when there is any; else a minimal line from scriptRun', async () => {
+    const { previewText, runPreview } = await import('../src/lib/conversations.ts')
+    const m = (content, scriptRun) => ({ role: 'assistant', content, kind: 'run', scriptRun })
+    assert.equal(previewText(m('Ran report.py', summary({ status: 'failed', scriptName: 'x.py' }))), 'Ran report.py')
+    assert.equal(previewText(m('', summary({ status: 'succeeded', name: 'csv-tools', scriptName: 'report.py' }))), 'Ran report.py')
+    assert.equal(previewText(m('', summary({ status: 'failed', name: 'report.py' }))), 'Ran report.py · failed')
+    assert.equal(previewText(m('', summary({ status: 'running', name: 'report.py' }))), 'Running report.py')
+    assert.equal(runPreview(undefined), 'Ran a script')
+    assert.equal(previewText({ role: 'assistant', content: '' }), '…', 'not a run: unchanged')
+    const { previewLine } = await import('../src/lib/shell.ts')
+    const last = { ...m('', summary({ status: 'succeeded', name: 'report.py' })), authorAgentId: 'a1' }
+    assert.equal(previewLine({ kind: 'group', lastMessage: last }, [{ id: 'a1', name: 'Analyst' }]), 'Analyst: Ran report.py', 'group: author + run line')
   })
 })

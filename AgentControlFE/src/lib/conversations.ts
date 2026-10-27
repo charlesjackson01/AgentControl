@@ -1,5 +1,5 @@
 /* Pure helpers for the chat-first sidebar and thread (tests/conversations.test.mjs). */
-import type { Agent, ChatMessage, ConversationSummary } from './types.ts'
+import type { Agent, ChatMessage, ChatRunSummary, ConversationSummary, ScriptRunStatus } from './types.ts'
 import { attachmentsPreview } from './attachments.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
@@ -54,10 +54,31 @@ export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null 
 }
 
 /** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
-export function previewText(last: (Pick<ChatMessage, 'role' | 'content' | 'error'> & { attachments?: readonly { name: string }[] }) | null | undefined, max = 80): string {
+const RUN_ENDED: Partial<Record<ScriptRunStatus, string>> = { failed: 'failed', timed_out: 'timed out', stopped: 'stopped', denied: 'denied' }
+
+/**
+ * A run message's preview when its content is empty: "Ran report.py", "Ran report.py · failed",
+ * "Running report.py". The message's own content wins whenever it has any (shown as is).
+ */
+export function runPreview(run: Pick<ChatRunSummary, 'name' | 'scriptName' | 'status'> | undefined): string {
+  const name = run?.scriptName || run?.name || 'a script'
+  if (!run) return `Ran ${name}`
+  if (run.status === 'queued' || run.status === 'running' || run.status === 'waiting_permission') return `Running ${name}`
+  const ended = RUN_ENDED[run.status]
+  return ended ? `Ran ${name} · ${ended}` : `Ran ${name}`
+}
+
+export function previewText(
+  last: (Pick<ChatMessage, 'role' | 'content' | 'error'> & Partial<Pick<ChatMessage, 'kind' | 'scriptRun'>> & { attachments?: readonly { name: string }[] }) | null | undefined,
+  max = 80,
+): string {
   if (!last) return 'No messages yet'
   // FE-7: a files-only message previews as "You: 📎 plan.pdf" / "You: 📎 3 files".
-  const body = last.content.replace(/\s+/g, ' ').trim() || attachmentsPreview(last.attachments) || (isErrorPreview(last) ? 'The run failed.' : '…')
+  const body =
+    last.content.replace(/\s+/g, ' ').trim() ||
+    (last.kind === 'run' ? runPreview(last.scriptRun) : '') ||
+    attachmentsPreview(last.attachments) ||
+    (isErrorPreview(last) ? 'The run failed.' : '…')
   const prefix = last.role === 'user' ? 'You: ' : isErrorPreview(last) ? 'Failed: ' : ''
   const full = prefix + body
   const chars = Array.from(full)

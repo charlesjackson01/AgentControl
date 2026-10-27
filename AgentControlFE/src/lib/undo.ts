@@ -119,10 +119,11 @@ function folderOf(root: 'agent' | 'group', groupId: string | undefined, groupNam
   return name ? `${name} group folder` : 'group folder'
 }
 
-/** A preview path may or may not carry the "group:" prefix the run's filesChanged use for group files. */
-function changeOf(run: Pick<ScriptRun, 'filesChanged'> | undefined, path: string) {
+/** The run's own record of a preview path (same folder: scope 'group' + groupId ↔ root 'group' + groupId; BE 146cd18). */
+function changeOf(run: Pick<ScriptRun, 'filesChanged'> | undefined, c: Pick<UndoPreviewChange, 'path' | 'root' | 'groupId'>) {
   const files = run?.filesChanged ?? []
-  return files.find((f) => f.path === path || f.path === `group:${path}` || `group:${f.path}` === path)?.change
+  const group = c.root === 'group'
+  return files.find((f) => f.path === c.path && (f.scope === 'group') === group && (!group || f.groupId === c.groupId))?.change
 }
 
 /**
@@ -144,7 +145,7 @@ export function undoRowNote(c: Pick<UndoPreviewChange, 'action' | 'afterBytes' |
 /** Preview changes → rows (mockup d): delete (red) or restore, with undoRowNote's note. */
 export function undoRows(preview: Pick<UndoPreview, 'changes'>, run?: Pick<ScriptRun, 'filesChanged'>, ctx: UndoRowContext = {}): UndoRow[] {
   return preview.changes.map((c, i) => {
-    const note = undoRowNote(c, changeOf(run, c.path))
+    const note = undoRowNote(c, changeOf(run, c))
     return { key: `${i}:${c.root}:${c.groupId ?? ''}:${c.path}`, action: c.action, path: c.path, note, folder: folderOf(c.root, c.groupId, c.groupName, ctx) }
   })
 }

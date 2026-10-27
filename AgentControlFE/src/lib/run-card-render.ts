@@ -97,6 +97,7 @@ function body(v: RunCardView, x: RunCardHandlers): ReactNode[] {
               { key: f.key },
               h('span', { className: CHG_CLASS[f.change] }, f.change),
               h('span', { className: 'rc-path' }, f.path),
+              f.folder ? h('span', { className: 'rc-folder' }, f.folder) : null,
               f.size ? h('span', { className: 'rc-size' }, f.size) : null,
             ),
           ),

@@ -27,12 +27,14 @@ export const RUN_CARD_GAPS = {
   narrow: 'GAP-R12: 390 px layout (source hidden, files and actions wrap)',
   loading: 'GAP-R13: details still loading / failed to load',
   waiting: 'GAP-R14: waiting for permission (M2 only; not reachable in M1)',
+  collapsed: 'GAP-R15: finished cards start collapsed (head from the message summary; the run loads on expand, contract 146cd18)',
+  groupFile: 'GAP-R16: a group-folder file row names the folder ("TL-1 Launch Room group folder")',
 } as const
 
 export type RunTone = 'ok' | 'bad' | 'run' | 'undone'
 
 export type RunMetaItem = { key: string; label: string; value: string; suffix?: string }
-export type RunFileRow = { key: string; change: FileChange['change']; path: string; size: string | null }
+export type RunFileRow = { key: string; change: FileChange['change']; path: string; size: string | null; folder: string | null }
 export type RunLog = { text: string; error: boolean; live: boolean }
 export type RunActions = {
   stop: boolean
@@ -83,6 +85,8 @@ export type RunCardInput = {
   now?: number
   /** For kind 'undo': the undone run's name. */
   undoOfName?: string
+  /** groupId → name, when a group FileChange has no groupName. */
+  groupNames?: Readonly<Record<string, string>>
 } & UndoReasonContext
 
 export const FILES_SHOWN = 5
@@ -217,25 +221,38 @@ function nameOf(input: RunCardInput): string {
   const { run, summary } = input
   const kind = run?.kind ?? summary?.kind ?? 'script'
   if (kind === 'undo') return `undo of ${input.undoOfName ?? 'a run'}`
-  if (kind === 'tool_build') return run?.argv.length ? scriptName(run) : summary?.name ?? 'tools'
-  if (run?.skillId && run.argv.length) return scriptName(run)
+  if (run?.argv.length && (kind === 'tool_build' || run.skillId)) return scriptName(run)
+  // BE 146cd18: scriptName is the card title; name stays the skill's display name.
+  if (summary?.scriptName) return summary.scriptName
+  if (kind === 'tool_build') return summary?.name ?? 'tools'
   return summary?.name ?? (run ? scriptName(run) : 'script')
 }
 
 /** Mockup: the skill ("csv-tools") or the folder it ran in ("workspace"). The summary's name is the skill's display name. */
 function sourceOf(input: RunCardInput, name: string): string | null {
   const { run, summary } = input
-  if (!run || run.kind !== 'script') return null
+  const kind = run?.kind ?? summary?.kind
+  if (kind !== 'script') return null
+  if (!run) return summary?.scriptName && summary.name && summary.name !== name ? summary.name : null
   if (run.skillId) return summary && summary.name !== name ? summary.name : run.skillId
   return run.cwd || null
 }
 
-function fileRows(files: readonly FileChange[]): RunFileRow[] {
+/** A group-scoped file's folder ("TL-1 Launch Room group folder"); the bot's own files have none. */
+export function fileFolder(f: Pick<FileChange, 'scope' | 'groupId' | 'groupName'>, groupNames?: Readonly<Record<string, string>>): string | null {
+  if (f.scope !== 'group') return null
+  const name = f.groupName || (f.groupId ? groupNames?.[f.groupId] : undefined)
+  return name ? `${name} group folder` : 'group folder'
+}
+
+/** BE 146cd18: `path` is relative to its scope's folder, with no prefix; it's shown as is. */
+function fileRows(files: readonly FileChange[], groupNames?: Readonly<Record<string, string>>): RunFileRow[] {
   return files.map((f, i) => ({
-    key: `${i}:${f.path}`,
+    key: `${i}:${f.scope ?? 'workspace'}:${f.groupId ?? ''}:${f.path}`,
     change: f.change,
-    path: f.path.replace(/^group:/, ''),
+    path: f.path,
     size: f.change === 'deleted' ? null : humanSize(f.bytes),
+    folder: fileFolder(f, groupNames),
   }))
 }
 
@@ -262,7 +279,7 @@ export function undoUnavailableText(undo: ScriptRun['undo'], ctx: UndoReasonCont
   if (undo.state !== 'unavailable') return null
   if (!undo.reason) return 'Undo no longer available.'
   // §7.4: too_large never had a snapshot, so it isn't "no longer" available.
-  if (undo.reason === 'too_large') return `Undo isn't available for this run: ${undoReasonText('too_large', ctx)}.`
+  if (undo.reason === 'too_large') return `Undo isn't available for this run: ${undoReasonText('too_large', { ...ctx, changedBytes: undo.changedBytes ?? ctx.changedBytes })}.`
   return undoGoneText(undo.reason, ctx)
 }
 
@@ -275,7 +292,7 @@ export function runCardView(input: RunCardInput): RunCardView {
   if (undo.state === 'done' && !isActiveStatus(status)) status = 'undone'
   const active = isActiveStatus(status)
   const name = nameOf(input)
-  const durationMs = durationOf(run)
+  const durationMs = durationOf(run) ?? summary?.durationMs
   const elapsedMs = run?.startedAt ? now - Date.parse(run.startedAt) : undefined
   const info = {
     exitCode: run?.exitCode ?? summary?.exitCode,
@@ -321,7 +338,7 @@ export function runCardView(input: RunCardInput): RunCardView {
     if (rt) meta.push({ key: 'rt', label: 'Runtime', value: rt })
   }
 
-  const allFiles = active ? [] : fileRows(run.filesChanged)
+  const allFiles = active ? [] : fileRows(run.filesChanged, input.groupNames)
   const files = allFiles.slice(0, FILES_SHOWN)
   const moreFiles = allFiles.length - files.length
 

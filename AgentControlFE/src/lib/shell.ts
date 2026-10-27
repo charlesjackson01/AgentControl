@@ -160,7 +160,8 @@ export function previewLine(
   const last = c.lastMessage as ChatMessage | null
   if (isGroup(c) && last && last.role === 'assistant' && last.authorAgentId && !last.error) {
     const author = agents.find((a) => a.id === last.authorAgentId)?.name
-    if (author) return previewText({ ...last, content: `${author}: ${last.content}` }, max)
+    // An empty run message previews from its scriptRun ("Analyst: Ran x.py"), so build the body first.
+    if (author) return previewText({ ...last, content: `${author}: ${previewText(last, Infinity)}` }, max)
   }
   return previewText(last, max)
 }

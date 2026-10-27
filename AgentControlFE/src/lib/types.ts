@@ -536,7 +536,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 4bf9429 (BE-P2-1), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ 77cc66e (BE-P2-1), section "Phase 2",
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -791,12 +791,29 @@ export interface VmHostInfo {
 export interface UndoPreview {
   runId: string
   /** What undo would do: added → deleted, modified/deleted → restored. */
-  changes: { path: string; action: 'delete' | 'restore'; root: 'agent' | 'group'; groupId?: string }[]
+  changes: UndoPreviewChange[]
   /** Files changed since the run (by a later run or the user). Undo without force → 409. */
-  conflicts: { path: string; root: 'agent' | 'group'; groupId?: string }[]
+  conflicts: { path: string; root: 'agent' | 'group'; groupId?: string; groupName?: string }[]
   /** Shown in the dialog: undo never reverses internet side effects or installed tools. */
   caveats: ('internet' | 'tools')[]
+  /** Optional: the bot's undo snapshot budget (same numbers as VmInfo). */
+  budget?: { usedBytes: number; limitBytes: number }
 }
+/** One file undo would touch. Sizes are optional; null where that side doesn't exist (added/deleted). */
+export interface UndoPreviewChange {
+  path: string
+  action: 'delete' | 'restore'
+  root: 'agent' | 'group'
+  groupId?: string
+  /** Display name of the group, when root is 'group'. */
+  groupName?: string
+  /** Size now (after the run); null if the run deleted it. */
+  afterBytes?: number | null
+  /** Size undo would restore; null if the run added it. */
+  beforeBytes?: number | null
+}
+/** 410 error text for reason 'machine_restored' (the FE shows UndoGone.error as is). */
+export const UNDO_MACHINE_RESTORED_TEXT = "This bot's computer was restored from a backup, so this run can't be undone."
 /** POST /api/runs/:runId/undo body. force: overwrite conflicting files ("Undo anyway"). */
 export interface UndoRequest {
   force?: boolean

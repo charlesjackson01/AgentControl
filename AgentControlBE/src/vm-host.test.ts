@@ -258,7 +258,7 @@ describe.each([
     let runs = 1
     let free = 500 * GIB
     const { svc } = service(platform, cli, { activeRuns: () => runs, freeBytes: async () => free })
-    await expect(svc.grow(90)).rejects.toMatchObject({ statusCode: 409, message: expect.stringMatching(/Scripts are running/) })
+    await expect(svc.grow(90)).rejects.toMatchObject({ statusCode: 409, reason: 'runs_active', message: expect.stringMatching(/Scripts are running/) })
     runs = 0
     // 30 GB more + the 3 GB run floor.
     free = 30 * GIB + RUN_BLOCK_FREE_MB * 1024 * 1024 - 1
@@ -349,10 +349,11 @@ describe('routes', () => {
     runs = 1
     const busy = await app.inject({ method: 'POST', url: '/api/vm/machine/grow', payload: { toGb: 90 } })
     expect(busy.statusCode).toBe(409)
-    expect(busy.json().message).toMatch(/Scripts are running/)
+    expect(busy.json()).toMatchObject({ statusCode: 409, error: 'Request Error', reason: 'runs_active', message: expect.stringMatching(/Scripts are running/) })
     runs = 0
     const bad = await app.inject({ method: 'POST', url: '/api/vm/machine/grow', payload: {} })
     expect(bad.statusCode).toBe(400)
+    expect(bad.json()).not.toHaveProperty('reason')
     const grown = await app.inject({ method: 'POST', url: '/api/vm/machine/grow', payload: { toGb: 90 } })
     expect(grown.statusCode).toBe(200)
     expect(grown.json().machine).toMatchObject({ diskGb: 90 })

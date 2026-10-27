@@ -14,7 +14,7 @@
 import { statfs } from 'node:fs/promises'
 import { homedir, totalmem } from 'node:os'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
-import { fail } from './http.js'
+import { fail, failWithReason } from './http.js'
 import { RUN_BLOCK_FREE_MB, VM_MACHINE_DEFAULTS, type SnapshotDriver, type StorageBackendKind, type VmHostInfo } from './shared/types.js'
 
 export type HostOs = VmHostInfo['os']
@@ -103,7 +103,7 @@ export interface VmHostService {
   hostInfo(fresh?: boolean): Promise<VmHostInfo>
   /** Create (6 GB / 4 vCPU / 60 GB) and/or start the `agentcontrol` machine. No-op on Linux. */
   ensureMachine(): Promise<VmHostInfo>
-  /** POST /api/vm/machine/grow. Throws 400/409 via fail(). */
+  /** POST /api/vm/machine/grow. Throws 400, 409 (reason 'runs_active' while runs are in progress) or 502 via fail(). */
   grow(toGb: unknown): Promise<VmHostInfo>
 }
 
@@ -318,7 +318,8 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     if (typeof toGb !== 'number' || !Number.isInteger(toGb) || toGb <= m.diskGb || toGb > MAX_MACHINE_DISK_GB) {
       fail(400, `Choose a whole number of GB larger than the current ${m.diskGb} GB (up to ${MAX_MACHINE_DISK_GB} GB). Disks can grow but never shrink.`)
     }
-    if (activeRuns() > 0) fail(409, 'Scripts are running. Wait for them to finish, then grow the disk.')
+    // The machine has to stop to grow, so any run in progress blocks it.
+    if (activeRuns() > 0) failWithReason(409, 'runs_active', 'Scripts are running. Wait for them to finish, then grow the disk.')
     if (busy) fail(409, 'The machine is already being changed. Try again in a moment.')
     const free = await freeBytes(hostDiskPath())
     const needed = (toGb - m.diskGb) * GIB + RUN_FLOOR_BYTES

@@ -421,7 +421,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
 
   app.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number }
+    const err = error as Error & { statusCode?: number; reason?: unknown }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
     const message = redactUrlCredentials(err.message ?? '')
     if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
@@ -429,6 +429,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       statusCode: status,
       error: status >= 500 ? 'Internal Server Error' : 'Request Error',
       message,
+      // BE-P2-6: 409/410 carry a machine-readable reason (e.g. 'files_missing').
+      ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
     })
   })
 

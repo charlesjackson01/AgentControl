@@ -1,0 +1,308 @@
+/**
+ * BE-P2-3: static checks on the shared bot images. A real build (python3, node and
+ * chromium as uid 1000) is the `@vm` test at the bottom, skipped unless AC_VM_TESTS=1
+ * and an engine is installed; until Podman is on a CI runner these are the gate.
+ */
+import { execFileSync } from 'node:child_process'
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
+import { describe, expect, it } from 'vitest'
+import {
+  BOTVM_PINS,
+  BOT_PATHS,
+  IMAGE_LABELS,
+  PLAYWRIGHT_BROWSERS_PATH,
+  SHARED_IMAGE_KINDS,
+  baseImageFor,
+  botContainerName,
+  botImageRef,
+  botLayerContainerfile,
+  botOptVolume,
+  botToolsVolume,
+  containerfilePath,
+  imageBuildArgv,
+  sharedImageRef,
+  sharedImagesToBuild,
+  vmDir,
+  type SharedImageKind,
+} from './vm-images.js'
+
+interface Instr {
+  op: string
+  args: string
+}
+
+/** Containerfile → instructions (comments dropped, `\` continuations joined). */
+function parse(text: string): Instr[] {
+  const out: Instr[] = []
+  let buf = ''
+  for (const raw of text.split('\n')) {
+    const line = raw.trim()
+    if (!buf && (line === '' || line.startsWith('#'))) continue
+    if (line.startsWith('#')) continue
+    if (line.endsWith('\\')) {
+      buf += line.slice(0, -1) + ' '
+      continue
+    }
+    buf += line
+    const m = /^(\w+)\s+([\s\S]*)$/.exec(buf.trim())
+    if (m) out.push({ op: m[1]!.toUpperCase(), args: m[2]!.trim() })
+    buf = ''
+  }
+  return out
+}
+
+const files = Object.fromEntries(SHARED_IMAGE_KINDS.map((k) => [k, readFileSync(containerfilePath(k), 'utf8')])) as Record<SharedImageKind, string>
+const instrs = Object.fromEntries(SHARED_IMAGE_KINDS.map((k) => [k, parse(files[k])])) as Record<SharedImageKind, Instr[]>
+const of = (k: SharedImageKind, op: string) => instrs[k].filter((i) => i.op === op)
+
+/** ARG NAME=default → { NAME: default } */
+function argDefaults(k: SharedImageKind): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const i of of(k, 'ARG')) {
+    const m = /^([A-Z0-9_]+)(?:=(.*))?$/.exec(i.args)
+    if (m && m[2] !== undefined) out[m[1]!] = m[2]
+  }
+  return out
+}
+
+/** ENV/LABEL key=value pairs (quoted values allowed). */
+function pairs(k: SharedImageKind, op: 'ENV' | 'LABEL'): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const i of of(k, op)) {
+    for (const m of i.args.matchAll(/([\w.-]+)=("([^"]*)"|\S+)/g)) out[m[1]!] = m[3] ?? m[2]!
+  }
+  return out
+}
+
+function versionsEnv(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of readFileSync(path.join(vmDir(), 'images', 'versions.env'), 'utf8').split('\n')) {
+    const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
+    if (m) out[m[1]!] = m[2]!
+  }
+  return out
+}
+
+describe('pinned versions', () => {
+  it('versions.env, BOTVM_PINS and the Containerfile ARG defaults agree', () => {
+    expect(versionsEnv()).toEqual(BOTVM_PINS)
+    for (const k of SHARED_IMAGE_KINDS) {
+      for (const [name, value] of Object.entries(argDefaults(k))) {
+        if (name === 'BOTVM_IMAGE') expect(value).toBe(sharedImageRef('botvm'))
+        else expect(value, `${k} ARG ${name}`).toBe(BOTVM_PINS[name as keyof typeof BOTVM_PINS])
+      }
+    }
+  })
+
+  it('the base is Debian slim with Python 3.12, pinned by digest; Node 22 is checksum-pinned per arch', () => {
+    expect(BOTVM_PINS.BASE_IMAGE).toMatch(/^docker\.io\/library\/python:3\.12\.\d+-slim-bookworm@sha256:[0-9a-f]{64}$/)
+    expect(BOTVM_PINS.BASE_IMAGE).toContain(`python:${BOTVM_PINS.PYTHON_VERSION}-`)
+    expect(BOTVM_PINS.NODE_VERSION).toMatch(/^22\.\d+\.\d+$/)
+    expect(BOTVM_PINS.NODE_SHA256_X64).toMatch(/^[0-9a-f]{64}$/)
+    expect(BOTVM_PINS.NODE_SHA256_ARM64).toMatch(/^[0-9a-f]{64}$/)
+    expect(BOTVM_PINS.PLAYWRIGHT_VERSION).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(of('botvm', 'FROM').map((i) => i.args)).toEqual(['${BASE_IMAGE}'])
+    expect(of('botvm-browser', 'FROM').map((i) => i.args)).toEqual(['${BOTVM_IMAGE}'])
+    const nodeRun = of('botvm', 'RUN').find((i) => i.args.includes('nodejs.org/dist'))!
+    expect(nodeRun.args).toContain('sha256sum -c')
+    expect(nodeRun.args).toContain('${NODE_SHA256_X64}')
+    expect(nodeRun.args).toContain('${NODE_SHA256_ARM64}')
+    expect(nodeRun.args).toMatch(/curl -fsSL/)
+  })
+})
+
+describe.each(SHARED_IMAGE_KINDS)('%s Containerfile', (kind) => {
+  it('ends as the non-root bot user (uid 1000), with root only for install steps', () => {
+    const users = of(kind, 'USER').map((i) => i.args)
+    expect(users.at(-1)).toBe('1000:1000')
+    for (const u of users) expect(['root', '1000:1000']).toContain(u)
+    // Nothing runs after the final USER except metadata.
+    const lastUser = instrs[kind].findLastIndex((i) => i.op === 'USER')
+    expect(instrs[kind].slice(lastUser + 1).map((i) => i.op).filter((op) => op === 'RUN')).toEqual([])
+  })
+
+  it('carries the AgentControl and OCI labels with the pinned version', () => {
+    const labels = pairs(kind, 'LABEL')
+    expect(labels[IMAGE_LABELS.image]).toBe(kind)
+    expect(labels[IMAGE_LABELS.version]).toBe('${BOTVM_VERSION}')
+    expect(labels['org.opencontainers.image.version']).toBe('${BOTVM_VERSION}')
+    expect(labels['org.opencontainers.image.title']).toBe(`agentcontrol/${kind}`)
+  })
+
+  it('has no secrets, remote ADDs, privileged bits, exposed ports or sudo', () => {
+    const text = files[kind]
+    for (const i of [...of(kind, 'ARG'), ...of(kind, 'ENV')]) {
+      for (const name of i.args.match(/\b[A-Z][A-Z0-9_]+(?==)/g) ?? []) {
+        if (/^NODE_SHA256_/.test(name)) continue
+        expect(name, `${kind}: ${i.op} ${name}`).not.toMatch(/TOKEN|SECRET|PASSW|API_?KEY|CREDENTIAL|AUTH/)
+      }
+    }
+    expect(text).not.toMatch(/gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY/)
+    expect(of(kind, 'ADD')).toEqual([])
+    expect(of(kind, 'COPY')).toEqual([])
+    expect(of(kind, 'EXPOSE')).toEqual([])
+    expect(of(kind, 'VOLUME')).toEqual([])
+    const body = instrs[kind].map((i) => `${i.op} ${i.args}`).join('\n')
+    expect(body).not.toMatch(/\bsudo\b|--privileged|chmod [0-7]*7{3}|setuid|chmod u\+s/)
+    expect(body).not.toMatch(/HTTPS?_PROXY|NO_PROXY/)
+  })
+
+  it('cleans apt lists in every RUN that installs packages', () => {
+    for (const r of of(kind, 'RUN').filter((i) => /apt-get install|--with-deps/.test(i.args))) {
+      expect(r.args).toContain('rm -rf /var/lib/apt/lists/*')
+    }
+  })
+
+  it('works in /bot/workspace and idles under tini (runs arrive via exec)', () => {
+    expect(of(kind, 'WORKDIR').at(-1)?.args).toBe(BOT_PATHS.workspace)
+    expect(of(kind, 'ENTRYPOINT').at(-1)?.args).toBe('["/usr/bin/tini", "--"]')
+    expect(of(kind, 'CMD').at(-1)?.args).toBe('["sleep", "infinity"]')
+  })
+})
+
+describe('botvm base layout', () => {
+  it('creates the bot user as uid/gid 1000 with /home/bot', () => {
+    const run = of('botvm', 'RUN').find((i) => i.args.includes('useradd'))!
+    expect(run.args).toMatch(/groupadd --gid 1000 bot/)
+    expect(run.args).toMatch(/useradd --uid 1000 --gid 1000 --home-dir \/home\/bot/)
+  })
+
+  it('creates the /bot layout and the tool dirs, owned by the bot where writable', () => {
+    const run = of('botvm', 'RUN').find((i) => i.args.includes('mkdir -p /bot/workspace'))!
+    for (const p of [BOT_PATHS.workspace, BOT_PATHS.inputs, BOT_PATHS.skills, BOT_PATHS.groups, BOT_PATHS.optBin, `${BOT_PATHS.home}/.local/bin`]) {
+      expect(run.args).toContain(p)
+    }
+    expect(run.args).toMatch(/chown -R 1000:1000 \/bot\/workspace \/bot\/groups \/opt\/bot \/home\/bot/)
+    // Read-only mounts stay root-owned.
+    expect(run.args).not.toMatch(/chown[^&]*\/bot\/(shared|skills)/)
+  })
+
+  it('sets HOME, PATH (~/.local/bin and /opt/bot/bin first) and user-level pip/npm into the tools volume', () => {
+    const env = pairs('botvm', 'ENV')
+    expect(env.HOME).toBe(BOT_PATHS.home)
+    expect(env.PATH!.split(':').slice(0, 2)).toEqual(['/home/bot/.local/bin', BOT_PATHS.optBin])
+    expect(env.PIP_USER).toBe('1')
+    expect(env.PYTHONUSERBASE).toBe('/home/bot/.local')
+    expect(env.NPM_CONFIG_PREFIX).toBe('/home/bot/.local')
+    expect(env.NODE_PATH).toBe('/home/bot/.local/lib/node_modules')
+    expect(env.AC_BOTVM_VERSION).toBe('${BOTVM_VERSION}')
+  })
+
+  it('installs tini, coreutils and ca-certificates', () => {
+    const run = of('botvm', 'RUN').find((i) => i.args.includes('apt-get install'))!
+    for (const p of ['tini', 'coreutils', 'ca-certificates']) expect(run.args).toMatch(new RegExp(`\\b${p}\\b`))
+  })
+})
+
+describe('botvm-browser layer', () => {
+  it('presets PLAYWRIGHT_BROWSERS_PATH, installs only Chromium there, and blocks further downloads', () => {
+    const env = pairs('botvm-browser', 'ENV')
+    expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe(PLAYWRIGHT_BROWSERS_PATH)
+    expect(env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD).toBe('1')
+    expect(env.NODE_PATH!.split(':')).toEqual(['/home/bot/.local/lib/node_modules', '/usr/local/lib/node_modules'])
+    const run = of('botvm-browser', 'RUN').find((i) => i.args.includes('playwright install'))!
+    expect(run.args).toMatch(/playwright install --with-deps chromium(\s|$)/)
+    expect(run.args).toContain('"playwright==${PLAYWRIGHT_VERSION}"')
+    expect(run.args).toContain('"playwright@${PLAYWRIGHT_VERSION}"')
+    expect(run.args).toContain('chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"')
+    // The browser install goes to the system, not into the bot's volumes.
+    expect(run.args).toContain('PIP_USER=0')
+    expect(run.args).toContain('NPM_CONFIG_PREFIX=/usr/local')
+    // The ENV that sets the browsers path comes before the install.
+    const idx = (pred: (i: Instr) => boolean) => instrs['botvm-browser'].findIndex(pred)
+    expect(idx((i) => i.op === 'ENV' && i.args.startsWith('PLAYWRIGHT_BROWSERS_PATH='))).toBeLessThan(idx((i) => i === run))
+  })
+
+  it('runs Chromium without its own sandbox (the container is the sandbox)', () => {
+    expect(pairs('botvm-browser', 'ENV').PLAYWRIGHT_CHROMIUM_ARGS).toBe('--no-sandbox')
+  })
+})
+
+describe('image names', () => {
+  it('shared refs are local and versioned; the bot layer FROMs the right base', () => {
+    expect(sharedImageRef('botvm')).toBe(`localhost/agentcontrol/botvm:${BOTVM_PINS.BOTVM_VERSION}`)
+    expect(sharedImageRef('botvm-browser', '9.9.9')).toBe('localhost/agentcontrol/botvm-browser:9.9.9')
+    expect(baseImageFor('base')).toBe(sharedImageRef('botvm'))
+    expect(baseImageFor('browser')).toBe(sharedImageRef('botvm-browser'))
+    expect(sharedImagesToBuild({ browser: false })).toEqual(['botvm'])
+    expect(sharedImagesToBuild({ browser: true })).toEqual(['botvm', 'botvm-browser'])
+  })
+
+  it('per-bot names follow the plan and reject anything that is not a slug', () => {
+    expect(botImageRef('analyst', 3)).toBe('localhost/ac-bot-analyst:3')
+    expect(botContainerName('analyst')).toBe('ac-bot-analyst')
+    expect(botToolsVolume('analyst')).toBe('ac-tools-analyst')
+    expect(botOptVolume('analyst')).toBe('ac-opt-analyst')
+    for (const bad of ['', 'Analyst', '../x', 'a b', 'a;rm', '-x', 'a'.repeat(64)]) {
+      expect(() => botContainerName(bad)).toThrow(/invalid bot slug/)
+    }
+    expect(() => botImageRef('analyst', -1)).toThrow(/generation/)
+    expect(() => botImageRef('analyst', 1.5)).toThrow(/generation/)
+  })
+
+  it('botLayerContainerfile: base only, or root apt install back to uid 1000; sorted, deduped, validated', () => {
+    expect(botLayerContainerfile({ slug: 'analyst', generation: 0, base: 'base', packages: [] })).toBe(
+      `FROM ${sharedImageRef('botvm')}\nLABEL io.agentcontrol.image="ac-bot" io.agentcontrol.agent="analyst" io.agentcontrol.generation="0"\n`,
+    )
+    const cf = botLayerContainerfile({ slug: 'analyst', generation: 2, base: 'browser', packages: ['jq', 'ffmpeg', 'jq', 'libxml2-dev'] })
+    const lines = cf.trim().split('\n')
+    expect(lines[0]).toBe(`FROM ${sharedImageRef('botvm-browser')}`)
+    expect(lines.slice(2)).toEqual(['USER root', 'RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg jq libxml2-dev && rm -rf /var/lib/apt/lists/*', 'USER 1000:1000'])
+    for (const bad of ['jq; curl evil', '-o', 'A', '$(x)', 'x y']) {
+      expect(() => botLayerContainerfile({ slug: 'analyst', generation: 1, base: 'base', packages: [bad] })).toThrow(/invalid apt package/)
+    }
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
+  const script = path.join(vmDir(), 'build-images.sh')
+  const sh = (...args: string[]) => execFileSync('bash', [script, ...args], { encoding: 'utf8' })
+
+  it('dry-run builds the same argv as imageBuildArgv, base before browser, with uid-1000 smoke checks', () => {
+    const lines = sh('--dry-run').trim().split('\n')
+    expect(lines).toHaveLength(4)
+    const builds = lines.filter((l) => l.startsWith('podman build '))
+    expect(builds).toEqual(SHARED_IMAGE_KINDS.map((k) => ['podman', ...imageBuildArgv(k)].join(' ')))
+    const smokes = lines.filter((l) => l.startsWith('podman run '))
+    expect(smokes).toHaveLength(2)
+    for (const s of smokes) {
+      expect(s).toContain('--network none')
+      expect(s).toContain('--read-only')
+      expect(s).toContain('--cap-drop ALL')
+      expect(s).toContain('id\\ -u')
+    }
+    expect(smokes[1]).toContain('chromium.launch')
+  })
+
+  it('supports docker, a podman connection and --only, and never uses podman-machine-default', () => {
+    expect(sh('--dry-run', '--engine', 'docker', '--only', 'botvm').trim().split('\n')[0]).toBe(['docker', ...imageBuildArgv('botvm')].join(' '))
+    expect(sh('--dry-run', '--connection', 'agentcontrol', '--only', 'botvm-browser').trim().split('\n')[0]).toBe(
+      ['podman', '--connection', 'agentcontrol', ...imageBuildArgv('botvm-browser')].join(' '),
+    )
+    expect(() => execFileSync('bash', [script, '--dry-run', '--connection', 'podman-machine-default'], { stdio: 'pipe' })).toThrow()
+    expect(() => execFileSync('bash', [script, '--dry-run', '--engine', 'nerdctl'], { stdio: 'pipe' })).toThrow()
+  })
+})
+
+/** @vm: needs a real engine. Not run until Podman is installed on a runner (AC_VM_TESTS=1). */
+const engine = ['podman', 'docker'].find((e) => {
+  try {
+    execFileSync(e, ['--version'], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})
+describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', () => {
+  it('builds both images; python3, node and chromium run as uid 1000', () => {
+    const out = execFileSync('bash', [path.join(vmDir(), 'build-images.sh'), '--engine', engine!], { encoding: 'utf8', timeout: 30 * 60_000 })
+    expect(out).toMatch(/Python 3\.12\./)
+    expect(out).toMatch(/v22\./)
+  }, 30 * 60_000)
+})
+
+it('the vm/ folder ships next to src/ (and dist/)', () => {
+  expect(existsSync(containerfilePath('botvm'))).toBe(true)
+  expect(existsSync(containerfilePath('botvm-browser'))).toBe(true)
+})

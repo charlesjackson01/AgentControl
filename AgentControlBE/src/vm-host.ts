@@ -103,7 +103,7 @@ export interface VmHostService {
   hostInfo(fresh?: boolean): Promise<VmHostInfo>
   /** Create (6 GB / 4 vCPU / 60 GB) and/or start the `agentcontrol` machine. No-op on Linux. */
   ensureMachine(): Promise<VmHostInfo>
-  /** POST /api/vm/machine/grow. Throws 400, 409 (reason 'runs_active' while runs are in progress) or 502 via fail(). */
+  /** POST /api/vm/machine/grow. Throws 400, 409 (reason 'runs_active' while runs are in progress, 'machine_busy' while the machine is being changed) or 502 via fail(). */
   grow(toGb: unknown): Promise<VmHostInfo>
 }
 
@@ -320,7 +320,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     }
     // The machine has to stop to grow, so any run in progress blocks it.
     if (activeRuns() > 0) failWithReason(409, 'runs_active', 'Scripts are running. Wait for them to finish, then grow the disk.')
-    if (busy) fail(409, 'The machine is already being changed. Try again in a moment.')
+    if (busy) failWithReason(409, 'machine_busy', 'The machine is already being changed. Try again in a moment.')
     const free = await freeBytes(hostDiskPath())
     const needed = (toGb - m.diskGb) * GIB + RUN_FLOOR_BYTES
     if (free === null) fail(400, "Couldn't check this computer's free disk space, so the disk wasn't grown.")

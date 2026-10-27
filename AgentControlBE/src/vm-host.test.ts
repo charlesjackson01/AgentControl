@@ -287,6 +287,29 @@ describe('grow', () => {
     expectOnlyOurMachine(cli.calls)
   })
 
+  it('a second grow while the machine is being changed is 409 machine_busy; the first one finishes', async () => {
+    const machine: FakeMachine = { state: 'running', diskGb: 60, usedGb: 50 }
+    const cli = fakeCli({ podman: '5.4.0', vmType: 'applehv', machine })
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    let markStopping!: () => void
+    const stopping = new Promise<void>((r) => (markStopping = r))
+    const exec: CommandRunner = async (cmd, args, opts) => {
+      if (cmd === 'podman' && args[0] === 'machine' && args[1] === 'stop') {
+        markStopping()
+        await gate
+      }
+      return cli.exec(cmd, args, opts)
+    }
+    const { svc } = service('darwin', { ...cli, exec })
+    const first = svc.grow(90)
+    await stopping
+    await expect(svc.grow(120)).rejects.toMatchObject({ statusCode: 409, reason: 'machine_busy', message: expect.stringMatching(/already being changed/) })
+    release()
+    await expect(first).resolves.toMatchObject({ machine: { diskGb: 90 } })
+    expect(cli.calls.filter((c) => c[1] === 'machine' && c[2] === 'set').map((c) => c[4])).toEqual(['90'])
+  })
+
   it('Mac: a stopped machine is resized and left stopped', async () => {
     const cli = fakeCli({ podman: '5.4.0', machine: { state: 'stopped', diskGb: 90, usedGb: 0 } })
     await service('darwin', cli).svc.grow(120)

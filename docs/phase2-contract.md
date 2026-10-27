@@ -37,6 +37,14 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 
 **VM tab meters (agreed 2026-10-27):** memory is `usage.memoryMb` of `limits.memoryMb`; bot files & tools is `usage.personalBytes` (always the sum of `usage.breakdown`) of `usage.personalQuotaBytes`; undo snapshots is `usage.snapshots.bytes` of `budgetBytes` (separate, not in the 10 GB); per run shows `limits`. `VmInfo.runsHasMore` says whether older runs exist beyond `VmInfo.runs`; the script-runs list returns `hasMore` on every page. The bot files & tools meter groups `tools`, `opt` and `imageLayer` as "tools and packages". `ScriptRunSummary` may carry `files?: {added, modified, deleted}` (the split of `filesChangedCount`) and `network?`. Start empty for `files_missing` is M3, alongside Restore; M1 only explains the state.
 
+**Bot environment (BE-P2-4, additive, needs Team lead's OK):**
+- New error reasons (Fastify shape via `failWithReason`, show `message`): `POST /vm/start` 409 `engine_missing` (no container engine), 409 `image_missing` (shared `botvm` image not built yet), 409 `files_missing`, 502 on an engine failure; `POST /vm/stop` 409 `files_missing`, 502; `POST /vm/reset` 400 without `{confirm:true}`, 409 `run_active`, 409 `files_missing`, 502.
+- Tool builds (service now, routes with BE-P2-8/16/17): `vm_install` 400 bad package name / more than 100, 409 `internet_never` (bot policy), 409 `internet_unavailable` ("Installing system packages needs internet access, which isn't available yet." — M1 builds run with `--network none`), 502 `build_failed`; rebuild 409 `internet_unavailable` when `vm.packages` is non-empty; rollback 409 `no_previous_generation`, 409 `run_active`. Rollback restores the previous generation's package list (generation 0 = the shared base, packages `[]`).
+- Env: every `vm.env` entry is passed as `--env NAME=VALUE` on each exec (never the host's environment). `PATH_APPEND` is not set as a variable: its absolute, `:`-separated parts are appended to the image PATH (`/home/bot/.local/bin:/opt/bot/bin:...`). Only the BE-injected `AC_*` values follow.
+- Base upgrades: when the shared base version changes, the bot layer is rebuilt as the next generation from the new base on the next start; if that build fails the old layer keeps running. A generation reached by rollback stays on the base it was built on until the next build.
+- Container: `ac-bot-<slug>`, uid 1000, read-only root, `--cap-drop ALL`, no-new-privileges, `--network none` (`host` is never allowed; only `none` or `ac-egress-<slug>`), 512 MB `/tmp` tmpfs, volumes `ac-tools-<slug>` → `/home/bot`, `ac-opt-<slug>` → `/opt/bot`; binds `/bot/workspace` (rw), `/bot/shared` (ro), `/bot/groups/<slug>` (rw) per active group.
+- `VmInfo` placeholders until BE-P2-7/10/12: `runtime.effective` null, `usage.breakdown.tools/opt/imageLayer` 0, `usage.memoryMb` 0, snapshots 0, `runs` [], `browserState` `absent`.
+
 ## Global
 | Method | Path | 200 |
 |---|---|---|

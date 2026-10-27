@@ -18,7 +18,9 @@ import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attach
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
-import { createVmHostService, type VmHostService } from './vm-host.js'
+import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
+import { createBotEnvService, type BotEnvService } from './bot-env.js'
+import { botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
@@ -390,6 +392,8 @@ function parseSkillInput(body: unknown): SkillInput {
 export interface BuildAppOptions {
   /** BE-P2-2: engine/machine service; tests inject one with a fake CommandRunner. */
   vmHost?: VmHostService
+  /** BE-P2-4: per-bot containers, volumes and image layers; tests inject one with a fake CommandRunner. */
+  botEnv?: BotEnvService
 }
 
 export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOptions = {}): FastifyInstance {
@@ -1459,6 +1463,23 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     const body = request.body as { toGb?: unknown } | null | undefined
     return vmHost.grow(body && typeof body === 'object' ? body.toGb : undefined)
   })
+
+  // BE-P2-4: each bot's container, tools volumes and image layer.
+  const botEnv =
+    opts.botEnv ??
+    createBotEnvService({
+      engine: async () => {
+        const host = await vmHost.hostInfo()
+        if (!host.engine) return null
+        // Mac/Windows: always the dedicated machine, never podman-machine-default.
+        const globalArgs = host.engine === 'podman' && host.os !== 'linux' ? ['--connection', MACHINE_NAME] : []
+        return { cli: host.engine, globalArgs }
+      },
+      mounts: (agent) => botMounts(store, agent),
+      saveVm: storeSaveVm(store),
+      log: (msg) => app.log.info(msg),
+    })
+  registerBotEnvRoutes(app, store, { botEnv, hostInfo: () => vmHost.hostInfo() })
 
   return app
 }

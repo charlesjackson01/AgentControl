@@ -784,3 +784,77 @@ ol.cf-md__list { list-style: decimal; }
   .undo-list li .undo-note { flex: 1 1 100%; padding-left: 72px; }
   .undo-conflicts .undo-list li .undo-note { padding-left: 0; }
 }
+
+/* FE-P2-2: run card (mockup a-run-cards; mockup classes p2-run / p2-st / p2-cmd / p2-meta / p2-files / p2-log / p2-acts / p2-bar). Gaps: lib/run-card.ts RUN_CARD_GAPS. */
+.rc-wrap { width: 560px; max-width: 100%; }
+.rc { width: 100%; border: 1px solid var(--c-border); background: var(--c-surface-2); border-radius: var(--r-lg); font-size: 12px; margin-bottom: 4px; overflow: hidden; }
+.rc--bad { border-color: var(--c-danger-border); }
+.rc-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; min-width: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; }
+button.rc-head { cursor: pointer; }
+button.rc-head:focus-visible { outline: 2px solid var(--c-accent-ring); outline-offset: -2px; border-radius: var(--r-lg); }
+.rc-pill { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: var(--r-full); background: var(--c-accent-soft); color: var(--c-accent); font-size: 11px; font-weight: 500; white-space: nowrap; }
+.rc-name { font-family: var(--font-mono); font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rc-src { flex: 0 1 auto; color: var(--c-text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.rc-sp { flex: 1; }
+.rc-st { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: var(--r-full); font-size: 11px; font-weight: 500; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.rc-st--ok { background: var(--c-success-soft); color: var(--c-success); }
+.rc-st--bad { background: var(--c-danger-soft); color: var(--c-danger); }
+.rc-st--run { background: var(--c-accent-soft); color: var(--c-accent); }
+.rc-st--undone { background: var(--c-bg-sunk); color: var(--c-text-2); }
+.rc-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.rc-spin { width: 10px; height: 10px; border-radius: 50%; border: 1.6px solid currentColor; border-right-color: transparent; animation: spin 0.8s linear infinite; }
+.rc-chev { flex: none; color: var(--c-text-3); font-size: 11.5px; }
+.rc-bar { height: 3px; background: var(--c-bg-sunk); overflow: hidden; }
+.rc-bar span { display: block; height: 100%; width: 38%; background: var(--c-accent); border-radius: 0 3px 3px 0; animation: rc-bar 1.6s ease-in-out infinite; }
+@keyframes rc-bar { 0% { transform: translateX(-100%); } 100% { transform: translateX(265%); } }
+@media (prefers-reduced-motion: reduce) { .rc-bar span { animation: none; } }
+.rc-body { padding: 0 12px 10px 14px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.rc-body--bar { padding-top: 8px; }
+.rc-body[hidden] { display: none; }
+.rc-cmd { font-family: var(--font-mono); font-size: 11.5px; color: var(--c-text-2); background: var(--c-bg-sunk); border-radius: var(--r-sm); padding: 6px 8px; overflow-wrap: anywhere; }
+.rc-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--c-text-3); font-size: 11.5px; }
+.rc-meta b { font-weight: 500; color: var(--c-text-2); }
+.rc-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.rc-files li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.rc-chg { flex: none; width: 58px; font-size: 11px; color: var(--c-text-3); }
+.rc-chg--add { color: var(--c-success); }
+.rc-chg--del { color: var(--c-danger); }
+.rc-path { font-family: var(--font-mono); font-size: 11.5px; min-width: 0; overflow-wrap: anywhere; }
+.rc-size { flex: none; color: var(--c-text-3); font-size: 11px; }
+.rc-more { color: var(--c-text-3); font-size: 11px; padding-left: 66px; }
+/* The log keeps its last lines in view (a live tail), so it clips at the top. */
+.rc-log { font-family: var(--font-mono); font-size: 11px; line-height: 1.5; color: var(--c-text-2); background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-sm); padding: 6px 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 92px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+.rc-log--err { color: var(--c-danger); border-color: var(--c-danger-border); background: var(--c-danger-soft); }
+.rc-caret { color: var(--c-accent); animation: cf-blink 1.2s infinite; }
+.rc-error { margin: 0; color: var(--c-danger); font-size: 11.5px; }
+.rc-trunc { margin: 0; color: var(--c-text-3); font-size: 11.5px; }
+.rc-acts { display: flex; gap: 6px; align-items: center; padding-top: 2px; min-width: 0; }
+.rc-acts .btn { flex: none; height: 26px; padding: 0 10px; font-size: 12px; }
+.rc-note { color: var(--c-text-3); font-size: 11.5px; min-width: 0; }
+.rc-acts:not(.rc-acts--note-first) .rc-note { text-align: right; }
+.rc-stoperr { margin: 0; }
+.rc-loaderr { margin: 0; color: var(--c-text-2); font-size: 12px; }
+.rc-skel { display: flex; flex-direction: column; gap: 7px; }
+.rc-skel .skeleton { display: block; height: 22px; width: 100%; }
+.rc-skel .skeleton + .skeleton { height: 14px; width: 60%; }
+.rc-out { display: flex; flex-direction: column; gap: 12px; }
+.rc-out__h { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--c-text-2); }
+.rc-out__pre { margin: 0; max-height: 45vh; overflow: auto; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--c-text-2); background: var(--c-bg-sunk); border-radius: var(--r-sm); padding: 8px 10px; }
+.rc-out__pre--err { color: var(--c-danger); background: var(--c-danger-soft); }
+/* Mockup (a) at ≤600 px hides the source; GAP-R12: on phones the actions and the note wrap. */
+@media (max-width: 759px) {
+  .rc-src { display: none; }
+  /* GAP-R12: a long name keeps its width; the status wraps under it instead of squeezing it to a few letters. */
+  .rc-head { gap: 6px; flex-wrap: wrap; row-gap: 4px; }
+  .rc-head .rc-st { margin-left: auto; }
+  .rc-chg { width: 50px; }
+  /* Wrapped lines: room for about the same tail as on desktop. */
+  .rc-log { max-height: 150px; }
+  .rc-name { flex: 1 1 auto; }
+  .rc-acts { flex-wrap: wrap; row-gap: 6px; }
+  .rc-acts .rc-sp { display: none; }
+  .rc-acts .rc-note { flex: 1 1 100%; text-align: left !important; }
+  .rc-acts--note-first .rc-note { order: 2; }
+  .rc-files li { flex-wrap: wrap; row-gap: 0; }
+  .rc-files li .rc-path { flex: 1 1 calc(100% - 58px - 50px); }
+}

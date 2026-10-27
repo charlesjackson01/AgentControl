@@ -173,7 +173,8 @@ describe('activity card: component wiring', () => {
     const chat = readFileSync(new URL('../src/pages/ConversationChat.tsx', import.meta.url), 'utf8')
     // FE-5 moved BotRow/UserRow into components/shell/ChatRows.tsx (shared with the /new draft card).
     const rows = readFileSync(new URL('../src/components/shell/ChatRows.tsx', import.meta.url), 'utf8')
-    assert.match(rows, /\{before\}\s*\n\s*<div className=\{`cf-bub cf-bub--a/)
+    // FE-P2-2: `bare` (a run card) drops the bubble; otherwise the bubble still follows the card.
+    assert.match(rows, /\{before\}\s*\n\s*(?:\{bare \? children : )?<div className=\{`cf-bub cf-bub--a/)
     assert.match(rows, /\{after\}\s*\n\s*\{meta &&/)
     assert.match(chat, /activityView\(m\.activity, undefined, \(m\.runId && runFiles\[m\.runId\]\) \|\| null\)/)
   })

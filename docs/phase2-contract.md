@@ -44,6 +44,8 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 | POST | `/api/vm/machine/grow` `{toGb}` | `VmHostInfo`; 409 runs active, 400 low host disk |
 | GET | `/api/vm/export` | archive stream |
 
+**Host and grow (BE-P2-2, additive, needs Team lead OK):** `GET /api/vm/host` is live. `machine` is null on Linux; `provider` is `native` on Linux, Podman's VM type on Mac/Windows (`libkrun`, `applehv`, `wsl`, `hyperv`), or `docker-desktop` when only Docker is found there. `setupSteps` lists every step for the OS with `done` flags (`install-podman`; Linux `rootless` when the engine runs as root; Mac/Windows `create-machine`, `start-machine`) and is `[]` once all are done. `growOffer` appears at 80 % use; the ladder is 90, 120, then ×1.5 rounded up to 30 GB (180, 270 …), max 2048. `POST /api/vm/machine/grow`: 400 also for a `toGb` that isn't a whole number above the current size, on Linux (no machine) and when the machine is missing; the low-disk check needs `(toGb − current) GB + 3 GB` free on the host drive; **502** when Podman fails to stop/resize/start (message has Podman's last line). Mac resizes the machine (stop, `set --disk-size`, start if it was running); Windows only raises the managed budget.
+
 ## Live events: `GET /api/events` (SSE, M1)
 - Frame: `id: <n>` · `event: <type>` · `data: <LiveEvent JSON>`. Types: `run.updated` (full run + `summary` + `messageId`), `run.output` (chunk), `vm.updated`. `permission.*` are M2.
 - Catch-up: `Last-Event-ID` header (or `?lastEventId=`); replay from a ring of the last 1000. Too old → first frame `event: reset`, then re-fetch active runs and VM info.

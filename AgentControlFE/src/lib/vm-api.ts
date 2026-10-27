@@ -12,7 +12,7 @@ import {
   type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
 } from './types.ts'
 
-/** GET /api/agents/:id/runs page: newest first. */
+/** GET /api/agents/:id/script-runs page: newest first (BE be7afe4; Phase 1 /runs is model turns). */
 export type ScriptRunPage = { runs: ScriptRunSummary[]; hasMore: boolean }
 
 export type RunOutputStream = 'stdout' | 'stderr'
@@ -34,7 +34,7 @@ export const vmPaths = {
   agentRuns: (agentId: string, opts?: { before?: string; limit?: number }) => {
     const qs = new URLSearchParams({ limit: String(opts?.limit ?? RUN_PAGE_SIZE) })
     if (opts?.before) qs.set('before', opts.before)
-    return `/api/agents/${enc(agentId)}/runs?${qs}`
+    return `/api/agents/${enc(agentId)}/script-runs?${qs}`
   },
   agentExport: (agentId: string) => `/api/agents/${enc(agentId)}/export`,
   run: (runId: string) => `/api/runs/${enc(runId)}`,

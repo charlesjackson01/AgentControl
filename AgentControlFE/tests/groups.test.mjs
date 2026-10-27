@@ -249,6 +249,11 @@ describe('group files and memory owners', () => {
     assert.deepEqual(groupFileCard({ path: 'workspace/out.csv' }, 'Researcher', '1 KB', 'deleted'), { inGroup: false, path: 'workspace/out.csv', meta: "Researcher's folder · workspace · deleted" })
     assert.equal(groupFileCard({ path: 'workspace/out.csv' }, 'Researcher', '1 KB', 'modified').meta, "Researcher's folder · workspace · 1 KB")
   })
+  it("file cards: a modified group file reads 'changed by' (GAP-P2-FILE3); added stays 'added by'", () => {
+    assert.equal(groupFileCard({ path: 'shared/pier.md', root: 'group', groupId: 'g1' }, 'Researcher', '3 KB', 'modified', 'g1').meta, 'Group folder · changed by Researcher · 3 KB')
+    assert.equal(groupFileCard({ path: 'shared/q3.md', root: 'group', groupId: 'g2', groupName: 'Q3 report' }, 'Researcher', '1 KB', 'modified', 'g1').meta, 'Q3 report folder · changed by Researcher · 1 KB')
+    assert.equal(groupFileCard({ path: 'shared/pier.md', root: 'group', groupId: 'g1' }, 'Researcher', '3 KB', 'added', 'g1').meta, 'Group folder · added by Researcher · 3 KB')
+  })
   it('routes to /api/groups/:id', async () => {
     const calls = []
     const req = async (path, init) => (calls.push([path, init?.method ?? 'GET']), { entries: [], items: [], total: 0 })

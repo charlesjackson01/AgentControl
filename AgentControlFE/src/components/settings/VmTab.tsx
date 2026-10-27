@@ -9,7 +9,6 @@ import { vmPaths } from '../../lib/vm-api'
 import type { Agent, InternetPolicy, RuntimeMode, ScriptRun, VmHostInfo, VmProbeResult, VmToolsInfo } from '../../lib/types'
 import {
   RESET_ACTIVE_TEXT, RESET_TEXT, RESET_TITLE, envRowErrors, envWith, packageLabel, vmActionError, vmTabModel, whenText,
-  isRunHistoryPage,
   vmHistory,
   type RunHistoryPage,
 } from '../../lib/vm-tab'
@@ -62,11 +61,11 @@ export default function VmTab({ agent }: { agent: Agent }) {
     }
   }, [])
 
-  // History: vm.runs paints first; the first page of GET /runs?limit=50 brings the real hasMore.
+  // History: vm.runs paints first; the first page of GET /script-runs?limit=50 brings the real hasMore.
   useEffect(() => {
     let live = true
     api.vm.listRuns(agent.id).then(
-      (page: unknown) => live && isRunHistoryPage(page) && setFirst(page),
+      (page) => live && setFirst(page),
       () => undefined,
     )
     return () => {
@@ -179,8 +178,7 @@ export default function VmTab({ agent }: { agent: Agent }) {
   const before = history?.before
   const onMore = () =>
     void act('more', 'history', "Couldn't load older runs. Try again.", async () => {
-      const page: unknown = await api.vm.listRuns(agent.id, { before })
-      if (!isRunHistoryPage(page)) throw new Error('Not a run page')
+      const page = await api.vm.listRuns(agent.id, { before })
       setOlder((o) => ({ runs: [...(o?.runs ?? []), ...page.runs], hasMore: page.hasMore }))
     })
 

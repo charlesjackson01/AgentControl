@@ -30,6 +30,7 @@ export const VM_TAB_GAPS = {
   V9: 'Phone layout (2-column meters, wrapped history rows)',
   V10: 'Tab dot meaning: ● while the VM is running, ! when it needs attention (error, files missing, gVisor required but unavailable)',
   V11: 'files_missing offers Restore / Start empty in §14; Restore is hidden in M1 and there is no Start-empty route, so the tab explains and offers nothing',
+  V12: 'Bot files & tools meter note reads "workspace N · tools and packages N" (mockup had "tools N · env N"; imageLayer is vm_install packages, BE be7afe4)',
 } as const
 
 /* ---- formatting ---- */
@@ -184,9 +185,13 @@ export type MeterView = { key: string; label: string; value: string; of: string 
 const meterTone = (pct: number): MeterView['tone'] => (pct >= 100 ? 'bad' : pct >= 80 ? 'warn' : 'ok')
 const pctOf = (used: number, total: number) => (total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0)
 
-/** Mockup's "workspace 0.4 · tools 1.3 · env 0.2": files (workspace+inputs+memory), tools (~/.local + /opt), env (image layer). */
+/**
+ * "workspace 0.4 · tools and packages 1.5": files (workspace+inputs+memory) and tools and packages
+ * (~/.local + /opt + the image layer, i.e. what vm_install added; BE be7afe4 contract). Env vars are
+ * tiny and not counted. The parts sum to usage.personalBytes. (Mockup said "env"; GAP-V12.)
+ */
 export function breakdownText(b: VmInfo['usage']['breakdown']): string {
-  return `workspace ${gbNumber(b.workspace + b.inputs + b.memory)} · tools ${gbNumber(b.tools + b.opt)} · env ${gbNumber(b.imageLayer)}`
+  return `workspace ${gbNumber(b.workspace + b.inputs + b.memory)} · tools and packages ${gbNumber(b.tools + b.opt + b.imageLayer)}`
 }
 
 export function vmMeters(vm: VmInfo): MeterView[] {
@@ -661,12 +666,9 @@ export function vmTabModel(input: VmTabInput): VmTabModel {
 export type RunHistoryPage = { runs: ScriptRunSummary[]; hasMore: boolean }
 
 /** Whether a reply is that page shape (the Phase 1 route on the same path answers with a bare array). */
-export function isRunHistoryPage(x: unknown): x is RunHistoryPage {
-  return !!x && typeof x === 'object' && Array.isArray((x as RunHistoryPage).runs) && typeof (x as RunHistoryPage).hasMore === 'boolean'
-}
 
 /**
- * The history list: `vm.runs` paints first, then the first page of GET /runs?limit=50 and any
+ * The history list: `vm.runs` paints first, then the first page of GET /script-runs?limit=50 and any
  * "Show older runs" pages follow (deduped by id, newest first). `hasMore` comes only from the
  * server (VmInfo.runsHasMore for first paint, then the latest page's hasMore); no row-count guess.
  */

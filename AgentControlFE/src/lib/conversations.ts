@@ -58,9 +58,10 @@ export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null 
  * / "Undo of report.py" from the summary's name (scriptName, else name). BE 3a70c34 fills `content`
  * from runMessageContent(); whenever it has any, previewText shows it as is.
  */
-export function runPreview(run: Pick<ChatRunSummary, 'kind' | 'name' | 'scriptName'> | undefined): string {
+export function runPreview(run: Pick<ChatRunSummary, 'kind' | 'name' | 'scriptName' | 'undoOfName'> | undefined): string {
   const name = run?.scriptName?.trim() || run?.name?.trim() || 'script'
-  return run?.kind === 'undo' ? `Undo of ${name}` : `Ran ${name}`
+  // BE be7afe4: an undo run's preview names the run it reversed (undoOfName) when the BE sends it.
+  return run?.kind === 'undo' ? `Undo of ${run.undoOfName?.trim() || name}` : `Ran ${name}`
 }
 
 /** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */

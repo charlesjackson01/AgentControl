@@ -546,7 +546,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 3a70c34 (BE-P2-1), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ be7afe4 (BE-P2-1), section "Phase 2",
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -683,7 +683,7 @@ export interface ScriptRun {
   undoOfRunId?: string
 }
 
-/** Run history row (GET /api/agents/:id/runs and VmInfo.runs). */
+/** Run history row (GET /api/agents/:id/script-runs and VmInfo.runs). */
 export type ScriptRunSummary = Pick<ScriptRun,
   'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId'
 > & {
@@ -706,6 +706,8 @@ export interface ChatRunSummary {
   exitCode?: number
   /** The script's file name (argv[1] or argv[0]) for the card title; `name` stays the skill. */
   scriptName?: string
+  /** kind 'undo': the script name (else skill name) of the run it reversed. */
+  undoOfName?: string
   durationMs?: number
   runtime?: ContainerRuntime | null
 }
@@ -763,7 +765,7 @@ export interface VmInfo {
   storage: { backend: StorageBackendKind; driver: SnapshotDriver | null; location: string; lastBackupAt?: string; explorerPath?: string }
   /** Isolation note, e.g. when the host falls back to --userns keep-id. */
   isolationNote?: string
-  /** Newest first, at most 50 (older via GET /api/agents/:id/runs?before=). */
+  /** Newest first, at most 50 (older via GET /api/agents/:id/script-runs?before=). */
   runs: ScriptRunSummary[]
   /** True when older runs exist beyond `runs` (same meaning as the runs list's hasMore). */
   runsHasMore: boolean

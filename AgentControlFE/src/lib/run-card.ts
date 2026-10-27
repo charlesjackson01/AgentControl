@@ -220,7 +220,8 @@ const PILLS: Record<ScriptRunKind, { pill: string; icon: string }> = {
 function nameOf(input: RunCardInput): string {
   const { run, summary } = input
   const kind = run?.kind ?? summary?.kind ?? 'script'
-  if (kind === 'undo') return `undo of ${input.undoOfName ?? 'a run'}`
+  // BE be7afe4: summary.undoOfName names the reversed run, so a collapsed card needs no fetch.
+  if (kind === 'undo') return `undo of ${summary?.undoOfName?.trim() || input.undoOfName || 'a run'}`
   if (run?.argv.length && (kind === 'tool_build' || run.skillId)) return scriptName(run)
   // BE 146cd18: scriptName is the card title; name stays the skill's display name.
   if (summary?.scriptName) return summary.scriptName

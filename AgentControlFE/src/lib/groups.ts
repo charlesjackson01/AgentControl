@@ -353,7 +353,7 @@ export function addedByName(addedBy: string | undefined, agents: readonly AgentL
 
 /**
  * 06a file card in a group. BE 3a70c34: a FileChange with `root: 'group'` is in a group's folder,
- * `path` relative to it (no prefix) -> "Group folder · added by Researcher · 3 KB", opened in that
+ * `path` relative to it (no prefix) -> "Group folder · added (changed, deleted) by Researcher · 3 KB", opened in that
  * group's Shared files. A missing root is the author's own folder ("Researcher's folder · workspace
  * · 3 KB", opened in the author's chat). A file in a different group than this one names it
  * ("Q3 report folder", GAP-P2-FILE2: no mockup).
@@ -365,8 +365,10 @@ export function groupFileCard(
   change?: 'added' | 'modified' | 'deleted',
   currentGroupId?: string,
 ): { inGroup: boolean; path: string; groupId?: string; meta: string } {
-  // Phase 2: a run can delete files; say so instead of "added by" (GAP-P2-FILE: no mockup yet).
+  // Phase 2: the verb follows FileChange.change: "deleted by" (GAP-P2-FILE) and "changed by" for a
+  // modified group file (GAP-P2-FILE3, Team lead 2026-10-27); added (or unknown) stays "added by".
   const deleted = change === 'deleted'
+  const verb = deleted ? 'deleted by' : change === 'modified' ? 'changed by' : 'added by'
   const path = f.path
   if (f.root === 'group') {
     const other = f.groupId && currentGroupId && f.groupId !== currentGroupId
@@ -375,7 +377,7 @@ export function groupFileCard(
       inGroup: true,
       path,
       ...(f.groupId || currentGroupId ? { groupId: f.groupId || currentGroupId } : {}),
-      meta: [folder, deleted ? `deleted by ${authorName}` : `added by ${authorName}`, deleted ? null : size].filter(Boolean).join(' · '),
+      meta: [folder, `${verb} ${authorName}`, deleted ? null : size].filter(Boolean).join(' · '),
     }
   }
   const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''

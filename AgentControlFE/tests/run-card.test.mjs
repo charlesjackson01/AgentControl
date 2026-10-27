@@ -221,6 +221,15 @@ describe('runCardView: GAP states', () => {
     assert.equal(v.actions.undo, true)
     assert.equal(view(run('ur', { kind: 'undo', argv: [] })).name, 'undo of a run')
   })
+  it('collapsed undo card titles from summary.undoOfName (BE be7afe4), else the old text', () => {
+    const s = summary({ kind: 'undo', status: 'succeeded', name: 'undo', undoOfName: 'export_report.py' })
+    const v = runCardView({ summary: s })
+    assert.equal(v.loading, true, 'collapsed: no run fetched')
+    assert.equal(v.name, 'undo of export_report.py')
+    assert.equal(runCardView({ summary: s, undoOfName: 'other.py' }).name, 'undo of export_report.py', 'the summary wins')
+    assert.equal(runCardView({ summary: { ...s, undoOfName: undefined } }).name, 'undo of a run')
+    assert.equal(runCardView({ summary: { ...s, undoOfName: undefined }, undoOfName: 'clean_sales.py' }).name, 'undo of clean_sales.py')
+  })
   it('too-large output', () => {
     assert.equal(view(run('o', { status: 'succeeded', outputTruncated: true })).truncated, "Output passed the 200 MB limit; the rest wasn't kept.")
     assert.equal(view(cleanSales).truncated, null)
@@ -380,6 +389,8 @@ describe('sidebar preview of a run message', () => {
     assert.equal(runPreview(undefined), 'Ran script')
     assert.equal(runPreview(summary({ status: 'queued', name: 'r.py' })), 'Ran r.py')
     assert.equal(runPreview(summary({ kind: 'undo', status: 'succeeded', name: 'r.py' })), 'Undo of r.py')
+    assert.equal(runPreview(summary({ kind: 'undo', status: 'succeeded', name: 'undo', undoOfName: 'export_report.py' })), 'Undo of export_report.py')
+    assert.equal(runPreview(summary({ kind: 'undo', status: 'succeeded', name: 'r.py', undoOfName: ' ' })), 'Undo of r.py')
     assert.equal(previewText({ role: 'assistant', content: '' }), '…', 'not a run: unchanged')
     const { previewLine } = await import('../src/lib/shell.ts')
     const last = { ...m('', summary({ status: 'succeeded', name: 'report.py' })), authorAgentId: 'a1' }

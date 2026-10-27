@@ -4,11 +4,12 @@ import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  isRunHistoryPage, vmHistory,
+  vmHistory,
   RESET_ACTIVE_TEXT, RESET_TEXT, RESET_TITLE, VM_TAB_GAPS, breakdownText, envNameProblem, envRowErrors, envWith, filesLive, historyRow, historyTime,
   isolationView, packageLabel, toolsLine, vmActionError, vmHeader, vmMeters, vmNotices, vmPlatform, vmSubtitle, vmTabDot, vmTabModel,
 } from '../src/lib/vm-tab.ts'
 import { renderVmTab } from '../src/lib/vm-tab-render.ts'
+import { vmPaths } from '../src/lib/vm-api.ts'
 import { NOW, macHost, mockRuns, probeResult, runRow, vmInfo, winHost, winVm } from './vm-fixtures.mjs'
 
 const GB = 1024 ** 3
@@ -60,7 +61,7 @@ describe('vm tab: meters', () => {
     assert.equal(m[0].value, '1.2 GB')
     assert.equal(m[0].of, 'of 4 GB')
     assert.equal(m[1].value, '1.9 GB')
-    assert.equal(m[1].note, 'workspace 0.4 · tools 1.3 · env 0.2')
+    assert.equal(m[1].note, 'workspace 0.4 · tools and packages 1.5')
     assert.equal(m[2].note, 'separate budget · 14 runs')
     assert.equal(m[3].value, '2 CPUs')
     assert.equal(m[3].pct, null)
@@ -70,7 +71,9 @@ describe('vm tab: meters', () => {
     assert.equal(over[1].tone, 'bad')
     const warn = vmMeters(vmInfo({ usage: { ...vmInfo().usage, personalBytes: 8.5 * GB } }))
     assert.equal(warn[1].tone, 'warn')
-    assert.equal(breakdownText({ workspace: 0, inputs: 0, memory: 0, tools: 0, opt: 0, imageLayer: 0 }), 'workspace 0 · tools 0 · env 0')
+    assert.equal(breakdownText({ workspace: 0, inputs: 0, memory: 0, tools: 0, opt: 0, imageLayer: 0 }), 'workspace 0 · tools and packages 0')
+    assert.equal(breakdownText({ workspace: 0, inputs: 0, memory: 0, tools: 0, opt: 0, imageLayer: 2 * GB }), 'workspace 0 · tools and packages 2', 'imageLayer (vm_install) counts as packages')
+    assert.doesNotMatch(breakdownText(vmInfo().usage.breakdown), /env/, 'env vars are not counted')
   })
 })
 
@@ -285,7 +288,7 @@ describe('vm tab: misc', () => {
     assert.equal(vmActionError(new TypeError('Failed to fetch'), 'fallback'), 'fallback')
   })
   it('every GAP is listed', () => {
-    assert.deepEqual(Object.keys(VM_TAB_GAPS), ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11'])
+    assert.deepEqual(Object.keys(VM_TAB_GAPS), ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V12'])
   })
   it('VmTab.tsx wires the real routes (loadRun before Undo/Output, putVm after writes)', () => {
     const src = readFileSync(new URL('../src/components/settings/VmTab.tsx', import.meta.url), 'utf8')
@@ -294,7 +297,7 @@ describe('vm tab: misc', () => {
   })
 })
 
-describe('run history pages (GET /api/agents/:id/runs?limit=50)', () => {
+describe('run history pages (GET /api/agents/:id/script-runs?limit=50)', () => {
   const r = (id) => ({ id })
   it('vm.runs paints first; hasMore only from the server (runsHasMore, then pages)', () => {
     const fifty = Array.from({ length: 50 }, (_, i) => r(`r${i}`))
@@ -317,11 +320,13 @@ describe('run history pages (GET /api/agents/:id/runs?limit=50)', () => {
   it('no rows means no button', () => {
     assert.equal(vmHistory({ runs: [] }, { runs: [], hasMore: true }, null).hasMore, false)
   })
-  it('only the page shape counts (the Phase 1 route answers with an array)', () => {
-    assert.equal(isRunHistoryPage({ runs: [], hasMore: false }), true)
-    assert.equal(isRunHistoryPage([]), false)
-    assert.equal(isRunHistoryPage({ runs: [] }), false)
-    assert.equal(isRunHistoryPage(null), false)
+  it('history uses /script-runs; the Phase 1 /runs route (model turns) is left alone', () => {
+    assert.equal(vmPaths.agentRuns('a 1'), '/api/agents/a%201/script-runs?limit=50')
+    assert.equal(vmPaths.agentRuns('a1', { before: 'r9' }), '/api/agents/a1/script-runs?limit=50&before=r9')
+    const tab = readFileSync(new URL('../src/components/settings/VmTab.tsx', import.meta.url), 'utf8')
+    assert.doesNotMatch(tab, /isRunHistoryPage/, 'no plain-array guard: the new route only answers {runs, hasMore}')
+    const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8')
+    assert.match(api, /\/runs/, 'Phase 1 runs usage still there')
   })
   it('VmTab loads the first page on mount and drops the row-count guess', () => {
     const src = readFileSync(new URL('../src/components/settings/VmTab.tsx', import.meta.url), 'utf8')

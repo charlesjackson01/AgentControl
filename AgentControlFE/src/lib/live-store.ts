@@ -21,7 +21,7 @@ import type { LiveConnectionStatus } from './live-events.ts'
 
 /** Same as the BE's kept tail per stream. */
 export const OUTPUT_TAIL_CHARS = 64 * 1024
-/** VmInfo.runs holds at most this many (older via GET /api/agents/:id/runs?before=). */
+/** VmInfo.runs holds at most this many (older via GET /api/agents/:id/script-runs?before=). */
 export const VM_RUNS_MAX = 50
 
 export type RunOutput = { stdout: string; stderr: string }

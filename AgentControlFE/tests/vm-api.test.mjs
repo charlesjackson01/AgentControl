@@ -39,8 +39,8 @@ describe('vm api routes', () => {
       ['GET', '/api/agents/a1/vm/tools', undefined],
       ['POST', '/api/agents/a1/vm/tools/rebuild', undefined],
       ['POST', '/api/agents/a1/vm/tools/rollback', undefined],
-      ['GET', `/api/agents/a1/runs?limit=${RUN_PAGE_SIZE}`, undefined],
-      ['GET', '/api/agents/a1/runs?limit=10&before=r9', undefined],
+      ['GET', `/api/agents/a1/script-runs?limit=${RUN_PAGE_SIZE}`, undefined],
+      ['GET', '/api/agents/a1/script-runs?limit=10&before=r9', undefined],
     ])
   })
   it('one run, undo ("Undo anyway" sends force:true)', async () => {

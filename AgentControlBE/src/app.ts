@@ -18,6 +18,7 @@ import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attach
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
+import { createVmHostService, type VmHostService } from './vm-host.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
@@ -386,7 +387,12 @@ function parseSkillInput(body: unknown): SkillInput {
   }
 }
 
-export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance {
+export interface BuildAppOptions {
+  /** BE-P2-2: engine/machine service; tests inject one with a fake CommandRunner. */
+  vmHost?: VmHostService
+}
+
+export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' })
 
   // Reflect the request origin so the app works from localhost, LAN, and
@@ -415,7 +421,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   })
 
   app.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number }
+    const err = error as Error & { statusCode?: number; reason?: unknown }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
     const message = redactUrlCredentials(err.message ?? '')
     if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
@@ -423,6 +429,8 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       statusCode: status,
       error: status >= 500 ? 'Internal Server Error' : 'Request Error',
       message,
+      // BE-P2-6: 409/410 carry a machine-readable reason (e.g. 'files_missing').
+      ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
     })
   })
 
@@ -1435,6 +1443,22 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   ensureAllBotFolders(store, (msg) => app.log.warn(msg))
 
   registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
+
+  // BE-P2-2: engine and the `agentcontrol` machine.
+  const vmHost =
+    opts.vmHost ??
+    createVmHostService({
+      getDiskBudgetGb: () => store.settings.vm?.machine?.diskGb,
+      setDiskBudgetGb: (diskGb) => {
+        if (store.settings.vm) store.settings.vm.machine = { diskGb }
+        store.save()
+      },
+    })
+  app.get('/api/vm/host', async () => vmHost.hostInfo())
+  app.post('/api/vm/machine/grow', async (request) => {
+    const body = request.body as { toGb?: unknown } | null | undefined
+    return vmHost.grow(body && typeof body === 'object' ? body.toGb : undefined)
+  })
 
   return app
 }

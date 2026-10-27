@@ -10,6 +10,14 @@ export function fail(status: number, message: string): never {
   throw err
 }
 
+/** fail() with a machine-readable `reason` (409/410 bodies carry it, per the Phase 2 contract). */
+export function failWithReason(status: number, reason: string, message: string): never {
+  const err = new Error(message) as Error & { statusCode: number; reason: string }
+  err.statusCode = status
+  err.reason = reason
+  throw err
+}
+
 export function uid(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`
 }

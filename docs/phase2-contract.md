@@ -19,7 +19,7 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 | PATCH | `/api/agents/:id/vm` | `VmInfo` | 400 unknown key / `limits` / `egress` ("Home network access isn't available in Phase 2") / reserved env name (message from `envNameProblem`); 400 `permissions.browser:true` in M1 |
 | POST | `/api/agents/:id/vm/start` · `/stop` | `VmInfo` | 409 files_missing |
 | POST | `/api/agents/:id/vm/reset` `{confirm:true}` | `VmInfo` | 400 no confirm, 409 run active |
-| GET | `/api/agents/:id/vm/tools` | `ToolManifest & {packages, image}` | |
+| GET | `/api/agents/:id/vm/tools` | `VmToolsInfo` | 404 |
 | POST | `/api/agents/:id/vm/tools/rebuild` · `/rollback` | `ScriptRun` (kind tool_build) | 409 run active, 409 no previous generation |
 | GET | `/api/agents/:id/export` | zip stream | |
 | GET | `/api/agents/:id/runs?before=<runId>&limit=50` | `{ runs: ScriptRunSummary[], hasMore }` newest first | |
@@ -34,7 +34,7 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 |---|---|---|
 | GET | `/api/vm/host` | `VmHostInfo` |
 | GET/PATCH | `/api/vm/settings` | `VmSettingsView` (PATCH `VmSettingsPatch`, bounds in `SNAPSHOT_BUDGET_BOUNDS`, `BACKUP_KEEP_BOUNDS`) |
-| GET/POST | `/api/vm/probe` | last probe per check / re-check |
+| GET/POST | `/api/vm/probe` | `VmProbeResult` (last result / re-check) |
 | POST | `/api/vm/machine/grow` `{toGb}` | `VmHostInfo`; 409 runs active, 400 low host disk |
 | GET | `/api/vm/export` | archive stream |
 
@@ -49,3 +49,9 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 - No permission waiting state: a `network:'on'` run fails with "Internet access isn't available yet." (status `failed`). `waiting_permission` and `denied` exist in the type for M2.
 - `permissions.browser` stays false in M1 (PATCH true → 400 "The browser arrives in a later update.").
 - Backups and restore routes are M3.
+
+## Permissions (M2; shapes fixed now)
+| Method | Path | 200 | Errors |
+|---|---|---|---|
+| GET | `/api/permissions?status=pending&agentId=&conversationId=` | `PermissionListResponse` | |
+| POST | `/api/permissions/:requestId` `PermissionAnswer` + header `x-agentcontrol-confirm: 1` (`PERMISSION_CSRF_HEADER`) | `PermissionRequest` | 400 wrong decision for the type, 403 header missing, 404, 409 already resolved |

@@ -1,7 +1,7 @@
 # Phase 2 M1 API contract (BE-P2-1)
 
 Types: `AgentControlBE/src/shared/types.ts`, section "Phase 2" (hand-copy to the FE as in Phase 1).
-Errors stay `{ error: string }` with plain-language text; 409/410 add `reason`.
+Errors are Fastify's shape, `{ statusCode, error, message, reason? }`: `message` is the plain-language text, `error` is only the HTTP status phrase (e.g. "Request Error", "Internal Server Error"), and 409/410 and other errors below 500 may add a machine-readable `reason`. The FE shows `message` and branches on `reason`; it never shows `error`.
 Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the FE can build on fake data.
 
 ## What changed in BE-P2-1 (live now)
@@ -26,10 +26,10 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 | GET | `/api/runs/:runId` | `ScriptRun` | 404 |
 | GET | `/api/runs/:runId/output?stream=stdout\|stderr` | text/plain full log | 404, 410 log evicted |
 | POST | `/api/runs/:runId/stop` | `ScriptRun` | 409 not active |
-| GET | `/api/runs/:runId/undo/preview` | `UndoPreview` | 409 `UndoConflict{reason:'run_active'}`, 410 `UndoGone` |
-| POST | `/api/runs/:runId/undo` `UndoRequest{force?}` | `UndoResult` | 409 `UndoConflict` (`run_active`, or `conflicts` with the list), 410 `UndoGone{reason}` |
+| GET | `/api/runs/:runId/undo/preview` | `UndoPreview` | 409 `UndoConflict{reason:'run_active'}`, 410 `UndoGone` (both error bodies: text in `message`) |
+| POST | `/api/runs/:runId/undo` `UndoRequest{force?}` | `UndoResult` | 409 `UndoConflict` (`run_active`, or `conflicts` with the list), 410 `UndoGone{reason}` (both error bodies: text in `message`) |
 
-**Undo preview (additive, agreed 2026-10-27):** each `changes[]` entry may carry `beforeBytes?`/`afterBytes?` (number, or null for the side that doesn't exist: added files have `beforeBytes:null`, deleted files `afterBytes:null`) and `groupName?` beside `groupId`; `conflicts[]` may carry `groupName?`. `UndoPreview.budget?: {usedBytes, limitBytes}` mirrors the bot's snapshot budget from VmInfo. For a 410 with `reason:'machine_restored'` the `error` text is exactly "This bot's computer was restored from a backup, so this run can't be undone." (`UNDO_MACHINE_RESTORED_TEXT`); the FE shows `UndoGone.error` as is. File reads by later runs aren't tracked in M1.
+**Undo preview (additive, agreed 2026-10-27):** each `changes[]` entry may carry `beforeBytes?`/`afterBytes?` (number, or null for the side that doesn't exist: added files have `beforeBytes:null`, deleted files `afterBytes:null`) and `groupName?` beside `groupId`; `conflicts[]` may carry `groupName?`. `UndoPreview.budget?: {usedBytes, limitBytes}` mirrors the bot's snapshot budget from VmInfo. For a 410 with `reason:'machine_restored'` the `message` text is exactly "This bot's computer was restored from a backup, so this run can't be undone." (`UNDO_MACHINE_RESTORED_TEXT`); the FE shows the body's `message` as is. File reads by later runs aren't tracked in M1.
 
 **Run cards and file scopes (additive, agreed 2026-10-27):** `ChatRunSummary` may carry `scriptName?` (argv[1] or argv[0]; the card title, with `name`, the skill, as its source), `durationMs?`, `runtime?` and, for undo runs, `undoOfName?` (the reversed run's script name, else skill), so a card renders from the message alone and fetches `GET /api/runs/:id` only when the details or full output are opened. `ScriptRunUndo.changedBytes?` is set with `reason:'too_large'`. Each `FileChange` (run `filesChanged`, activity) may carry `root?: 'agent'|'group'` plus `groupId?`/`groupName?` for root `group`, the same shape as `UndoPreview`; `path` is relative to that folder, with no string prefix. A missing `root` means `agent` (Phase 1 shape). Run messages carry a short plain `content` for previews, built by `runMessageContent()` (src/run-messages.ts) from the summary and updated with it: "Running report.py" / "Queued report.py" while active, "Ran report.py" on success, "Ran report.py (failed)" / "(timed out)" / "(stopped)" / "(denied)" otherwise, "Ran report.py (undone)" once undone, and for an undo run "Undoing report.py" while active, "Undid report.py" on success, "Undo of report.py (failed)" otherwise. The name is `scriptName`, else `name`. Full output opens in a dialog in M1.
 

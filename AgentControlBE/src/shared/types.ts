@@ -864,7 +864,7 @@ export interface UndoPreviewChange {
   /** Size undo would restore; null if the run added it. */
   beforeBytes?: number | null
 }
-/** 410 error text for reason 'machine_restored' (the FE shows UndoGone.error as is). */
+/** 410 `message` text for reason 'machine_restored' (the FE shows the body's `message` as is). */
 export const UNDO_MACHINE_RESTORED_TEXT = "This bot's computer was restored from a backup, so this run can't be undone."
 /** POST /api/runs/:runId/undo body. force: overwrite conflicting files ("Undo anyway"). */
 export interface UndoRequest {
@@ -875,13 +875,20 @@ export interface UndoResult {
   run: ScriptRun
   undoRun: ScriptRun
 }
-/** 409 body: the bot has an active run, or there are conflicts and force wasn't set. */
+/**
+ * 409 body: the bot has an active run, or there are conflicts and force wasn't set.
+ * Sent in Fastify's error shape `{ statusCode, error, message, reason }`: `message` is the
+ * plain-language text, `error` is only the HTTP status phrase ("Request Error").
+ */
 export interface UndoConflict {
   error: string
   reason: 'run_active' | 'conflicts'
   conflicts?: UndoPreview['conflicts']
 }
-/** 410 body when the snapshot is gone. */
+/**
+ * 410 body when the snapshot is gone, in Fastify's error shape: `message` is the plain-language
+ * text (UNDO_MACHINE_RESTORED_TEXT for 'machine_restored'), `error` is the HTTP status phrase.
+ */
 export interface UndoGone {
   error: string
   reason: UndoUnavailableReason

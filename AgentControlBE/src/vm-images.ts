@@ -3,7 +3,8 @@
  *
  * - `localhost/agentcontrol/botvm:<ver>`: Debian slim, Python 3.12, Node 22, uid 1000.
  * - `localhost/agentcontrol/botvm-browser:<ver>`: botvm + Playwright + full Chromium (no headless shell;
- *   launch with `CHROMIUM_LAUNCH_OPTIONS`, i.e. channel 'chromium' in new headless mode).
+ *   launch with `CHROMIUM_LAUNCH_OPTIONS`, i.e. channel 'chromium' in new headless mode; a bare
+ *   `chromium.launch()` reaches the same binary through the headless-shell link).
  * - `localhost/ac-bot-<slug>:<gen>`: the bot's own layer (FROM one of the above + vm.packages),
  *   built by BotEnvService (BE-P2-4) from `botLayerContainerfile()`.
  *
@@ -47,18 +48,30 @@ export const BOT_PATHS = {
 /** Where the browser image keeps Chromium (read-only at run time). */
 export const PLAYWRIGHT_BROWSERS_PATH = '/opt/ms-playwright'
 /**
- * How code in botvm-browser launches Chromium. The image has only full Chromium (installed
- * with `--no-shell`), so `channel: 'chromium'` is required: it runs full Chromium in the new
- * headless mode; the default (headless shell) would fail. `--no-sandbox`: the container is the sandbox.
+ * How AgentControl's own code in botvm-browser launches Chromium (the recommended launch). The
+ * image has only full Chromium (installed with `--no-shell`); `channel: 'chromium'` runs it in
+ * the new headless mode. `--no-sandbox`: the container is the sandbox (Playwright adds it by
+ * default too). A bare `chromium.launch()` also works: the headless-shell path Playwright uses
+ * by default is a link to the same full Chromium (vm/images/botvm-browser/link-headless-shell.sh).
  */
 export const CHROMIUM_LAUNCH_OPTIONS = { channel: 'chromium', headless: true, args: ['--no-sandbox'] } as const
+
+/**
+ * Bot-facing note on launching the browser, for the model-facing text that will mention it:
+ * the `run_script` tool's `browser` parameter description (BE-P2-16) and the bundled
+ * `browser-basics` skill (BE-P2-15, plan §9). Neither exists yet; they should use this text.
+ */
+export const BROWSER_LAUNCH_NOTE =
+  "Chromium is preinstalled for Playwright (Python and Node). Launch it with channel 'chromium' " +
+  "(Python: p.chromium.launch(channel=\"chromium\"); Node: chromium.launch({ channel: 'chromium' })); " +
+  'a plain chromium.launch() also works. It runs headless; do not install browsers.'
 
 /** Image label keys AgentControl sets and reads back (e.g. to detect a stale base). */
 export const IMAGE_LABELS = { image: 'io.agentcontrol.image', version: 'io.agentcontrol.version', agent: 'io.agentcontrol.agent', generation: 'io.agentcontrol.generation' } as const
 
 /**
  * Approximate sizes for the VM tab and Settings › VMs until the engine reports real ones.
- * Measured on the real Podman build of 1.0.0 (linux/amd64, 2026-10-27): 430.7 MB and 1343.3 MB
+ * Measured on the real Podman build of 1.0.0 (linux/amd64, 2026-10-27): 430.7 MB and 1343.4 MB (1343.3 before the headless-shell link, +15 kB)
  * (the browser size includes botvm; full Chromium only, installed with `--no-shell`).
  */
 export const SHARED_IMAGE_APPROX_BYTES: Record<SharedImageKind, number> = { botvm: 431 * 1000 ** 2, 'botvm-browser': 1343 * 1000 ** 2 }

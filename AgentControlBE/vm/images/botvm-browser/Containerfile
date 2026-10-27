@@ -2,9 +2,11 @@
 # BE-P2-3: agentcontrol/botvm-browser — the shared, read-only browser layer
 # (plan §2.2, §9). FROM the botvm base plus Playwright and full Chromium.
 # Used only by bots whose Browser permission is on; never counted in a bot's 10 GB.
-# Only full Chromium is installed (`--no-shell`: no chromium-headless-shell), so
-# launch with channel 'chromium' (new headless mode) and --no-sandbox (the container
-# is the sandbox): Python `chromium.launch(channel="chromium", args=["--no-sandbox"])`.
+# Only full Chromium is installed (`--no-shell`: no chromium-headless-shell). The
+# recommended launch is channel 'chromium' (new headless mode) with --no-sandbox (the
+# container is the sandbox): Python `chromium.launch(channel="chromium", args=["--no-sandbox"])`.
+# A bare `chromium.launch()` works too: link-headless-shell.sh points the headless-shell
+# path Playwright uses by default at the same full Chromium binary.
 # Browsers live read-only in /opt/ms-playwright; downloads into volumes are blocked.
 
 ARG BOTVM_IMAGE=localhost/agentcontrol/botvm:1.0.0
@@ -40,6 +42,11 @@ RUN export HOME=/root PIP_USER=0 NPM_CONFIG_PREFIX=/usr/local \
  && python3 -m playwright install --with-deps --no-shell chromium \
  && rm -rf /var/lib/apt/lists/* /root/.cache /root/.npm \
  && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
+
+# Bare `chromium.launch()` (no channel) → full Chromium in new headless mode (see the script).
+COPY link-headless-shell.sh /usr/local/lib/agentcontrol/link-headless-shell.sh
+RUN sh /usr/local/lib/agentcontrol/link-headless-shell.sh \
+ && rm -rf /usr/local/lib/agentcontrol
 
 # Node resolves the global playwright; no further browser downloads (rootfs is
 # read-only at run time, and volumes must not hold browsers).

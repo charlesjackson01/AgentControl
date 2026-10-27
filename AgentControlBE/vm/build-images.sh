@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BE-P2-3: build and tag the shared bot images (plan §2.2):
 #   localhost/agentcontrol/botvm:<BOTVM_VERSION>          (~431 MB)
-#   localhost/agentcontrol/botvm-browser:<BOTVM_VERSION>  (~1.34 GB, FROM botvm; full Chromium, no headless shell)
+#   localhost/agentcontrol/botvm-browser:<BOTVM_VERSION>  (~1.34 GB, FROM botvm; full Chromium; the headless-shell path is a link to it)
 # Versions come from vm/images/versions.env. Nothing is pushed anywhere.
 #
 # Usage: vm/build-images.sh [--engine podman|docker] [--only botvm|botvm-browser] [--connection NAME]
@@ -78,13 +78,40 @@ build_browser() {
 }
 
 # Smoke check (§14 BE-P2-3 acceptance): python3, node (and chromium) run as uid 1000.
-# The browser smoke checks there is no chromium-headless-shell, prints the full Chromium
-# binary, then launches it headless the way bots must: channel 'chromium', --no-sandbox.
+# The browser smoke checks the headless-shell path is only a link to full Chromium (no
+# headless shell installed), then, from Python and from Node, launches headless both bare
+# (`chromium.launch()`, what bot-written scripts do) and with channel 'chromium' + --no-sandbox
+# (the recommended launch), loads a data:/about:blank page and requires a HeadlessChrome UA.
 smoke() {
   local ref="$1"; shift
   run "${cmd[@]}" run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --shm-size 512m --cap-drop ALL --security-opt no-new-privileges "$ref" \
     bash -c 'test "$(id -u)" = 1000 && python3 --version && node --version'"$*"
 }
+
+# No single quotes inside these: they go in single quotes in the smoke's bash -c.
+browser_py='from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    for name, kw in (("bare", {}), ("channel", {"channel": "chromium", "headless": True, "args": ["--no-sandbox"]})):
+        b = p.chromium.launch(**kw)
+        pg = b.new_page()
+        pg.goto("data:text/html,<title>ok</title>")
+        ua = pg.evaluate("navigator.userAgent")
+        assert pg.title() == "ok" and "HeadlessChrome/" in ua, ua
+        print("python", name, b.version, "HeadlessChrome")
+        b.close()'
+browser_js='const { chromium } = require("playwright");
+(async () => {
+  for (const [name, kw] of [["bare", {}], ["channel", { channel: "chromium", headless: true, args: ["--no-sandbox"] }]]) {
+    const b = await chromium.launch(kw);
+    const pg = await b.newPage();
+    await pg.goto("about:blank");
+    const ua = await pg.evaluate(() => navigator.userAgent);
+    if (!ua.includes("HeadlessChrome/")) throw new Error(ua);
+    console.log("node", name, b.version(), "HeadlessChrome");
+    await b.close();
+  }
+})().catch((e) => { console.error(e); process.exit(1); });'
+browser_smoke=" && h=\$(ls /opt/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux*/chrome-headless-shell) && f=\$(ls /opt/ms-playwright/chromium-*/chrome-linux*/chrome) && test -L \"\$h\" && test \"\$(readlink -f \"\$h\")\" = \"\$(readlink -f \"\$f\")\" && echo \"headless shell: link to \$f\" && python3 -c '$browser_py' && node -e '$browser_js'"
 
 if [[ -z "$only" || "$only" == "botvm" ]]; then
   build_base
@@ -92,5 +119,5 @@ if [[ -z "$only" || "$only" == "botvm" ]]; then
 fi
 if [[ -z "$only" || "$only" == "botvm-browser" ]]; then
   build_browser
-  smoke "$browser_ref" ' && ! ls -d /opt/ms-playwright/chromium_headless_shell-* >/dev/null 2>&1 && echo "headless shell: none" && ls /opt/ms-playwright/chromium-*/chrome-linux*/chrome && python3 -c "from playwright.sync_api import sync_playwright as p; b=p().start().chromium.launch(channel=\"chromium\", headless=True, args=[\"--no-sandbox\"]); print(b.version); b.close()"'
+  smoke "$browser_ref" "$browser_smoke"
 fi

@@ -6,8 +6,8 @@ import { createLiveController } from '../src/lib/live-controller.ts'
 import { pendingPermissions, runOutput, runSummaryFor } from '../src/lib/live-store.ts'
 import { fakeEventsFetch, frame, permission, run, summary, tick, until, vm } from './live-fixtures.mjs'
 
-function fakeClient(runs = {}, vms = {}) {
-  const calls = { runs: [], vms: [] }
+function fakeClient(runs = {}, vms = {}, pending = () => ({ requests: [] })) {
+  const calls = { runs: [], vms: [], pending: 0 }
   return {
     calls,
     client: {
@@ -19,6 +19,10 @@ function fakeClient(runs = {}, vms = {}) {
       getVm: async (id) => {
         calls.vms.push(id)
         return vms[id]
+      },
+      listPendingPermissions: async () => {
+        calls.pending += 1
+        return pending()
       },
     },
   }
@@ -56,9 +60,9 @@ describe('live controller', () => {
     assert.ok(notified >= 5)
   })
 
-  it('reconnect re-fetches active runs and pending requests (and held VMs), resuming with Last-Event-ID', async () => {
-    // First stream: r1 running, r2 done, a pending request on r3 (not seen yet); then the stream drops.
-    // While disconnected r1 finished and the request was allowed; no events for either arrive.
+  it('reconnect re-fetches active runs, pending requests (list route) and held VMs, resuming with Last-Event-ID', async () => {
+    // First stream: r1 running, r2 done, two pending requests; then the stream drops.
+    // While disconnected r1 finished, p1 was answered and p2 arrived; no events for any of it.
     const f = fakeEventsFetch([
       {
         frames: [
@@ -72,25 +76,37 @@ describe('live controller', () => {
     ])
     const fresh = {
       r1: run('r1', { status: 'succeeded', exitCode: 0, stdoutTail: 'done\n', filesChanged: [{ path: 'workspace/out.csv', change: 'added' }] }),
-      r3: run('r3', { status: 'running', permissions: [{ requestId: 'p1', type: 'internet', decision: 'allow_once' }] }),
     }
-    const { client, calls } = fakeClient(fresh, { a1: vm('a1', { state: 'stopped' }) })
+    let connected = 0
+    // The first open sees p1 pending; after the reconnect p1 is answered and p2 is new.
+    const pending = () => (connected++ === 0 ? { requests: [permission('p1', { runId: 'r3' })] } : { requests: [permission('p2', { runId: 'r4' })] })
+    const { client, calls } = fakeClient(fresh, { a1: vm('a1', { state: 'stopped' }) }, pending)
     const live = createLiveController({ client, connection: { url: '/api/events', fetch: f.fetch, retryMs: 1 } })
     live.start()
-    await until(() => f.calls.length === 2 && live.getState().runs.r1?.status === 'succeeded' && live.getState().vms.a1.state === 'stopped')
+    await until(() => f.calls.length === 2 && live.getState().permissions.p2 && live.getState().vms.a1.state === 'stopped')
     await live.resync()
     live.stop()
     const s = live.getState()
     assert.equal(f.calls[1].headers['Last-Event-ID'], '13')
-    // r2 had ended, so only the active run and the run behind the pending request are fetched.
-    assert.ok(calls.runs.includes('r1') && calls.runs.includes('r3'))
-    assert.ok(!calls.runs.includes('r2'))
+    // Only the active run is fetched: not the finished one, and not the runs behind requests.
+    assert.ok(calls.runs.includes('r1'))
+    assert.ok(!calls.runs.includes('r2') && !calls.runs.includes('r3'))
     assert.ok(calls.vms.includes('a1'))
+    assert.ok(calls.pending >= 2, 'the pending list is fetched on every open')
     assert.equal(s.runs.r1.status, 'succeeded')
     assert.deepEqual(runSummaryFor(s, { id: 'm-r1' }).files, { added: 1, modified: 0, deleted: 0 })
     assert.equal(runOutput(s, 'r1').stdout, 'done\n')
-    assert.equal(s.permissions.p1.status, 'allowed_once')
-    assert.deepEqual(pendingPermissions(s), [])
+    assert.deepEqual(pendingPermissions(s).map((p) => p.id), ['p2'])
+  })
+
+  it('a failing pending list (an M1 BE without the route) keeps what we hold', async () => {
+    const { client } = fakeClient({}, {}, () => {
+      throw Object.assign(new Error('Not found'), { status: 404 })
+    })
+    const live = createLiveController({ client, connection: { url: '/e', fetch: fakeEventsFetch([]).fetch } })
+    live.dispatch({ type: 'event', event: { type: 'permission.requested', conversationId: 'c1', request: permission('p1') } })
+    await live.resync()
+    assert.deepEqual(pendingPermissions(live.getState()).map((p) => p.id), ['p1'])
   })
 
   it('event: reset bumps `resets` and re-fetches active runs and tracked ones', async () => {

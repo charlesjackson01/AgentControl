@@ -1,5 +1,5 @@
 /*
- * FE-P2-1: the Phase 2 live-events stream, GET /api/events (docs/phase2-contract.md @ 6e4291b).
+ * FE-P2-1: the Phase 2 live-events stream, GET /api/events (docs/phase2-contract.md @ 4bf9429).
  * Pure apart from the injected fetch; tests/live-events.test.mjs.
  *
  * Read with fetch rather than EventSource so the optional bearer token (VITE_AUTH_TOKEN)

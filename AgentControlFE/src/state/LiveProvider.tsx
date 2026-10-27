@@ -7,13 +7,17 @@ import { LiveContext, type LiveContextValue } from './live-context'
 
 /**
  * FE-P2-1: one unfiltered GET /api/events stream for the app (M1: SSE only, no polling).
- * Re-fetches active runs and watched bots' VM info on every (re)connect and reset.
+ * Re-fetches active runs, watched bots' VM info and pending permission requests on every (re)connect and reset.
  * Renders nothing of its own.
  */
 export default function LiveProvider({ children }: { children: ReactNode }) {
   const [controller] = useState(() =>
     createLiveController({
-      client: { getRun: (id) => api.vm.getRun(id), getVm: (id) => api.vm.getVm(id) },
+      client: {
+        getRun: (id) => api.vm.getRun(id),
+        getVm: (id) => api.vm.getVm(id),
+        listPendingPermissions: () => api.vm.listPendingPermissions(),
+      },
       connection: { url: apiUrl(vmPaths.events()), fetch: (input, init) => fetch(input, init), headers: authHeaders() },
     }),
   )

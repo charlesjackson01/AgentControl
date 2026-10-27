@@ -46,6 +46,8 @@ export type LiveAction =
   /** A run fetched over REST (GET /api/runs/:id, a stop/undo/rebuild response). */
   | { type: 'run'; run: ScriptRun }
   | { type: 'vm'; vm: VmInfo }
+  /** GET /api/permissions?status=pending: the full pending list (unfiltered). */
+  | { type: 'pending'; requests: PermissionRequest[] }
   | { type: 'reset' }
 
 /* ---------- status helpers ---------- */
@@ -141,7 +143,7 @@ function outputAfterRun(prev: RunOutput | undefined, run: ScriptRun): RunOutput 
 
 const PERMISSION_STATUS = { allow_once: 'allowed_once', always: 'always', enable: 'enabled', deny: 'denied', timeout: 'timeout' } as const
 
-/** A fetched run also tells us how its permission requests ended (there is no GET for a request). */
+/** A fetched run also tells us how its permission requests ended. */
 function permissionsAfterRun(perms: Record<string, PermissionRequest>, run: ScriptRun): Record<string, PermissionRequest> {
   let next = perms
   for (const p of run.permissions ?? []) {
@@ -150,6 +152,20 @@ function permissionsAfterRun(perms: Record<string, PermissionRequest>, run: Scri
     if (next === perms) next = { ...perms }
     next[p.requestId] = { ...known, status: PERMISSION_STATUS[p.decision] }
   }
+  return next
+}
+
+/**
+ * The server's pending list is the truth: listed requests are stored (a resolved copy we
+ * already hold is kept, since the list can be older than a resolved event), and requests we
+ * held as pending that aren't listed any more are dropped (resolved while we were away; the
+ * decision isn't in the list, and a fetch of the run or a resolved event fills it in).
+ */
+function permissionsAfterList(perms: Record<string, PermissionRequest>, pending: PermissionRequest[]): Record<string, PermissionRequest> {
+  const listed = new Set(pending.map((p) => p.id))
+  const next: Record<string, PermissionRequest> = {}
+  for (const [id, p] of Object.entries(perms)) if (p.status !== 'pending' || listed.has(id)) next[id] = p
+  for (const p of pending) if (!next[p.id] || next[p.id].status === 'pending') next[p.id] = p
   return next
 }
 
@@ -179,6 +195,8 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       return applyRun(state, action.run)
     case 'vm':
       return { ...state, vms: { ...state.vms, [action.vm.agentId]: action.vm } }
+    case 'pending':
+      return { ...state, permissions: permissionsAfterList(state.permissions, action.requests) }
     case 'event': {
       const ev = action.event
       switch (ev.type) {
@@ -226,15 +244,14 @@ export type ResyncPlan = { runIds: string[]; agentIds: string[] }
 
 /**
  * What to re-fetch after a (re)connect or a reset (Team lead: SSE only, re-fetch on reconnect):
- * - every run we hold that is still active (queued, waiting_permission, running), plus the runs
- *   behind pending permission requests (a fetched run carries each request's decision), plus
+ * - every run we hold that is still active (queued, waiting_permission, running), plus
  *   `extraRunIds` (active runs a view knows of from a message's scriptRun but hasn't loaded);
  * - the VM info of every bot we hold (that also lists new runs, newest first).
+ * Pending permission requests are always re-fetched as one list (GET /api/permissions?status=pending).
  */
 export function resyncPlan(state: LiveState, extraRunIds: Iterable<string> = []): ResyncPlan {
   const runIds = new Set<string>()
   for (const r of Object.values(state.runs)) if (isActiveStatus(r.status)) runIds.add(r.id)
-  for (const p of Object.values(state.permissions)) if (p.status === 'pending') runIds.add(p.runId)
   for (const id of extraRunIds) {
     const known = state.runs[id]
     if (!known || isActiveStatus(known.status)) runIds.add(id)

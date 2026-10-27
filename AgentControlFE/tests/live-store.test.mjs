@@ -104,6 +104,20 @@ describe('vm and permission events', () => {
     s = apply(s, { type: 'run', run: run('r1', { status: 'running', permissions: [{ requestId: 'p1', type: 'internet', decision: 'allow_once' }] }) })
     assert.equal(s.permissions.p1.status, 'allowed_once')
   })
+  it('the pending list replaces what we held as pending, and keeps resolved copies', () => {
+    let s = apply(
+      initialLiveState,
+      event({ type: 'permission.requested', conversationId: 'c1', request: permission('gone') }),
+      event({ type: 'permission.requested', conversationId: 'c1', request: permission('still') }),
+      event({ type: 'permission.resolved', conversationId: 'c1', request: permission('done', { status: 'denied' }) }),
+    )
+    s = apply(s, { type: 'pending', requests: [permission('still', { why: 'newer copy' }), permission('new', { conversationId: 'c2' }), permission('done')] })
+    assert.deepEqual(Object.keys(s.permissions).sort(), ['done', 'new', 'still'])
+    assert.equal(s.permissions.still.why, 'newer copy')
+    assert.equal(s.permissions.done.status, 'denied', 'an older list never reopens a resolved request')
+    assert.deepEqual(pendingPermissions(s, 'c2').map((p) => p.id), ['new'])
+    assert.deepEqual(apply(s, { type: 'pending', requests: [] }).permissions, { done: s.permissions.done })
+  })
 })
 
 describe('connection, reset and resyncPlan', () => {
@@ -113,7 +127,7 @@ describe('connection, reset and resyncPlan', () => {
     assert.equal(s.resets, 2)
     assert.equal(liveReducer(s, { type: 'connection', status: 'open' }), s)
   })
-  it('re-fetches active runs, runs behind pending requests, tracked ids and every held VM', () => {
+  it('re-fetches active runs, tracked ids and every held VM (pending requests come from the list route)', () => {
     const s = apply(
       initialLiveState,
       updated(run('done', { status: 'succeeded' })),
@@ -123,7 +137,7 @@ describe('connection, reset and resyncPlan', () => {
       { type: 'vm', vm: vm('a1') },
       { type: 'vm', vm: vm('a2') },
     )
-    assert.deepEqual(resyncPlan(s, ['tracked', 'done']), { runIds: ['q', 'tracked', 'unseen', 'w'], agentIds: ['a1', 'a2'] })
+    assert.deepEqual(resyncPlan(s, ['tracked', 'done']), { runIds: ['q', 'tracked', 'w'], agentIds: ['a1', 'a2'] })
     assert.deepEqual(resyncPlan(initialLiveState), { runIds: [], agentIds: [] })
   })
 })

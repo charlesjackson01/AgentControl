@@ -536,7 +536,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 6e4291b (BE-P2-1), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ 4bf9429 (BE-P2-1), section "Phase 2",
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -840,3 +840,46 @@ export type LiveEvent =
   | { type: 'permission.requested'; conversationId: string; request: PermissionRequest }
   | { type: 'permission.resolved'; conversationId: string; request: PermissionRequest }
   | { type: 'vm.updated'; agentId: string; vm: VmInfo }
+
+/** GET /api/agents/:id/vm/tools. tools is absent until the first manifest refresh. */
+export interface VmToolsInfo {
+  agentId: string
+  tools?: ToolManifest
+  packages: string[]
+  image: AgentVm['image']
+  /** True when POST /vm/tools/rollback has a previous generation to go back to. */
+  canRollback: boolean
+}
+
+export type ProbeCheckId = 'start' | 'bind_mount' | 'snapshot_mount' | 'network' | 'cgroup_limits' | 'exec' | 'chromium'
+/** One probe check (§4 checks 1–7). 'skipped': not needed (e.g. chromium with no browser bots). */
+export interface ProbeCheck {
+  id: ProbeCheckId
+  status: 'pass' | 'fail' | 'skipped'
+  /** Plain-language detail on fail, e.g. "bind-mount ownership check failed". */
+  message?: string
+  durationMs?: number
+}
+/** GET /api/vm/probe (last result) and POST /api/vm/probe (re-check, 200 when done). */
+export interface VmProbeResult {
+  runsc: { installed: boolean; version?: string }
+  /** null when runsc isn't installed (nothing probed). */
+  checks: ProbeCheck[] | null
+  /** All checks passed: gVisor can run here. */
+  compatible: boolean
+  uidMapping: 'idmap' | 'keep-id' | null
+  snapshotDriver: SnapshotDriver | null
+  checkedAt: string | null
+  /** The cache key parts, for display/debug. */
+  versions: { engine: string | null; runsc: string | null; image: string | null }
+}
+
+/** GET /api/permissions?status=pending[&agentId=][&conversationId=]: newest first. */
+export interface PermissionListResponse {
+  requests: PermissionRequest[]
+}
+/** POST /api/permissions/:requestId body. Requires header PERMISSION_CSRF_HEADER: '1' (403 without; 409 when already resolved). */
+export interface PermissionAnswer {
+  decision: PermissionDecision
+}
+export const PERMISSION_CSRF_HEADER = 'x-agentcontrol-confirm'

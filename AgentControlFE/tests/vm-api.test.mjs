@@ -1,12 +1,13 @@
-// FE-P2-1: every Phase 2 client call hits the contract's method, path and body (docs/phase2-contract.md @ 6e4291b).
+// FE-P2-1: every Phase 2 client call hits the contract's method, path and body (docs/phase2-contract.md @ 4bf9429).
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { RUN_PAGE_SIZE, createVmApi, undoErrorOf, vmPaths } from '../src/lib/vm-api.ts'
+import { RUN_PAGE_SIZE, createVmApi, permissionErrorOf, undoErrorOf, vmPaths } from '../src/lib/vm-api.ts'
 
 function recorder() {
   const calls = []
   const request = async (path, init) => {
     calls.push([init?.method ?? 'GET', path, init?.body === undefined ? undefined : JSON.parse(init.body)])
+    if (init?.headers) calls.push(['headers', init.headers])
     return {}
   }
   const requestText = async (path, init) => {
@@ -78,6 +79,18 @@ describe('vm api routes', () => {
       ['POST', '/api/vm/machine/grow', { toGb: 80 }],
     ])
   })
+  it('permissions: the pending list, and answers carry the CSRF header', async () => {
+    const { api, calls } = recorder()
+    await api.listPendingPermissions()
+    await api.listPendingPermissions({ agentId: 'a1', conversationId: 'c 1' })
+    await api.answerPermission('p/1', 'allow_once')
+    assert.deepEqual(calls, [
+      ['GET', '/api/permissions?status=pending', undefined],
+      ['GET', '/api/permissions?status=pending&agentId=a1&conversationId=c+1', undefined],
+      ['POST', '/api/permissions/p%2F1', { decision: 'allow_once' }],
+      ['headers', { 'x-agentcontrol-confirm': '1' }],
+    ])
+  })
   it('paths for links and the events stream', () => {
     assert.equal(vmPaths.agentExport('a1'), '/api/agents/a1/export')
     assert.equal(vmPaths.vmExport(), '/api/vm/export')
@@ -99,5 +112,16 @@ describe('undoErrorOf', () => {
     assert.deepEqual(undoErrorOf(apiErr(500, undefined, 'Boom')), { kind: 'other', message: 'Boom', status: 500 })
     assert.deepEqual(undoErrorOf(apiErr(409, { error: 'x' })), { kind: 'other', message: 'Undo failed.', status: 409 })
     assert.deepEqual(undoErrorOf(new TypeError('Failed to fetch')), { kind: 'other', message: 'Failed to fetch' })
+  })
+})
+
+describe('permissionErrorOf', () => {
+  const apiErr = (status, message = 'x') => Object.assign(new Error(message), { status })
+  it('409 resolved, 403 forbidden (CSRF header), 404, else other', () => {
+    assert.deepEqual(permissionErrorOf(apiErr(409, 'Already answered.')), { kind: 'resolved', message: 'Already answered.' })
+    assert.equal(permissionErrorOf(apiErr(403)).kind, 'forbidden')
+    assert.equal(permissionErrorOf(apiErr(404)).kind, 'not_found')
+    assert.deepEqual(permissionErrorOf(apiErr(400, 'Wrong decision.')), { kind: 'other', message: 'Wrong decision.', status: 400 })
+    assert.deepEqual(permissionErrorOf(new TypeError('Failed to fetch')), { kind: 'other', message: 'Failed to fetch' })
   })
 })

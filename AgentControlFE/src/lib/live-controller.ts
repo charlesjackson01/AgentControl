@@ -5,15 +5,17 @@
  *
  * - Every frame goes through liveReducer.
  * - On every open (the first one too) and on `event: reset`, the resyncPlan is fetched:
- *   active runs (plus runs behind pending permission requests) and the VM info of watched bots.
+ *   active runs, the VM info of watched bots, and the pending permission requests (one list call).
  */
 import { connectLiveEvents, type LiveConnectionOptions } from './live-events.ts'
 import { initialLiveState, liveReducer, resyncPlan, type LiveAction, type LiveState } from './live-store.ts'
-import type { ScriptRun, VmInfo } from './types.ts'
+import type { PermissionListResponse, ScriptRun, VmInfo } from './types.ts'
 
 export type LiveClient = {
   getRun: (runId: string) => Promise<ScriptRun>
   getVm: (agentId: string) => Promise<VmInfo>
+  /** GET /api/permissions?status=pending (unfiltered). An M1 BE may not have it yet: a failure keeps what we hold. */
+  listPendingPermissions: () => Promise<PermissionListResponse>
 }
 
 export type LiveControllerOptions = {
@@ -74,6 +76,15 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
     }
   }
 
+  const loadPending = async () => {
+    try {
+      const { requests } = await opts.client.listPendingPermissions()
+      if (Array.isArray(requests)) dispatch({ type: 'pending', requests })
+    } catch {
+      // Keep the requests we hold; the next (re)connect tries again.
+    }
+  }
+
   // One resync at a time; a request during one runs one more pass after it.
   const resync = (): Promise<void> => {
     if (running) {
@@ -84,7 +95,7 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
       do {
         again = false
         const plan = resyncPlan(state, tracked)
-        await Promise.all([...plan.runIds.map(loadRun), ...plan.agentIds.map(loadVm)])
+        await Promise.all([...plan.runIds.map(loadRun), ...plan.agentIds.map(loadVm), loadPending()])
         // Once loaded, the store's own active list covers them.
         for (const id of [...tracked]) if (state.runs[id]) tracked.delete(id)
       } while (again)

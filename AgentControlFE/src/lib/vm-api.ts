@@ -1,17 +1,16 @@
 /*
- * FE-P2-1: the Phase 2 VM, script-run and undo routes (docs/phase2-contract.md @ 6e4291b).
+ * FE-P2-1: the Phase 2 VM, script-run, undo and permission routes (docs/phase2-contract.md @ 4bf9429).
  * A factory over the shared `request`, so tests/vm-api.test.mjs can check every
  * method, path and body with a fake. `api.vm` in ./api.ts is the live instance.
  *
  * Routes land in BE-P2-17 (and earlier tasks); shapes are fixed by BE-P2-1.
  */
-import type {
-  AgentVm, ScriptRun, ScriptRunSummary, ToolManifest, UndoConflict, UndoGone, UndoPreview, UndoRequest, UndoResult,
-  VmHostInfo, VmInfo, VmPatch, VmSettingsPatch, VmSettingsView,
-} from './types'
-
-/** GET /api/agents/:id/vm/tools. Not a named BE type: the contract says `ToolManifest & {packages, image}`. */
-export type VmToolsInfo = ToolManifest & { packages: string[]; image: AgentVm['image'] }
+import {
+  PERMISSION_CSRF_HEADER,
+  type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type ScriptRun, type ScriptRunSummary, type UndoConflict, type UndoGone, type UndoPreview, type UndoRequest, type UndoResult,
+  type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
+} from './types.ts'
 
 /** GET /api/agents/:id/runs page: newest first. */
 export type ScriptRunPage = { runs: ScriptRunSummary[]; hasMore: boolean }
@@ -41,6 +40,14 @@ export const vmPaths = {
   run: (runId: string) => `/api/runs/${enc(runId)}`,
   runOutput: (runId: string, stream: RunOutputStream) => `/api/runs/${enc(runId)}/output?stream=${stream}`,
   vmExport: () => '/api/vm/export',
+  /** Pending permission requests, newest first (M2 route; shapes fixed now). */
+  pendingPermissions: (filters?: { agentId?: string; conversationId?: string }) => {
+    const qs = new URLSearchParams({ status: 'pending' })
+    if (filters?.agentId) qs.set('agentId', filters.agentId)
+    if (filters?.conversationId) qs.set('conversationId', filters.conversationId)
+    return `/api/permissions?${qs}`
+  },
+  permission: (requestId: string) => `/api/permissions/${enc(requestId)}`,
   /** Live events (SSE). Filters are optional; the app opens one unfiltered stream. */
   events: (filters?: { conversationId?: string; agentId?: string }) => {
     const qs = new URLSearchParams()
@@ -85,11 +92,23 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     getHost: () => request<VmHostInfo>('/api/vm/host'),
     getSettings: () => request<VmSettingsView>('/api/vm/settings'),
     updateSettings: (body: VmSettingsPatch) => request<VmSettingsView>('/api/vm/settings', patch(body)),
-    /** GAP: the contract gives no type for the probe body ("last probe per check"). */
-    getProbe: () => request<unknown>('/api/vm/probe'),
-    recheckProbe: () => request<unknown>('/api/vm/probe', post()),
+    /** Last probe result; POST re-checks and answers when done. */
+    getProbe: () => request<VmProbeResult>('/api/vm/probe'),
+    recheckProbe: () => request<VmProbeResult>('/api/vm/probe', post()),
     /** 409 while runs are active, 400 when the host disk is low. */
     growMachine: (toGb: number) => request<VmHostInfo>('/api/vm/machine/grow', post({ toGb })),
+
+    /* ---- permissions (M2 routes; shapes fixed by BE-P2-1 @ 4bf9429) ---- */
+    listPendingPermissions: (filters?: { agentId?: string; conversationId?: string }) =>
+      request<PermissionListResponse>(vmPaths.pendingPermissions(filters)),
+    /**
+     * Answer a request. The CSRF header (`x-agentcontrol-confirm: 1`) is required (403 without);
+     * 409 when it was already resolved, 400 for a decision of the wrong type: read with permissionErrorOf.
+     */
+    answerPermission: (requestId: string, decision: PermissionDecision) => {
+      const body: PermissionAnswer = { decision }
+      return request<PermissionRequest>(vmPaths.permission(requestId), { ...post(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } })
+    },
   }
 }
 
@@ -119,5 +138,24 @@ export function undoErrorOf(err: unknown): UndoError {
     if (b.reason === 'conflicts') return { kind: 'conflicts', message, conflicts: Array.isArray(b.conflicts) ? b.conflicts : [] }
   }
   if (status === 410 && body && typeof body.reason === 'string') return { kind: 'gone', message, reason: body.reason as UndoGone['reason'] }
+  return status === undefined ? { kind: 'other', message } : { kind: 'other', message, status }
+}
+
+/* ---- permission answer errors ---- */
+
+export type PermissionError =
+  /** 409: answered already (another tab, or it timed out). Re-fetch the list; nothing to retry. */
+  | { kind: 'resolved'; message: string }
+  /** 403: the CSRF header was missing or refused. A client bug, not the user's. */
+  | { kind: 'forbidden'; message: string }
+  | { kind: 'not_found'; message: string }
+  | { kind: 'other'; message: string; status?: number }
+
+export function permissionErrorOf(err: unknown): PermissionError {
+  const message = err instanceof Error ? err.message : String(err)
+  const status = isObj(err) && typeof err.status === 'number' ? err.status : undefined
+  if (status === 409) return { kind: 'resolved', message }
+  if (status === 403) return { kind: 'forbidden', message }
+  if (status === 404) return { kind: 'not_found', message }
   return status === undefined ? { kind: 'other', message } : { kind: 'other', message, status }
 }

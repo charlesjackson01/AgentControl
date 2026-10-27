@@ -1,4 +1,4 @@
-// FE-P2-1 test fixtures: fake Phase 2 data (shapes from AgentControlBE/src/shared/types.ts @ 6e4291b).
+// FE-P2-1 test fixtures: fake Phase 2 data (shapes from AgentControlBE/src/shared/types.ts @ 4bf9429).
 export const run = (id, extra = {}) => ({
   id, agentId: 'a1', conversationId: 'c1', messageId: `m-${id}`, context: 'dm', kind: 'script', argv: ['python3', 'scripts/clean.py'],
   cwd: 'workspace', network: 'off', browser: false, runtime: 'runsc', permissions: [], status: 'running',

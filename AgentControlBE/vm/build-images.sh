@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BE-P2-3: build and tag the shared bot images (plan §2.2):
-#   localhost/agentcontrol/botvm:<BOTVM_VERSION>          (~430 MB)
-#   localhost/agentcontrol/botvm-browser:<BOTVM_VERSION>  (~1.6 GB, FROM botvm)
+#   localhost/agentcontrol/botvm:<BOTVM_VERSION>          (~431 MB)
+#   localhost/agentcontrol/botvm-browser:<BOTVM_VERSION>  (~1.34 GB, FROM botvm; full Chromium, no headless shell)
 # Versions come from vm/images/versions.env. Nothing is pushed anywhere.
 #
 # Usage: vm/build-images.sh [--engine podman|docker] [--only botvm|botvm-browser] [--connection NAME]
@@ -78,6 +78,8 @@ build_browser() {
 }
 
 # Smoke check (§14 BE-P2-3 acceptance): python3, node (and chromium) run as uid 1000.
+# The browser smoke checks there is no chromium-headless-shell, prints the full Chromium
+# binary, then launches it headless the way bots must: channel 'chromium', --no-sandbox.
 smoke() {
   local ref="$1"; shift
   run "${cmd[@]}" run --rm --network none --read-only --tmpfs /tmp:rw,size=512m --shm-size 512m --cap-drop ALL --security-opt no-new-privileges "$ref" \
@@ -90,5 +92,5 @@ if [[ -z "$only" || "$only" == "botvm" ]]; then
 fi
 if [[ -z "$only" || "$only" == "botvm-browser" ]]; then
   build_browser
-  smoke "$browser_ref" ' && python3 -c "from playwright.sync_api import sync_playwright as p; b=p().start().chromium.launch(args=[\"--no-sandbox\"]); print(b.version); b.close()"'
+  smoke "$browser_ref" ' && ! ls -d /opt/ms-playwright/chromium_headless_shell-* >/dev/null 2>&1 && echo "headless shell: none" && ls /opt/ms-playwright/chromium-*/chrome-linux*/chrome && python3 -c "from playwright.sync_api import sync_playwright as p; b=p().start().chromium.launch(channel=\"chromium\", headless=True, args=[\"--no-sandbox\"]); print(b.version); b.close()"'
 fi

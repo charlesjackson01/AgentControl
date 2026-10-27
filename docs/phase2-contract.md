@@ -12,6 +12,8 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 - `settings.vm` (server side). `GET/PATCH /api/settings` keep returning only `autoRun/notify/telemetry`.
 - Naming: `ScriptRunStatus`, `ScriptRun`, `ScriptRunSummary` (Phase 1's `RunStatus`/`AgentRun` are model turns and unchanged).
 
+**Image sizes (BE-P2-3, measured 2026-10-27, Podman 5.4.2 rootless, linux/amd64, version 1.0.0):** `botvm` 430.7 MB (430,668,054 bytes); `botvm-browser` 1343.3 MB (1,343,336,112 bytes, includes botvm; full Chromium 403 MB, no headless shell, down from 1628.7 MB with it). `SHARED_IMAGE_APPROX_BYTES` uses 431 MB and 1343 MB. Shared images are never counted in a bot's 10 GB. Browser code in the image launches with `channel: 'chromium'` (new headless mode) and `--no-sandbox`.
+
 ## Per bot
 | Method | Path | 200 | Errors |
 |---|---|---|---|

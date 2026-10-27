@@ -13,7 +13,14 @@ Layout: `/bot/workspace` (rw, workdir), `/bot/shared` and `/bot/skills` (ro moun
 `/home/bot` (ac-tools volume; pip `--user` and npm global prefix `~/.local`), `/opt/bot` (ac-opt volume, `/opt/bot/bin` on PATH).
 
 * All pins live in `images/versions.env` (base image by digest, Node tarball sha256 per arch). `src/vm-images.ts` mirrors them; `src/vm-images.test.ts` fails if they drift.
-* Build: `npm run vm:images -- [--engine podman|docker] [--connection agentcontrol] [--only botvm|botvm-browser] [--dry-run]`.
+* Build: `npm run vm:images -- [--engine podman|docker] [--connection agentcontrol] [--only botvm|botvm-browser] [--podman-arg ARG]... [--dry-run]`.
+  Extra global podman options (e.g. a throwaway store) go in `--podman-arg` (repeatable) or `PODMAN_ARGS` (whitespace-separated, read first),
+  e.g. `PODMAN_ARGS="--root /tmp/pt/root --runroot /tmp/pt/runroot" npm run vm:images`. Both are refused with `--engine docker`.
+  `--root` does not move Podman's blob-info cache (`$XDG_DATA_HOME/containers/cache`, default `~/.local/share`); set `XDG_DATA_HOME` too to keep a test build fully out of `~`.
   Builds, then smoke-runs each image read-only, no network, cap-drop ALL, checking uid 1000 + python3 + node (+ Chromium launch).
   `--connection podman-machine-default` is refused.
-* Real build test: `AC_VM_TESTS=1 npx vitest run src/vm-images.test.ts` (needs Podman or Docker; skipped otherwise). **Pending**: not yet run — Podman is not installed on the dev box.
+* Real build test: `AC_VM_TESTS=1 npx vitest run src/vm-images.test.ts` (needs Podman or Docker; skipped otherwise; `PODMAN_ARGS` is passed through).
+  Passed on the dev box (Podman 5.4.2 rootless, crun, linux/amd64) on 2026-10-27: botvm 430.7 MB, botvm-browser 1628.7 MB (includes botvm;
+  Chromium 403 MB + headless shell 273 MB). That box does not enforce rootless cgroup limits, so this test checks no limits.
+* apt inside the images uses HTTPS mirrors with SRV lookups off and retries (`/etc/apt/apt.conf.d/80-agentcontrol`), set in botvm and inherited.
+* RUN steps are POSIX sh: Podman's default OCI format ignores `SHELL`, so there is none.

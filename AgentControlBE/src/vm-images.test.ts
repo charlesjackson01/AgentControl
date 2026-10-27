@@ -189,6 +189,20 @@ describe('botvm base layout', () => {
     expect(env.AC_BOTVM_VERSION).toBe('${BOTVM_VERSION}')
   })
 
+  it('configures apt for HTTPS, no SRV lookups and retries before the first apt-get', () => {
+    const runs = of('botvm', 'RUN')
+    const cfg = runs.findIndex((i) => i.args.includes('/etc/apt/apt.conf.d/80-agentcontrol'))
+    expect(cfg).toBeGreaterThanOrEqual(0)
+    expect(cfg).toBeLessThan(runs.findIndex((i) => i.args.includes('apt-get')))
+    expect(runs[cfg]!.args).toContain('Acquire::EnableSrvRecords "false";')
+    expect(runs[cfg]!.args).toContain('Acquire::Retries "5";')
+    expect(runs[cfg]!.args).toContain("s|http://deb.debian.org/|https://deb.debian.org/|g")
+  })
+
+  it('has no SHELL instruction (Podman OCI builds ignore it)', () => {
+    for (const k of SHARED_IMAGE_KINDS) expect(of(k, 'SHELL'), k).toEqual([])
+  })
+
   it('installs tini, coreutils and ca-certificates', () => {
     const run = of('botvm', 'RUN').find((i) => i.args.includes('apt-get install'))!
     for (const p of ['tini', 'coreutils', 'ca-certificates']) expect(run.args).toMatch(new RegExp(`\\b${p}\\b`))
@@ -206,9 +220,11 @@ describe('botvm-browser layer', () => {
     expect(run.args).toContain('"playwright==${PLAYWRIGHT_VERSION}"')
     expect(run.args).toContain('"playwright@${PLAYWRIGHT_VERSION}"')
     expect(run.args).toContain('chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"')
-    // The browser install goes to the system, not into the bot's volumes.
-    expect(run.args).toContain('PIP_USER=0')
-    expect(run.args).toContain('NPM_CONFIG_PREFIX=/usr/local')
+    // The browser install goes to the system, not into the bot's volumes (nor root's
+    // caches into /home/bot); npm first without its bin link so pip owns the CLI.
+    expect(run.args).toMatch(/^export HOME=\/root PIP_USER=0 NPM_CONFIG_PREFIX=\/usr\/local /)
+    expect(run.args).toContain('npm install -g --no-fund --no-audit --no-bin-links')
+    expect(run.args.indexOf('npm install')).toBeLessThan(run.args.indexOf('pip install'))
     // The ENV that sets the browsers path comes before the install.
     const idx = (pred: (i: Instr) => boolean) => instrs['botvm-browser'].findIndex(pred)
     expect(idx((i) => i.op === 'ENV' && i.args.startsWith('PLAYWRIGHT_BROWSERS_PATH='))).toBeLessThan(idx((i) => i === run))
@@ -257,7 +273,13 @@ describe('image names', () => {
 
 describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
   const script = path.join(vmDir(), 'build-images.sh')
-  const sh = (...args: string[]) => execFileSync('bash', [script, ...args], { encoding: 'utf8' })
+  // Dry runs must not see a PODMAN_ARGS the caller exported for the @vm build.
+  const cleanEnv = (extra: Record<string, string> = {}) => {
+    const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+    if (!('PODMAN_ARGS' in extra)) delete env.PODMAN_ARGS
+    return env
+  }
+  const sh = (...args: string[]) => execFileSync('bash', [script, ...args], { encoding: 'utf8', env: cleanEnv() })
 
   it('dry-run builds the same argv as imageBuildArgv, base before browser, with uid-1000 smoke checks', () => {
     const lines = sh('--dry-run').trim().split('\n')
@@ -280,12 +302,30 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
     expect(sh('--dry-run', '--connection', 'agentcontrol', '--only', 'botvm-browser').trim().split('\n')[0]).toBe(
       ['podman', '--connection', 'agentcontrol', ...imageBuildArgv('botvm-browser')].join(' '),
     )
-    expect(() => execFileSync('bash', [script, '--dry-run', '--connection', 'podman-machine-default'], { stdio: 'pipe' })).toThrow()
-    expect(() => execFileSync('bash', [script, '--dry-run', '--engine', 'nerdctl'], { stdio: 'pipe' })).toThrow()
+    expect(() => execFileSync('bash', [script, '--dry-run', '--connection', 'podman-machine-default'], { stdio: 'pipe', env: cleanEnv() })).toThrow()
+    expect(() => execFileSync('bash', [script, '--dry-run', '--engine', 'nerdctl'], { stdio: 'pipe', env: cleanEnv() })).toThrow()
+  })
+
+  it('passes extra global podman options from PODMAN_ARGS and --podman-arg before the subcommand (podman only)', () => {
+    const out = execFileSync('bash', [script, '--dry-run', '--only', 'botvm', '--podman-arg', '--log-level=warn', '--podman-arg=--cgroup-manager=cgroupfs'], {
+      encoding: 'utf8',
+      env: cleanEnv({ PODMAN_ARGS: ' --root /tmp/pt/root  --runroot /tmp/pt/runroot ' }),
+    })
+    const lines = out.trim().split('\n')
+    expect(lines).toHaveLength(2)
+    const pre = 'podman --root /tmp/pt/root --runroot /tmp/pt/runroot --log-level=warn --cgroup-manager=cgroupfs '
+    expect(lines[0]).toBe(pre + imageBuildArgv('botvm').join(' '))
+    expect(lines[1]!.startsWith(pre + 'run --rm --network none ')).toBe(true)
+    expect(sh('--dry-run', '--only', 'botvm', '--connection', 'agentcontrol', '--podman-arg', '--log-level=warn').split('\n')[0]).toBe(
+      ['podman', '--log-level=warn', '--connection', 'agentcontrol', ...imageBuildArgv('botvm')].join(' '),
+    )
+    expect(() => execFileSync('bash', [script, '--dry-run', '--engine', 'docker', '--podman-arg', '--root=/x'], { stdio: 'pipe', env: cleanEnv() })).toThrow()
+    expect(() => execFileSync('bash', [script, '--dry-run', '--engine', 'docker'], { stdio: 'pipe', env: cleanEnv({ PODMAN_ARGS: '--root /x' }) })).toThrow()
+    expect(() => execFileSync('bash', [script, '--dry-run', '--podman-arg'], { stdio: 'pipe', env: cleanEnv() })).toThrow()
   })
 })
 
-/** @vm: needs a real engine. Not run until Podman is installed on a runner (AC_VM_TESTS=1). */
+/** @vm: needs a real engine (AC_VM_TESTS=1). Honours PODMAN_ARGS (e.g. a throwaway --root/--runroot). */
 const engine = ['podman', 'docker'].find((e) => {
   try {
     execFileSync(e, ['--version'], { stdio: 'ignore' })
@@ -299,6 +339,8 @@ describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', (
     const out = execFileSync('bash', [path.join(vmDir(), 'build-images.sh'), '--engine', engine!], { encoding: 'utf8', timeout: 30 * 60_000 })
     expect(out).toMatch(/Python 3\.12\./)
     expect(out).toMatch(/v22\./)
+    // The browser smoke prints Chromium's version after launching it as uid 1000.
+    expect(out).toMatch(/^\d+\.\d+\.\d+\.\d+$/m)
   }, 30 * 60_000)
 })
 

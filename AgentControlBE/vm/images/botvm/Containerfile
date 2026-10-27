@@ -24,7 +24,15 @@ LABEL org.opencontainers.image.title="agentcontrol/botvm" \
       io.agentcontrol.python="${PYTHON_VERSION}" \
       io.agentcontrol.node="${NODE_VERSION}"
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# No SHELL instruction: Podman's default OCI image format ignores it, so every RUN
+# below is plain POSIX sh (dash) and must not rely on pipefail.
+
+# apt config shared by this image, the Playwright --with-deps step and the per-bot
+# layers (BE-P2-4): HTTPS mirrors (the slim base already has ca-certificates), no DNS
+# SRV lookups (apt follows _http._tcp SRV answers, which DNS-intercepting egress
+# proxies point at themselves; that gave 500s and TLS resets on the dev box), retries.
+RUN sed -i 's|http://deb.debian.org/|https://deb.debian.org/|g' /etc/apt/sources.list.d/debian.sources \
+ && printf 'Acquire::EnableSrvRecords "false";\nAcquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-agentcontrol
 
 # System tools. No sudo, no ssh server, no compilers beyond what pip wheels need.
 RUN apt-get update \

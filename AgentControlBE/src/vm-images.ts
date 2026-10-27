@@ -49,8 +49,12 @@ export const PLAYWRIGHT_BROWSERS_PATH = '/opt/ms-playwright'
 /** Image label keys AgentControl sets and reads back (e.g. to detect a stale base). */
 export const IMAGE_LABELS = { image: 'io.agentcontrol.image', version: 'io.agentcontrol.version', agent: 'io.agentcontrol.agent', generation: 'io.agentcontrol.generation' } as const
 
-/** Approximate sizes for the VM tab and Settings › VMs until the engine reports real ones. */
-export const SHARED_IMAGE_APPROX_BYTES: Record<SharedImageKind, number> = { botvm: 250 * 1024 ** 2, 'botvm-browser': 1100 * 1024 ** 2 }
+/**
+ * Approximate sizes for the VM tab and Settings › VMs until the engine reports real ones.
+ * Measured on the first real Podman build of 1.0.0 (linux/amd64): 430.7 MB and 1628.7 MB
+ * (the browser size includes botvm).
+ */
+export const SHARED_IMAGE_APPROX_BYTES: Record<SharedImageKind, number> = { botvm: 430 * 1000 ** 2, 'botvm-browser': 1630 * 1000 ** 2 }
 
 export function sharedImageRef(kind: SharedImageKind, version: string = BOTVM_VERSION): string {
   return `${BOTVM_REPO}/${kind}:${version}`

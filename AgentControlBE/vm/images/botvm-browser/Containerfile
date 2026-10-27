@@ -19,7 +19,7 @@ LABEL org.opencontainers.image.title="agentcontrol/botvm-browser" \
       io.agentcontrol.version="${BOTVM_VERSION}" \
       io.agentcontrol.playwright="${PLAYWRIGHT_VERSION}"
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# No SHELL instruction (ignored in Podman's OCI format); RUNs are POSIX sh.
 
 # Installing system packages needs root; the final USER drops back to 1000.
 USER root
@@ -28,8 +28,13 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 # Playwright for Python (system site-packages, not the bot's --user dir) and Node
 # (global under /usr/local), same version so both use the one Chromium build.
-RUN PIP_USER=0 pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
- && NPM_CONFIG_PREFIX=/usr/local npm install -g --no-fund --no-audit "playwright@${PLAYWRIGHT_VERSION}" \
+# HOME=/root so root's npm/pip caches and logs never land in /home/bot (the seed of
+# the bot's ac-tools volume). npm goes first and skips its bin link (it refuses to
+# overwrite one): /usr/local/bin/playwright is the pip CLI (same version), and Node
+# code gets the package through NODE_PATH.
+RUN export HOME=/root PIP_USER=0 NPM_CONFIG_PREFIX=/usr/local \
+ && npm install -g --no-fund --no-audit --no-bin-links "playwright@${PLAYWRIGHT_VERSION}" \
+ && pip install --no-cache-dir --root-user-action=ignore "playwright==${PLAYWRIGHT_VERSION}" \
  && python3 -m playwright install --with-deps chromium \
  && rm -rf /var/lib/apt/lists/* /root/.cache /root/.npm \
  && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"

@@ -151,8 +151,16 @@ export default function RunCard({ message, botName, agentId, groupNames, client 
           onStop: stop,
           stopping: busy,
           stopError,
-          onUndo: () => setDialog('undo'),
-          onOutput: () => setDialog('output'),
+          // The card renders from the summary; Undo and Full output fetch the run first if it isn't
+          // loaded yet (the dialog opens once it is: both render only with `run`).
+          onUndo: () => {
+            if (!run) load()
+            setDialog('undo')
+          },
+          onOutput: () => {
+            if (!run) load()
+            setDialog('output')
+          },
           loadError,
           onRetry: retry,
           undoRef: undoBtn,

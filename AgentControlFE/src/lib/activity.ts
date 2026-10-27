@@ -15,7 +15,20 @@ export const MAX_STEPS = 20
 /** `target` is the mono part after the verb: the step's path, or the tool name for tools without a verb ("Ran convert_units"). */
 export type ActivityStep = { tool: string; verb: string; target: string | null; summary: string; ok: boolean; path?: string }
 /** `meta` is the line under the name: "workspace/briefs · 2.4 KB · updated just now" (04), or "workspace/briefs · modified" without BE-3 fields. */
-export type ActivityFile = { path: string; name: string; dir: string; change: 'added' | 'modified' | 'deleted'; changeLabel: string; size: string | null; updated: string | null; meta: string }
+export type ActivityFile = {
+  path: string
+  name: string
+  dir: string
+  change: 'added' | 'modified' | 'deleted'
+  changeLabel: string
+  size: string | null
+  updated: string | null
+  meta: string
+  /** BE 3a70c34 FileChange: the folder `path` is relative to; missing on the wire means 'agent'. */
+  root: 'agent' | 'group'
+  groupId?: string
+  groupName?: string
+}
 
 /*
  * Mockup gaps (not shown in v3 04/05b; minimal neutral versions, pending Charles):
@@ -149,7 +162,8 @@ function filesOf(raw: unknown, now: Date): ActivityFile[] {
     const updated = rel ? `updated ${rel}` : null
     // Mockup 04 when BE-3 sends bytes/modifiedAt; otherwise today's "folder · modified".
     const meta = (size || updated ? [dir, size, updated] : [dir, f.change]).filter(Boolean).join(' · ')
-    return [{ path, name: cut === -1 ? path : path.slice(cut + 1), dir, change: f.change, changeLabel: f.change, size, updated, meta }]
+    const scope = f.root === 'group' ? { root: 'group' as const, ...(str(f.groupId) ? { groupId: f.groupId } : {}), ...(str(f.groupName) ? { groupName: f.groupName } : {}) } : { root: 'agent' as const }
+    return [{ path, name: cut === -1 ? path : path.slice(cut + 1), dir, change: f.change, changeLabel: f.change, size, updated, meta, ...scope }]
   })
 }
 

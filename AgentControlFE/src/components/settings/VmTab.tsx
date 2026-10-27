@@ -5,10 +5,13 @@ import { ErrorState, Skeleton } from '../States'
 import UndoDialog from '../chat/UndoDialog'
 import RunOutputDialog from '../chat/RunOutputDialog'
 import { api } from '../../lib/api'
-import { RUN_PAGE_SIZE, vmPaths } from '../../lib/vm-api'
-import type { Agent, InternetPolicy, RuntimeMode, ScriptRun, ScriptRunSummary, VmHostInfo, VmProbeResult, VmToolsInfo } from '../../lib/types'
+import { vmPaths } from '../../lib/vm-api'
+import type { Agent, InternetPolicy, RuntimeMode, ScriptRun, VmHostInfo, VmProbeResult, VmToolsInfo } from '../../lib/types'
 import {
   RESET_ACTIVE_TEXT, RESET_TEXT, RESET_TITLE, envRowErrors, envWith, packageLabel, vmActionError, vmTabModel, whenText,
+  isRunHistoryPage,
+  vmHistory,
+  type RunHistoryPage,
 } from '../../lib/vm-tab'
 import { renderVmTab, type EnvEditor, type VmBusy, type VmTabUi } from '../../lib/vm-tab-render'
 import { useLive } from '../../state/live-context'
@@ -32,7 +35,8 @@ export default function VmTab({ agent }: { agent: Agent }) {
   const [errors, setErrors] = useState<VmTabUi['errors']>({})
   const [editor, setEditor] = useState<EnvEditor | null>(null)
   const [probeNote, setProbeNote] = useState<string | null>(null)
-  const [older, setOlder] = useState<{ runs: ScriptRunSummary[]; hasMore: boolean } | null>(null)
+  const [first, setFirst] = useState<RunHistoryPage | null>(null)
+  const [older, setOlder] = useState<RunHistoryPage | null>(null)
   const [resetOpen, setResetOpen] = useState(false)
   const [resetError, setResetError] = useState<string | null>(null)
   const [tools, setTools] = useState<{ open: boolean; info: VmToolsInfo | null; error: string | null; busy: boolean }>({ open: false, info: null, error: null, busy: false })
@@ -58,15 +62,29 @@ export default function VmTab({ agent }: { agent: Agent }) {
     }
   }, [])
 
+  // History: vm.runs paints first; the first page of GET /runs?limit=50 brings the real hasMore.
+  useEffect(() => {
+    let live = true
+    api.vm.listRuns(agent.id).then(
+      (page: unknown) => live && isRunHistoryPage(page) && setFirst(page),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [agent.id])
+
   const groupNames = useMemo(() => {
     const out: Record<string, string> = {}
     for (const c of conversations ?? []) if (c.kind === 'group') out[c.id] = c.name
     return out
   }, [conversations])
 
+  const history = useMemo(() => (vm ? vmHistory(vm, first, older) : null), [vm, first, older])
+
   const model = useMemo(
-    () => (vm ? vmTabModel({ vm, botName: agent.name, host, probe, groupNames, olderRuns: older?.runs }) : null),
-    [vm, agent.name, host, probe, groupNames, older],
+    () => (vm ? vmTabModel({ vm, botName: agent.name, host, probe, groupNames, olderRuns: history?.runs }) : null),
+    [vm, agent.name, host, probe, groupNames, history],
   )
 
   if (!vm || !model) {
@@ -158,12 +176,11 @@ export default function VmTab({ agent }: { agent: Agent }) {
     })
   }
 
-  const allRuns = [...vm.runs, ...(older?.runs ?? [])]
-  // vm.runs is the newest 50; a full page may have more behind it.
-  const hasMore = older ? older.hasMore : vm.runs.length >= RUN_PAGE_SIZE
+  const before = history?.before
   const onMore = () =>
     void act('more', 'history', "Couldn't load older runs. Try again.", async () => {
-      const page = await api.vm.listRuns(agent.id, { before: allRuns[allRuns.length - 1]?.id })
+      const page: unknown = await api.vm.listRuns(agent.id, { before })
+      if (!isRunHistoryPage(page)) throw new Error('Not a run page')
       setOlder((o) => ({ runs: [...(o?.runs ?? []), ...page.runs], hasMore: page.hasMore }))
     })
 
@@ -172,7 +189,7 @@ export default function VmTab({ agent }: { agent: Agent }) {
     errors,
     editor,
     probeNote,
-    hasMore: hasMore && allRuns.length > 0,
+    hasMore: history?.hasMore ?? false,
     exportHref: vmPaths.agentExport(agent.id),
     opening,
   }
@@ -237,7 +254,7 @@ export default function VmTab({ agent }: { agent: Agent }) {
           )
         }}
       >
-        <p>{RESET_TEXT(agent.name)}</p>
+        <p>{RESET_TEXT}</p>
         {resetError && <p className="vm-err" role="alert">{resetError}</p>}
       </ConfirmDialog>
       <Dialog

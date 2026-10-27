@@ -20,7 +20,7 @@ import { humanSize } from './file-format.ts'
  */
 export const VM_TAB_GAPS = {
   V1: 'VM states other than Running (not set up, starting, stopped, error, files missing): same header, badge and copy per state',
-  V2: 'Reset VM confirmation dialog (ConfirmDialog, §14 copy)',
+  V2: 'Reset VM confirmation dialog (ConfirmDialog; copy from Team lead 2026-10-27, no backup claim)',
   V3: 'Linux "where files live" (no shared VM line)',
   V4: 'gVisor active, active (forced), off (forced), required but unavailable: badge + one line each (§4 wording)',
   V5: 'Notices: grow disk offer, keep-id fallback (isolationNote), copy snapshot driver, over 10 GB',
@@ -586,8 +586,8 @@ export function vmActionError(err: unknown, fallback: string): string {
 }
 
 export const RESET_TITLE = (botName: string) => `Reset ${possessive(botName)} VM?`
-export const RESET_TEXT = (botName: string) =>
-  `This removes ${possessive(botName)} container, its own image layer and installed tools (pip, npm and system packages), after taking a backup first. ${possessive(botName)} workspace files, memory and profile are untouched.`
+/** Team lead 2026-10-27: no backup claim (reset doesn't take one in M1). */
+export const RESET_TEXT = 'Your files are kept. Installed tools and packages will be removed.'
 export const RESET_ACTIVE_TEXT = 'A run is going on. Stop it or wait for it to finish, then reset.'
 
 /* ---- the whole tab ---- */
@@ -653,4 +653,31 @@ export function vmTabModel(input: VmTabInput): VmTabModel {
     rows: runs.map((r) => historyRow(r, ctx)),
     runActive: runs.some((r) => r.status === 'queued' || r.status === 'waiting_permission' || r.status === 'running'),
   }
+}
+
+/* ---------- run history pages ---------- */
+
+/** One page of GET /api/agents/:id/runs (contract: `{ runs: ScriptRunSummary[], hasMore }`). */
+export type RunHistoryPage = { runs: ScriptRunSummary[]; hasMore: boolean }
+
+/** Whether a reply is that page shape (the Phase 1 route on the same path answers with a bare array). */
+export function isRunHistoryPage(x: unknown): x is RunHistoryPage {
+  return !!x && typeof x === 'object' && Array.isArray((x as RunHistoryPage).runs) && typeof (x as RunHistoryPage).hasMore === 'boolean'
+}
+
+/**
+ * The history list: `vm.runs` paints first, then the first page of GET /runs?limit=50 and any
+ * "Show older runs" pages follow (deduped by id, newest first). `hasMore` comes only from the
+ * server (VmInfo.runsHasMore for first paint, then the latest page's hasMore); no row-count guess.
+ */
+export function vmHistory(
+  vm: { runs: readonly ScriptRunSummary[]; runsHasMore?: boolean },
+  first: RunHistoryPage | null,
+  older: RunHistoryPage | null,
+): { runs: ScriptRunSummary[]; hasMore: boolean; before: string | undefined } {
+  const seen = new Set<string>()
+  const runs = [...vm.runs, ...(first?.runs ?? []), ...(older?.runs ?? [])].filter((r) => (seen.has(r.id) ? false : (seen.add(r.id), true)))
+  // BE 187519a VmInfo.runsHasMore covers first paint; then each page's own hasMore.
+  const hasMore = runs.length > 0 && (older ? older.hasMore : first ? first.hasMore : vm.runsHasMore === true)
+  return { runs, hasMore, before: runs.at(-1)?.id }
 }

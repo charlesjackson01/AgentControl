@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
+  isRunHistoryPage, vmHistory,
   RESET_ACTIVE_TEXT, RESET_TEXT, RESET_TITLE, VM_TAB_GAPS, breakdownText, envNameProblem, envRowErrors, envWith, filesLive, historyRow, historyTime,
   isolationView, packageLabel, toolsLine, vmActionError, vmHeader, vmMeters, vmNotices, vmPlatform, vmSubtitle, vmTabDot, vmTabModel,
 } from '../src/lib/vm-tab.ts'
@@ -276,7 +277,8 @@ describe('vm tab: misc', () => {
   })
   it('reset copy and action errors', () => {
     assert.equal(RESET_TITLE('Analyst'), "Reset Analyst's VM?")
-    assert.match(RESET_TEXT('Analyst'), /workspace files, memory and profile are untouched/)
+    assert.equal(RESET_TEXT, 'Your files are kept. Installed tools and packages will be removed.')
+    assert.doesNotMatch(RESET_TEXT, /backup/i)
     assert.match(RESET_ACTIVE_TEXT, /run is going on/)
     assert.equal(vmActionError({ status: 400, message: '"PATH" is reserved.' }, 'x'), '"PATH" is reserved.')
     assert.equal(vmActionError({ status: 500, message: 'boom' }, 'fallback'), 'fallback')
@@ -289,5 +291,41 @@ describe('vm tab: misc', () => {
     const src = readFileSync(new URL('../src/components/settings/VmTab.tsx', import.meta.url), 'utf8')
     for (const s of ['loadRun(id)', 'putVm(await api.vm.startVm', 'api.vm.resetVm', 'api.vm.recheckProbe', 'api.vm.growMachine', 'api.vm.listRuns', 'api.vm.getVmTools', 'rollbackTools', 'UndoDialog', 'RunOutputDialog'])
       assert.ok(src.includes(s), s)
+  })
+})
+
+describe('run history pages (GET /api/agents/:id/runs?limit=50)', () => {
+  const r = (id) => ({ id })
+  it('vm.runs paints first; hasMore only from the server (runsHasMore, then pages)', () => {
+    const fifty = Array.from({ length: 50 }, (_, i) => r(`r${i}`))
+    assert.deepEqual(vmHistory({ runs: fifty }, null, null), { runs: fifty, hasMore: false, before: 'r49' }, 'no 50-row guess')
+    assert.equal(vmHistory({ runs: fifty, runsHasMore: true }, null, null).hasMore, true, 'VmInfo.runsHasMore for first paint')
+    assert.equal(vmHistory({ runs: fifty, runsHasMore: true }, { runs: fifty, hasMore: false }, null).hasMore, false, 'the page wins')
+  })
+  it('the first page brings the real hasMore and merges by id', () => {
+    const h = vmHistory({ runs: [r('a'), r('b')] }, { runs: [r('a'), r('b'), r('c')], hasMore: true }, null)
+    assert.deepEqual(h.runs.map((x) => x.id), ['a', 'b', 'c'])
+    assert.equal(h.hasMore, true)
+    assert.equal(h.before, 'c')
+    assert.equal(vmHistory({ runs: [r('a')] }, { runs: [r('a')], hasMore: false }, null).hasMore, false)
+  })
+  it('older pages append and their hasMore wins', () => {
+    const h = vmHistory({ runs: [r('a')] }, { runs: [r('a'), r('b')], hasMore: true }, { runs: [r('c')], hasMore: false })
+    assert.deepEqual(h.runs.map((x) => x.id), ['a', 'b', 'c'])
+    assert.equal(h.hasMore, false)
+  })
+  it('no rows means no button', () => {
+    assert.equal(vmHistory({ runs: [] }, { runs: [], hasMore: true }, null).hasMore, false)
+  })
+  it('only the page shape counts (the Phase 1 route answers with an array)', () => {
+    assert.equal(isRunHistoryPage({ runs: [], hasMore: false }), true)
+    assert.equal(isRunHistoryPage([]), false)
+    assert.equal(isRunHistoryPage({ runs: [] }), false)
+    assert.equal(isRunHistoryPage(null), false)
+  })
+  it('VmTab loads the first page on mount and drops the row-count guess', () => {
+    const src = readFileSync(new URL('../src/components/settings/VmTab.tsx', import.meta.url), 'utf8')
+    assert.match(src, /api\.vm\.listRuns\(agent\.id\)/)
+    assert.doesNotMatch(src, />= RUN_PAGE_SIZE/)
   })
 })

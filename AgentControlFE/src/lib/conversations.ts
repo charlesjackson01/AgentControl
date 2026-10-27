@@ -1,5 +1,5 @@
 /* Pure helpers for the chat-first sidebar and thread (tests/conversations.test.mjs). */
-import type { Agent, ChatMessage, ChatRunSummary, ConversationSummary, ScriptRunStatus } from './types.ts'
+import type { Agent, ChatMessage, ChatRunSummary, ConversationSummary } from './types.ts'
 import { attachmentsPreview } from './attachments.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
@@ -53,29 +53,17 @@ export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null 
   return !!last && last.role === 'assistant' && last.error === true
 }
 
-/** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
-const RUN_ENDED: Partial<Record<ScriptRunStatus, string>> = { failed: 'failed', timed_out: 'timed out', stopped: 'stopped', denied: 'denied', undone: 'undone' }
-
 /**
- * A run message's preview when its content is empty (older messages): the same words as BE 3a70c34's
- * runMessageContent(), e.g. "Running report.py", "Ran report.py (failed)", "Undid report.py".
- * The message's own content (BE fills it from the summary) wins whenever it has any, shown as is.
+ * A run message's preview when its content is empty (older messages only): a minimal "Ran report.py"
+ * / "Undo of report.py" from the summary's name (scriptName, else name). BE 3a70c34 fills `content`
+ * from runMessageContent(); whenever it has any, previewText shows it as is.
  */
-export function runPreview(run: Pick<ChatRunSummary, 'kind' | 'name' | 'scriptName' | 'status'> | undefined): string {
+export function runPreview(run: Pick<ChatRunSummary, 'kind' | 'name' | 'scriptName'> | undefined): string {
   const name = run?.scriptName?.trim() || run?.name?.trim() || 'script'
-  if (!run) return `Ran ${name}`
-  const active = run.status === 'queued' || run.status === 'running' || run.status === 'waiting_permission'
-  if (run.kind === 'undo') {
-    if (run.status === 'succeeded') return `Undid ${name}`
-    if (active) return `Undoing ${name}`
-    return `Undo of ${name} (${RUN_ENDED[run.status] ?? run.status})`
-  }
-  if (run.status === 'queued') return `Queued ${name}`
-  if (active) return `Running ${name}`
-  const ended = RUN_ENDED[run.status]
-  return ended ? `Ran ${name} (${ended})` : `Ran ${name}`
+  return run?.kind === 'undo' ? `Undo of ${name}` : `Ran ${name}`
 }
 
+/** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
 export function previewText(
   last: (Pick<ChatMessage, 'role' | 'content' | 'error'> & Partial<Pick<ChatMessage, 'kind' | 'scriptRun'>> & { attachments?: readonly { name: string }[] }) | null | undefined,
   max = 80,

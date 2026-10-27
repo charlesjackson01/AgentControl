@@ -20,13 +20,20 @@ Layout: `/bot/workspace` (rw, workdir), `/bot/shared` and `/bot/skills` (ro moun
   Builds, then smoke-runs each image read-only, no network, cap-drop ALL, checking uid 1000 + python3 + node (+ Chromium launch).
   `--connection podman-machine-default` is refused.
 * Real build test: `AC_VM_TESTS=1 npx vitest run src/vm-images.test.ts` (needs Podman or Docker; skipped otherwise; `PODMAN_ARGS` is passed through).
-  Passed on the dev box (Podman 5.4.2 rootless, crun, linux/amd64) on 2026-10-27: botvm 430.7 MB, botvm-browser 1343.3 MB (includes botvm;
-  Chromium 403 MB, no headless shell; it was 1628.7 MB with the 273 MB headless shell). That box does not enforce rootless cgroup limits,
+  Passed on the dev box (Podman 5.4.2 rootless, crun, linux/amd64) on 2026-10-27: botvm 430.7 MB, botvm-browser 1343.4 MB (includes botvm;
+  Chromium 403 MB; the headless-shell path is a 15 kB link layer; it was 1628.7 MB with the real 273 MB headless shell; bare and channel launches pass from Python and Node). That box does not enforce rootless cgroup limits,
   so this test checks no limits.
-* Launching Chromium: the browser image installs full Chromium only (`playwright install --with-deps --no-shell chromium`), so always launch
-  with `channel: 'chromium'` (full Chromium in the new headless mode) and `--no-sandbox` (the container is the sandbox):
+* Launching Chromium: the browser image installs full Chromium only (`playwright install --with-deps --no-shell chromium`).
+  Recommended launch: `channel: 'chromium'` (full Chromium in the new headless mode) and `--no-sandbox` (the container is the sandbox):
   Node `chromium.launch({ channel: 'chromium', headless: true, args: ['--no-sandbox'] })` (`CHROMIUM_LAUNCH_OPTIONS` in `src/vm-images.ts`),
-  Python `p.chromium.launch(channel="chromium", headless=True, args=["--no-sandbox"])`. Without `channel` Playwright looks for
-  `chromium_headless_shell-*` and fails with "Executable doesn't exist". The build smoke checks there is no headless shell and launches this way.
+  Python `p.chromium.launch(channel="chromium", headless=True, args=["--no-sandbox"])`.
+  A bare `chromium.launch()` (what bot-written scripts usually do) works too: Playwright's default headless browser is the headless shell,
+  and `images/botvm-browser/link-headless-shell.sh` makes its path (`chromium_headless_shell-<rev>/chrome-headless-shell-linux*/chrome-headless-shell`)
+  a relative symlink to the full `chromium-<rev>/chrome-linux*/chrome`, with the install markers. Playwright passes plain `--headless`,
+  which full Chromium runs as the new headless mode (user agent `HeadlessChrome/<ver>`), and adds `--no-sandbox` by default.
+  The link costs nothing in size. `headless: false` needs a display, which bot containers do not have.
+  The build smoke checks the link, then launches from Python and from Node both bare and with `channel`, requiring a HeadlessChrome UA.
+  The `@vm` test also runs a bare `launch()` from both as uid 1000 with no network (data: URL and about:blank).
+  Bot-facing wording for this is `BROWSER_LAUNCH_NOTE` in `src/vm-images.ts` (for the `run_script` browser description and `browser-basics`).
 * apt inside the images uses HTTPS mirrors with SRV lookups off and retries (`/etc/apt/apt.conf.d/80-agentcontrol`), set in botvm and inherited.
 * RUN steps are POSIX sh: Podman's default OCI format ignores `SHELL`, so there is none.

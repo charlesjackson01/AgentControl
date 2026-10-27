@@ -356,13 +356,15 @@ export function addedByName(addedBy: string | undefined, agents: readonly AgentL
  * Researcher · 3 KB", Open in this group's Shared files at shared/x.md); any other path is the
  * author's own folder ("Researcher's folder · workspace · 3 KB", Open in the author's chat).
  */
-export function groupFileCard(path: string, authorName: string, size: string | null): { inGroup: boolean; path: string; meta: string } {
+export function groupFileCard(path: string, authorName: string, size: string | null, change?: 'added' | 'modified' | 'deleted'): { inGroup: boolean; path: string; meta: string } {
+  // Phase 2: a run can delete files; say so instead of "added by" (GAP-P2-FILE: no mockup yet).
+  const deleted = change === 'deleted'
   if (path.startsWith('group:')) {
     const rel = path.slice('group:'.length)
-    return { inGroup: true, path: rel, meta: ['Group folder', `added by ${authorName}`, size].filter(Boolean).join(' · ') }
+    return { inGroup: true, path: rel, meta: ['Group folder', deleted ? `deleted by ${authorName}` : `added by ${authorName}`, deleted ? null : size].filter(Boolean).join(' · ') }
   }
   const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
-  return { inGroup: false, path, meta: [`${authorName}'s folder`, dir, size].filter(Boolean).join(' · ') }
+  return { inGroup: false, path, meta: [`${authorName}'s folder`, dir, deleted ? 'deleted' : size].filter(Boolean).join(' · ') }
 }
 
 /* ---------- panel tabs and URL ---------- */

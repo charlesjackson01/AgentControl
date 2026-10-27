@@ -1,6 +1,7 @@
 import { MAX_AVATAR_BYTES } from './types'
 import type { EndpointTestResult } from './endpoint-proxy'
 import { DEFAULT_ERROR_MESSAGE, errorMessageFrom } from './api-error'
+import { createVmApi } from './vm-api'
 import { normalizeSkillsResponse, skillPath, type SkillsResponse } from './skills-catalog'
 import { CONVERSATION_PAGE_SIZE, MAX_CONVERSATION_PAGE_SIZE, type ConversationSendResult, type ChatMessagePage, type ConversationMessagesResponse, type ConversationSummary, type GroupCreateInput, type GroupPatch, type GroupSendResult, type GroupSummary } from './types'
 import type { SkillSummary } from './types'
@@ -18,11 +19,14 @@ import type { Agent, AgentInput, Attachment, AgentRun, AgentRunInput, AgentStatu
 
 export class ApiError extends Error {
   status: number
+  /** The parsed JSON error body, when there was one (Phase 2: 409 UndoConflict / 410 UndoGone carry `reason`). */
+  body?: unknown
 
-  constructor(message: string, status = 500) {
+  constructor(message: string, status = 500, body?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    if (body !== undefined) this.body = body
   }
 }
 
@@ -49,12 +53,26 @@ const API_BASE = import.meta.env.VITE_API_BASE ?? ''
  */
 const AUTH_TOKEN = import.meta.env.VITE_AUTH_TOKEN
 
+/** The auth header (when VITE_AUTH_TOKEN is set), for requests that don't go through `request` (the live-events stream). */
+export function authHeaders(): Record<string, string> {
+  return AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}
+}
+
+async function failure(res: Response): Promise<ApiError> {
+  let message = DEFAULT_ERROR_MESSAGE
+  let body: unknown
+  try {
+    body = await res.json()
+    message = errorMessageFrom(body)
+  } catch {
+    // Non-JSON error body (e.g. upstream gateway HTML): keep the default.
+  }
+  return new ApiError(message, res.status, body)
+}
+
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // Merge existing request headers, auth header, and the JSON content type.
-  const headers: Record<string, string> = {}
-  if (AUTH_TOKEN) {
-    headers.Authorization = `Bearer ${AUTH_TOKEN}`
-  }
+  const headers: Record<string, string> = authHeaders()
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
@@ -65,16 +83,15 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   // Deletes answer 204 with no body.
   if (res.status === 204) return undefined as T
-  if (!res.ok) {
-    let message = DEFAULT_ERROR_MESSAGE
-    try {
-      message = errorMessageFrom(await res.json())
-    } catch {
-      // Non-JSON error body (e.g. upstream gateway HTML): keep the default.
-    }
-    throw new ApiError(message, res.status)
-  }
+  if (!res.ok) throw await failure(res)
   return (await res.json()) as T
+}
+
+/** Phase 2: a plain-text body (GET /api/runs/:runId/output). */
+export async function requestText(path: string, init?: RequestInit): Promise<string> {
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...authHeaders(), ...init?.headers } })
+  if (!res.ok) throw await failure(res)
+  return res.text()
 }
 
 /** Strip trailing slashes so `${baseUrl}/v1/models` never doubles up. */
@@ -190,6 +207,9 @@ function uploadAvatar(agentId: string, file: Blob): Promise<Agent> {
    -------------------------------------------------------------------------- */
 
 export const api = {
+  /** Phase 2 (FE-P2-1): bot VMs, script runs, undo and the global VM routes. */
+  vm: createVmApi(request, requestText),
+
   async listConversations(): Promise<ConversationSummary[]> {
     return request<ConversationSummary[]>('/api/conversations')
   },

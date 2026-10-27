@@ -236,6 +236,11 @@ describe('group files and memory owners', () => {
     assert.deepEqual(groupFileCard('group:shared/pier.md', 'Researcher', '3 KB'), { inGroup: true, path: 'shared/pier.md', meta: 'Group folder · added by Researcher · 3 KB' })
     assert.deepEqual(groupFileCard('workspace/out.csv', 'Researcher', null), { inGroup: false, path: 'workspace/out.csv', meta: "Researcher's folder · workspace" })
   })
+  it("file cards: a Phase 2 'deleted' file says so instead of 'added by'", () => {
+    assert.deepEqual(groupFileCard('group:shared/pier.md', 'Researcher', '3 KB', 'deleted'), { inGroup: true, path: 'shared/pier.md', meta: 'Group folder · deleted by Researcher' })
+    assert.deepEqual(groupFileCard('workspace/out.csv', 'Researcher', '1 KB', 'deleted'), { inGroup: false, path: 'workspace/out.csv', meta: "Researcher's folder · workspace · deleted" })
+    assert.equal(groupFileCard('workspace/out.csv', 'Researcher', '1 KB', 'modified').meta, "Researcher's folder · workspace · 1 KB")
+  })
   it('routes to /api/groups/:id', async () => {
     const calls = []
     const req = async (path, init) => (calls.push([path, init?.method ?? 'GET']), { entries: [], items: [], total: 0 })

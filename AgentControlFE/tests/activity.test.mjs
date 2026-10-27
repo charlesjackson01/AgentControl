@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { readFileSync } from 'node:fs'
-import { MAX_STEPS, activityLabel, activityView, fileOpenPath, stepVerb } from '../src/lib/activity.ts'
+import { MAX_STEPS, activityLabel, activityView, canOpenFile, fileOpenPath, stepVerb } from '../src/lib/activity.ts'
 
 const mockup04 = {
   skills: [{ id: 'obra/systematic-debugging', name: 'systematic-debugging', source: 'obra/superpowers' }],
@@ -79,7 +79,7 @@ describe('activity card: empty or missing activity hides it', () => {
     it(`${name} → null`, () => assert.equal(activityView(a), null))
   }
   it('only malformed entries → null', () => {
-    assert.equal(activityView({ skills: [{ id: 1 }], steps: [{ tool: 'x' }], filesChanged: [{ path: 'a', change: 'deleted' }] }), null)
+    assert.equal(activityView({ skills: [{ id: 1 }], steps: [{ tool: 'x' }], filesChanged: [{ path: 'a', change: 'renamed' }] }), null) // Phase 2: 'deleted' is valid now (see below)
   })
 })
 
@@ -178,3 +178,20 @@ describe('activity card: component wiring', () => {
     assert.match(chat, /activityView\(m\.activity, undefined, \(m\.runId && runFiles\[m\.runId\]\) \|\| null\)/)
   })
 })
+
+describe("file cards: Phase 2 'deleted' (BE-P2-1)", () => {
+  const now = new Date('2026-10-27T12:00:00Z')
+  it('keeps a deleted file with "folder · deleted" and nothing to open', () => {
+    const v = activityView({ skills: [], steps: [], filesChanged: [
+      { path: 'workspace/old.csv', change: 'deleted', bytes: 10, modifiedAt: '2026-10-27T11:59:00Z' },
+      { path: 'workspace/new.csv', change: 'added', bytes: 2048 },
+    ] }, now)
+    assert.deepEqual(v.files[0], { path: 'workspace/old.csv', name: 'old.csv', dir: 'workspace', change: 'deleted', changeLabel: 'deleted', size: null, updated: null, meta: 'workspace · deleted' })
+    assert.equal(canOpenFile(v.files[0]), false)
+    assert.equal(canOpenFile(v.files[1]), true)
+  })
+  it('still drops unknown change kinds', () => {
+    assert.equal(activityView({ skills: [], steps: [], filesChanged: [{ path: 'x', change: 'renamed' }] }), null)
+  })
+})
+

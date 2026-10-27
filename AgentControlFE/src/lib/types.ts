@@ -206,8 +206,11 @@ export type AgentRun = {
   projectId?: string
 }
 
-/** BE-3: one file a run wrote; `bytes`/`modifiedAt` (ISO) are the file after the write (optional on old runs). */
-export type FileChange = { path: string; change: 'added' | 'modified'; bytes?: number; modifiedAt?: string }
+/**
+ * BE-3: one file a run wrote; `bytes`/`modifiedAt` (ISO) are the file after the write (optional on old runs).
+ * Phase 2 (BE-P2-1): script runs and undo also report 'deleted' (bytes/modifiedAt then absent).
+ */
+export type FileChange = { path: string; change: 'added' | 'modified' | 'deleted'; bytes?: number; modifiedAt?: string }
 
 /**
  * How one attached skill went into a run's system prompt. 'catalog' (BE-7): one
@@ -314,6 +317,8 @@ export type Agent = {
   internetPolicy?: InternetPolicy
   /** "Learn from chat" toggle (BE-1/BE-4); default true. */
   memoryLearn?: boolean
+  /** Phase 2 (BE-P2-1): the bot's VM settings. The BE always sends it; optional here so a Phase 1 BE still type-checks. */
+  vm?: AgentVm
 }
 
 /** Everything the create/edit form owns. */
@@ -364,6 +369,8 @@ export type MessageActivity = {
   filesChanged: FileChange[]
 }
 
+export type ChatMessageKind = 'message' | 'system' | 'run' | 'permission'
+
 /** One message in a chat-first conversation (independent of run pruning). */
 export type ChatMessage = {
   id: string
@@ -375,8 +382,18 @@ export type ChatMessage = {
   runId?: string
   /** Assistant message stored for a failed run; `content` is the error text (BE fix/chat-error-flag). */
   error?: true
-  /** 'system' = "You created Harbor team…" lines (BE-5). */
-  kind?: 'message' | 'system'
+  /**
+   * 'system' = "You created Harbor team…" lines (BE-5). Absent = 'message'.
+   * Phase 2 (BE-P2-1): 'run' is a script-run card (scriptRunId + scriptRun), 'permission' an
+   * internet or browser request card (permissionRequestId). Both are role 'assistant' with authorAgentId.
+   */
+  kind?: ChatMessageKind
+  /** kind 'run': the ScriptRun this card shows (full run: GET /api/runs/:runId). */
+  scriptRunId?: string
+  /** kind 'run': a small summary kept in step with the run (also pushed as run.updated). */
+  scriptRun?: ChatRunSummary
+  /** kind 'permission': the PermissionRequest this card shows. */
+  permissionRequestId?: string
   /** Set on assistant messages (required in groups, BE-5). */
   authorAgentId?: string
   /** BE-5 d5e5a99: on the lead's reply, the @mentioned bots the 4-reply cap left out, in mention order (absent when none). */
@@ -517,3 +534,309 @@ export type FileListing = {
    */
   totalFiles?: number
 }
+
+/*
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ 6e4291b (BE-P2-1), section "Phase 2",
+ * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
+ * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
+ */
+/* ───────────────────────── Phase 2: bot VMs, script runs, undo, permissions (BE-P2-1) ───────────────────────── */
+
+/** Per-run limits, fixed in Phase 2 (PATCHing them returns 400). */
+export const VM_LIMITS = { memoryMb: 4096, personalDiskMb: 10240, cpus: 2, timeoutSec: 600, pids: 256, outputMb: 200 } as const
+export type VmLimits = typeof VM_LIMITS
+/** Each group's shared/ folder: 10 GB, counted once (not against members). */
+export const GROUP_SHARED_QUOTA_MB = 10240
+/** Mac/Windows shared machine `agentcontrol` (decision 2). */
+export const VM_MACHINE_DEFAULTS = { name: 'agentcontrol', memoryMb: 6144, cpus: 4, initialDiskGb: 60 } as const
+/** Undo retention (decision 3): a snapshot is eligible while in the bot's last 20 runs OR under 7 days old. */
+export const UNDO_RETENTION = { runs: 20, days: 7 } as const
+/** Machine free-space floor below which new runs are blocked. */
+export const RUN_BLOCK_FREE_MB = 3072
+/** Env var names a bot may not set. Matched case-insensitively; any name starting AC_ is reserved too. */
+export const RESERVED_ENV_NAMES: readonly string[] = ['PATH', 'HOME', 'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY']
+export const RESERVED_ENV_PREFIX = 'AC_'
+/** Env var names: POSIX-ish, 1–64 chars. Values up to 4096 chars; at most 50 vars per bot. */
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
+export const MAX_ENV_VARS = 50
+export const MAX_ENV_VALUE_CHARS = 4096
+
+/** gVisor mode for one bot; 'inherit' follows the global mode. */
+export type RuntimeMode = 'inherit' | 'force_on' | 'force_off'
+export const RUNTIME_MODES: readonly RuntimeMode[] = ['inherit', 'force_on', 'force_off']
+export type GlobalRuntimeMode = 'auto' | 'force_on' | 'force_off'
+export const GLOBAL_RUNTIME_MODES: readonly GlobalRuntimeMode[] = ['auto', 'force_on', 'force_off']
+export type ContainerRuntime = 'runsc' | 'crun' | 'runc'
+export type RuntimeStatus = 'active' | 'not_installed' | 'incompatible_fallback' | 'forced_off' | 'required_unavailable'
+
+/** One non-secret env var, injected on every run. */
+export interface EnvVar {
+  name: string
+  value: string
+}
+
+/** The bot's installed-tool manifest (refreshed after a run changes ~/.local or /opt/bot). */
+export interface ToolManifest {
+  pip: string[]
+  npm: string[]
+  optBin: string[]
+  updatedAt: string
+}
+
+/** Agent.vm: stored per bot. */
+export interface AgentVm {
+  /** Browser (Playwright) permission. Default false; only the user can turn it on. */
+  permissions: { browser: boolean }
+  gvisor: RuntimeMode
+  env: EnvVar[]
+  /** apt packages; source of truth for the bot image layer. */
+  packages: string[]
+  image: { generation: number; previous?: number; builtAt?: string; base: 'base' | 'browser' }
+  tools?: ToolManifest
+  /** Reserved for a future LAN/Tailscale allow-list; always [] in Phase 2 (PATCH → 400). */
+  egress: { allow: [] }
+}
+
+export type VmState = 'not_setup' | 'stopped' | 'starting' | 'running' | 'error' | 'files_missing'
+export type BrowserState = 'absent' | 'downloading' | 'ready' | 'error'
+export type SnapshotDriver = 'reflink' | 'overlay' | 'copy'
+export type StorageBackendKind = 'local' | 'wsl'
+
+export type ScriptRunStatus = 'queued' | 'waiting_permission' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'stopped' | 'denied' | 'undone'
+export const SCRIPT_RUN_ACTIVE: readonly ScriptRunStatus[] = ['queued', 'waiting_permission', 'running']
+export type ScriptRunKind = 'script' | 'tool_build' | 'undo'
+export type UndoUnavailableReason = 'expired' | 'budget_bot' | 'budget_global' | 'low_disk' | 'too_large' | 'machine_restored'
+export const UNDO_UNAVAILABLE_REASONS: readonly UndoUnavailableReason[] = ['expired', 'budget_bot', 'budget_global', 'low_disk', 'too_large', 'machine_restored']
+
+export interface ScriptRunUndo {
+  /** 'available' while the snapshot is kept, 'unavailable' once evicted (with reason), 'done' after an undo. */
+  state: 'available' | 'unavailable' | 'done'
+  reason?: UndoUnavailableReason
+  /** When it became unavailable or was undone. */
+  at?: string
+  /** state 'done': the undo run that reversed this one. */
+  undoRunId?: string
+}
+
+export type PermissionType = 'internet' | 'browser'
+/** internet: allow_once | always | deny. browser: enable | deny. */
+export type PermissionDecision = 'allow_once' | 'always' | 'enable' | 'deny'
+
+/** One script run, tool build or undo (data/runs/<slug>/<runId>.json). Separate from AgentRun (a model turn). */
+export interface ScriptRun {
+  id: string
+  agentId: string
+  conversationId: string
+  /** The chat message (kind 'run') that shows this card. */
+  messageId?: string
+  /** The model turn (AgentRun) that called run_script. */
+  agentRunId?: string
+  context: 'dm' | 'group'
+  groupId?: string
+  skillId?: string
+  kind: ScriptRunKind
+  argv: string[]
+  /** Inline script body, when the model sent one instead of argv. */
+  script?: string
+  /** Relative to /bot (e.g. "workspace" or "groups/<slug>"). */
+  cwd: string
+  why?: string
+  network: 'off' | 'on'
+  browser: boolean
+  /** null until resolved (queued runs, or a run that failed before start). */
+  runtime: ContainerRuntime | null
+  permissions: { requestId: string; type: PermissionType; decision: PermissionDecision | 'timeout' | 'pending' }[]
+  status: ScriptRunStatus
+  /** status 'queued': runs ahead of this one on the machine (0 = next). */
+  queuePosition?: number
+  exitCode?: number
+  /** Plain-language reason for failed / denied / timed_out / stopped. */
+  error?: string
+  queuedAt: string
+  startedAt?: string
+  endedAt?: string
+  durationMs?: number
+  peakMemoryMb?: number
+  /** Last 64 KB of each stream (the model gets the last 8 KB). */
+  stdoutTail: string
+  stderrTail: string
+  outputBytes: number
+  /** True when output passed the 200 MB cap and was cut. */
+  outputTruncated?: boolean
+  filesChanged: FileChange[]
+  hostsContacted?: { host: string; count: number; blocked: boolean }[]
+  snapshot: { id: string; driver: SnapshotDriver; retainedBytes: number } | null
+  undo: ScriptRunUndo
+  /** kind 'undo': the run it reversed. */
+  undoOfRunId?: string
+}
+
+/** Run history row (GET /api/agents/:id/runs and VmInfo.runs). */
+export type ScriptRunSummary = Pick<ScriptRun,
+  'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId'
+> & { filesChangedCount: number; groupId?: string }
+
+/** The small run summary a kind 'run' ChatMessage carries. */
+export interface ChatRunSummary {
+  status: ScriptRunStatus
+  kind: ScriptRunKind
+  /** Skill name, else the script's file name (argv[1] or argv[0]), else "script". */
+  name: string
+  files: { added: number; modified: number; deleted: number }
+  undo: ScriptRunUndo
+  queuePosition?: number
+  exitCode?: number
+}
+
+export interface PermissionRequest {
+  id: string
+  runId: string
+  agentId: string
+  conversationId: string
+  /** The chat message (kind 'permission') that shows this card. */
+  messageId?: string
+  type: PermissionType
+  hosts?: string[]
+  why?: string
+  status: 'pending' | 'allowed_once' | 'always' | 'enabled' | 'denied' | 'timeout'
+  createdAt: string
+  /** createdAt + 10 min; after that it resolves as 'timeout' (= deny). */
+  expiresAt: string
+  resolvedAt?: string
+}
+export const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000
+
+/** GET /api/agents/:id/vm (and the /sandbox alias for one release). */
+export interface VmInfo {
+  agentId: string
+  state: VmState
+  stateMessage?: string
+  host: { engine: 'podman' | 'docker' | null; provider: string; machine?: string }
+  runtime: {
+    effective: ContainerRuntime | null
+    status: RuntimeStatus
+    /** Failing probe check, or why it's required but unavailable. */
+    reason?: string
+    checkedAt?: string
+    mode: RuntimeMode
+    globalMode: GlobalRuntimeMode
+  }
+  internetPolicy: InternetPolicy
+  permissions: { browser: boolean; browserState: BrowserState; /** 0–1 while downloading */ progress?: number }
+  limits: VmLimits
+  usage: {
+    memoryMb: number
+    personalBytes: number
+    personalQuotaBytes: number
+    breakdown: { workspace: number; inputs: number; memory: number; tools: number; opt: number; imageLayer: number }
+    snapshots: { bytes: number; budgetBytes: number; runsWithUndo: number }
+  }
+  env: EnvVar[]
+  packages: string[]
+  tools?: ToolManifest
+  image: AgentVm['image']
+  idleStopAt?: string
+  storage: { backend: StorageBackendKind; driver: SnapshotDriver | null; location: string; lastBackupAt?: string; explorerPath?: string }
+  /** Isolation note, e.g. when the host falls back to --userns keep-id. */
+  isolationNote?: string
+  /** Newest first, at most 50 (older via GET /api/agents/:id/runs?before=). */
+  runs: ScriptRunSummary[]
+}
+
+/** PATCH /api/agents/:id/vm body. Unknown keys, `limits` and `egress` → 400. */
+export interface VmPatch {
+  internetPolicy?: InternetPolicy
+  permissions?: { browser?: boolean }
+  gvisor?: RuntimeMode
+  /** Replaces the whole list. */
+  env?: EnvVar[]
+}
+
+/** Global VM settings (settings.vm). GET/PATCH /api/vm/settings serves all but volumeId and machine. */
+export interface VmSettings {
+  gvisor: GlobalRuntimeMode
+  backups: { enabled: boolean; /** "HH:MM" local */ time: string; keep: number }
+  snapshotBudget: { perBotMb: number; globalMb: number; freeFloorMb: number }
+  /** Server-only: the Windows data volume marker. */
+  volumeId?: string
+  /** Server-only: the managed machine disk budget (grows on demand). */
+  machine?: { diskGb: number }
+}
+export type VmSettingsView = Omit<VmSettings, 'volumeId' | 'machine'>
+export type VmSettingsPatch = { gvisor?: GlobalRuntimeMode; backups?: Partial<VmSettings['backups']>; snapshotBudget?: Partial<VmSettings['snapshotBudget']> }
+/** Allowed bounds for PATCH /api/vm/settings snapshotBudget (MB) and backups.keep. */
+export const SNAPSHOT_BUDGET_BOUNDS = {
+  perBotMb: { min: 256, max: 20480 },
+  globalMb: { min: 1024, max: 204800 },
+  freeFloorMb: { min: 3072, max: 51200 },
+} as const
+export const BACKUP_KEEP_BOUNDS = { min: 1, max: 30 } as const
+
+/** GET /api/vm/host. */
+export interface VmHostInfo {
+  engine: 'podman' | 'docker' | null
+  version: string | null
+  /** e.g. 'native', 'libkrun', 'applehv', 'wsl', 'hyperv'. */
+  provider: string
+  os: 'linux' | 'darwin' | 'win32'
+  machine: { name: 'agentcontrol'; state: 'running' | 'stopped' | 'missing' | 'starting' | 'error'; memoryMb: number; cpus: number; diskGb: number; diskUsedGb: number; growOffer?: { toGb: number } } | null
+  storage: { driver: SnapshotDriver | null; backend: StorageBackendKind; volumeState: 'ok' | 'missing' | 'mismatch' }
+  /** Max concurrent runs on this host (1 on Mac/Windows; the Linux formula). */
+  concurrency: number
+  /** Plain-language setup steps still to do (e.g. "Install Podman"); [] when ready. */
+  setupSteps: { id: string; text: string; done: boolean; helpUrl?: string }[]
+}
+
+/** GET /api/runs/:runId/undo/preview. */
+export interface UndoPreview {
+  runId: string
+  /** What undo would do: added → deleted, modified/deleted → restored. */
+  changes: { path: string; action: 'delete' | 'restore'; root: 'agent' | 'group'; groupId?: string }[]
+  /** Files changed since the run (by a later run or the user). Undo without force → 409. */
+  conflicts: { path: string; root: 'agent' | 'group'; groupId?: string }[]
+  /** Shown in the dialog: undo never reverses internet side effects or installed tools. */
+  caveats: ('internet' | 'tools')[]
+}
+/** POST /api/runs/:runId/undo body. force: overwrite conflicting files ("Undo anyway"). */
+export interface UndoRequest {
+  force?: boolean
+}
+/** POST /api/runs/:runId/undo 200: the undo run (kind 'undo') that reversed it. */
+export interface UndoResult {
+  run: ScriptRun
+  undoRun: ScriptRun
+}
+/** 409 body: the bot has an active run, or there are conflicts and force wasn't set. */
+export interface UndoConflict {
+  error: string
+  reason: 'run_active' | 'conflicts'
+  conflicts?: UndoPreview['conflicts']
+}
+/** 410 body when the snapshot is gone. */
+export interface UndoGone {
+  error: string
+  reason: UndoUnavailableReason
+}
+
+/**
+ * Phase 2 live events: GET /api/events (text/event-stream; new, Phase 1 had none).
+ * - Each frame: `id: <n>` (monotonic integer as a string), `event: <type>`, `data: <LiveEvent JSON>`.
+ * - Reconnect with `Last-Event-ID: <n>` (or ?lastEventId=) to replay newer events from a ring of the
+ *   last 1000; if <n> is older than the ring the first frame is `event: reset` (data {}), meaning
+ *   re-fetch active runs, pending requests and VM info.
+ * - Heartbeat: a `: ping` comment line every 15 s. `retry: 3000` is sent once on connect.
+ * - Optional filters: ?conversationId=… and/or ?agentId=… (vm.updated matches agentId).
+ */
+export type LiveEventType = LiveEvent['type']
+export interface LiveEventFrame {
+  id: string
+  event: LiveEvent
+}
+export const LIVE_EVENT_HEARTBEAT_MS = 15_000
+export const LIVE_EVENT_REPLAY = 1000
+export type LiveEvent =
+  | { type: 'run.updated'; conversationId: string; run: ScriptRun; messageId?: string; summary: ChatRunSummary }
+  | { type: 'run.output'; conversationId: string; runId: string; stream: 'stdout' | 'stderr'; chunk: string }
+  | { type: 'permission.requested'; conversationId: string; request: PermissionRequest }
+  | { type: 'permission.resolved'; conversationId: string; request: PermissionRequest }
+  | { type: 'vm.updated'; agentId: string; vm: VmInfo }

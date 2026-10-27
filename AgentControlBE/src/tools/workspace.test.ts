@@ -1,3 +1,4 @@
+import { defaultAgentVm } from '../vm-defaults.js'
 // Registry facade first: it must load standalone (see registry.test.ts).
 import { executeToolCall } from '../tools.js'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -97,6 +98,7 @@ function makeAgent(partial: Partial<Agent> & { id: string; name: string }): Agen
     slug: partial.id,
     internetPolicy: 'ask',
     memoryLearn: true,
+    vm: defaultAgentVm(),
     ...partial,
   }
 }

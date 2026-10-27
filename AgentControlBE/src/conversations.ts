@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AgentRun, AgentStatus, Attachment, ChatMessage, Conversation, ConversationSummary, DmConversation, GroupConversation, MessageActivity } from './shared/types.js'
+import type { AgentRun, AgentStatus, Attachment, ChatMessage, Conversation, ConversationSummary, DmConversation, FileChange, GroupConversation, MessageActivity } from './shared/types.js'
 
 /** BE-5: which agent is writing a group reply right now, by conversation id (in memory only). */
 export const groupTyping = new Map<string, string>()
@@ -212,10 +212,10 @@ function withActivity(raw: unknown): { activity?: MessageActivity } {
   const steps = arr(raw.steps).filter((x) => strs(x, ['tool', 'summary']) && typeof x.ok === 'boolean')
     .slice(0, 20)
     .map((x) => ({ tool: x.tool as string, summary: x.summary as string, ok: x.ok as boolean, ...(typeof x.path === 'string' ? { path: x.path } : {}) }))
-  const filesChanged = arr(raw.filesChanged).filter((x) => typeof x.path === 'string' && (x.change === 'added' || x.change === 'modified'))
+  const filesChanged = arr(raw.filesChanged).filter((x) => typeof x.path === 'string' && (x.change === 'added' || x.change === 'modified' || x.change === 'deleted'))
     .map((x) => ({
       path: x.path as string,
-      change: x.change as 'added' | 'modified',
+      change: x.change as FileChange['change'],
       ...(typeof x.bytes === 'number' && Number.isFinite(x.bytes) && x.bytes >= 0 ? { bytes: x.bytes } : {}),
       ...(typeof x.modifiedAt === 'string' && !Number.isNaN(Date.parse(x.modifiedAt)) ? { modifiedAt: x.modifiedAt } : {}),
     }))
@@ -242,6 +242,11 @@ export function normalizeChatMessages(raw: unknown, conversationIds: Set<string>
           ...(typeof m.runId === 'string' ? { runId: m.runId } : {}),
           ...(m.error === true ? { error: true as const } : {}),
           ...(m.kind === 'system' || m.kind === 'message' ? { kind: m.kind } : {}),
+          // Phase 2 cards keep their kind only with the id they point at.
+          ...(m.kind === 'run' && typeof m.scriptRunId === 'string'
+            ? { kind: 'run' as const, scriptRunId: m.scriptRunId, ...(m.scriptRun && typeof m.scriptRun === 'object' && typeof m.scriptRun.status === 'string' ? { scriptRun: structuredClone(m.scriptRun) } : {}) }
+            : {}),
+          ...(m.kind === 'permission' && typeof m.permissionRequestId === 'string' ? { kind: 'permission' as const, permissionRequestId: m.permissionRequestId } : {}),
           ...(typeof m.authorAgentId === 'string' ? { authorAgentId: m.authorAgentId } : {}),
           ...(Array.isArray(m.skippedAgentIds) && m.skippedAgentIds.length > 0 && m.skippedAgentIds.every((id) => typeof id === 'string')
             ? { skippedAgentIds: [...m.skippedAgentIds] } : {}),

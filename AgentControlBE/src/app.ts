@@ -1,3 +1,4 @@
+import { defaultAgentVm } from './vm-defaults.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
@@ -45,6 +46,7 @@ import {
   type SkillSourceInfo,
   type SkillTool,
   SKILL_SOURCE_IDS,
+  type WorkspaceSettings,
 } from './shared/types.js'
 import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
 
@@ -285,6 +287,11 @@ function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
 }
 
 /** Apply an AgentInput onto an agent: null clears color/avatar, omitted keeps them. */
+/** GET/PATCH /api/settings: the Phase 1 fields only (VM settings live at /api/vm/settings). */
+function publicSettings(s: WorkspaceSettings): WorkspaceSettings {
+  return { autoRun: s.autoRun, notify: s.notify, telemetry: s.telemetry }
+}
+
 function mergeAgent(current: Agent, input: AgentInput): Agent {
   const { color, avatar, temperature, ...rest } = input
   const next: Agent = { ...current, ...rest }
@@ -508,7 +515,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   }
   app.get('/api/archive/projects', async () => ({ files: store.meta.archive }))
 
-  app.get('/api/settings', async () => store.settings)
+  app.get('/api/settings', async () => publicSettings(store.settings))
 
   // Partial update; only known boolean fields.
   app.patch('/api/settings', async (request) => {
@@ -522,7 +529,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     store.settings = next
     store.save()
-    return store.settings
+    return publicSettings(store.settings)
   })
 
   app.get('/api/agents', async () => store.agents)
@@ -766,6 +773,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         slug: assignAgentSlug(input.name, isPrimary, new Set(store.agents.map((a) => a.slug))),
         internetPolicy: 'ask',
         memoryLearn: true,
+        vm: defaultAgentVm(),
         status: 'idle',
         createdAt: new Date().toISOString(),
         lastRunAt: null,

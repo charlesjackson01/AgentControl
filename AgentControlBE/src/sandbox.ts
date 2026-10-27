@@ -7,11 +7,12 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { botRoot, folderUsage } from './files.js'
 import { fail } from './http.js'
-import { INTERNET_POLICIES, MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES, type Agent, type InternetPolicy, type Skill } from './shared/types.js'
+import { VM_LIMITS, INTERNET_POLICIES, MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES, type Agent, type InternetPolicy, type Skill } from './shared/types.js'
 import { assignAgentSlug, type WorkspaceStore } from './store.js'
 import { chatCompletion } from './upstream.js'
 
-export const SANDBOX_LIMITS = { cpus: 2, memoryMb: 1024, timeoutSec: 60, pids: 256, outputMb: 200, diskQuotaMb: 500 } as const
+/** Phase 2 limits (BE-P2-1); same values as VM_LIMITS, in the Phase 1 /sandbox shape. */
+export const SANDBOX_LIMITS = { cpus: VM_LIMITS.cpus, memoryMb: VM_LIMITS.memoryMb, timeoutSec: VM_LIMITS.timeoutSec, pids: VM_LIMITS.pids, outputMb: VM_LIMITS.outputMb, diskQuotaMb: VM_LIMITS.personalDiskMb } as const
 export const VM_NOT_AVAILABLE = { status: 'not-available', phase: 2, message: 'Bot VM arrives in Phase 2' } as const
 
 export interface SandboxInfo {

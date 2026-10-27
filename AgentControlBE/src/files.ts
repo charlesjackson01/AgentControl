@@ -13,11 +13,13 @@ import type { Readable } from 'node:stream'
 import { archiveStamp } from './archive.js'
 import { fail } from './http.js'
 import type { Agent, FileEntry, FileListing, FileZone, Skill } from './shared/types.js'
+import { VM_LIMITS } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { skillFolder } from './tools/skills.js'
 import { archiveShares, moveShares, readShares, withShares } from './share-records.js'
 
-export const BOT_QUOTA_BYTES = 500 * 1024 * 1024
+/** Phase 2 (decision 1): 10 GB of personal data per bot; each group's shared/ gets its own 10 GB. */
+export const BOT_QUOTA_BYTES = VM_LIMITS.personalDiskMb * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 export const WRITABLE_ZONES = ['shared', 'workspace'] as const
 const ZONES = ['shared', 'workspace', 'memory', 'skills'] as const

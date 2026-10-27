@@ -238,7 +238,7 @@ describe('stored chat message activity across a reopen', () => {
       const activity = {
         skills: [{ id: 'superpowers/systematic-debugging', name: 'systematic-debugging', source: 'superpowers' }, { id: 7 }],
         steps: [{ tool: 'read_file', summary: 'Read notes.md', ok: true, path: 'notes.md' }, { tool: 'x' }],
-        filesChanged: [{ path: 'out.md', change: 'added' }, { path: 'bad.md', change: 'deleted' }],
+        filesChanged: [{ path: 'out.md', change: 'added' }, { path: 'bad.md', change: 'renamed' }],
       }
       const attachments = [
         { root: 'agent', path: 'docs/a.md', name: 'a.md', size: 12, mime: 'text/markdown' },

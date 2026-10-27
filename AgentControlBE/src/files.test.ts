@@ -119,7 +119,7 @@ describe('Files API', () => {
     expect(listing.entries.map((e) => [e.path, e.kind, e.zone])).toEqual([
       ['memory', 'dir', 'memory'], ['shared', 'dir', 'shared'], ['skills', 'dir', 'skills'], ['workspace', 'dir', 'workspace'], ['BOT.md', 'file', 'meta'],
     ])
-    expect(listing.usage.quotaBytes).toBe(500 * 1024 * 1024)
+    expect(listing.usage.quotaBytes).toBe(10240 * 1024 * 1024)
     expect(listing.usage.bytes).toBeGreaterThan(0)
     expect(res.body).not.toContain(dir)
   })

@@ -68,7 +68,7 @@ describe('GET/PATCH /api/agents/:id/sandbox', () => {
       limits: SANDBOX_LIMITS,
       runs: [],
     })
-    expect(body.limits).toEqual({ cpus: 2, memoryMb: 1024, timeoutSec: 60, pids: 256, outputMb: 200, diskQuotaMb: 500 })
+    expect(body.limits).toEqual({ cpus: 2, memoryMb: 4096, timeoutSec: 600, pids: 256, outputMb: 200, diskQuotaMb: 10240 })
     expect(body.usage.bytes).toBeGreaterThanOrEqual(1234)
     expect(JSON.stringify(body)).not.toContain(dir)
   })

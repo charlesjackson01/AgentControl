@@ -316,7 +316,7 @@ export default function ProfileTab({ agent, endpoints, onSaved, onClose, onClear
           <dt>Internet for scripts</dt>
           <dd>
             {INTERNET_POLICY_LABELS[internetPolicy]}
-            <span className="cf-kv__note">Change it in the Sandbox tab (FE-4).</span>
+            <span className="cf-kv__note">Change it in the VM tab.</span>
           </dd>
         </dl>
       </section>

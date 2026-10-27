@@ -282,9 +282,9 @@ function DraftCard({ nbs, onCreate, onOpenFull }: { nbs: NewBotState; onCreate: 
           </div>
         </div>
         <div>
-          <div className="cf-nb-lbl">Sandbox</div>
+          <div className="cf-nb-lbl">VM</div>
           <div className="cf-nb-sb">
-            Bot VM arrives in Phase 2. Scripts will write only to <span className="cf-mono">workspace/</span>.
+            Its own VM is set up on its first script run. Scripts write only to its own folder; see Settings › VM.
           </div>
         </div>
       </div>

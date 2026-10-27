@@ -8,9 +8,16 @@ import { chatPanelPath } from '../src/lib/commands.ts'
 const qs = (s) => new URLSearchParams(s)
 
 describe('settings tab routing (?panel=settings&tab=)', () => {
-  it('five tabs in 03a order; FE-4 owns files + sandbox', () => {
-    assert.deepEqual(SETTINGS_TABS.map((t) => t.id), ['profile', 'memory', 'skills', 'files', 'sandbox'])
-    assert.deepEqual(SETTINGS_TABS.filter((t) => t.owner === 'FE-4').map((t) => t.id), ['files', 'sandbox'])
+  it('five tabs in 03a order; FE-4 owns files, FE-P2-5 the VM tab (was Sandbox)', () => {
+    assert.deepEqual(SETTINGS_TABS.map((t) => t.id), ['profile', 'memory', 'skills', 'files', 'vm'])
+    assert.deepEqual(SETTINGS_TABS.filter((t) => t.owner === 'FE-4').map((t) => t.id), ['files'])
+    assert.deepEqual(SETTINGS_TABS.filter((t) => t.owner === 'FE-P2-5').map((t) => t.id), ['vm'])
+    assert.equal(SETTINGS_TABS.find((t) => t.id === 'vm').label, 'VM')
+    assert.deepEqual(SETTINGS_TABS.filter((t) => t.comingSoon), [], 'no comingSoon tab left')
+  })
+  it('FE-P2-5: ?tab=sandbox still opens the VM tab', () => {
+    assert.equal(settingsTab(qs('panel=settings&tab=sandbox')), 'vm')
+    assert.equal(settingsTab(qs('panel=settings&tab=vm')), 'vm')
   })
   it('open only with panel=settings; tab defaults to profile', () => {
     assert.equal(settingsOpen(qs('panel=settings')), true)

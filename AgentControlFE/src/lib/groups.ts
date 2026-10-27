@@ -382,7 +382,7 @@ type ParamsLike = { get(name: string): string | null }
 /**
  * Same URL keys as the bot panel: `?panel=settings&tab=members|memory|settings` and
  * `?panel=files&path=…` (Shared files). Bot tab names map over (profile -> members,
- * skills/sandbox -> members) so a deep link never lands nowhere.
+ * skills/vm/sandbox -> members) so a deep link never lands nowhere.
  */
 export function groupTab(params: ParamsLike): GroupTab {
   if (params.get('panel') === 'files') return 'files'

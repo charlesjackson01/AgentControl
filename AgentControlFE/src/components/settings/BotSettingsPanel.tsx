@@ -3,7 +3,7 @@ import Avatar from '../Avatar'
 import ProfileTab from './ProfileTab'
 import MemoryTab from './MemoryTab'
 import SkillsTab from './SkillsTab'
-import PlaceholderTab from './PlaceholderTab'
+import VmTab from './VmTab'
 import FilesTab from './FilesTab'
 import { saveAgentChange } from '../../lib/agent-patch'
 import { memoryApi, type MemoryLoad } from '../../lib/memory'
@@ -13,6 +13,8 @@ import type { SettingsTab } from '../../lib/commands'
 import type { Agent, Endpoint } from '../../lib/types'
 import { putRaw, request, serverMessage } from '../../lib/api'
 import { filesApi, filesTotal } from '../../lib/files'
+import { vmTabDot } from '../../lib/vm-tab'
+import { useLive } from '../../state/live-context'
 
 const memory = memoryApi(request)
 const files = filesApi(request, putRaw, serverMessage)
@@ -34,14 +36,17 @@ type Props = {
 
 /**
  * FE-3 bot settings: a 720 px right slide-over (03a–03e) with Profile, Memory,
- * Skills, Files and Sandbox tabs. The tab lives in the URL (`?panel=settings&tab=`);
- * Files and Sandbox are FE-4 placeholders.
+ * Skills, Files and VM tabs. The tab lives in the URL (`?panel=settings&tab=`;
+ * `tab=sandbox` still opens VM). VM is FE-P2-5.
  */
 export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTab, onClose, onSaved, onCleared, onDeleted, filesPath = 'shared', onFilesPath }: Props) {
   // The latest saved copy wins until the list reload catches up, so one tab's save
   // never resends another tab's stale fields.
   const [saved, setSaved] = useState<Agent | null>(null)
   const agent = saved && saved.id === fromList.id ? saved : fromList
+  const { state: live } = useLive()
+  // GAP-V10: ● running/starting, ! needs attention.
+  const vmDot = vmTabDot(live.vms[fromList.id])
   const [mem, setMem] = useState<MemoryLoad | null>(null)
   const [memAttempt, setMemAttempt] = useState(0)
   // GAP-F2: "Files N" = the whole folder's totalFiles from the latest listing (this root fetch,
@@ -115,13 +120,17 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
               aria-selected={tab === t.id}
               aria-controls="cf-set-body"
               className={`cf-set__tab${tab === t.id ? ' cf-set__tab--on' : ''}`}
-              // GAP-F14: Sandbox needs BE-8; the tab stays visible but disabled.
               disabled={t.comingSoon}
-              title={t.comingSoon ? 'Coming soon' : undefined}
+              title={t.comingSoon ? 'Coming soon' : t.id === 'vm' && vmDot ? vmDot.label : undefined}
               onClick={() => onTab(t.id)}
             >
               {t.label}
               {counts[t.id] !== undefined && <span className="cf-set__count">{counts[t.id]}</span>}
+              {t.id === 'vm' && vmDot && (
+                <span className={`vm-tabdot${vmDot.text === '!' ? ' vm-tabdot--bad' : ''}`} aria-label={vmDot.label}>
+                  {vmDot.text}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -145,7 +154,7 @@ export default function BotSettingsPanel({ agent: fromList, endpoints, tab, onTa
           )}
           {tab === 'skills' && <SkillsTab key={agent.id} agent={agent} onAgentSaved={didSave} />}
           {tab === 'files' && <FilesTab key={agent.id} agent={agent} path={filesPath} onPath={(p) => onFilesPath?.(p)} onTotal={onFilesTotal} />}
-          {tab === 'sandbox' && <PlaceholderTab tab={tab} agent={agent} />}
+          {tab === 'vm' && <VmTab key={agent.id} agent={agent} />}
         </div>
       </aside>
     </>

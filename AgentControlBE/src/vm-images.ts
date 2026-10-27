@@ -64,7 +64,8 @@ export const CHROMIUM_LAUNCH_OPTIONS = { channel: 'chromium', headless: true, ar
 export const BROWSER_LAUNCH_NOTE =
   "Chromium is preinstalled for Playwright (Python and Node). Launch it with channel 'chromium' " +
   "(Python: p.chromium.launch(channel=\"chromium\"); Node: chromium.launch({ channel: 'chromium' })); " +
-  'a plain chromium.launch() also works. It runs headless; do not install browsers.'
+  'a plain chromium.launch() also works. It runs headless; do not install browsers. ' +
+  'Use the preinstalled Playwright; do not install, upgrade or pin another Playwright version, or the browser will not launch.'
 
 /** Image label keys AgentControl sets and reads back (e.g. to detect a stale base). */
 export const IMAGE_LABELS = { image: 'io.agentcontrol.image', version: 'io.agentcontrol.version', agent: 'io.agentcontrol.agent', generation: 'io.agentcontrol.generation' } as const

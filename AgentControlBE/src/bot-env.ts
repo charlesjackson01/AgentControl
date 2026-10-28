@@ -252,6 +252,12 @@ export interface BotEnvDeps {
    * as --runtime-flag=ignore-cgroups). Podman doesn't store them in the container.
    */
   runtimeFlags?: (agent: Agent) => string[]
+  /**
+   * BE-P2-7: the force_on message when gVisor is required for this bot but unavailable, else null.
+   * Then ensure/start refuse (409 reason 'gvisor_unavailable') before any engine call, so no
+   * container is created or started on the standard runtime instead.
+   */
+  runtimeBlocked?: (agent: Agent) => string | null
   /** Network for tool builds (apt). Never 'host'. M1: 'none' (no internet yet). */
   buildNetwork?: () => 'none' | 'default'
   /** Persist a changed Agent.vm; false when the save failed. */
@@ -485,6 +491,9 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
 
   async function ensureLocked(agent: Agent, start: boolean, forRun = false): Promise<AgentVm> {
     const slug = agent.slug
+    // BE-P2-7: gVisor required but unavailable: never fall back to the standard runtime.
+    const rtBlock = deps.runtimeBlocked?.(agent)
+    if (rtBlock) failWithReason(409, 'gvisor_unavailable', rtBlock)
     // Mount guard first: nothing reaches the engine for a mount outside the bot's allow-list.
     const mounts = deps.allowedMounts ? checkBotMounts(deps.mounts(agent), deps.allowedMounts(agent)) : deps.mounts(agent)
     await ensureVolume(botToolsVolume(slug), slug)

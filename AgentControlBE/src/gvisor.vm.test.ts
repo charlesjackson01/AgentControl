@@ -16,10 +16,11 @@ import Fastify from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { execCommandRunner } from './command-runner.js'
 import { createBotEnvService, type EngineRef } from './bot-env.js'
-import { createRuntimeProbe, forceOnMessage, PROBE_BUDGET_MS, PROBE_LABEL, registerProbeRoutes, resolveRuntime, type RuntimeProbeResult } from './runtime-probe.js'
+import { CHECK_FAILED_TEXT, createRuntimeProbe, forceOnMessage, runtimeBlockMessage, PROBE_BUDGET_MS, PROBE_LABEL, registerProbeRoutes, resolveRuntime, type RuntimeProbeResult } from './runtime-probe.js'
 import { defaultAgentVm } from './vm-defaults.js'
 import type { Agent } from './shared/types.js'
 import { sharedImageRef } from './vm-images.js'
+import { createContainerRunner, GVISOR_UNAVAILABLE_REASON } from './podman-runner.js'
 
 const SLUG = 'be7vmtest'
 const enginePrefix = (process.env.AC_VM_ENGINE ?? 'podman').split(/\s+/).filter(Boolean)
@@ -137,6 +138,54 @@ describe.skipIf(!engineReady)('@vm BE-P2-7 RuntimeProbe + gVisor resolution', ()
     console.log(`[be7 chromium] std pass; runsc: ${onRunsc ? `${onRunsc.status} ${onRunsc.message ?? ''}` : 'not run'}`)
     if (probe.checks?.find((c) => c.id === 'start')?.status === 'pass') expect(onRunsc?.status).toMatch(/pass|fail/)
   })
+
+  it('force_on where runsc fails here: the run fails with gvisor_unavailable and no crun container is created or started', async ({ skip }) => {
+    if (cli === 'docker') skip('Podman only here')
+    if (probe.runsc.installed && probe.compatible) skip('runsc passes every check here, so force_on is Active')
+    pm('rm', '--force', `ac-bot-${SLUG}`)
+    for (const sub of ['workspace', 'shared']) mkdirSync(join(dir, 'bot', sub), { recursive: true })
+    const agent = { id: 'ag_be7vm', slug: SLUG, name: 'BE7 VM test', internetPolicy: 'ask', vm: { ...defaultAgentVm(), gvisor: 'force_on' } } as unknown as Agent
+    const rt = () => resolveRuntime('auto', agent.vm.gvisor, probe, agent.name)
+    const failing = probe.checks?.find((c) => c.status === 'fail')
+    const msg = forceOnMessage(agent.name, !probe.runsc.installed ? 'it isn\'t installed' : CHECK_FAILED_TEXT[failing!.id]!)
+    expect(rt()).toMatchObject({ effective: null, status: 'required_unavailable', reason: msg })
+    // What auto would do instead (the quiet fallback force_on must not take).
+    console.log(`[be7 force_on] auto here: ${JSON.stringify(resolveRuntime('auto', 'inherit', probe, agent.name))}`)
+    const created: string[][] = []
+    const exec: typeof execCommandRunner = (cmd, args, o) => {
+      if (args.includes('create') || args.includes('start') || args.includes('exec') || args.includes('run')) created.push([...args])
+      return execCommandRunner(cmd, args, o)
+    }
+    const botEnv = createBotEnvService({
+      exec,
+      engine: async () => ENGINE,
+      mounts: () => [
+        { source: join(dir, 'bot', 'workspace'), target: '/bot/workspace', readonly: false },
+        { source: join(dir, 'bot', 'shared'), target: '/bot/shared', readonly: true },
+      ],
+      uidMapping: () => 'keep-id',
+      allowedMounts: () => ({ slug: SLUG, workspace: join(dir, 'bot', 'workspace'), inputs: join(dir, 'bot', 'shared'), groups: {}, botRoot: join(dir, 'bot') }),
+      saveVm: () => true,
+      runtime: () => (rt().effective === 'runsc' ? 'runsc' : null),
+      runtimeFlags: () => [],
+      runtimeBlocked: () => runtimeBlockMessage(rt()),
+      enforceLimits: () => probe.standard?.limitsAccepted ?? true,
+    })
+    const runner = createContainerRunner({
+      botEnv, engine: async () => ENGINE, getAgent: (id) => (id === agent.id ? agent : undefined), runtime: rt, exec,
+      // Even with the test-only override and usable mounts, force_on must not fall back.
+      mountsUsable: () => true, env: { AC_ALLOW_UNLIMITED_RUNS: '1' },
+    })
+    const res = await runner.run({ agentId: agent.id, context: { kind: 'dm' }, argv: ['sh', '-c', 'echo should-not-run'], cwd: 'workspace', timeoutSec: 10, network: 'off' })
+    console.log(`[be7 force_on] run: ${JSON.stringify({ outcome: res.outcome, reason: res.reason, error: res.error, runtime: res.runtime, stdout: res.stdout })}`)
+    expect(res).toMatchObject({ status: 'error', outcome: 'failed', reason: GVISOR_UNAVAILABLE_REASON, error: msg, runtime: null, stdout: '' })
+    // The VM tab's start is refused the same way.
+    await expect(botEnv.start(agent)).rejects.toMatchObject({ statusCode: 409, reason: 'gvisor_unavailable', message: msg })
+    await expect(botEnv.ensure(agent, { start: true, forRun: true })).rejects.toMatchObject({ reason: 'gvisor_unavailable' })
+    expect(created).toEqual([])
+    expect(pm('container', 'inspect', '--format', '{{.Id}}', `ac-bot-${SLUG}`)).toBeNull()
+    expect(pm('ps', '-a', '--filter', `name=ac-bot-${SLUG}`, '--format', '{{.Names}}')).toBe('')
+  }, 120_000)
 
   it('a runtime change recreates the bot container (volumes kept), even for the bot\'s own run', async ({ skip }) => {
     if (cli === 'docker') skip('Podman only here')

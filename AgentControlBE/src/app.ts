@@ -20,7 +20,7 @@ import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
 import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
-import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
+import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { botMountAllowList, botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
 import { checkVolume, LocalFs, storageFor } from './storage/index.js'
@@ -1570,6 +1570,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       saveVm: storeSaveVm(store),
       // Only gVisor is named explicitly; the standard runtime stays the engine default (no recreate).
       runtime: (agent) => (runtimeOf(agent).effective === 'runsc' ? 'runsc' : null),
+      runtimeBlocked: (agent) => runtimeBlockMessage(runtimeOf(agent)),
       runtimeFlags: (agent) => {
         const r = runtimeOf(agent)
         return r.effective === 'runsc' ? (r.flags ?? []) : []

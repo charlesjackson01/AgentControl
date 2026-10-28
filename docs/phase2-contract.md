@@ -69,6 +69,15 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
   - "Chromium check failed"
 
   It can also be "it isn't installed" or "the runtime check hasn't run yet". `incompatible_fallback` keeps the check's full message as `reason`, as before.
+- **Needs OK: `reason: 'gvisor_unavailable'` (BE-P2-7 follow-up, additive).** gVisor is required but unavailable when the effective mode is `force_on`, and the probe failed, runsc is missing, or there is no probe result yet. A run then fails before anything starts:
+  - `outcome: 'failed'`, `reason: 'gvisor_unavailable'`, `runtime: null`
+  - `error`: the force_on message above, the same text as `VmInfo.runtime.reason`.
+
+  It is never a quiet fallback to crun. Only `auto` falls back. The check comes first, before `limits_unenforced` and `mounts_unusable`, and the test-only override doesn't lift it. It runs again when a queued run's turn comes.
+
+  `POST /api/agents/:id/vm/start` answers **409 `reason:'gvisor_unavailable'`** with the same message. No container is created or started on the standard runtime.
+
+  When RunService (BE-P2-12) adds a run route, it answers **409 `reason:'gvisor_unavailable'`**. The FE can show it ahead of time from `VmInfo.runtime.status === 'required_unavailable'`.
 - **Triggers and cache.**
   - **When the probe runs:**
     - On server start: the cached result for the current key is used right away, then a fresh probe runs.

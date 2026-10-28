@@ -25,6 +25,7 @@ import {
   RUNSC_FLAG_VARIANTS,
   type ProbeFacts,
   type RuntimeProbeResult,
+  runtimeBlockMessage,
 } from './runtime-probe.js'
 
 const facts = (over: Partial<ProbeFacts> = {}): ProbeFacts => ({
@@ -379,6 +380,21 @@ describe('resolveRuntime (plan §4 table)', () => {
   }
   const failed: RuntimeProbeResult = { ...base, compatible: false, checks: [{ id: 'bind_mount', status: 'fail', message: 'bind-mount ownership check failed' }] }
   const missing: RuntimeProbeResult = { ...base, runsc: { installed: false }, checks: null, compatible: false }
+
+  it('BE-P2-7 runtimeBlockMessage: only force_on with gVisor unavailable blocks (probe failed, missing, no result); auto never does', () => {
+    for (const [g, b] of [['force_on', 'inherit'], ['auto', 'force_on'], ['force_off', 'force_on']] as const) {
+      for (const p of [failed, missing, null]) {
+        const rt = resolveRuntime(g, b, p, 'Analyst')
+        expect(rt.effective).toBeNull()
+        expect(runtimeBlockMessage(rt)).toMatch(/^gVisor is required for Analyst but isn't available \(.+\)\. Turn off Force on or fix gVisor\.$/)
+      }
+      expect(runtimeBlockMessage(resolveRuntime(g, b, base, 'Analyst'))).toBeNull()
+    }
+    for (const p of [failed, missing, null, base]) {
+      expect(runtimeBlockMessage(resolveRuntime('auto', 'inherit', p, 'Analyst'))).toBeNull()
+      expect(runtimeBlockMessage(resolveRuntime('force_on', 'force_off', p, 'Analyst'))).toBeNull()
+    }
+  })
 
   it.each([
     ['auto', 'inherit', base, 'runsc', 'active'],

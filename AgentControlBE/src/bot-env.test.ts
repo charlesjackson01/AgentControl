@@ -310,6 +310,25 @@ describe('BotEnvService (fake engine)', () => {
     expect(e.calls.filter((x) => x[0] === 'rm')).toHaveLength(1)
   })
 
+  it('BE-P2-7: gVisor required but unavailable: ensure/start refuse with 409 gvisor_unavailable and never touch the engine', async () => {
+    const e = fakeEngine()
+    const MSG = "gVisor is required for Analyst but isn't available (it isn't installed). Turn off Force on or fix gVisor."
+    let blocked: string | null = MSG
+    const svc = service(e, { runtime: () => (blocked ? null : 'runsc'), runtimeBlocked: () => blocked })
+    const a = agent()
+    for (const call of [() => svc.start(a), () => svc.ensure(a, { start: true }), () => svc.ensure(a, { start: true, forRun: true }), () => svc.ensure(a)]) {
+      await expect(call()).rejects.toMatchObject({ statusCode: 409, reason: 'gvisor_unavailable', message: MSG })
+    }
+    expect(e.calls).toEqual([])
+    expect(e.containers.size).toBe(0)
+    // Once gVisor is available the container is created on runsc.
+    blocked = null
+    await svc.start(a)
+    const created = e.calls.filter((x) => x[0] === 'create')
+    expect(created).toHaveLength(1)
+    expect(created[0]!.join(' ')).toContain('--runtime runsc')
+  })
+
   it('BE-P2-7: a runtime change recreates the container (volumes kept); forRun does it even during the bot\'s run', async () => {
     const e = fakeEngine()
     const seen: string[][] = []

@@ -11,6 +11,10 @@
  * BE-P2-5: likewise, when no uid mapping passed the probe's bind_mount check (the bot couldn't use
  * its folders safely), runs are blocked with reason 'mounts_unusable' (Team lead, 2026-10-28); the
  * same test-only override lifts it. The limits block is checked first.
+ * BE-P2-7: when gVisor is required (force_on) but unavailable (probe failed, runsc missing, or no
+ * probe result yet), runs fail with reason 'gvisor_unavailable' and the force_on message, before
+ * anything else and before any container is created or started; never a quiet fallback to crun.
+ * The override doesn't lift it. The check runs again when a queued run's turn comes.
  */
 import path from 'node:path'
 import type { Agent } from './shared/types.js'
@@ -30,6 +34,7 @@ export const NETWORK_UNAVAILABLE = 'Internet access isn\'t available yet.'
 export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
 export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
 export const MOUNTS_UNUSABLE_REASON = 'mounts_unusable'
+export const GVISOR_UNAVAILABLE_REASON = 'gvisor_unavailable'
 export const MOUNTS_UNUSABLE_MESSAGE = "This computer can't give bot scripts safe access to their files, so scripts can't run here."
 /** Test-only override for the limits and mounts blocks. Never set by default, never exposed in the API/UI. */
 export const ALLOW_UNLIMITED_RUNS_ENV = 'AC_ALLOW_UNLIMITED_RUNS'
@@ -165,7 +170,26 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     return { ...r, pidsFull: full }
   }
 
-  async function runOne(agent: Agent, req: RunScriptRequest, rt: ResolvedRuntime, cwd: string, timeoutSec: number, t0: number): Promise<RunScriptResult> {
+  /** The run blocks, in order: gVisor required but unavailable, limits, mounts. Null: the run may start. */
+  function blocked(agent: Agent, rt: ResolvedRuntime, t0: number): RunScriptResult | null {
+    if (rt.status === 'required_unavailable') {
+      return err(t0, rt.reason ?? 'gVisor is required but isn\'t available.', { reason: GVISOR_UNAVAILABLE_REASON, runtime: null })
+    }
+    const overridden = (deps.env ?? process.env)[ALLOW_UNLIMITED_RUNS_ENV] === '1'
+    if (rt.limitsEnforced !== true && !overridden) {
+      return err(t0, LIMITS_UNENFORCED_MESSAGE, { reason: LIMITS_UNENFORCED_REASON, runtime: rt.effective })
+    }
+    if (deps.mountsUsable && !deps.mountsUsable(agent) && !overridden) {
+      return err(t0, MOUNTS_UNUSABLE_MESSAGE, { reason: MOUNTS_UNUSABLE_REASON, runtime: rt.effective })
+    }
+    return null
+  }
+
+  async function runOne(agent: Agent, req: RunScriptRequest, cwd: string, timeoutSec: number, t0: number): Promise<RunScriptResult> {
+    // Resolved again at the run's turn: the probe or the mode may have changed while it was queued.
+    const rt = deps.runtime(agent)
+    const no = blocked(agent, rt, t0)
+    if (no) return no
     const e = await deps.engine()
     if (!e) return err(t0, 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.', { runtime: null })
     try {
@@ -280,15 +304,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     } catch {
       return Promise.resolve(err(t0, `A run's folder must be workspace or groups/<group> (got ${JSON.stringify(String(req.cwd).slice(0, 80))}).`))
     }
-    const rt = deps.runtime(agent)
-    if (rt.status === 'required_unavailable') return Promise.resolve(err(t0, rt.reason ?? 'gVisor is required but isn\'t available.', { runtime: null }))
-    const overridden = (deps.env ?? process.env)[ALLOW_UNLIMITED_RUNS_ENV] === '1'
-    if (rt.limitsEnforced !== true && !overridden) {
-      return Promise.resolve(err(t0, LIMITS_UNENFORCED_MESSAGE, { reason: LIMITS_UNENFORCED_REASON, runtime: rt.effective }))
-    }
-    if (deps.mountsUsable && !deps.mountsUsable(agent) && !overridden) {
-      return Promise.resolve(err(t0, MOUNTS_UNUSABLE_MESSAGE, { reason: MOUNTS_UNUSABLE_REASON, runtime: rt.effective }))
-    }
+    const no = blocked(agent, deps.runtime(agent), t0)
+    if (no) return Promise.resolve(no)
     const timeoutSec = Math.min(Math.max(1, Math.floor(Number(req.timeoutSec) || VM_LIMITS.timeoutSec)), VM_LIMITS.timeoutSec)
 
     // One run at a time per bot; queued runs wait their turn.
@@ -300,7 +317,7 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       if ((epochs.get(agent.id) ?? 0) !== epoch || req.signal?.aborted) {
         return { ...err(t0, 'The run was stopped.'), outcome: 'stopped' as const }
       }
-      return runOne(agent, req, rt, cwd, timeoutSec, t0)
+      return runOne(agent, req, cwd, timeoutSec, t0)
     })
     queues.set(agent.id, next)
     return next.finally(() => {

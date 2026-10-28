@@ -306,6 +306,27 @@ describe('BE-P2-8: runtime, limits and runs in VmInfo', () => {
     expect(probeCalls).toEqual(['refresh', 'refresh'])
   })
 
+  it('BE-P2-7: a force_on bot with no probe result (or runsc missing/failing) fails its run with gvisor_unavailable; no container is created', async () => {
+    vi.stubEnv('AC_ALLOW_UNLIMITED_RUNS', '1')
+    const a = await makeAgent()
+    expect((await inject('PATCH', `/api/agents/${a.id}/vm`, { gvisor: 'force_on' })).statusCode).toBe(200)
+    const go = () => app.vmRunner.run({ agentId: a.id, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 5, network: 'off' })
+    const std = { runtime: 'crun', version: '1.21', limitsEnforced: true, limitsAccepted: true, uidMapping: 'keep-id', checks: [{ id: 'bind_mount', status: 'pass' }] } as const
+    const base = { uidMapping: 'keep-id', snapshotDriver: null, checkedAt: '2026-10-28T15:00:00.000Z', versions: { engine: '5.4.2', runsc: null, image: 'abc' }, runscFlags: [], standard: std }
+    const cases: [RuntimeProbeResult | null, string][] = [
+      [null, 'the runtime check hasn\'t run yet'],
+      [{ ...base, runsc: { installed: false }, checks: null, compatible: false } as unknown as RuntimeProbeResult, 'it isn\'t installed'],
+      [{ ...base, runsc: { installed: true, version: 'x' }, compatible: false, checks: [{ id: 'start', status: 'fail', message: 'nope' }] } as unknown as RuntimeProbeResult, 'the test container didn\'t start'],
+    ]
+    for (const [p, why] of cases) {
+      probeResult = p
+      const msg = `gVisor is required for Analyst but isn't available (${why}). Turn off Force on or fix gVisor.`
+      expect(await go()).toMatchObject({ status: 'error', outcome: 'failed', reason: 'gvisor_unavailable', error: msg, runtime: null })
+      expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toMatchObject({ status: 'required_unavailable', effective: null, reason: msg })
+    }
+    expect(engine.calls.filter((c) => c[0] === 'create' || c[0] === 'start' || c[0] === 'exec')).toEqual([])
+  })
+
   it('stop and reset stop the bot\'s runs first', async () => {
     const a = await makeAgent()
     const spy = vi.spyOn(app.vmRunner, 'stopRuns')

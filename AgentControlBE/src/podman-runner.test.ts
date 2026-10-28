@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
-import { createContainerRunner, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
-import type { ResolvedRuntime } from './runtime-probe.js'
+import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
+import { resolveRuntime, type ResolvedRuntime, type RuntimeProbeResult } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { StreamRunner } from './stream-runner.js'
 import { defaultAgentVm } from './vm-defaults.js'
@@ -301,5 +301,61 @@ describe('createContainerRunner', () => {
     const s = setup({ scripts: [{ code: 127, spawnError: 'podman: not found' }] })
     expect(await s.runner.available()).toBe(true)
     expect((await s.runner.run(req())).error).toBe('Couldn\'t run the engine: podman: not found')
+  })
+})
+
+describe('BE-P2-7: force_on never falls back to crun', () => {
+  // The standard runtime is fine here (limits enforced, mounts usable), so a quiet fallback would run.
+  const stdOk: NonNullable<RuntimeProbeResult['standard']> = {
+    runtime: 'crun', version: 'crun 1.21', limitsEnforced: true, limitsAccepted: true, uidMapping: 'keep-id',
+    checks: [{ id: 'start', status: 'pass' }, { id: 'bind_mount', status: 'pass' }, { id: 'cgroup_limits', status: 'pass' }],
+  }
+  const base: RuntimeProbeResult = {
+    runsc: { installed: true, version: '0.0~20240729.0' }, compatible: false, uidMapping: 'keep-id', snapshotDriver: null,
+    checkedAt: '2026-10-28T15:00:00.000Z', versions: { engine: '5.4.2', runsc: '0.0~20240729.0', image: 'abc' }, standard: stdOk, runscFlags: [],
+    checks: [{ id: 'start', status: 'pass' }, { id: 'bind_mount', status: 'pass' }, { id: 'cgroup_limits', status: 'fail', message: "limits can't be enforced (x)" }],
+  }
+  const cases: [string, RuntimeProbeResult | null, string][] = [
+    ['the probe failed', base, "gVisor is required for Analyst but isn't available (limits can't be enforced). Turn off Force on or fix gVisor."],
+    ['runsc is missing', { ...base, runsc: { installed: false }, checks: null }, "gVisor is required for Analyst but isn't available (it isn't installed). Turn off Force on or fix gVisor."],
+    ['there is no probe result yet', null, "gVisor is required for Analyst but isn't available (the runtime check hasn't run yet). Turn off Force on or fix gVisor."],
+  ]
+  for (const [what, probe, message] of cases) {
+    for (const [globalMode, botMode] of [['auto', 'force_on'], ['force_on', 'inherit']] as const) {
+      it(`${what} (global ${globalMode}, bot ${botMode}): the run fails with gvisor_unavailable and nothing reaches the engine, even with the override`, async () => {
+        const rt = resolveRuntime(globalMode, botMode, probe, 'Analyst')
+        expect(rt).toMatchObject({ effective: null, status: 'required_unavailable', reason: message })
+        for (const env of [{}, { AC_ALLOW_UNLIMITED_RUNS: '1' }]) {
+          const s = setup({ runtime: rt, deps: { env, mountsUsable: () => true } })
+          const r = await s.runner.run(req())
+          expect(r).toEqual(expect.objectContaining({ status: 'error', outcome: 'failed', reason: GVISOR_UNAVAILABLE_REASON, error: message, runtime: null }))
+          expect(s.botEnv.ensure).not.toHaveBeenCalled()
+          expect(s.streamed).toEqual([])
+          expect(s.commands).toEqual([])
+        }
+      })
+    }
+    it(`${what}: auto (inherit) falls back to crun instead`, () => {
+      const rt = resolveRuntime('auto', 'inherit', probe, 'Analyst')
+      if (probe) expect(rt).toMatchObject({ effective: 'crun', limitsEnforced: true })
+      else expect(rt).toMatchObject({ effective: null, status: 'not_installed' })
+      expect(rt.status).not.toBe('required_unavailable')
+    })
+  }
+
+  it('a run queued behind a running one re-resolves the runtime at its turn', async () => {
+    let rt: ResolvedRuntime = crun
+    const s = setup({ scripts: [{ hang: true }, { code: 0 }], deps: { runtime: () => rt } })
+    const ac = new AbortController()
+    const first = s.runner.run(req({ signal: ac.signal }))
+    const second = s.runner.run(req())
+    await vi.waitFor(() => expect(s.streamed).toHaveLength(1))
+    // Force on is set (no probe result yet) while the first run is running and the second waits.
+    rt = resolveRuntime('auto', 'force_on', null, 'Analyst')
+    ac.abort()
+    expect((await first).outcome).toBe('stopped')
+    expect(await second).toMatchObject({ outcome: 'failed', reason: GVISOR_UNAVAILABLE_REASON, runtime: null })
+    expect(s.botEnv.ensure).toHaveBeenCalledTimes(1)
+    expect(s.streamed).toHaveLength(1)
   })
 })

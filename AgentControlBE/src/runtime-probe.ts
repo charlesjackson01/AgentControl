@@ -853,6 +853,15 @@ export function resolveRuntime(globalMode: GlobalRuntimeMode, botMode: RuntimeMo
   return { ...base, effective, status, ...(reason ? { reason } : {}), ...failedCheck, ...(effective ? stdLimits : {}) }
 }
 
+/**
+ * BE-P2-7: the force_on message when gVisor is required but unavailable (probe failed, runsc
+ * missing, or no probe result yet), else null. BotEnvService refuses to create or start the
+ * container then (never a quiet fallback to the standard runtime); the runner fails the run.
+ */
+export function runtimeBlockMessage(rt: ResolvedRuntime): string | null {
+  return rt.status === 'required_unavailable' ? (rt.reason ?? 'gVisor is required but isn\'t available.') : null
+}
+
 /** Plan §4's force_on run failure, e.g. "… isn't available (bind-mount ownership check failed). …". */
 export function forceOnMessage(botName: string, why: string): string {
   return `gVisor is required for ${botName} but isn't available (${why}). Turn off Force on or fix gVisor.`

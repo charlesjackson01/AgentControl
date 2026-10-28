@@ -78,7 +78,7 @@ export function fakeEngine(opts: { globalArgs?: string[]; failBuild?: boolean } 
       const img = images.get(ref)
       if (!img) return err(`Error: ${ref}: image not known`)
       const labels: Record<string, string> = {}
-      a.forEach((x, i) => { if (x === '--label') { const [k, v] = a[i + 1]!.split('='); labels[k!] = v! } })
+      a.forEach((x, i) => { if (x === '--label') { const kv = a[i + 1]!; const at = kv.indexOf('='); labels[kv.slice(0, at)] = kv.slice(at + 1) } })
       containers.set(name, { imageId: img.id, labels, running: false, argv: [...a] })
       return ok('cid')
     }

@@ -18,15 +18,30 @@
  * file the server created, creates, renames and deletes a file, makes a folder and leaves one file
  * there, and writes to the read-only mount (must be EROFS). Back on the host, the files it left
  * must be owned by the server's uid/gid. The first candidate that passes is the uid mapping.
+ *
+ * BE-P2-7: the gVisor part of plan §4.
+ * - Checks are reported in plan order: start, bind_mount, snapshot_mount (BE-P2-9, skipped),
+ *   network (`--network none`; the egress-proxy CONNECT comes with BE-P2-13), cgroup_limits, exec,
+ *   chromium. The first failing one is the reason shown for a fallback or a failed force_on.
+ * - chromium: only when the feature set asks for it (a bot has the browser on). The botvm-browser
+ *   image runs with the same hardening, offline, and launches Chromium the way AgentControl does
+ *   (CHROMIUM_LAUNCH_OPTIONS) and screenshots about:blank.
+ * - Cache key: engine (cli, args, version, standard runtime), runsc version, image id(s), feature
+ *   set. Results are kept per key (in memory, and in `cacheFile` when given), so going back to an
+ *   earlier key re-uses that result while it's under a day old.
+ * - Triggers (wired in app.ts): BE start (restore the cached result, then probe), a key change or
+ *   age > 1 day (checked hourly by `startTimer`), a global or per-bot mode change, POST /api/vm/probe.
+ * - Mac/Windows: runsc's version is read inside the machine (`podman machine ssh <name> runsc --version`).
+ * - The app never installs gVisor.
  */
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
-import { BOT_GID, BOT_PATHS, BOT_UID, sharedImageRef } from './vm-images.js'
+import { BOT_GID, BOT_PATHS, BOT_UID, CHROMIUM_LAUNCH_OPTIONS, sharedImageRef } from './vm-images.js'
 import { bindMountOptions, UID_MAPPINGS, usernsArgs, type UidMapping } from './isolation.js'
 import { failWithReason } from './http.js'
 import { PERMISSION_CSRF_HEADER } from './shared/types.js'
@@ -34,6 +49,7 @@ import type {
   ContainerRuntime,
   GlobalRuntimeMode,
   ProbeCheck,
+  ProbeCheckId,
   RuntimeMode,
   RuntimeStatus,
   VmInfo,
@@ -52,6 +68,26 @@ export const RUNSC_FLAG_VARIANTS: readonly (readonly string[])[] = [
   ['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none'],
 ]
 export const PROBE_MAX_AGE_MS = 24 * 60 * 60 * 1000
+/** How often the timer asks ensureFresh (which probes only on a key change or age > PROBE_MAX_AGE_MS). */
+export const PROBE_TIMER_MS = 60 * 60 * 1000
+/** Plan §4: the whole probe should finish within this; longer is logged. */
+export const PROBE_BUDGET_MS = 30_000
+/** Results kept per cache key. */
+export const PROBE_CACHE_SIZE = 8
+/** Plan §4 check order. */
+export const CHECK_ORDER: readonly ProbeCheckId[] = ['start', 'bind_mount', 'snapshot_mount', 'network', 'cgroup_limits', 'exec', 'chromium']
+/** Short phrase per failed check, for "gVisor is required for X but isn't available (…)". */
+export const CHECK_FAILED_TEXT: Record<ProbeCheckId, string> = {
+  start: "the test container didn't start",
+  bind_mount: 'bind-mount ownership check failed',
+  snapshot_mount: 'snapshot mount check failed',
+  network: 'network isolation check failed',
+  cgroup_limits: LIMITS_NOT_ENFORCED,
+  exec: 'python3/node check failed',
+  chromium: 'Chromium check failed',
+}
+/** Optional probe features; each one adds a check and is part of the cache key. */
+export type ProbeFeature = 'chromium'
 
 const PROBE_SCRIPT = `
 import json, os, subprocess, sys
@@ -243,6 +279,11 @@ export interface RuntimeProbeResult extends VmProbeResult {
   runscFlags: string[]
 }
 
+const emptyResult = (checkedAt: string | null): RuntimeProbeResult => ({
+  runsc: { installed: false }, checks: null, compatible: false, uidMapping: null, snapshotDriver: null, checkedAt,
+  versions: { engine: null, runsc: null, image: null }, standard: null, runscFlags: [],
+})
+
 export interface RuntimeProbeDeps {
   exec?: CommandRunner
   engine: () => Promise<EngineRef | null>
@@ -256,6 +297,17 @@ export interface RuntimeProbeDeps {
    * Default: the OS temp dir when the engine is local, else null.
    */
   bindDir?: () => string | null
+  /** BE-P2-7: optional checks to run (part of the cache key). Default none. */
+  features?: () => readonly ProbeFeature[]
+  /** Image for the chromium check (default the shared botvm-browser). */
+  browserImage?: () => string
+  /**
+   * BE-P2-7: uid mapping candidates for the bind_mount check per runtime (default UID_MAPPINGS;
+   * Docker always uses the engine default). Tests use it to break the idmap check.
+   */
+  uidMappings?: (runtime: ContainerRuntime | null) => readonly UidMapping[]
+  /** BE-P2-7: JSON file the per-key results are kept in across restarts (none: memory only). */
+  cacheFile?: string
   now?: () => Date
   log?: (msg: string) => void
 }
@@ -267,6 +319,10 @@ export interface RuntimeProbe {
   refresh(): Promise<RuntimeProbeResult>
   /** Probe when nothing is cached, it's older than a day, or engine/runsc/image versions changed. */
   ensureFresh(): Promise<RuntimeProbeResult>
+  /** BE-P2-7: make the cached result for the current key (under a day old) current, without probing. */
+  restore(): Promise<RuntimeProbeResult | null>
+  /** BE-P2-7: call ensureFresh every `intervalMs` (default PROBE_TIMER_MS); returns the stop function. */
+  startTimer(intervalMs?: number): () => void
 }
 
 const lastLine = (r: CommandResult) => (r.stderr || r.stdout).trim().split('\n').filter(Boolean).pop()?.slice(0, 300) ?? `exit code ${r.code}`
@@ -330,11 +386,77 @@ export function probeRunArgv(o: { name: string; image: string; runtime: Containe
   ]
 }
 
+const CHROMIUM_SCRIPT = `
+import json, time
+t = time.time()
+out = {}
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch(**json.loads(${JSON.stringify(JSON.stringify(CHROMIUM_LAUNCH_OPTIONS))}))
+        out["version"] = b.version
+        page = b.new_page()
+        page.goto("about:blank")
+        png = page.screenshot()
+        b.close()
+        out["bytes"] = len(png)
+        out["png"] = png[:4] == b"\\x89PNG"
+except Exception as e:
+    lines = [l for l in str(e).splitlines() if l.strip()]
+    out["error"] = (lines[0] if lines else type(e).__name__)[:300]
+out["seconds"] = round(time.time() - t, 1)
+print("AC_CHROMIUM " + json.dumps(out))
+`
+
+/** The Chromium check's container (botvm-browser, hardened, offline; HOME on the tmpfs). */
+export function chromiumProbeArgv(o: { name: string; image: string; runtime: ContainerRuntime | null; uidMapping: UidMapping | null }): string[] {
+  return [
+    'run', '--rm',
+    '--name', o.name,
+    '--label', `${PROBE_LABEL}=1`,
+    '--network', 'none',
+    '--user', `${BOT_UID}:${BOT_GID}`,
+    '--read-only',
+    '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges',
+    ...(o.runtime ? ['--runtime', o.runtime] : []),
+    ...usernsArgs(o.uidMapping),
+    '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
+    '--env', 'HOME=/tmp',
+    o.image,
+    'python3', '-c', CHROMIUM_SCRIPT,
+  ]
+}
+
+/** Parse the AC_CHROMIUM line. */
+export function parseChromiumOutput(stdout: string): { version?: string; bytes?: number; png?: boolean; error?: string } | null {
+  const line = stdout.split('\n').find((l) => l.startsWith('AC_CHROMIUM '))
+  if (!line) return null
+  try {
+    const v = JSON.parse(line.slice('AC_CHROMIUM '.length)) as Record<string, unknown>
+    return {
+      ...(typeof v.version === 'string' ? { version: v.version } : {}),
+      ...(typeof v.bytes === 'number' ? { bytes: v.bytes } : {}),
+      ...(typeof v.png === 'boolean' ? { png: v.png } : {}),
+      ...(typeof v.error === 'string' ? { error: v.error } : {}),
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Plan order (CHECK_ORDER); unknown ids keep their place at the end. */
+export function orderChecks(checks: ProbeCheck[]): ProbeCheck[] {
+  const rank = (c: ProbeCheck) => {
+    const i = CHECK_ORDER.indexOf(c.id)
+    return i < 0 ? CHECK_ORDER.length : i
+  }
+  return checks.map((c, i) => ({ c, i })).sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i).map((x) => x.c)
+}
+
 const skipped = (id: ProbeCheck['id'], message: string): ProbeCheck => ({ id, status: 'skipped', message })
-const LATER_CHECKS: ProbeCheck[] = [
-  skipped('snapshot_mount', 'Checked with the snapshot driver (BE-P2-9).'),
-  skipped('chromium', 'Checked when a bot turns the browser on (BE-P2-15).'),
-]
+const LATER_CHECKS: ProbeCheck[] = [skipped('snapshot_mount', 'Checked with the snapshot driver (BE-P2-9).')]
+const CHROMIUM_NOT_NEEDED = skipped('chromium', 'Not needed: no bot has the browser on.')
 
 export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
   const run = deps.exec ?? execCommandRunner
@@ -422,7 +544,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     const base = deps.bindDir ? deps.bindDir() : e.globalArgs.includes('--connection') ? null : tmpdir()
     if (!base) return { check: skipped('bind_mount', 'Not checked: the bots\' files aren\'t on a folder the engine can mount from here yet.'), uidMapping: null }
     const t0 = Date.now()
-    const candidates: (UidMapping | null)[] = e.cli === 'docker' ? [null] : [...UID_MAPPINGS]
+    const candidates: (UidMapping | null)[] = e.cli === 'docker' ? [null] : [...(deps.uidMappings?.(runtime) ?? UID_MAPPINGS)]
     const failed: string[] = []
     for (const m of candidates) {
       let res: { ok: boolean; message: string }
@@ -446,10 +568,32 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     if (!c.started) return { checks: c.checks, uidMapping: null }
     const b = await bindCheck(e, runtime, flags)
     log(`runtime-probe: ${runtime ?? 'default runtime'}: bind mounts ${b.check.status}${b.uidMapping ? ` with ${b.uidMapping}` : ''}${b.check.status === 'pass' ? '' : `: ${b.check.message ?? ''}`}`)
-    const i = c.checks.findIndex((x) => x.id === 'exec')
-    const checks = [...c.checks]
-    checks.splice(i < 0 ? checks.length : i + 1, 0, b.check)
-    return { checks, uidMapping: b.uidMapping }
+    return { checks: orderChecks([...c.checks, b.check]), uidMapping: b.uidMapping }
+  }
+
+  /** Check 7: Chromium launch + about:blank screenshot (only with the 'chromium' feature, for a runtime that started). */
+  async function chromiumCheck(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], m: UidMapping | null): Promise<ProbeCheck> {
+    const t0 = Date.now()
+    const ref = deps.browserImage?.() ?? sharedImageRef('botvm-browser')
+    const name = `ac-probe-chromium-${randomBytes(4).toString('hex')}`
+    const globals = e.cli === 'docker' ? [] : [...flags]
+    const r = await call(e, [...globals, ...chromiumProbeArgv({ name, image: ref, runtime, uidMapping: e.cli === 'docker' ? null : m })], PROBE_TIMEOUT_MS)
+    if (r.code !== 0) await call(e, ['rm', '--force', name]).catch(() => undefined)
+    const out = parseChromiumOutput(r.stdout)
+    const durationMs = Date.now() - t0
+    if (out?.png && (out.bytes ?? 0) > 0) return { id: 'chromium', status: 'pass', message: `Chromium${out.version ? ` ${out.version}` : ''} launched and took a screenshot of about:blank`, durationMs }
+    const why = out?.error ?? (out ? 'the screenshot wasn\'t a PNG' : `the test container didn't start: ${lastLine(r)}`)
+    return { id: 'chromium', status: 'fail', message: `Chromium didn't launch: ${why}`, durationMs }
+  }
+
+  /** bind_mount, then (with the feature) chromium, for a runtime that started. */
+  async function laterChecks(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], c: { checks: ProbeCheck[]; started: boolean }, features: readonly ProbeFeature[]): Promise<{ checks: ProbeCheck[]; uidMapping: UidMapping | null }> {
+    const b = await withBind(e, runtime, flags, c)
+    if (!c.started) return b
+    const fallback: UidMapping | null = e.cli === 'docker' ? null : 'keep-id'
+    const chromium = features.includes('chromium') ? await chromiumCheck(e, runtime, flags, b.uidMapping ?? fallback) : CHROMIUM_NOT_NEEDED
+    if (features.includes('chromium')) log(`runtime-probe: ${runtime ?? 'default runtime'}: chromium ${chromium.status}${chromium.status === 'pass' ? '' : `: ${chromium.message ?? ''}`}`)
+    return { checks: orderChecks([...b.checks, chromium]), uidMapping: b.uidMapping }
   }
 
   function checksFor(r: CommandResult, facts: ProbeFacts | null, limitsAccepted: boolean, t0: number): { checks: ProbeCheck[]; started: boolean; limitsEnforced: boolean } {
@@ -469,7 +613,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     })
     const execOk = Boolean(facts.python) && Boolean(facts.node) && facts.uid === BOT_UID
     checks.push(execOk ? { id: 'exec', status: 'pass', message: `python ${facts.python}, node ${facts.node}` } : { id: 'exec', status: 'fail', message: facts.uid !== BOT_UID ? `Runs as uid ${facts.uid}, expected ${BOT_UID}.` : `python3 or node is missing (python ${facts.python ?? 'missing'}, node ${facts.node ?? 'missing'}).` })
-    return { checks: [...checks, ...LATER_CHECKS], started: true, limitsEnforced }
+    return { checks: orderChecks([...checks, ...LATER_CHECKS]), started: true, limitsEnforced }
   }
 
   async function engineFacts(e: EngineRef): Promise<{ engineVersion: string | null; std: ContainerRuntime | null; stdVersion: string | null; imageId: string | null }> {
@@ -488,9 +632,13 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
   }
 
   async function runscVersion(e: EngineRef): Promise<string | null> {
-    // Linux: runsc sits on the host. Mac/Windows: inside the machine (BE-P2-7 asks via `machine ssh`).
-    if (e.globalArgs.includes('--connection')) return null
-    const r = await run('runsc', ['--version'], { timeoutMs: 10_000 })
+    // Linux: runsc sits on the host. Mac/Windows (`--connection <machine>`): inside the machine.
+    const conn = e.globalArgs.indexOf('--connection')
+    const machine = conn >= 0 ? e.globalArgs[conn + 1] : undefined
+    if (conn >= 0 && (e.cli !== 'podman' || !machine)) return null
+    const r = machine
+      ? await run(e.cli, ['machine', 'ssh', machine, 'runsc', '--version'], { timeoutMs: 20_000 })
+      : await run('runsc', ['--version'], { timeoutMs: 10_000 })
     if (r.code !== 0) return null
     return r.stdout.split('\n')[0]?.replace(/^runsc version\s*/, '').trim() || null
   }
@@ -498,9 +646,9 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
   async function probe(): Promise<RuntimeProbeResult> {
     const e = await deps.engine()
     const checkedAt = now().toISOString()
-    if (!e) {
-      return { runsc: { installed: false }, checks: null, compatible: false, uidMapping: null, snapshotDriver: null, checkedAt, versions: { engine: null, runsc: null, image: null }, standard: null, runscFlags: [] }
-    }
+    if (!e) return emptyResult(checkedAt)
+    const started = Date.now()
+    const features = [...new Set(deps.features?.() ?? [])].sort()
     const facts = await engineFacts(e)
     const versions = { engine: facts.engineVersion, runsc: await runscVersion(e), image: facts.imageId }
 
@@ -508,7 +656,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     let t0 = Date.now()
     const std = await probeOne(e, null, [])
     const stdChecks = checksFor(std.r, parseProbeOutput(std.r.stdout), std.limits, t0)
-    const stdBind = await withBind(e, null, [], stdChecks)
+    const stdBind = await laterChecks(e, null, [], stdChecks, features)
     const standard = { runtime: facts.std, version: facts.stdVersion, limitsEnforced: stdChecks.limitsEnforced, limitsAccepted: std.limits, checks: stdBind.checks, uidMapping: stdBind.uidMapping }
     log(`runtime-probe: ${facts.std ?? 'default runtime'}: limits ${stdChecks.limitsEnforced ? 'enforced' : 'NOT enforced'}`)
 
@@ -530,7 +678,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
         runscChecks = c.checks
         runscFlags = [...flags]
         if (c.started) {
-          const b = await withBind(e, 'runsc', flags, c)
+          const b = await laterChecks(e, 'runsc', flags, c, features)
           runscChecks = b.checks
           runscMapping = b.uidMapping
           break
@@ -544,6 +692,8 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     }
     const compatible = Boolean(runscChecks?.every((c) => c.status !== 'fail'))
     log(`runtime-probe: runsc ${!runscInstalled ? 'not installed' : compatible ? 'compatible' : `incompatible: ${runscChecks?.find((c) => c.status === 'fail')?.message ?? ''}`}`)
+    const durationMs = Date.now() - started
+    if (durationMs > PROBE_BUDGET_MS) log(`runtime-probe: took ${Math.round(durationMs / 1000)} s (over the ${PROBE_BUDGET_MS / 1000} s budget)`)
     return {
       runsc: { installed: runscInstalled, ...(versions.runsc ? { version: versions.runsc } : {}) },
       checks: runscChecks,
@@ -554,6 +704,8 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
       versions,
       standard,
       runscFlags,
+      features,
+      durationMs,
     }
   }
 
@@ -561,8 +713,46 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     const e = await deps.engine()
     if (!e) return 'no-engine'
     const f = await engineFacts(e)
-    return JSON.stringify([e.cli, e.globalArgs, f.engineVersion, f.std, await runscVersion(e), f.imageId])
+    const features = [...new Set(deps.features?.() ?? [])].sort()
+    let browserImageId: string | null = null
+    if (features.includes('chromium')) {
+      const r = await call(e, ['image', 'inspect', '--format', '{{.Id}}', deps.browserImage?.() ?? sharedImageRef('botvm-browser')])
+      browserImageId = r.code === 0 ? r.stdout.trim().replace(/^sha256:/, '').slice(0, 12) || null : null
+    }
+    return JSON.stringify([e.cli, e.globalArgs, f.engineVersion, f.std, await runscVersion(e), f.imageId, features, browserImageId])
   }
+
+  // Per-key results (plan §4: cached by engine version, runsc version, image digest, feature set).
+  const cache = new Map<string, RuntimeProbeResult>()
+  if (deps.cacheFile) {
+    try {
+      const saved = JSON.parse(readFileSync(deps.cacheFile, 'utf8')) as unknown
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+        for (const [k, v] of Object.entries(saved as Record<string, unknown>)) {
+          if (v && typeof v === 'object' && typeof (v as RuntimeProbeResult).checkedAt === 'string') cache.set(k, v as RuntimeProbeResult)
+        }
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') log(`runtime-probe: ignoring the probe cache: ${(err as Error).message}`)
+    }
+  }
+  function remember(key: string, r: RuntimeProbeResult): void {
+    if (key === 'no-engine') return
+    cache.delete(key)
+    cache.set(key, r)
+    while (cache.size > PROBE_CACHE_SIZE) cache.delete(cache.keys().next().value!)
+    if (!deps.cacheFile) return
+    try {
+      mkdirSync(path.dirname(deps.cacheFile), { recursive: true })
+      const tmp = `${deps.cacheFile}.${randomBytes(4).toString('hex')}.tmp`
+      writeFileSync(tmp, JSON.stringify(Object.fromEntries(cache)), { mode: 0o600 })
+      renameSync(tmp, deps.cacheFile)
+    } catch (err) {
+      log(`runtime-probe: couldn't save the probe cache: ${(err as Error).message}`)
+    }
+  }
+  const fresh = (r: RuntimeProbeResult | null | undefined): r is RuntimeProbeResult =>
+    Boolean(r?.checkedAt) && now().getTime() - Date.parse(r!.checkedAt!) <= PROBE_MAX_AGE_MS
 
   async function refresh(): Promise<RuntimeProbeResult> {
     if (inflight) return inflight
@@ -571,6 +761,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
         const key = await keyNow()
         last = await probe()
         lastKey = key
+        remember(key, last)
         return last
       } finally {
         inflight = null
@@ -579,14 +770,39 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     return inflight
   }
 
+  async function ensureFresh(): Promise<RuntimeProbeResult> {
+    if (inflight) return inflight
+    const key = await keyNow()
+    if (key === lastKey && fresh(last)) return last!
+    const cached = cache.get(key)
+    if (fresh(cached)) {
+      last = cached
+      lastKey = key
+      return cached
+    }
+    return refresh()
+  }
+
   return {
     current: () => last,
     refresh,
-    async ensureFresh() {
-      if (inflight) return inflight
-      if (!last || !last.checkedAt || now().getTime() - Date.parse(last.checkedAt) > PROBE_MAX_AGE_MS) return refresh()
-      if ((await keyNow()) !== lastKey) return refresh()
-      return last
+    ensureFresh,
+    async restore() {
+      const key = await keyNow()
+      const cached = cache.get(key)
+      if (!fresh(cached)) return null
+      if (!inflight) {
+        last = cached
+        lastKey = key
+      }
+      return cached
+    },
+    startTimer(intervalMs = PROBE_TIMER_MS) {
+      const t = setInterval(() => {
+        ensureFresh().catch((err: unknown) => log(`runtime-probe: scheduled check failed: ${(err as Error).message}`))
+      }, intervalMs)
+      t.unref?.()
+      return () => clearInterval(t)
     },
   }
 }
@@ -612,6 +828,7 @@ export function resolveRuntime(globalMode: GlobalRuntimeMode, botMode: RuntimeMo
     : {}
   const failing = probe?.checks?.find((c) => c.status === 'fail')
   const runscReason = !probe?.runsc.installed ? 'it isn\'t installed' : failing ? shortReason(failing) : undefined
+  const failedCheck = probe?.runsc.installed && failing ? { failedCheck: failing.id } : {}
   let status: RuntimeStatus
   let effective: ContainerRuntime | null
   let reason: string | undefined
@@ -621,19 +838,24 @@ export function resolveRuntime(globalMode: GlobalRuntimeMode, botMode: RuntimeMo
   } else if (!probe) {
     status = mode === 'force_on' ? 'required_unavailable' : 'not_installed'
     effective = null
-    reason = 'The runtime check hasn\'t run yet.'
+    reason = mode === 'force_on' ? forceOnMessage(botName, 'the runtime check hasn\'t run yet') : 'The runtime check hasn\'t run yet.'
   } else if (probe.runsc.installed && probe.compatible) {
     return { ...base, effective: 'runsc', status: 'active', limitsEnforced: true, ...(probe.runscFlags.length ? { flags: probe.runscFlags } : {}) }
   } else if (mode === 'force_on') {
     status = 'required_unavailable'
     effective = null
-    reason = `gVisor is required for ${botName} but isn't available (${runscReason}). Turn off Force on or fix gVisor.`
+    reason = forceOnMessage(botName, !probe.runsc.installed ? 'it isn\'t installed' : failing ? CHECK_FAILED_TEXT[failing.id] ?? `${failing.id} check failed` : 'a check failed')
   } else {
     status = probe.runsc.installed ? 'incompatible_fallback' : 'not_installed'
     effective = stdRuntime
     reason = probe.runsc.installed ? runscReason : undefined
   }
-  return { ...base, effective, status, ...(reason ? { reason } : {}), ...(effective ? stdLimits : {}) }
+  return { ...base, effective, status, ...(reason ? { reason } : {}), ...failedCheck, ...(effective ? stdLimits : {}) }
+}
+
+/** Plan §4's force_on run failure, e.g. "… isn't available (bind-mount ownership check failed). …". */
+export function forceOnMessage(botName: string, why: string): string {
+  return `gVisor is required for ${botName} but isn't available (${why}). Turn off Force on or fix gVisor.`
 }
 
 function shortReason(c: ProbeCheck): string {
@@ -643,9 +865,7 @@ function shortReason(c: ProbeCheck): string {
 
 /** GET/POST /api/vm/probe. */
 export function registerProbeRoutes(app: FastifyInstance, probe: RuntimeProbe): void {
-  app.get('/api/vm/probe', async (): Promise<RuntimeProbeResult> =>
-    probe.current() ?? { runsc: { installed: false }, checks: null, compatible: false, uidMapping: null, snapshotDriver: null, checkedAt: null, versions: { engine: null, runsc: null, image: null }, standard: null, runscFlags: [] },
-  )
+  app.get('/api/vm/probe', async (): Promise<RuntimeProbeResult> => probe.current() ?? emptyResult(null))
   // Mutating: needs the confirm header (PERMISSION_CSRF_HEADER), 403 reason 'confirm_required' without it.
   app.post('/api/vm/probe', async (request) => {
     if (request.headers[PERMISSION_CSRF_HEADER] !== '1') failWithReason(403, 'confirm_required', `Re-checking the VM runtime needs the ${PERMISSION_CSRF_HEADER}: 1 header.`)

@@ -253,7 +253,9 @@ describe('BotEnvService (fake engine)', () => {
     expect(withFlags).toEqual(['start', 'exec', 'stop'])
     const create = seen.find((a) => a[0] === 'create')!
     expect(create.join(' ')).toContain('--runtime runsc')
-    expect(create.join(' ')).not.toContain('--runtime-flag')
+    expect(create.filter((x) => x.startsWith('--runtime-flag'))).toEqual([])
+    // BE-P2-7: the flags are kept as a label (so stop/rm after a runtime change use the right ones).
+    expect(create).toContain(`${BOT_ENV_LABELS.runtimeFlags}=${FLAGS.join(' ')}`)
   })
 
   it('BE-P2-8: EngineRef.command runs another program (e.g. sudo -n podman) with the global args', async () => {
@@ -306,6 +308,47 @@ describe('BotEnvService (fake engine)', () => {
     runs = 0
     await svc.ensure(a, { start: true })
     expect(e.calls.filter((x) => x[0] === 'rm')).toHaveLength(1)
+  })
+
+  it('BE-P2-7: a runtime change recreates the container (volumes kept); forRun does it even during the bot\'s run', async () => {
+    const e = fakeEngine()
+    const seen: string[][] = []
+    const FLAGS = ['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none']
+    let rt: 'runsc' | null = null
+    const exec: CommandRunner = async (cmd, args) => {
+      seen.push([...args])
+      return e.exec(cmd, args.filter((x) => !x.startsWith('--runtime-flag=')))
+    }
+    const svc = service(e, { exec, runtime: () => rt, runtimeFlags: () => (rt ? FLAGS : []) })
+    const a = agent()
+    await svc.start(a)
+    const created = () => e.calls.filter((x) => x[0] === 'create')
+    expect(created()).toHaveLength(1)
+    // No label when there are no flags (crun containers keep their earlier config hash).
+    expect(created()[0]!.some((x) => x.startsWith(BOT_ENV_LABELS.runtimeFlags))).toBe(false)
+    rt = 'runsc'
+    runs = 1
+    await svc.ensure(a, { start: true }) // idle-only path: kept during a run
+    expect(created()).toHaveLength(1)
+    await svc.ensure(a, { start: true, forRun: true })
+    expect(created()).toHaveLength(2)
+    expect(created()[1]!.join(' ')).toContain('--runtime runsc')
+    expect(e.calls.filter((x) => x[0] === 'volume' && x[1] === 'rm')).toEqual([])
+    // The crun container was removed without runsc flags; the runsc one starts with them.
+    const rm1 = seen.filter((x) => x.includes('rm') && x.includes('--force'))
+    expect(rm1).toHaveLength(1)
+    expect(rm1[0]!.some((x) => x.startsWith('--runtime-flag='))).toBe(false)
+    expect(seen.filter((x) => x[0] === FLAGS[0]).map((x) => x[2])).toContain('start')
+    // Back to crun: stop/rm of the runsc container use the flags it was created with.
+    rt = null
+    runs = 0
+    seen.length = 0
+    await svc.stop(a)
+    await svc.ensure(a, { start: true })
+    expect(seen.find((x) => x.includes('stop'))!.slice(0, 2)).toEqual(FLAGS)
+    expect(seen.find((x) => x.includes('rm') && x.includes('--force'))!.slice(0, 2)).toEqual(FLAGS)
+    expect(created()).toHaveLength(3)
+    expect(created()[2]!.join(' ')).not.toContain('--runtime runsc')
   })
 
   it('base upgrade rebuilds the layer on the new base (packages kept), volumes untouched', async () => {

@@ -147,7 +147,7 @@ describe('createContainerRunner', () => {
     const r = await s.runner.run(req({ runId: 'run_1', onOutput: (w, c) => chunks.push(`${w}:${c.toString()}`) }))
     expect(r).toMatchObject({ status: 'ok', outcome: 'succeeded', exitCode: 0, stdout: 'hello\n', stderr: 'warn\n', outputBytes: 11, runtime: 'crun' })
     expect(chunks).toEqual(['stdout:hello\n', 'stderr:warn\n'])
-    expect(s.botEnv.ensure).toHaveBeenCalledWith(agent, { start: true })
+    expect(s.botEnv.ensure).toHaveBeenCalledWith(agent, { start: true, forRun: true })
     const argv = s.streamed[0]!
     expect(argv.slice(0, 4)).toEqual(['podman', '--root', '/r', 'exec'])
     expect(argv.join(' ')).toContain('--user 1000:1000 --workdir /bot/workspace')

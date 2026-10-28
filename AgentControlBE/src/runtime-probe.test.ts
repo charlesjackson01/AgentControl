@@ -2,11 +2,17 @@ import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rena
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Fastify from 'fastify'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CommandResult, CommandRunner } from './command-runner.js'
 import {
   bindProbeArgv,
+  CHECK_ORDER,
+  chromiumProbeArgv,
   createRuntimeProbe,
+  forceOnMessage,
+  orderChecks,
+  parseChromiumOutput,
+  PROBE_MAX_AGE_MS,
   judgeBind,
   judgeLimits,
   parseBindOutput,
@@ -66,20 +72,27 @@ interface FakeOpts {
   runsc?: (flags: string[]) => CommandResult
   runscVersion?: CommandResult
   imageId?: () => string
+  /** BE-P2-7: the Chromium check's container (default: a pass). */
+  chromium?: (runtime: string | null, a: string[]) => CommandResult
 }
+const CHROMIUM_OK = ok('AC_CHROMIUM {"version": "128.0.6613.18", "bytes": 3120, "png": true, "seconds": 1.2}\n')
 function fakeEngine(o: FakeOpts = {}) {
   const calls: { cmd: string; args: string[] }[] = []
   const bindCalls: BindCall[] = []
   const exec: CommandRunner = async (cmd, args) => {
     const a = [...args]
     calls.push({ cmd, args: a })
-    if (cmd === 'runsc') return o.runscVersion ?? ok('runsc version 0.0~20240729.0\nspec: 1.1.0\n')
+    if (cmd === 'runsc' || (a[0] === 'machine' && a[1] === 'ssh')) return o.runscVersion ?? ok('runsc version 0.0~20240729.0\nspec: 1.1.0\n')
     if (a.includes('version')) return ok('5.4.2\n')
     if (a.includes('info')) return ok('crun|crun version 1.21\ncommit: x\n')
     const verb = a[0] === '--root' ? a.slice(2) : a
     if (verb[0] === 'image' && verb[1] === 'inspect') return ok(`sha256:${o.imageId?.() ?? 'abcdef0123456789'}\n`)
     if (a.includes('rm')) return ok()
     const runAt = a.indexOf('run')
+    if (runAt >= 0 && a.some((x) => x.startsWith('ac-probe-chromium-'))) {
+      const rt = a.includes('--runtime') ? a[a.indexOf('--runtime') + 1]! : null
+      return o.chromium ? o.chromium(rt, a) : CHROMIUM_OK
+    }
     if (runAt >= 0 && a.includes('--mount')) {
       const src = (dest: string) => a.find((x) => x.startsWith('type=bind,') && x.includes(`destination=${dest}`))!.split(',').find((x) => x.startsWith('source='))!.slice(7)
       const userns = a[a.indexOf('--userns') + 1]
@@ -147,8 +160,9 @@ describe('createRuntimeProbe', () => {
     expect(r.compatible).toBe(false)
     expect(r.runscFlags).toEqual(['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none'])
     expect(r.checks?.map((c) => [c.id, c.status])).toEqual([
-      ['start', 'pass'], ['network', 'pass'], ['cgroup_limits', 'fail'], ['exec', 'pass'],
-      ['bind_mount', 'pass'], ['snapshot_mount', 'skipped'], ['chromium', 'skipped'],
+      // BE-P2-7: plan order, so the first failing check is the reason.
+      ['start', 'pass'], ['bind_mount', 'pass'], ['snapshot_mount', 'skipped'], ['network', 'pass'],
+      ['cgroup_limits', 'fail'], ['exec', 'pass'], ['chromium', 'skipped'],
     ])
     expect(r.uidMapping).toBe('keep-id')
     expect(r.standard?.uidMapping).toBe('keep-id')
@@ -293,7 +307,7 @@ describe('BE-P2-5 bind_mount check', () => {
       const check = r.standard!.checks.find((c) => c.id === 'bind_mount')!
       expect(check.status).toBe('pass')
       expect(check.message).toMatch(/^keep-id: .*\(idmap failed: the test container didn't start: .*mount_setattr/)
-      expect(r.standard!.checks.map((c) => c.id).slice(0, 5)).toEqual(['start', 'network', 'cgroup_limits', 'exec', 'bind_mount'])
+      expect(r.standard!.checks.map((c) => c.id).slice(0, 5)).toEqual(['start', 'bind_mount', 'snapshot_mount', 'network', 'cgroup_limits'])
       // The failed idmap containers are removed by name; the host temp folders are gone.
       expect(f.calls.filter((c) => c.args[c.args.length - 1]?.startsWith('ac-probe-bind-') && c.args.includes('rm'))).toHaveLength(2)
       expect(readdirSync(dir)).toEqual([])
@@ -391,6 +405,38 @@ describe('resolveRuntime (plan §4 table)', () => {
     expect(resolveRuntime('auto', 'inherit', null, 'A')).toMatchObject({ effective: null, status: 'not_installed' })
     expect(resolveRuntime('auto', 'force_on', null, 'A')).toMatchObject({ effective: null, status: 'required_unavailable' })
   })
+  it('BE-P2-7: every row, with the reason and failing check where the plan shows them', () => {
+    const fallback = resolveRuntime('auto', 'inherit', failed, 'Analyst')
+    expect(fallback).toEqual({
+      effective: 'crun', status: 'incompatible_fallback', reason: 'bind-mount ownership check failed', failedCheck: 'bind_mount',
+      checkedAt: '2026-10-27T18:00:00.000Z', mode: 'inherit', globalMode: 'auto', limitsEnforced: true,
+    })
+    expect(resolveRuntime('auto', 'inherit', base, 'A')).toEqual({ effective: 'runsc', status: 'active', limitsEnforced: true, checkedAt: base.checkedAt, mode: 'inherit', globalMode: 'auto' })
+    const notInstalled = resolveRuntime('auto', 'inherit', missing, 'A')
+    expect(notInstalled).toMatchObject({ effective: 'crun', status: 'not_installed' })
+    expect(notInstalled.reason).toBeUndefined()
+    expect(notInstalled.failedCheck).toBeUndefined()
+    expect(resolveRuntime('force_on', 'inherit', failed, 'Analyst')).toMatchObject({ status: 'required_unavailable', failedCheck: 'bind_mount' })
+    expect(resolveRuntime('force_off', 'inherit', failed, 'A')).toMatchObject({ effective: 'crun', status: 'forced_off', failedCheck: 'bind_mount' })
+    expect(resolveRuntime('force_off', 'inherit', failed, 'A').reason).toBeUndefined()
+  })
+  it('BE-P2-7: force_on names the first failing check in plain words, whatever its detail', () => {
+    const detail: RuntimeProbeResult = { ...base, compatible: false, checks: [
+      { id: 'start', status: 'pass' },
+      { id: 'bind_mount', status: 'fail', message: 'idmap failed: …; keep-id failed: the new file is owned by 100999:100999 on the host' },
+      { id: 'cgroup_limits', status: 'fail', message: `${LIMITS_NOT_ENFORCED} (memory.max reads "max")` },
+    ] }
+    expect(resolveRuntime('auto', 'force_on', detail, 'Analyst').reason).toBe(
+      'gVisor is required for Analyst but isn\'t available (bind-mount ownership check failed). Turn off Force on or fix gVisor.',
+    )
+    // Incompatible fallback keeps the detail (the VM tab shows it with the time).
+    expect(resolveRuntime('auto', 'inherit', detail, 'Analyst').reason).toBe(detail.checks![1]!.message)
+    const chromium: RuntimeProbeResult = { ...base, compatible: false, checks: [{ id: 'chromium', status: 'fail', message: 'Chromium didn\'t launch: x' }] }
+    expect(resolveRuntime('auto', 'force_on', chromium, 'Analyst').reason).toBe(forceOnMessage('Analyst', 'Chromium check failed'))
+    expect(resolveRuntime('auto', 'force_on', null, 'Analyst').reason).toBe(
+      'gVisor is required for Analyst but isn\'t available (the runtime check hasn\'t run yet). Turn off Force on or fix gVisor.',
+    )
+  })
   it('runsc flags ride along for the runner', () => {
     expect(resolveRuntime('auto', 'inherit', { ...base, runscFlags: ['--runtime-flag=x'] }, 'A').flags).toEqual(['--runtime-flag=x'])
   })
@@ -414,5 +460,183 @@ describe('GET/POST /api/vm/probe', () => {
     expect(post.json().standard.limitsEnforced).toBe(false)
     expect((await app.inject({ method: 'GET', url: '/api/vm/probe' })).json().checkedAt).toBe(post.json().checkedAt)
     await app.close()
+  })
+})
+
+describe('BE-P2-7 probe: order, Chromium, cache key, cache file, timer', () => {
+  const withDir = async <T>(fn: (dir: string) => Promise<T>): Promise<T> => {
+    const dir = mkdtempSync(join(tmpdir(), 'ac-be7-'))
+    try {
+      return await fn(dir)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const chromiumRuns = (f: ReturnType<typeof fakeEngine>) => f.calls.filter((c) => c.args.some((x) => x.startsWith('ac-probe-chromium-')) && c.args.includes('run'))
+
+  it('checks come in plan order (1–7), unknown ids last', () => {
+    expect(CHECK_ORDER).toEqual(['start', 'bind_mount', 'snapshot_mount', 'network', 'cgroup_limits', 'exec', 'chromium'])
+    const shuffled = [...CHECK_ORDER].reverse().map((id) => ({ id, status: 'pass' as const }))
+    expect(orderChecks(shuffled).map((c) => c.id)).toEqual([...CHECK_ORDER])
+  })
+
+  it('force_on + runsc missing (real probe, fake engine) → the exact run message', async () => {
+    const f = fakeEngine({ runscVersion: bad('runsc: not found', 127) })
+    const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null }).refresh()
+    expect(r.runsc.installed).toBe(false)
+    expect(resolveRuntime('auto', 'force_on', r, 'Analyst')).toMatchObject({
+      effective: null, status: 'required_unavailable',
+      reason: 'gVisor is required for Analyst but isn\'t available (it isn\'t installed). Turn off Force on or fix gVisor.',
+    })
+  })
+
+  it('a broken idmap on runsc (no keep-id fallback) → Incompatible fallback with the bind reason', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED) })
+      const r = await createRuntimeProbe({
+        exec: f.exec, engine, image: () => 'img', bindDir: () => dir,
+        uidMappings: (rt) => (rt === 'runsc' ? ['idmap'] : ['idmap', 'keep-id']),
+      }).refresh()
+      expect(r.compatible).toBe(false)
+      expect(r.checks?.[1]).toMatchObject({ id: 'bind_mount', status: 'fail' })
+      const res = resolveRuntime('auto', 'inherit', r, 'Analyst')
+      expect(res).toMatchObject({ effective: 'crun', status: 'incompatible_fallback', failedCheck: 'bind_mount' })
+      expect(res.reason).toMatch(/^The bot can't use its folders: idmap failed: the test container didn't start: .*mount_setattr/)
+      expect(resolveRuntime('auto', 'force_on', r, 'Analyst').reason).toBe(forceOnMessage('Analyst', 'bind-mount ownership check failed'))
+      expect(f.bindCalls.map((c) => [c.runtime, c.mapping])).toEqual([[null, 'idmap'], [null, 'keep-id'], ['runsc', 'idmap']])
+    })
+  })
+
+  it('Chromium: skipped unless a bot has the browser on; then hardened, offline, both runtimes', async () => {
+    const f = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED) })
+    const r0 = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null }).refresh()
+    expect(r0.checks?.find((c) => c.id === 'chromium')).toEqual({ id: 'chromium', status: 'skipped', message: 'Not needed: no bot has the browser on.' })
+    expect(r0.features).toEqual([])
+    expect(chromiumRuns(f)).toHaveLength(0)
+    const g = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED) })
+    const r = await createRuntimeProbe({ exec: g.exec, engine, image: () => 'img', bindDir: () => null, features: () => ['chromium'], browserImage: () => 'browser-img' }).refresh()
+    expect(r.features).toEqual(['chromium'])
+    expect(r.compatible).toBe(true)
+    expect(r.checks?.at(-1)).toMatchObject({ id: 'chromium', status: 'pass', message: 'Chromium 128.0.6613.18 launched and took a screenshot of about:blank' })
+    expect(r.standard?.checks.at(-1)).toMatchObject({ id: 'chromium', status: 'pass' })
+    const runs = chromiumRuns(g)
+    expect(runs).toHaveLength(2)
+    const rs = runs[1]!.args
+    expect(rs.slice(0, 2)).toEqual(['--root', '/tmp/r'])
+    expect(rs.join(' ')).toContain('--runtime runsc')
+    expect(rs).toContain('browser-img')
+    expect(typeof r.durationMs).toBe('number')
+  })
+
+  it('Chromium failing on runsc only → runsc incompatible with the Chromium reason', async () => {
+    const f = fakeEngine({
+      std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED),
+      chromium: (rt) => (rt === 'runsc' ? ok('AC_CHROMIUM {"error": "BrowserType.launch: Target page, context or browser has been closed"}\n') : CHROMIUM_OK),
+    })
+    const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null, features: () => ['chromium'] }).refresh()
+    expect(r.standard?.checks.at(-1)?.status).toBe('pass')
+    expect(r.compatible).toBe(false)
+    const res = resolveRuntime('auto', 'inherit', r, 'A')
+    expect(res).toMatchObject({ status: 'incompatible_fallback', failedCheck: 'chromium', reason: 'Chromium didn\'t launch: BrowserType.launch: Target page, context or browser has been closed' })
+    const h = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED), chromium: () => bad('Error: image not known', 125) })
+    const r2 = await createRuntimeProbe({ exec: h.exec, engine, image: () => 'img', bindDir: () => null, features: () => ['chromium'], tryRunsc: false }).refresh()
+    expect(r2.standard?.checks.at(-1)).toMatchObject({ status: 'fail', message: 'Chromium didn\'t launch: the test container didn\'t start: Error: image not known' })
+  })
+
+  it('the Chromium container is hardened and offline; the output parser ignores junk', () => {
+    const argv = chromiumProbeArgv({ name: 'ac-probe-chromium-x', image: 'img', runtime: 'runsc', uidMapping: 'keep-id' }).join(' ')
+    for (const f of ['--rm', '--network none', '--user 1000:1000', '--read-only', '--cap-drop ALL', '--security-opt no-new-privileges', '--runtime runsc', '--userns keep-id:uid=1000,gid=1000', '--env HOME=/tmp']) expect(argv).toContain(f)
+    expect(argv).not.toMatch(/=host|--privileged|--network host/)
+    expect(parseChromiumOutput('x\nAC_CHROMIUM {"png": true, "bytes": 5, "version": "1"}')).toEqual({ png: true, bytes: 5, version: '1' })
+    expect(parseChromiumOutput('AC_CHROMIUM {bad')).toBeNull()
+    expect(parseChromiumOutput('none')).toBeNull()
+  })
+
+  it('the feature set is part of the cache key; per-key results are reused while fresh', async () => {
+    let features: ('chromium')[] = []
+    let t = Date.parse('2026-10-27T18:00:00Z')
+    const f = fakeEngine()
+    const p = createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, features: () => features, now: () => new Date(t) })
+    const runs = () => f.calls.filter((c) => isRun(c) && !c.args.some((x) => x.startsWith('ac-probe-chromium-'))).length
+    await p.ensureFresh()
+    expect(runs()).toBe(1)
+    await p.ensureFresh()
+    expect(runs()).toBe(1)
+    features = ['chromium']
+    const withBrowser = await p.ensureFresh()
+    expect(runs()).toBe(2)
+    expect(withBrowser.features).toEqual(['chromium'])
+    features = []
+    t += 1000
+    const back = await p.ensureFresh()
+    expect(runs()).toBe(2) // cached result for the old key
+    expect(back.features).toEqual([])
+    expect(p.current()).toBe(back)
+    t += PROBE_MAX_AGE_MS + 1
+    await p.ensureFresh()
+    expect(runs()).toBe(3)
+  })
+
+  it('cache file: saved (0600) and restored at start for the same key; stale or other keys are not', async () => {
+    await withDir(async (dir) => {
+      const cacheFile = join(dir, 'vm', 'runtime-probe.json')
+      let t = Date.parse('2026-10-27T18:00:00Z')
+      const now = () => new Date(t)
+      const f = fakeEngine()
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, cacheFile, now }).refresh()
+      expect(statSync(cacheFile).mode & 0o777).toBe(0o600)
+      expect(readdirSync(join(dir, 'vm'))).toEqual(['runtime-probe.json'])
+      const g = fakeEngine()
+      const p2 = createRuntimeProbe({ exec: g.exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, cacheFile, now })
+      expect(await p2.restore()).toEqual(r)
+      expect(p2.current()).toEqual(r)
+      expect(g.calls.filter(isRun)).toHaveLength(0)
+      await p2.ensureFresh()
+      expect(g.calls.filter(isRun)).toHaveLength(0)
+      // Another image digest: a different key.
+      const p3 = createRuntimeProbe({ exec: fakeEngine({ imageId: () => '99999999aaaa' }).exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, cacheFile, now })
+      expect(await p3.restore()).toBeNull()
+      t += PROBE_MAX_AGE_MS + 1
+      const p4 = createRuntimeProbe({ exec: fakeEngine().exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, cacheFile, now })
+      expect(await p4.restore()).toBeNull()
+      expect(p4.current()).toBeNull()
+      // A broken file is ignored (logged), not fatal.
+      writeFileSync(cacheFile, '{broken')
+      const logs: string[] = []
+      const p5 = createRuntimeProbe({ exec: fakeEngine().exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, cacheFile, now, log: (m) => logs.push(m) })
+      expect(await p5.restore()).toBeNull()
+      expect(logs.some((m) => m.includes('ignoring the probe cache'))).toBe(true)
+    })
+  })
+
+  it('startTimer runs ensureFresh on the interval until stopped', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fakeEngine()
+      let t = Date.parse('2026-10-27T18:00:00Z')
+      const p = createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false, now: () => new Date(t) })
+      const stop = p.startTimer(1000)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(f.calls.filter(isRun)).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(f.calls.filter(isRun)).toHaveLength(1) // fresh, same key
+      t += PROBE_MAX_AGE_MS + 1
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(f.calls.filter(isRun)).toHaveLength(2)
+      stop()
+      t += PROBE_MAX_AGE_MS + 1
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(f.calls.filter(isRun)).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('Mac/Windows: runsc --version is read inside the machine', async () => {
+    const f = fakeEngine()
+    const r = await createRuntimeProbe({ exec: f.exec, engine: async () => ({ cli: 'podman' as const, globalArgs: ['--connection', 'agentcontrol'] }), image: () => 'img', tryRunsc: false }).refresh()
+    expect(r.versions.runsc).toBe('0.0~20240729.0')
+    expect(f.calls.some((c) => c.cmd === 'podman' && c.args.join(' ') === 'machine ssh agentcontrol runsc --version')).toBe(true)
+    expect(f.calls.some((c) => c.cmd === 'runsc')).toBe(false)
   })
 })

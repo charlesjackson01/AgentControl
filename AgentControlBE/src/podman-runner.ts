@@ -169,7 +169,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     const e = await deps.engine()
     if (!e) return err(t0, 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.', { runtime: null })
     try {
-      await deps.botEnv.ensure(agent, { start: true })
+      // BE-P2-7: forRun, so a changed runtime (or image/config) recreates the container now (volumes kept).
+      await deps.botEnv.ensure(agent, { start: true, forRun: true })
     } catch (x) {
       return err(t0, `The bot's VM couldn't start: ${(x as Error).message}`, { runtime: rt.effective })
     }

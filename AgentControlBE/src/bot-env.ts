@@ -55,6 +55,8 @@ export const BOT_ENV_LABELS = {
   packages: 'io.agentcontrol.packages',
   /** Container: hash of its create argv (a different value = recreate). */
   config: 'io.agentcontrol.config',
+  /** Container (BE-P2-7): the runtime flags it was created for (runsc variants), so stop/rm use them after a change. */
+  runtimeFlags: 'io.agentcontrol.runtime-flags',
 } as const
 export const TMP_SIZE_MB = 512
 export const MAX_PACKAGES = 100
@@ -98,6 +100,8 @@ export interface CreateArgvOptions {
   enforceLimits?: boolean
   /** BE-P2-7: e.g. 'runsc'. */
   runtime?: ContainerRuntime | null
+  /** BE-P2-7: podman global runtime flags it runs with (runsc variants); kept as a label (and in the hash). */
+  runtimeFlags?: readonly string[]
   /**
    * BE-P2-5: uid mapping (Podman; see isolation.ts). null/absent = the engine's default (Docker).
    * Part of the config hash, so a changed mapping recreates the container (volumes kept, re-owned by U).
@@ -123,6 +127,7 @@ export function createArgvBody(o: CreateArgvOptions): string[] {
     argv.push('--memory', `${VM_LIMITS.memoryMb}m`, '--memory-swap', `${VM_LIMITS.memoryMb}m`, '--cpus', String(VM_LIMITS.cpus), '--pids-limit', String(VM_LIMITS.pids))
   }
   if (o.runtime) argv.push('--runtime', o.runtime)
+  if (o.runtimeFlags?.length) argv.push('--label', `${BOT_ENV_LABELS.runtimeFlags}=${o.runtimeFlags.join(' ')}`)
   const uid = o.uidMapping ?? null
   argv.push(...usernsArgs(uid))
   argv.push(
@@ -262,6 +267,8 @@ export interface ContainerStatus {
   state: ContainerState
   imageId?: string
   configHash?: string
+  /** BE-P2-7: the runtime flags it was created for (empty: none). */
+  runtimeFlags?: string[]
 }
 
 export interface BuildResult {
@@ -273,8 +280,13 @@ export interface BuildResult {
 
 export interface BotEnvService {
   status(agent: Agent): Promise<ContainerStatus>
-  /** Make volumes, layer and container match Agent.vm; start it when `start`. Returns the (maybe updated) vm. */
-  ensure(agent: Agent, opts?: { start?: boolean }): Promise<AgentVm>
+  /**
+   * Make volumes, layer and container match Agent.vm; start it when `start`. Returns the (maybe
+   * updated) vm. A changed image or config (e.g. runtime) recreates the container, except while a
+   * run is active in it. `forRun` (BE-P2-7): the caller is the bot's run about to start (runs are
+   * one at a time per bot), so nothing else runs in the container and it may be recreated.
+   */
+  ensure(agent: Agent, opts?: { start?: boolean; forRun?: boolean }): Promise<AgentVm>
   start(agent: Agent): Promise<AgentVm>
   stop(agent: Agent): Promise<void>
   /** Run a command in the (started) container; for the tool manifest, probes and tests. BE-P2-8 streams its own. */
@@ -365,7 +377,16 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     if (!c) fail(502, 'Couldn\'t read the bot\'s VM state from the engine.')
     const st = (c.State as { Status?: unknown; Running?: unknown } | undefined) ?? {}
     const running = st.Running === true || st.Status === 'running'
-    return { state: running ? 'running' : 'stopped', imageId: stripSha(c.Image), configHash: labelsOf(c)[BOT_ENV_LABELS.config] }
+    const labels = labelsOf(c)
+    return {
+      state: running ? 'running' : 'stopped',
+      imageId: stripSha(c.Image),
+      configHash: labels[BOT_ENV_LABELS.config],
+      // No label: created before BE-P2-7 or with no flags (undefined: unknown).
+      ...(labels[BOT_ENV_LABELS.runtimeFlags] !== undefined
+        ? { runtimeFlags: labels[BOT_ENV_LABELS.runtimeFlags]!.split(' ').filter((f) => /^--runtime-flag=[\w.=-]+$/.test(f)) }
+        : {}),
+    }
   }
   async function imageInfo(ref: string): Promise<{ id: string; labels: Record<string, string> } | null> {
     const r = await cli(['image', 'inspect', ref])
@@ -462,7 +483,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     }
   }
 
-  async function ensureLocked(agent: Agent, start: boolean): Promise<AgentVm> {
+  async function ensureLocked(agent: Agent, start: boolean, forRun = false): Promise<AgentVm> {
     const slug = agent.slug
     // Mount guard first: nothing reaches the engine for a mount outside the bot's allow-list.
     const mounts = deps.allowedMounts ? checkBotMounts(deps.mounts(agent), deps.allowedMounts(agent)) : deps.mounts(agent)
@@ -478,16 +499,18 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
       network: 'none',
       enforceLimits: enforceLimits(),
       runtime: deps.runtime?.(agent) ?? null,
+      runtimeFlags: rtFlags(agent),
       uidMapping: deps.uidMapping?.(agent) ?? null,
     })
     let st = await containerStatus(slug)
     if (st.state !== 'missing' && (st.imageId !== img.id || st.configHash !== configHash)) {
-      if (activeRuns(agent.id) > 0 && st.state === 'running') {
+      if (!forRun && activeRuns(agent.id) > 0 && st.state === 'running') {
         // Not idle: keep the current container; the next ensure at idle recreates it.
         return agent.vm
       }
       log(`bot-env: ${slug}: recreating the container (${st.imageId !== img.id ? 'new image' : 'new config'}; volumes kept)`)
-      await must(['rm', '--force', botContainerName(slug)], 'remove the old container')
+      // With the flags it was created for (a runsc container may need e.g. ignore-cgroups to be removed).
+      await must([...(st.runtimeFlags ?? []), 'rm', '--force', botContainerName(slug)], 'remove the old container')
       st = { state: 'missing' }
     }
     if (st.state === 'missing') {
@@ -504,12 +527,13 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
 
   return {
     status: (agent) => containerStatus(agent.slug),
-    ensure: (agent, opts = {}) => serial(agent.slug, () => ensureLocked(agent, opts.start === true)),
+    ensure: (agent, opts = {}) => serial(agent.slug, () => ensureLocked(agent, opts.start === true, opts.forRun === true)),
     start: (agent) => serial(agent.slug, () => ensureLocked(agent, true)),
     stop: (agent) =>
       serial(agent.slug, async () => {
         const st = await containerStatus(agent.slug)
-        if (st.state === 'running') await must([...rtFlags(agent), 'stop', '--time', '10', botContainerName(agent.slug)], 'stop the bot\'s VM', 30_000)
+        // The flags it was created for (the bot's runtime may have changed since).
+        if (st.state === 'running') await must([...(st.runtimeFlags ?? rtFlags(agent)), 'stop', '--time', '10', botContainerName(agent.slug)], 'stop the bot\'s VM', 30_000)
       }),
     exec,
 

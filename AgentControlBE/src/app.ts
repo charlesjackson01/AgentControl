@@ -400,7 +400,10 @@ export interface BuildAppOptions {
   botEnv?: BotEnvService
   /** BE-P2-8: runtime/limits probe; tests inject one with a fake CommandRunner. */
   runtimeProbe?: RuntimeProbe
-  /** BE-P2-8: run the probe when the server is ready (index.ts; off in tests). */
+  /**
+   * BE-P2-8/7: run the probe when the server is ready, re-check it hourly (a new probe only on a
+   * key change or after a day) and after a runtime mode change (index.ts; off in tests).
+   */
   probeOnStart?: boolean
 }
 
@@ -409,6 +412,11 @@ declare module 'fastify' {
     /** BE-P2-8: the VM script runner (BE-P2-12's RunService drives it). */
     vmRunner: ContainerRunner
     vmRuntimeProbe: RuntimeProbe
+    /**
+     * BE-P2-7: call after the global gVisor mode (settings.vm.gvisor) changes; re-probes in the
+     * background. PATCH /api/vm/settings (BE-P2-17) uses it; the per-bot PATCH already does.
+     */
+    vmRuntimeModeChanged: () => void
   }
 }
 
@@ -1501,6 +1509,9 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
         const backend = storageFor(store).backend
         return backend instanceof LocalFs ? backend.volumeRoot : null
       },
+      // BE-P2-7: the Chromium check only when a bot has the browser on (part of the cache key).
+      features: () => (store.agents.some((a) => a.vm.permissions.browser) ? ['chromium'] : []),
+      cacheFile: join(store.dataDir, 'vm', 'runtime-probe.json'),
       log: (msg) => app.log.info(msg),
     })
   const runtimeOf = (agent: Agent): ResolvedRuntime =>
@@ -1525,11 +1536,27 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     const failed = check?.status === 'fail' ? ` ${check.message ?? 'The bot file access check failed.'}` : ''
     return uidMappingOf(agent, cli) === 'keep-id' ? `${KEEP_ID_NOTE}${failed}` : failed.trim() || undefined
   }
+  // BE-P2-7 triggers: BE start (the cached result for this key right away, then a fresh probe),
+  // hourly ensureFresh (key change or older than a day), mode changes, POST /api/vm/probe.
+  const probeLater = (what: 'refresh' | 'ensureFresh') => {
+    // Real probes only in the server (probeOnStart) or with an injected (test) probe.
+    if (!opts.probeOnStart && !opts.runtimeProbe) return
+    void runtimeProbe[what]().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
+  }
+  let stopProbeTimer: (() => void) | null = null
   if (opts.probeOnStart) {
     app.addHook('onReady', async () => {
-      void runtimeProbe.ensureFresh().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
+      void (async () => {
+        await runtimeProbe.restore().catch(() => null)
+        await runtimeProbe.refresh()
+      })().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
+      stopProbeTimer = runtimeProbe.startTimer()
+    })
+    app.addHook('onClose', async () => {
+      stopProbeTimer?.()
     })
   }
+  app.decorate('vmRuntimeModeChanged', () => probeLater('refresh'))
 
   // BE-P2-4: each bot's container, tools volumes and image layer.
   let runner: ContainerRunner | null = null
@@ -1581,6 +1608,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     },
     runner,
     isolationNote: isolationNoteOf,
+    // BE-P2-7: a per-bot mode change re-probes; a browser permission change may change the feature set.
+    onProbeInputChange: (what) => probeLater(what === 'mode' ? 'refresh' : 'ensureFresh'),
   })
 
   return app

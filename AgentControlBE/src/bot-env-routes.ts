@@ -88,6 +88,8 @@ export interface BotEnvRouteDeps {
   runner?: { stopRuns(agentId: string): void; idleStopAt(agentId: string): string | undefined }
   /** BE-P2-5: VmInfo.isolationNote (e.g. the keep-id fallback), or undefined. */
   isolationNote?: (agent: Agent, engine: VmHostInfo['engine'] | null) => string | undefined
+  /** BE-P2-7: after a saved PATCH changed the bot's gVisor mode ('mode') or browser permission ('features'). */
+  onProbeInputChange?: (what: 'mode' | 'features') => void
 }
 
 export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore, deps: BotEnvRouteDeps): void {
@@ -205,6 +207,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       store.agents = previous
       fail(500, 'Couldn\'t save the change. Try again.')
     }
+    if (next.vm.gvisor !== agent.vm.gvisor) deps.onProbeInputChange?.('mode')
+    if (next.vm.permissions.browser !== agent.vm.permissions.browser) deps.onProbeInputChange?.('features')
     return vmInfo(next)
   })
 

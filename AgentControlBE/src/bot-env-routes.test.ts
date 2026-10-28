@@ -28,7 +28,14 @@ let engine: ReturnType<typeof fakeEngine>
 let host: VmHostInfo
 let runs = 0
 let probeResult: RuntimeProbeResult | null = null
-const fakeProbe: RuntimeProbe = { current: () => probeResult, refresh: async () => probeResult!, ensureFresh: async () => probeResult! }
+const probeCalls: string[] = []
+const fakeProbe: RuntimeProbe = {
+  current: () => probeResult,
+  refresh: async () => (probeCalls.push('refresh'), probeResult!),
+  ensureFresh: async () => (probeCalls.push('ensureFresh'), probeResult!),
+  restore: async () => probeResult,
+  startTimer: () => () => {},
+}
 
 beforeEach(() => {
   vi.stubEnv('AGENTCONTROL_SECRET', 'be4-test-secret')
@@ -39,6 +46,7 @@ beforeEach(() => {
   host = hostInfo()
   runs = 0
   probeResult = null
+  probeCalls.length = 0
   const vmHost: VmHostService = { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host }
   const botEnv = createBotEnvService({
     exec: engine.exec,
@@ -259,13 +267,14 @@ describe('BE-P2-8: runtime, limits and runs in VmInfo', () => {
     expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toEqual({ effective: null, status: 'not_installed', mode: 'inherit', globalMode: 'auto', reason: "The runtime check hasn't run yet." })
     probeResult = probe()
     expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toEqual({
-      effective: 'crun', status: 'incompatible_fallback', reason: "limits can't be enforced", checkedAt: '2026-10-27T18:00:00.000Z',
+      effective: 'crun', status: 'incompatible_fallback', reason: "limits can't be enforced", failedCheck: 'cgroup_limits', checkedAt: '2026-10-27T18:00:00.000Z',
       mode: 'inherit', globalMode: 'auto', limitsEnforced: false, limitsReason: "limits can't be enforced (crun)",
     })
     await inject('PATCH', `/api/agents/${a.id}/vm`, { gvisor: 'force_on' })
     const forced = (await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime
     expect(forced).toMatchObject({ effective: null, status: 'required_unavailable' })
     expect(forced.reason).toBe("gVisor is required for Analyst but isn't available (limits can't be enforced). Turn off Force on or fix gVisor.")
+    expect(forced.failedCheck).toBe('cgroup_limits')
     expect(forced.flags).toBeUndefined()
   })
 
@@ -279,6 +288,22 @@ describe('BE-P2-8: runtime, limits and runs in VmInfo', () => {
     expect(ok.statusCode).toBe(200)
     const a = await makeAgent()
     expect((await inject('GET', `/api/agents/${a.id}/vm`)).json().runtime).toMatchObject({ effective: 'runsc', status: 'active', limitsEnforced: true })
+  })
+
+  it('BE-P2-7 triggers: a mode change re-probes; vmRuntimeModeChanged (for /api/vm/settings) too; other edits don\'t', async () => {
+    const a = await makeAgent()
+    await inject('PATCH', `/api/agents/${a.id}/vm`, { env: [{ name: 'FOO', value: 'x' }] })
+    await new Promise((r) => setImmediate(r))
+    expect(probeCalls).toEqual([])
+    await inject('PATCH', `/api/agents/${a.id}/vm`, { gvisor: 'force_off' })
+    await new Promise((r) => setImmediate(r))
+    expect(probeCalls).toEqual(['refresh'])
+    await inject('PATCH', `/api/agents/${a.id}/vm`, { gvisor: 'force_off' })
+    await new Promise((r) => setImmediate(r))
+    expect(probeCalls).toEqual(['refresh'])
+    app.vmRuntimeModeChanged()
+    await new Promise((r) => setImmediate(r))
+    expect(probeCalls).toEqual(['refresh', 'refresh'])
   })
 
   it('stop and reset stop the bot\'s runs first', async () => {

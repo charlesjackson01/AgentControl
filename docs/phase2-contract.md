@@ -44,7 +44,7 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 - Base upgrades: when the shared base version changes, the bot layer is rebuilt as the next generation from the new base on the next start; if that build fails the old layer keeps running. A generation reached by rollback stays on the base it was built on until the next build.
 - Container: `ac-bot-<slug>`, uid 1000, read-only root, `--cap-drop ALL`, no-new-privileges, `--network none` (`host` is never allowed; only `none` or `ac-egress-<slug>`), 512 MB `/tmp` tmpfs, volumes `ac-tools-<slug>` → `/home/bot`, `ac-opt-<slug>` → `/opt/bot`; binds `/bot/workspace` (rw), `/bot/shared` (ro), `/bot/groups/<slug>` (rw) per active group.
 - **`run_active` vs `runs_active` (approved by Team lead 2026-10-27):** `run_active` (singular) means *this bot's* run is in progress and blocks a per-bot action: `/vm/reset`, tool rollback, and run undo (`UndoConflict`). `runs_active` (plural) is only for the machine-wide `POST /api/vm/machine/grow` check (any bot's run). Both are 409; show `message`, branch on `reason`.
-- `VmInfo` placeholders until BE-P2-7/10/12: `runtime.effective` null, `usage.breakdown.tools/opt/imageLayer` 0, `usage.memoryMb` 0, snapshots 0, `runs` [], `browserState` `absent`.
+- `VmInfo` placeholders until BE-P2-7/10/12 (`runtime` is resolved since BE-P2-8/7): `runtime.effective` null before the first probe, `usage.breakdown.tools/opt/imageLayer` 0, `usage.memoryMb` 0, snapshots 0, `runs` [], `browserState` `absent`.
 
 **Runtime probe and runner (BE-P2-8, additive, approved by Team lead 2026-10-27):**
 - `GET /api/vm/probe` (last result; before the first probe an empty result with `checkedAt` null) and `POST /api/vm/probe` (re-check) are live. `POST /api/vm/probe` requires the header `x-agentcontrol-confirm: 1` (`PERMISSION_CSRF_HEADER`); without it **403 `reason:'confirm_required'`**. The probe runs on server start and again when older than 24 h or the engine, runsc or image version changes. It never uses `--network host`.
@@ -53,6 +53,34 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 - `VmInfo.idleStopAt` is set while the container runs: idle stop after 10 min without runs (swept every 60 s). `POST /vm/stop` and `/vm/reset` stop the bot's runs first (outcome `stopped`).
 - Runner (`app.vmRunner`, consumed by RunService in BE-P2-12): `RunScriptRequest` gains optional `runId` (passed as `AC_RUN_ID`), `onOutput(stream, chunk)`, `signal` (AbortSignal) and `extraEnv`. `RunScriptResult` gains optional `outcome` (`succeeded|failed|timed_out|stopped`), `error` (plain language: out of memory at the 4 GB limit, the 256-process limit, killed (137), command not found (127), more than 200 MB of output, past its time limit, stopped), `outputBytes`, `outputTruncated`, `runtime`, `oomKilled` and `pidsLimited`. `pidsLimited` comes from `pids.events`; if leftover processes keep the container at its limit so the counters can't be read, the read is retried (0.5, 1, 2 s) and a failed run is counted as hitting the limit. After a run hits the process limit the bot's container is stopped to clear leftover processes (the next run starts it again). stdout/stderr in the result are the last 64 KB. Output stops at 200 MB (the run is stopped); the full log on disk and the 8 KB tails for the model are BE-P2-12. `network: 'on'` fails with "Internet access isn't available yet." The timeout is clamped to 1–600 s. Runs are serialized per bot.
 - Engine: `EngineRef.command?` runs a different program with `globalArgs` (e.g. `sudo` with `['-n','podman','--root',…]`), and `BotEnvDeps.runtimeFlags?(agent)` adds gVisor's flags as global args on start, stop and exec.
+
+**gVisor probe and resolution (BE-P2-7, additive, live on `p2/be-7-gvisor`; needs OK):**
+- **Needs OK:** `VmInfo.runtime.failedCheck?: ProbeCheckId`: the first failing gVisor check (plan order) whenever runsc is installed and a check failed (statuses `incompatible_fallback`, `required_unavailable`, and also `forced_off` for info). The VM tab can name the check next to `reason` and `checkedAt`. Absent when runsc is missing or passes.
+- **Needs OK:** `VmProbeResult.features?: string[]` (the feature set the probe ran with: `[]` or `['chromium']`) and `VmProbeResult.durationMs?: number` (how long the probe took; the target is under 30 s, it logs when over).
+- **Needs OK: check order.** `checks` (and `standard.checks`) now come in plan order: `start`, `bind_mount`, `snapshot_mount`, `network`, `cgroup_limits`, `exec`, `chromium`. The first `fail` is the reason. Example on this box: rootless runsc only starts with `ignore-cgroups`, so `cgroup_limits` fails ("limits can't be enforced"). Where idmap is broken and keep-id isn't tried, `bind_mount` fails first.
+- **Needs OK: `chromium` check.** It is real when any bot has `permissions.browser` on (not possible in M1; BE-P2-15 turns it on). It starts the `botvm-browser` image hardened and offline (`--network none`, uid 1000, read-only, no caps, the probe's uid mapping) and has Chromium screenshot `about:blank`. Pass message: "Chromium <version> launched and took a screenshot of about:blank". Fail message: "Chromium didn't launch: …". When no bot has the browser on, it is `skipped` with "Not needed: no bot has the browser on." `snapshot_mount` stays `skipped` until BE-P2-9. The egress CONNECT part of `network` is BE-P2-13.
+- **Needs OK: force_on message.** When runsc is missing or a check failed, the run fails and `runtime.reason` is exactly "gVisor is required for <bot> but isn't available (<why>). Turn off Force on or fix gVisor.". `<why>` is the plain name of the first failing check:
+  - "the test container didn't start"
+  - "bind-mount ownership check failed"
+  - "snapshot mount check failed"
+  - "network isolation check failed"
+  - "limits can't be enforced"
+  - "python3/node check failed"
+  - "Chromium check failed"
+
+  It can also be "it isn't installed" or "the runtime check hasn't run yet". `incompatible_fallback` keeps the check's full message as `reason`, as before.
+- **Triggers and cache.**
+  - **When the probe runs:**
+    - On server start: the cached result for the current key is used right away, then a fresh probe runs.
+    - Every hour: re-probe when the key changed or the result is older than 24 h.
+    - When a bot's `gvisor` mode changes (`PATCH /api/agents/:id/vm`): a full re-probe.
+    - When a bot's browser permission changes: re-probe only when the feature set changed.
+    - On `POST /api/vm/probe`.
+  - **Global mode:** `app.vmRuntimeModeChanged()` is the hook for BE-P2-17's `PATCH /api/vm/settings` (that route is not added here).
+  - **Cache key:** engine and its global args, engine version, standard runtime, runsc version, botvm image id, feature set, and the browser image id when `chromium` is on.
+  - **Storage:** up to 8 results are kept per key in `<data>/vm/runtime-probe.json` (server-only, mode 600, written atomically). AgentControl never installs gVisor. On Mac/Windows the runsc version is read inside the machine (`podman machine ssh <machine> runsc --version`).
+- **A runtime change recreates the container (volumes kept).** This happens when a bot's effective runtime changes (crun ↔ runsc, or other runsc flags). The bot's next run recreates its container, even though the run counts as active, because runs are one at a time per bot. Other `ensure` callers still wait for idle. Containers created with runsc flags get a label `io.agentcontrol.runtime-flags`; it is not added when there are no flags, so crun containers keep their hash. Stop and remove use the flags the container was created with. FE impact: none.
+
 
 ## Global
 | Method | Path | 200 |

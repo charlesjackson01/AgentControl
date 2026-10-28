@@ -772,6 +772,8 @@ export interface VmInfo {
     limitsEnforced?: boolean
     /** BE-P2-8 (additive): why, when limitsEnforced is false (starts with "limits can't be enforced"). */
     limitsReason?: string
+    /** BE-P2-7 (additive, needs OK): the probe check that failed (incompatible_fallback / required_unavailable). */
+    failedCheck?: ProbeCheckId
   }
   internetPolicy: InternetPolicy
   permissions: { browser: boolean; browserState: BrowserState; /** 0–1 while downloading */ progress?: number }
@@ -977,6 +979,10 @@ export interface VmProbeResult {
   } | null
   /** BE-P2-8 (additive): runtime flags runsc needed to start, e.g. ["--runtime-flag=ignore-cgroups", "--runtime-flag=network=none"]. */
   runscFlags?: string[]
+  /** BE-P2-7 (additive, needs OK): optional checks this result covers (part of the cache key), e.g. ["chromium"]. */
+  features?: string[]
+  /** BE-P2-7 (additive, needs OK): how long the probe took (plan §4 budget: under 30 s). */
+  durationMs?: number
 }
 
 /** GET /api/permissions?status=pending[&agentId=][&conversationId=]: newest first. */

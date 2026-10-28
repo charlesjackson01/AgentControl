@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
-import { createContainerRunner, LIMITS_UNENFORCED_MESSAGE, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
+import { createContainerRunner, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
 import type { ResolvedRuntime } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { StreamRunner } from './stream-runner.js'
@@ -87,6 +87,42 @@ describe('createContainerRunner', () => {
     expect(r).toMatchObject({ outcome: 'succeeded', exitCode: 0 })
     expect(r.reason).toBeUndefined()
     expect(streamed).toHaveLength(1)
+  })
+
+  it('BE-P2-5: blocks runs when no uid mapping passed the bind_mount check, unless AC_ALLOW_UNLIMITED_RUNS=1', async () => {
+    expect(MOUNTS_UNUSABLE_MESSAGE).toBe("This computer can't give bot scripts safe access to their files, so scripts can't run here.")
+    for (const env of [{}, { AC_ALLOW_UNLIMITED_RUNS: '0' }, { AC_ALLOW_UNLIMITED_RUNS: 'yes' }]) {
+      const seen: string[] = []
+      const { runner, streamed, botEnv } = setup({ deps: { env, mountsUsable: (a) => { seen.push(a.id); return false } } })
+      const r = await runner.run(req())
+      expect(r).toMatchObject({ status: 'error', outcome: 'failed', reason: 'mounts_unusable', error: MOUNTS_UNUSABLE_MESSAGE, runtime: 'crun' })
+      expect(seen).toEqual(['ag1'])
+      expect(streamed).toEqual([])
+      expect(botEnv.ensure).not.toHaveBeenCalled()
+      expect(runner.activeRuns('ag1')).toBe(0)
+    }
+    // The same test-only override lifts it.
+    const o = setup({ deps: { env: { AC_ALLOW_UNLIMITED_RUNS: '1' }, mountsUsable: () => false } })
+    expect(await o.runner.run(req())).toMatchObject({ outcome: 'succeeded', exitCode: 0 })
+    // Usable mounts (or no check wired) run normally.
+    expect((await setup({ deps: { mountsUsable: () => true } }).runner.run(req())).outcome).toBe('succeeded')
+    expect((await setup().runner.run(req())).outcome).toBe('succeeded')
+    // Both blocked: limits_unenforced is reported first.
+    const both = setup({ runtime: { ...crun, limitsEnforced: false }, deps: { mountsUsable: () => false } })
+    expect((await both.runner.run(req())).reason).toBe('limits_unenforced')
+  })
+
+  it('BE-P2-5: the mounts override is read from process.env by default', async () => {
+    const saved = process.env.AC_ALLOW_UNLIMITED_RUNS
+    try {
+      delete process.env.AC_ALLOW_UNLIMITED_RUNS
+      expect((await setup({ deps: { env: undefined, mountsUsable: () => false } }).runner.run(req())).reason).toBe('mounts_unusable')
+      process.env.AC_ALLOW_UNLIMITED_RUNS = '1'
+      expect((await setup({ deps: { env: undefined, mountsUsable: () => false } }).runner.run(req())).outcome).toBe('succeeded')
+    } finally {
+      if (saved === undefined) delete process.env.AC_ALLOW_UNLIMITED_RUNS
+      else process.env.AC_ALLOW_UNLIMITED_RUNS = saved
+    }
   })
 
   it('the override is read from process.env by default and is off when unset', async () => {

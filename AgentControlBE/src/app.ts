@@ -1558,6 +1558,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     engine: engineRef,
     getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
     runtime: runtimeOf,
+    // BE-P2-5: block runs unless a uid mapping passed the probe's bind_mount check (Team lead, 2026-10-28).
+    mountsUsable: (agent) => bindCheckOf(agent)?.status === 'pass',
     log: (msg) => app.log.info(msg),
   })
   app.decorate('vmRunner', runner)

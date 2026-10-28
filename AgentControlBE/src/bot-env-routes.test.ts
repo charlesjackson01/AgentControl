@@ -209,6 +209,26 @@ describe('BE-P2-5: mount allow-list and isolation note', () => {
     expect(() => checkBotMounts(botMounts(store, stored(a.id)), botMountAllowList(store, stored(lone.id)))).toThrow()
   })
 
+  it('runs are blocked with mounts_unusable when the bind_mount check did not pass (or no probe yet)', async () => {
+    vi.stubEnv('AC_ALLOW_UNLIMITED_RUNS', '')
+    const a = await makeAgent()
+    const go = () => app.vmRunner.run({ agentId: a.id, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 5, network: 'off' })
+    const std = (bind: 'pass' | 'fail' | 'skipped') => ({
+      runsc: { installed: false }, checks: [], compatible: false, uidMapping: null, snapshotDriver: null, checkedAt: '2026-10-28T15:00:00.000Z',
+      versions: { engine: '5.4.2', runsc: null, image: 'abc' }, runscFlags: [],
+      standard: { runtime: 'crun', version: '1.21', limitsEnforced: true, limitsAccepted: true, uidMapping: bind === 'pass' ? 'keep-id' : null, checks: [{ id: 'bind_mount', status: bind }] },
+    }) as RuntimeProbeResult
+    for (const bind of ['fail', 'skipped'] as const) {
+      probeResult = std(bind)
+      expect(await go()).toMatchObject({ reason: 'mounts_unusable', error: "This computer can't give bot scripts safe access to their files, so scripts can't run here." })
+    }
+    probeResult = std('pass')
+    expect((await go()).reason).toBeUndefined()
+    vi.stubEnv('AC_ALLOW_UNLIMITED_RUNS', '1')
+    probeResult = std('fail')
+    expect((await go()).reason).toBeUndefined()
+  })
+
   it('VmInfo.isolationNote: keep-id note on Podman until the probe picks idmap; bind failure appended; none on Docker', async () => {
     const a = await makeAgent()
     const note = async () => (await inject('GET', `/api/agents/${a.id}/vm`)).json().isolationNote as string | undefined

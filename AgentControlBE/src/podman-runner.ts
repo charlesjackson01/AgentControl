@@ -8,6 +8,9 @@
  * When the runtime can't enforce limits (or the probe hasn't confirmed it yet), runs are
  * blocked with reason 'limits_unenforced' (Team lead, 2026-10-27). AC_ALLOW_UNLIMITED_RUNS=1
  * is a test-only override: off by default, never set by any config or script, never exposed.
+ * BE-P2-5: likewise, when no uid mapping passed the probe's bind_mount check (the bot couldn't use
+ * its folders safely), runs are blocked with reason 'mounts_unusable' (Team lead, 2026-10-28); the
+ * same test-only override lifts it. The limits block is checked first.
  */
 import path from 'node:path'
 import type { Agent } from './shared/types.js'
@@ -26,7 +29,9 @@ export const IDLE_SWEEP_MS = 60 * 1000
 export const NETWORK_UNAVAILABLE = 'Internet access isn\'t available yet.'
 export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
 export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
-/** Test-only override for the limits block. Never set by default, never exposed in the API/UI. */
+export const MOUNTS_UNUSABLE_REASON = 'mounts_unusable'
+export const MOUNTS_UNUSABLE_MESSAGE = "This computer can't give bot scripts safe access to their files, so scripts can't run here."
+/** Test-only override for the limits and mounts blocks. Never set by default, never exposed in the API/UI. */
 export const ALLOW_UNLIMITED_RUNS_ENV = 'AC_ALLOW_UNLIMITED_RUNS'
 /** What podman/crun/sh print when no new process can be started in the container. */
 const PIDS_FULL_RE = /resource temporarily unavailable|cannot fork|can't fork|EAGAIN/i
@@ -86,6 +91,11 @@ export interface ContainerRunnerDeps {
   idleStopMs?: number
   now?: () => Date
   log?: (msg: string) => void
+  /**
+   * BE-P2-5: whether a uid mapping passed the probe's bind_mount check for the bot's runtime
+   * (false also before the probe has a result). Default: true.
+   */
+  mountsUsable?: (agent: Agent) => boolean
   /** Environment to read the test-only AC_ALLOW_UNLIMITED_RUNS override from (default process.env, read per run). */
   env?: NodeJS.ProcessEnv
   /** For tests: the wait between event-counter retries. */
@@ -271,8 +281,12 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     }
     const rt = deps.runtime(agent)
     if (rt.status === 'required_unavailable') return Promise.resolve(err(t0, rt.reason ?? 'gVisor is required but isn\'t available.', { runtime: null }))
-    if (rt.limitsEnforced !== true && (deps.env ?? process.env)[ALLOW_UNLIMITED_RUNS_ENV] !== '1') {
+    const overridden = (deps.env ?? process.env)[ALLOW_UNLIMITED_RUNS_ENV] === '1'
+    if (rt.limitsEnforced !== true && !overridden) {
       return Promise.resolve(err(t0, LIMITS_UNENFORCED_MESSAGE, { reason: LIMITS_UNENFORCED_REASON, runtime: rt.effective }))
+    }
+    if (deps.mountsUsable && !deps.mountsUsable(agent) && !overridden) {
+      return Promise.resolve(err(t0, MOUNTS_UNUSABLE_MESSAGE, { reason: MOUNTS_UNUSABLE_REASON, runtime: rt.effective }))
     }
     const timeoutSec = Math.min(Math.max(1, Math.floor(Number(req.timeoutSec) || VM_LIMITS.timeoutSec)), VM_LIMITS.timeoutSec)
 

@@ -23,6 +23,7 @@ import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-e
 import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
+import { checkVolume } from './storage/index.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
@@ -1458,7 +1459,10 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
 
   // BE-2: every existing bot gets its folder on boot.
-  ensureAllBotFolders(store, (msg) => app.log.warn(msg))
+  // BE-P2-6: check the files volume marker first. A missing or foreign volume
+  // is files_missing: nothing is created or re-initialized; chats keep working
+  // and file operations answer 409 { reason: 'files_missing' }.
+  if (checkVolume(store, (msg) => app.log.warn(msg)) === 'ok') ensureAllBotFolders(store, (msg) => app.log.warn(msg))
 
   registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
 

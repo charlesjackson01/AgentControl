@@ -6,17 +6,18 @@
  * Who added each shared/ file lives next to the folder in data/groups/<slug>.added-by.json
  * ('user' or an agent id), so it is never listed and never counted.
  * Paths are always relative to the group root; absolute server paths are never sent.
+ * BE-P2-6: all disk access goes through the workspace's StorageBackend; the
+ * group folder is the volume path groups/<slug>, its trash archive/trash/groups/<slug>.
  */
-import { createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync, type Stats } from 'node:fs'
-import { dirname, join, relative, sep } from 'node:path'
 import { archiveStamp } from './archive.js'
 import {
-  byKindThenName, countFiles, ensureRoomAt, entryFor, folderBytes, freeName, guardedPath, mkdirsGuarded, mimeFor,
-  openNoFollow, parseClientPath, quotaBytes, tempNoFollow, writeIfChanged, type FileContent,
+  byKindThenName, ensureRoomAt, entryFor, freeName, isWithin, listEntries, mimeFor, newestFirst, parseClientPath, quotaBytes,
+  walkFiles, type FileContent,
 } from './files.js'
 import { fail } from './http.js'
 import type { Agent, FileEntry, FileListing, FileZone, GroupConversation } from './shared/types.js'
 import { archiveShares, moveShares, readShares, withShares } from './share-records.js'
+import { storageFor, storageReady, type StorageBackend, type StorageStat, type VolPath } from './storage/index.js'
 import type { WorkspaceStore } from './store.js'
 
 const GROUP_MD = 'GROUP.md'
@@ -24,24 +25,33 @@ const MEMORY_MD = ['memory', 'MEMORY.md']
 const SLUG = /^[a-z0-9-]{1,40}$/
 const where = "in this group's files"
 
-export function groupsDir(store: WorkspaceStore): string {
-  return join(store.dataDir, 'groups')
-}
-
-export function groupRoot(store: WorkspaceStore, slug: string): string {
+/** The group's folder as a volume path: 'groups/<slug>'. */
+export function groupVol(slug: string): VolPath {
   if (!SLUG.test(slug)) fail(400, 'This group has no valid folder name.')
-  return join(groupsDir(store), slug)
+  return `groups/${slug}`
 }
 
-export function groupTrashDir(store: WorkspaceStore, slug: string): string {
-  return join(store.dataDir, 'archive', 'trash', 'groups', slug)
+export function groupTrashVol(slug: string): VolPath {
+  return `archive/trash/${groupVol(slug)}`
 }
 
-const addedByFile = (store: WorkspaceStore, slug: string) => join(groupsDir(store), `${slug}.added-by.json`)
+/**
+ * Host path of a group folder, for code that still reads the disk directly
+ * (search index); LocalFs only. Prefer groupVol + the backend.
+ */
+export function groupRoot(store: WorkspaceStore, slug: string): string {
+  const host = storageFor(store).backend.hostPath(groupVol(slug))
+  if (host === null) fail(500, 'This storage has no host path.')
+  return host
+}
 
-function readAddedBy(store: WorkspaceStore, slug: string): Record<string, string> {
+const addedByFile = (slug: string): VolPath => `${groupVol(slug)}.added-by.json`
+
+function readAddedBy(fs: StorageBackend, slug: string): Record<string, string> {
   try {
-    const raw: unknown = JSON.parse(readFileSync(addedByFile(store, slug), 'utf8'))
+    const text = fs.readTextAt(addedByFile(slug))
+    if (text === null) return {}
+    const raw: unknown = JSON.parse(text)
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
     return Object.fromEntries(Object.entries(raw as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string'))
   } catch {
@@ -49,22 +59,22 @@ function readAddedBy(store: WorkspaceStore, slug: string): Record<string, string
   }
 }
 
-function writeAddedBy(store: WorkspaceStore, slug: string, map: Record<string, string>): void {
-  mkdirSync(groupsDir(store), { recursive: true })
-  writeFileSync(addedByFile(store, slug), `${JSON.stringify(map, null, 2)}\n`)
+function writeAddedBy(fs: StorageBackend, slug: string, map: Record<string, string>): void {
+  fs.writeTextAt(addedByFile(slug), `${JSON.stringify(map, null, 2)}\n`)
 }
 
 /** Record who wrote `path` (relative, e.g. 'shared/a.md'): 'user' or an agent id. */
 export function recordAddedBy(store: WorkspaceStore, slug: string, path: string, by: string): void {
-  const map = readAddedBy(store, slug)
+  const fs = storageReady(store)
+  const map = readAddedBy(fs, slug)
   if (map[path] === by) return
   map[path] = by
-  writeAddedBy(store, slug, map)
+  writeAddedBy(fs, slug, map)
 }
 
 /** Move (to set) or drop (to null) the records at and under `from`. */
-function moveAddedBy(store: WorkspaceStore, slug: string, from: string, to: string | null): void {
-  const map = readAddedBy(store, slug)
+function moveAddedBy(fs: StorageBackend, slug: string, from: string, to: string | null): void {
+  const map = readAddedBy(fs, slug)
   let changed = false
   for (const key of Object.keys(map)) {
     if (key !== from && !key.startsWith(`${from}/`)) continue
@@ -73,7 +83,7 @@ function moveAddedBy(store: WorkspaceStore, slug: string, from: string, to: stri
     if (to !== null) map[to + key.slice(from.length)] = value
     changed = true
   }
-  if (changed) writeAddedBy(store, slug, map)
+  if (changed) writeAddedBy(fs, slug, map)
 }
 
 function groupMarkdown(group: GroupConversation, agents: readonly Agent[]): string {
@@ -99,28 +109,29 @@ function groupMemoryMarkdown(store: WorkspaceStore, group: GroupConversation): s
   return lines.join('\n')
 }
 
-/** Create the group's folder (idempotent) and refresh GROUP.md and memory/MEMORY.md. */
-export function ensureGroupFolder(store: WorkspaceStore, group: GroupConversation): string {
-  const root = groupRoot(store, group.slug)
-  mkdirSync(root, { recursive: true })
-  for (const z of ['shared', 'memory']) mkdirSync(guardedPath(root, [z]), { recursive: true })
-  writeIfChanged(guardedPath(root, [GROUP_MD]), groupMarkdown(group, store.agents))
-  writeIfChanged(guardedPath(root, MEMORY_MD), groupMemoryMarkdown(store, group))
+/** Create the group's folder (idempotent) and refresh GROUP.md and memory/MEMORY.md. Returns its volume path. */
+export function ensureGroupFolder(store: WorkspaceStore, group: GroupConversation): VolPath {
+  const fs = storageReady(store)
+  const root = groupVol(group.slug)
+  fs.ensureDir(root)
+  for (const z of ['shared', 'memory']) fs.mkdirs(root, [z])
+  fs.writeIfChanged(root, [GROUP_MD], groupMarkdown(group, store.agents))
+  fs.writeIfChanged(root, MEMORY_MD, groupMemoryMarkdown(store, group))
   return root
 }
 
-/** Group delete: move the folder (and its added-by records) to data/archive/groups/<slug>-<ts>/. Never removes it. */
+/** Group delete: move the folder (and its added-by records) to archive/groups/<slug>-<ts>/. Never removes it. */
 export function archiveGroupFolder(store: WorkspaceStore, group: GroupConversation, at = new Date()): string | null {
-  const root = groupRoot(store, group.slug)
-  if (!existsSync(root)) return null
-  const dir = join(store.dataDir, 'archive', 'groups')
-  mkdirSync(dir, { recursive: true })
-  const target = freeName(dir, `${group.slug}-${archiveStamp(at)}`)
-  renameSync(root, target)
-  const meta = addedByFile(store, group.slug)
-  if (existsSync(meta)) renameSync(meta, join(target, '.added-by.json'))
-  archiveShares(root, target)
-  return relative(join(store.dataDir, 'archive'), target).split(sep).join('/')
+  const fs = storageReady(store)
+  const root = groupVol(group.slug)
+  if (!fs.existsAt(root)) return null
+  fs.ensureDir('archive/groups')
+  const target = freeName(fs, 'archive/groups', `${group.slug}-${archiveStamp(at)}`)
+  fs.renameAt(root, target)
+  const meta = addedByFile(group.slug)
+  if (fs.existsAt(meta)) fs.renameAt(meta, `${target}/.added-by.json`)
+  archiveShares(fs, root, target)
+  return target.slice('archive/'.length)
 }
 
 function zoneOf(parts: readonly string[]): FileZone | null {
@@ -140,148 +151,123 @@ function withAddedBy(entry: FileEntry, map: Record<string, string>): FileEntry {
 }
 
 export function groupUsage(store: WorkspaceStore, group: GroupConversation): FileListing['usage'] {
-  const trashBytes = folderBytes(groupTrashDir(store, group.slug))
-  return { bytes: folderBytes(groupRoot(store, group.slug)) + trashBytes, quotaBytes: quotaBytes(), trashBytes }
+  const fs = storageReady(store)
+  const trashBytes = fs.du(groupTrashVol(group.slug))
+  return { bytes: fs.du(groupVol(group.slug)) + trashBytes, quotaBytes: quotaBytes(), trashBytes }
 }
 
 /** Make room in the group folder (trash counts and is pruned oldest-first, like a bot's). */
 export function ensureGroupRoom(store: WorkspaceStore, slug: string, adding: number, freeing = 0): void {
-  ensureRoomAt(groupRoot(store, slug), groupTrashDir(store, slug), adding, freeing, 'group folder')
+  ensureRoomAt(storageReady(store), groupVol(slug), groupTrashVol(slug), adding, freeing, 'group folder')
 }
 
 export function listGroupFolder(store: WorkspaceStore, group: GroupConversation, rawPath: unknown): FileListing {
   const root = ensureGroupFolder(store, group)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   const path = parts.join('/')
-  const map = readAddedBy(store, group.slug)
+  const map = readAddedBy(fs, group.slug)
   const listing = (entries: FileEntry[]): FileListing => ({
-    root: `groups/${group.slug}/`, path, entries: withShares(entries.map((e) => withAddedBy(e, map)), readShares(root)).sort(byKindThenName),
-    usage: groupUsage(store, group), totalFiles: countFiles(root),
+    root: `groups/${group.slug}/`, path, entries: withShares(entries.map((e) => withAddedBy(e, map)), readShares(fs, root)).sort(byKindThenName),
+    usage: groupUsage(store, group), totalFiles: fs.countFiles(root),
   })
+  const statOr404 = (p: readonly string[]): StorageStat => fs.stat(root, p) ?? fail(404, `Nothing at "${p.join('/')}" ${where}.`)
   if (parts.length === 0) {
     return listing([
-      entryFor(['shared'], statSync(guardedPath(root, ['shared'])), 'shared'),
-      entryFor(['memory'], statSync(guardedPath(root, ['memory'])), 'memory'),
-      entryFor([GROUP_MD], statSync(guardedPath(root, [GROUP_MD])), 'meta'),
+      entryFor(['shared'], statOr404(['shared']), 'shared'),
+      entryFor(['memory'], statOr404(['memory']), 'memory'),
+      entryFor([GROUP_MD], statOr404([GROUP_MD]), 'meta'),
     ])
   }
   const zone = zoneOf(parts)
   if (!zone) fail(404, `Nothing at "${path}" ${where}.`)
-  const dir = guardedPath(root, parts)
-  let info: Stats
-  try { info = lstatSync(dir) } catch { fail(404, `Nothing at "${path}" ${where}.`) }
-  if (!info.isDirectory()) fail(400, `"${path}" is a file; read it with /files/content.`)
-  const entries: FileEntry[] = []
-  for (const name of readdirSync(dir)) {
-    const st = lstatSync(join(dir, name))
-    if (st.isSymbolicLink() || (!st.isFile() && !st.isDirectory())) continue
-    if (name.endsWith('.tmp') && name.startsWith('.')) continue
-    entries.push(entryFor([...parts, name], st, zone))
-  }
-  return listing(entries)
+  const info = fs.stat(root, parts)
+  if (!info) fail(404, `Nothing at "${path}" ${where}.`)
+  if (info.kind !== 'dir') fail(400, `"${path}" is a file; read it with /files/content.`)
+  return listing(listEntries(fs, root, parts, zone))
 }
 
 /** Every file under shared/, flat, newest first. */
 export function listGroupShared(store: WorkspaceStore, group: GroupConversation): { entries: FileEntry[] } {
   const root = ensureGroupFolder(store, group)
-  const map = readAddedBy(store, group.slug)
-  const out: FileEntry[] = []
-  const walk = (parts: string[]) => {
-    const dir = guardedPath(root, parts)
-    for (const name of readdirSync(dir)) {
-      const st = lstatSync(join(dir, name))
-      if (st.isSymbolicLink()) continue
-      if (st.isDirectory()) walk([...parts, name])
-      else if (st.isFile() && !(name.startsWith('.') && name.endsWith('.tmp'))) out.push(withAddedBy(entryFor([...parts, name], st, 'shared'), map))
-    }
-  }
-  walk(['shared'])
-  out.sort((a, b) => (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : a.modifiedAt < b.modifiedAt ? 1 : -1))
-  return { entries: withShares(out, readShares(root)) }
+  const fs = storageReady(store)
+  const map = readAddedBy(fs, group.slug)
+  const out = walkFiles(fs, root, ['shared'], 'shared').map((e) => withAddedBy(e, map)).sort(newestFirst)
+  return { entries: withShares(out, readShares(fs, root)) }
 }
 
 export function readGroupContent(store: WorkspaceStore, group: GroupConversation, rawPath: unknown): FileContent {
   const root = ensureGroupFolder(store, group)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   const path = parts.join('/')
   if (parts.length === 0) fail(400, '"path" is required.')
   if (!zoneOf(parts)) fail(404, `No file "${path}" ${where}.`)
-  const full = guardedPath(root, parts)
-  let info: Stats
-  try { info = lstatSync(full) } catch { fail(404, `No file "${path}" ${where}.`) }
-  if (info.isDirectory()) fail(400, `"${path}" is a folder; list it with /files.`)
-  if (!info.isFile()) fail(404, `No file "${path}" ${where}.`)
-  const fd = openNoFollow(full)
+  const info = fs.stat(root, parts)
+  if (!info) fail(404, `No file "${path}" ${where}.`)
+  if (info.kind === 'dir') fail(400, `"${path}" is a folder; list it with /files.`)
+  if (info.kind !== 'file') fail(404, `No file "${path}" ${where}.`)
+  const opened = fs.openRead(root, parts)
   const name = parts[parts.length - 1]!
-  return { name, mime: mimeFor(name), size: fstatSync(fd).size, body: createReadStream('', { fd }) }
+  return { name, mime: mimeFor(name), size: opened.size, body: opened.stream }
 }
 
 export function writeGroupContent(store: WorkspaceStore, group: GroupConversation, rawPath: unknown, body: Buffer, overwrite: boolean, by = 'user'): FileEntry {
   const root = ensureGroupFolder(store, group)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   assertGroupWritable(parts)
-  const full = guardedPath(root, parts)
-  let existing: Stats | null = null
-  try { existing = lstatSync(full) } catch { existing = null }
-  if (existing?.isDirectory()) fail(409, `"${parts.join('/')}" is a folder.`)
+  const existing = fs.stat(root, parts)
+  if (existing?.kind === 'dir') fail(409, `"${parts.join('/')}" is a folder.`)
   if (existing && !overwrite) fail(409, `"${parts.join('/')}" already exists. Pass overwrite=1 to replace it.`)
-  ensureGroupRoom(store, group.slug, body.length, existing?.isFile() ? existing.size : 0)
-  mkdirsGuarded(root, parts.slice(0, -1))
-  const temporary = tempNoFollow(full, body)
-  try {
-    guardedPath(root, parts)
-    renameSync(temporary, full)
-  } catch (err) {
-    rmSync(temporary, { force: true })
-    throw err
-  }
+  ensureGroupRoom(store, group.slug, body.length, existing?.kind === 'file' ? existing.size : 0)
+  fs.mkdirs(root, parts.slice(0, -1))
+  const info = fs.write(root, parts, body, 'replace')
   recordAddedBy(store, group.slug, parts.join('/'), by)
-  return { ...entryFor(parts, statSync(full), 'shared'), addedBy: by }
+  return { ...entryFor(parts, info, 'shared'), addedBy: by }
 }
 
 export function makeGroupFolder(store: WorkspaceStore, group: GroupConversation, rawPath: unknown): FileEntry {
   const root = ensureGroupFolder(store, group)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   assertGroupWritable(parts)
-  const full = guardedPath(root, parts)
-  if (existsSync(full)) fail(409, `"${parts.join('/')}" already exists.`)
-  mkdirsGuarded(root, parts)
-  return entryFor(parts, statSync(full), 'shared')
+  if (fs.stat(root, parts)) fail(409, `"${parts.join('/')}" already exists.`)
+  fs.mkdirs(root, parts)
+  return entryFor(parts, fs.stat(root, parts)!, 'shared')
 }
 
 export function moveGroupPath(store: WorkspaceStore, group: GroupConversation, rawFrom: unknown, rawTo: unknown): FileEntry {
   const root = ensureGroupFolder(store, group)
+  const fs = storageReady(store)
   if (typeof rawFrom !== 'string' || rawFrom.trim() === '') fail(400, '"from" is required.')
   if (typeof rawTo !== 'string' || rawTo.trim() === '') fail(400, '"to" is required.')
   const from = parseClientPath(rawFrom, 'from')
   const to = parseClientPath(rawTo, 'to')
   assertGroupWritable(from, 'from')
   assertGroupWritable(to, 'to')
-  const src = guardedPath(root, from)
-  const dst = guardedPath(root, to)
-  let info: Stats
-  try { info = lstatSync(src) } catch { fail(404, `Nothing at "${from.join('/')}" ${where}.`) }
-  if (existsSync(dst)) fail(409, `"${to.join('/')}" already exists.`)
-  if (info.isDirectory() && (dst + sep).startsWith(src + sep)) fail(400, 'A folder cannot be moved inside itself.')
-  mkdirsGuarded(root, to.slice(0, -1))
-  renameSync(src, dst)
-  moveAddedBy(store, group.slug, from.join('/'), to.join('/'))
-  moveShares(root, from.join('/'), to.join('/'))
-  return withShares([withAddedBy(entryFor(to, statSync(dst), 'shared'), readAddedBy(store, group.slug))], readShares(root))[0]!
+  const info = fs.stat(root, from)
+  const taken = fs.stat(root, to) !== null
+  if (!info) fail(404, `Nothing at "${from.join('/')}" ${where}.`)
+  if (taken) fail(409, `"${to.join('/')}" already exists.`)
+  if (info.kind === 'dir' && isWithin(from, to)) fail(400, 'A folder cannot be moved inside itself.')
+  fs.mkdirs(root, to.slice(0, -1))
+  fs.move(root, from, to)
+  moveAddedBy(fs, group.slug, from.join('/'), to.join('/'))
+  moveShares(fs, root, from.join('/'), to.join('/'))
+  return withShares([withAddedBy(entryFor(to, fs.stat(root, to)!, 'shared'), readAddedBy(fs, group.slug))], readShares(fs, root))[0]!
 }
 
-/** Move a file or folder to data/archive/trash/groups/<slug>/<ts>/<path>. Never removed here. */
+/** Move a file or folder to archive/trash/groups/<slug>/<ts>/<path>. Never removed here. */
 export function trashGroupPath(store: WorkspaceStore, group: GroupConversation, rawPath: unknown, at = new Date()): void {
   const root = ensureGroupFolder(store, group)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   assertGroupWritable(parts)
-  const src = guardedPath(root, parts)
-  try { lstatSync(src) } catch { fail(404, `Nothing at "${parts.join('/')}" ${where}.`) }
-  const trash = groupTrashDir(store, group.slug)
-  mkdirSync(trash, { recursive: true })
-  const dest = join(freeName(trash, archiveStamp(at)), ...parts)
-  mkdirSync(dirname(dest), { recursive: true })
-  renameSync(src, dest)
-  moveAddedBy(store, group.slug, parts.join('/'), null)
-  moveShares(root, parts.join('/'), null)
+  if (!fs.stat(root, parts)) fail(404, `Nothing at "${parts.join('/')}" ${where}.`)
+  const trash = groupTrashVol(group.slug)
+  fs.ensureDir(trash)
+  fs.moveOut(root, parts, `${freeName(fs, trash, archiveStamp(at))}/${parts.join('/')}`)
+  moveAddedBy(fs, group.slug, parts.join('/'), null)
+  moveShares(fs, root, parts.join('/'), null)
 }

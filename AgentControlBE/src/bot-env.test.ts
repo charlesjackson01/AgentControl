@@ -55,6 +55,72 @@ beforeEach(() => {
   buildNet = 'default'
 })
 
+describe('BE-P2-5 uid mapping and mount guard', () => {
+  const mounts = [{ source: '/d/ws', target: '/bot/workspace', readonly: false }, { source: '/d/in', target: '/bot/shared', readonly: true }]
+  it('keep-id: --userns keep-id, U on both volumes, plain binds', () => {
+    const s = createArgvBody({ slug: 'analyst', image: 'img', mounts, uidMapping: 'keep-id' }).join(' ')
+    expect(s).toContain('--userns keep-id:uid=1000,gid=1000')
+    expect(s).toContain('--mount type=volume,source=ac-tools-analyst,destination=/home/bot,U=true')
+    expect(s).toContain('--mount type=volume,source=ac-opt-analyst,destination=/opt/bot,U=true')
+    expect(s).toContain('type=bind,source=/d/ws,destination=/bot/workspace --mount')
+    expect(s).toContain('type=bind,source=/d/in,destination=/bot/shared,readonly')
+    expect(s).not.toContain('idmap')
+  })
+  it('idmap: --userns auto, idmapped binds (never U on a bind)', () => {
+    const s = createArgvBody({ slug: 'analyst', image: 'img', mounts, uidMapping: 'idmap' }).join(' ')
+    expect(s).toContain('--userns auto')
+    expect(s).toContain('destination=/bot/workspace,idmap')
+    expect(s).toContain('destination=/bot/shared,readonly,idmap')
+    expect(s).toContain('destination=/home/bot,U=true')
+    expect(s).not.toMatch(/type=bind[^ ]*U=true/)
+  })
+  it('none (Docker): no --userns, no U', () => {
+    const s = createArgvBody({ slug: 'analyst', image: 'img', mounts, uidMapping: null }).join(' ')
+    expect(s).not.toMatch(/--userns|U=true|idmap/)
+  })
+  it('the mapping is part of the config hash (a change recreates the container)', () => {
+    const h = (m: 'idmap' | 'keep-id' | null) => createArgv({ slug: 'analyst', image: 'img', mounts, uidMapping: m }).configHash
+    expect(new Set([h('idmap'), h('keep-id'), h(null)]).size).toBe(3)
+  })
+  it('ensure passes the mapping; a mapping change recreates with volumes kept', async () => {
+    const e = fakeEngine()
+    let m: 'idmap' | 'keep-id' = 'keep-id'
+    const svc = service(e, { uidMapping: () => m })
+    const a = agent()
+    await svc.ensure(a)
+    expect(e.calls.find((c) => c[0] === 'create')?.join(' ')).toContain('--userns keep-id:uid=1000,gid=1000')
+    m = 'idmap'
+    await svc.ensure(a)
+    const creates = e.calls.filter((c) => c[0] === 'create')
+    expect(creates).toHaveLength(2)
+    expect(creates[1]!.join(' ')).toContain('--userns auto')
+    expect(e.calls.some((c) => c[0] === 'volume' && c[1] === 'rm')).toBe(false)
+  })
+  it('a mount outside the allow-list throws before the engine is called', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'ac-be5-guard-'))
+    try {
+      for (const d of ['a/workspace', 'a/shared', 'b/workspace']) mkdirSync(join(root, d), { recursive: true })
+      const e = fakeEngine()
+      const svc = service(e, {
+        mounts: () => [{ source: join(root, 'b/workspace'), target: '/bot/workspace', readonly: false }],
+        allowedMounts: () => ({ slug: 'analyst', workspace: join(root, 'a/workspace'), inputs: join(root, 'a/shared'), groups: {}, botRoot: join(root, 'a') }),
+      })
+      await expect(svc.ensure(agent(), { start: true })).rejects.toMatchObject({ statusCode: 500, reason: 'mount_refused' })
+      await expect(svc.start(agent())).rejects.toMatchObject({ reason: 'mount_refused' })
+      expect(e.calls).toEqual([])
+      // The bot's own folders go through.
+      const ok2 = service(e, {
+        mounts: () => [{ source: join(root, 'a/workspace'), target: '/bot/workspace', readonly: false }],
+        allowedMounts: () => ({ slug: 'analyst', workspace: join(root, 'a/workspace'), inputs: join(root, 'a/shared'), groups: {}, botRoot: join(root, 'a') }),
+      })
+      await ok2.ensure(agent())
+      expect(e.calls.some((c) => c[0] === 'create')).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('argv builders', () => {
   const mounts = [{ source: '/d/ws', target: '/bot/workspace', readonly: false }, { source: '/d/in', target: '/bot/shared', readonly: true }]
 
@@ -70,7 +136,7 @@ describe('argv builders', () => {
     expect(argv[0]).toBe('create')
     expect(argv[argv.length - 1]).toBe('localhost/ac-bot-analyst:1')
     expect(s).not.toMatch(/--env|--privileged|--network host|=host/)
-    const noLimits = createArgvBody({ slug: 'analyst', image: 'x', mounts, enforceLimits: false, runtime: 'runsc', usernsArgs: ['--userns', 'auto'] }).join(' ')
+    const noLimits = createArgvBody({ slug: 'analyst', image: 'x', mounts, enforceLimits: false, runtime: 'runsc', uidMapping: 'idmap' }).join(' ')
     expect(noLimits).not.toContain('--memory')
     expect(noLimits).toContain('--runtime runsc --userns auto')
   })

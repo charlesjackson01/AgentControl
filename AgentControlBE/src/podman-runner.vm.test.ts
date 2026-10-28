@@ -17,7 +17,7 @@
  * itself, only in that case, and restores it afterwards. Where limits are enforced it is not set.
  */
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
@@ -79,8 +79,6 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
     for (const sub of ['workspace', 'shared', 'memory']) mkdirSync(join(dir, sub))
     writeFileSync(join(dir, 'shared', 'input.txt'), 'read me\n')
     writeFileSync(join(dir, 'memory', 'BOT.md'), '# secret profile\n')
-    for (const p of [dir, join(dir, 'workspace'), join(dir, 'shared')]) chmodSync(p, 0o777)
-    chmodSync(join(dir, 'shared', 'input.txt'), 0o644)
 
     const p = createRuntimeProbe({ exec: execCommandRunner, engine: async () => ENGINE, tryRunsc: process.env.AC_VM_RUNSC !== '0' })
     probe = await p.refresh()
@@ -96,6 +94,9 @@ describe.skipIf(!engineReady)('@vm runtime probe + container runner', () => {
         { source: join(dir, 'workspace'), target: '/bot/workspace', readonly: false },
         { source: join(dir, 'shared'), target: '/bot/shared', readonly: true },
       ],
+      // BE-P2-5: the probe's uid mapping (keep-id here) replaces the old chmod 777 on the folders.
+      uidMapping: () => (cli === 'docker' ? null : ((rt.effective === 'runsc' ? probe.uidMapping : probe.standard?.uidMapping) ?? 'keep-id')),
+      allowedMounts: () => ({ slug: SLUG, workspace: join(dir, 'workspace'), inputs: join(dir, 'shared'), groups: {}, botRoot: dir }),
       saveVm: () => true,
       runtime: () => (rt.effective === 'runsc' ? 'runsc' : null),
       runtimeFlags: () => (rt.effective === 'runsc' ? (rt.flags ?? []) : []),

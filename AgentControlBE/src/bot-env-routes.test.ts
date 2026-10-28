@@ -4,8 +4,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createBotEnvService } from './bot-env.js'
-import { botMounts, BROWSER_NOT_YET, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
+import { botMountAllowList, botMounts, BROWSER_NOT_YET, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
+import { checkBotMounts, KEEP_ID_NOTE } from './isolation.js'
 import { botRoot } from './files.js'
 import { createStore } from './store.js'
 import type { Agent, VmHostInfo } from './shared/types.js'
@@ -185,6 +186,40 @@ describe('start / stop / reset / tools', () => {
     expect(mounts).toContainEqual(expect.objectContaining({ target: `/bot/groups/${slug}`, readonly: false }))
     const lone = await makeAgent('Lone')
     expect(botMounts(store, stored(lone.id)).some((m) => m.target.startsWith('/bot/groups/'))).toBe(false)
+  })
+})
+
+describe('BE-P2-5: mount allow-list and isolation note', () => {
+  it('botMountAllowList: own folders and member groups only; botMounts passes its own guard', async () => {
+    await inject('POST', '/api/agents', { name: 'Primary', endpointId: 'ep_local_llama', modelId: 'llama-3-8b', isPrimary: true })
+    const a = await makeAgent('Member')
+    const b = await makeAgent('Other')
+    const lone = await makeAgent('Lone')
+    const slug = ((await inject('POST', '/api/groups', { name: 'Team', memberAgentIds: [a.id, b.id] })).json() as { slug: string }).slug
+    const allowA = botMountAllowList(store, stored(a.id))
+    expect(Object.keys(allowA.groups)).toEqual([slug])
+    expect(allowA.workspace).toBe(join(botRoot(store, stored(a.id)), 'workspace'))
+    expect(allowA.botRoot).toBe(botRoot(store, stored(a.id)))
+    expect(allowA.groupsRoot).toBeDefined()
+    expect(botMountAllowList(store, stored(lone.id)).groups).toEqual({})
+    const mountsA = botMounts(store, stored(a.id))
+    expect(checkBotMounts(mountsA, allowA)).toEqual(mountsA)
+    // A's mounts with B's allow-list (= B's container mounting A's paths) are refused.
+    expect(() => checkBotMounts(mountsA, botMountAllowList(store, stored(b.id)))).toThrow(/isn't this bot's folder/)
+    expect(() => checkBotMounts(botMounts(store, stored(a.id)), botMountAllowList(store, stored(lone.id)))).toThrow()
+  })
+
+  it('VmInfo.isolationNote: keep-id note on Podman until the probe picks idmap; bind failure appended; none on Docker', async () => {
+    const a = await makeAgent()
+    const note = async () => (await inject('GET', `/api/agents/${a.id}/vm`)).json().isolationNote as string | undefined
+    expect(await note()).toBe(KEEP_ID_NOTE)
+    const base = { runsc: { installed: false }, checks: [], compatible: false, snapshotDriver: null, checkedAt: '2026-10-28T15:00:00.000Z', versions: { engine: '5.4.2', runsc: null, image: 'abc' }, runscFlags: [] }
+    probeResult = { ...base, uidMapping: null, standard: { runtime: 'crun', version: '1.21', limitsEnforced: true, limitsAccepted: true, uidMapping: 'idmap', checks: [{ id: 'bind_mount', status: 'pass' }] } } as RuntimeProbeResult
+    expect(await note()).toBeUndefined()
+    probeResult = { ...base, uidMapping: null, standard: { runtime: 'crun', version: '1.21', limitsEnforced: true, limitsAccepted: true, uidMapping: null, checks: [{ id: 'bind_mount', status: 'fail', message: "The bot can't use its folders: x" }] } } as RuntimeProbeResult
+    expect(await note()).toBe(`${KEEP_ID_NOTE} The bot can't use its folders: x`)
+    host = { ...hostInfo(), engine: 'docker' as never }
+    expect(await note()).toBeUndefined()
   })
 })
 

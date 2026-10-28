@@ -22,8 +22,9 @@ import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
 import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
-import { botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
-import { checkVolume } from './storage/index.js'
+import { botMountAllowList, botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
+import { checkVolume, LocalFs, storageFor } from './storage/index.js'
+import { KEEP_ID_NOTE, type UidMapping } from './isolation.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
@@ -1482,8 +1483,10 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     return vmHost.grow(body && typeof body === 'object' ? body.toGb : undefined)
   })
 
+  let engineCli: EngineRef['cli'] | null = null
   const engineRef = async (): Promise<EngineRef | null> => {
     const host = await vmHost.hostInfo()
+    engineCli = host.engine ?? null
     if (!host.engine) return null
     // Mac/Windows: always the dedicated machine, never podman-machine-default.
     const globalArgs = host.engine === 'podman' && host.os !== 'linux' ? ['--connection', MACHINE_NAME] : []
@@ -1491,10 +1494,37 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   }
 
   // BE-P2-8: which runtime each bot gets, and whether limits are really enforced.
-  const runtimeProbe = opts.runtimeProbe ?? createRuntimeProbe({ engine: engineRef, log: (msg) => app.log.info(msg) })
+  const runtimeProbe = opts.runtimeProbe ?? createRuntimeProbe({
+      engine: engineRef,
+      // BE-P2-5: the bind_mount check uses a temp folder next to the bots' files (same mount path).
+      bindDir: () => {
+        const backend = storageFor(store).backend
+        return backend instanceof LocalFs ? backend.volumeRoot : null
+      },
+      log: (msg) => app.log.info(msg),
+    })
   const runtimeOf = (agent: Agent): ResolvedRuntime =>
     resolveRuntime(store.settings.vm?.gvisor ?? 'auto', agent.vm.gvisor, runtimeProbe.current(), agent.name)
   registerProbeRoutes(app, runtimeProbe)
+
+  // BE-P2-5: uid mapping per bot (Podman). The probe's choice for the bot's runtime; keep-id when
+  // the probe hasn't run or no mapping passed (it works rootless on Linux, Mac and Windows).
+  const bindCheckOf = (agent: Agent) => {
+    const p = runtimeProbe.current()
+    return (runtimeOf(agent).effective === 'runsc' ? p?.checks : p?.standard?.checks)?.find((c) => c.id === 'bind_mount')
+  }
+  const uidMappingOf = (agent: Agent, cli: EngineRef['cli'] | null = engineCli): UidMapping | null => {
+    if (cli === 'docker') return null
+    const p = runtimeProbe.current()
+    const m = runtimeOf(agent).effective === 'runsc' ? p?.uidMapping : p?.standard?.uidMapping
+    return m ?? 'keep-id'
+  }
+  const isolationNoteOf = (agent: Agent, cli: EngineRef['cli'] | null): string | undefined => {
+    if (cli !== 'podman') return undefined
+    const check = bindCheckOf(agent)
+    const failed = check?.status === 'fail' ? ` ${check.message ?? 'The bot file access check failed.'}` : ''
+    return uidMappingOf(agent, cli) === 'keep-id' ? `${KEEP_ID_NOTE}${failed}` : failed.trim() || undefined
+  }
   if (opts.probeOnStart) {
     app.addHook('onReady', async () => {
       void runtimeProbe.ensureFresh().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
@@ -1508,6 +1538,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     createBotEnvService({
       engine: engineRef,
       mounts: (agent) => botMounts(store, agent),
+      allowedMounts: (agent) => botMountAllowList(store, agent),
+      uidMapping: (agent) => uidMappingOf(agent),
       saveVm: storeSaveVm(store),
       // Only gVisor is named explicitly; the standard runtime stays the engine default (no recreate).
       runtime: (agent) => (runtimeOf(agent).effective === 'runsc' ? 'runsc' : null),
@@ -1546,6 +1578,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       return r
     },
     runner,
+    isolationNote: isolationNoteOf,
   })
 
   return app

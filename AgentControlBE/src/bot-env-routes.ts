@@ -17,6 +17,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { BotEnvService, BotMount } from './bot-env.js'
+import type { MountAllowList } from './isolation.js'
 import { envListProblem } from './bot-env.js'
 import { botRoot, folderBytes, quotaBytes } from './files.js'
 import { groupRoot } from './group-files.js'
@@ -28,6 +29,7 @@ import {
   type Agent,
   type AgentVm,
   type EnvVar,
+  type GroupConversation,
   type InternetPolicy,
   type RuntimeMode,
   type VmHostInfo,
@@ -58,6 +60,25 @@ export function botMounts(store: WorkspaceStore, agent: Agent): BotMount[] {
   return mounts
 }
 
+const memberGroups = (store: WorkspaceStore, agent: Agent): GroupConversation[] =>
+  store.conversations.filter((c): c is GroupConversation => c.kind === 'group' && !c.archivedAt && c.memberAgentIds.includes(agent.id))
+
+/**
+ * BE-P2-5: what a bot may mount, for the mount guard (isolation.ts checkBotMounts): its own
+ * workspace and inputs (inside its own folder) and the shared folder of each group it's in.
+ */
+export function botMountAllowList(store: WorkspaceStore, agent: Agent): MountAllowList {
+  const root = botRoot(store, agent)
+  const groups: Record<string, string> = {}
+  let groupsRoot: string | undefined
+  for (const c of memberGroups(store, agent)) {
+    const g = groupRoot(store, c.slug)
+    groups[c.slug] = path.join(g, 'shared')
+    groupsRoot ??= path.dirname(g)
+  }
+  return { slug: agent.slug, workspace: path.join(root, 'workspace'), inputs: path.join(root, 'shared'), groups, botRoot: root, ...(groupsRoot ? { groupsRoot } : {}) }
+}
+
 export interface BotEnvRouteDeps {
   botEnv: BotEnvService
   hostInfo: () => Promise<VmHostInfo>
@@ -65,6 +86,8 @@ export interface BotEnvRouteDeps {
   runtime?: (agent: Agent) => VmInfo['runtime']
   /** BE-P2-8: stop/reset end the bot's runs; idleStopAt for VmInfo. */
   runner?: { stopRuns(agentId: string): void; idleStopAt(agentId: string): string | undefined }
+  /** BE-P2-5: VmInfo.isolationNote (e.g. the keep-id fallback), or undefined. */
+  isolationNote?: (agent: Agent, engine: VmHostInfo['engine'] | null) => string | undefined
 }
 
 export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore, deps: BotEnvRouteDeps): void {
@@ -101,6 +124,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const breakdown = { workspace, inputs, memory, tools: 0, opt: 0, imageLayer: 0 }
     const globalMode = store.settings.vm?.gvisor ?? 'auto'
     const idleStopAt = deps.runner?.idleStopAt(agent.id)
+    const isolationNote = deps.isolationNote?.(agent, host?.engine ?? null)
     const vm = agent.vm
     return {
       agentId: agent.id,
@@ -128,6 +152,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       ...(vm.tools ? { tools: vm.tools } : {}),
       image: vm.image,
       ...(idleStopAt && state === 'running' ? { idleStopAt } : {}),
+      ...(isolationNote ? { isolationNote } : {}),
       storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root },
       runs: [],
       runsHasMore: false,

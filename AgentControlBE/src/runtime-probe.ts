@@ -10,12 +10,24 @@
  * gVisor rootless often starts only with `--runtime-flag=ignore-cgroups --runtime-flag=network=none`;
  * that variant can't enforce limits, so it is reported Incompatible and crun stays in use.
  * `network=host` is never used.
+ *
+ * BE-P2-5: the `bind_mount` check. For each runtime that started, a second throwaway container
+ * (same hardening flags, no limits) gets a host temp folder bind-mounted read-write at
+ * /bot/workspace and another read-only at /bot/shared, with each uid mapping candidate in turn
+ * (isolation.ts: idmap, then keep-id; Docker: the engine default). As uid 1000 it appends to a
+ * file the server created, creates, renames and deletes a file, makes a folder and leaves one file
+ * there, and writes to the read-only mount (must be EROFS). Back on the host, the files it left
+ * must be owned by the server's uid/gid. The first candidate that passes is the uid mapping.
  */
 import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
-import { BOT_GID, BOT_UID, sharedImageRef } from './vm-images.js'
+import { BOT_GID, BOT_PATHS, BOT_UID, sharedImageRef } from './vm-images.js'
+import { bindMountOptions, UID_MAPPINGS, usernsArgs, type UidMapping } from './isolation.js'
 import { failWithReason } from './http.js'
 import { PERMISSION_CSRF_HEADER } from './shared/types.js'
 import type {
@@ -90,6 +102,111 @@ except Exception as e:
 print("AC_PROBE " + json.dumps(out))
 `
 
+const BIND_SCRIPT = `
+import errno, json, os
+W = "${BOT_PATHS.workspace}"
+R = "${BOT_PATHS.inputs}"
+out = {"uid": os.getuid()}
+def err(e):
+    return "%s %s" % (errno.errorcode.get(e.errno, e.errno), e.strerror)
+def step(name, fn):
+    try:
+        fn()
+        out[name] = "ok"
+    except OSError as e:
+        out[name] = err(e)
+def append():
+    with open(W + "/host.txt", "a") as f:
+        f.write("bot\\n")
+def create():
+    with open(W + "/a.txt", "w") as f:
+        f.write("x")
+def keep():
+    with open(W + "/d/kept.txt", "w") as f:
+        f.write("k")
+step("modify", append)
+step("create", create)
+step("mkdir", lambda: os.mkdir(W + "/d"))
+step("rename", lambda: os.rename(W + "/a.txt", W + "/d/b.txt"))
+step("delete", lambda: os.remove(W + "/d/b.txt"))
+step("keep", keep)
+try:
+    with open(R + "/in.txt") as f:
+        out["readRo"] = f.read().strip()
+except OSError as e:
+    out["readRo"] = err(e)
+try:
+    with open(R + "/x.txt", "w") as f:
+        f.write("x")
+    out["writeRo"] = "writable"
+except OSError as e:
+    out["writeRo"] = "EROFS" if e.errno == errno.EROFS else err(e)
+print("AC_BIND " + json.dumps(out))
+`
+const BIND_STEPS = ['modify', 'create', 'mkdir', 'rename', 'delete', 'keep'] as const
+const BIND_RO_TEXT = 'read only'
+
+/** The bind_mount probe container's argv (after the engine's global args and runtime flags). */
+export function bindProbeArgv(o: { name: string; image: string; runtime: ContainerRuntime | null; uidMapping: UidMapping | null; rw: string; ro: string }): string[] {
+  return [
+    'run', '--rm',
+    '--name', o.name,
+    '--label', `${PROBE_LABEL}=1`,
+    '--network', 'none',
+    '--user', `${BOT_UID}:${BOT_GID}`,
+    '--read-only',
+    '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges',
+    ...(o.runtime ? ['--runtime', o.runtime] : []),
+    ...usernsArgs(o.uidMapping),
+    '--tmpfs', '/tmp:rw,nosuid,nodev,size=16m,mode=1777',
+    '--mount', `type=bind,source=${o.rw},destination=${BOT_PATHS.workspace}${bindMountOptions(o.uidMapping)}`,
+    '--mount', `type=bind,source=${o.ro},destination=${BOT_PATHS.inputs},readonly${bindMountOptions(o.uidMapping)}`,
+    o.image,
+    'python3', '-c', BIND_SCRIPT,
+  ]
+}
+
+/** Parse the AC_BIND line. */
+export function parseBindOutput(stdout: string): Record<string, string | number> | null {
+  const line = stdout.split('\n').find((l) => l.startsWith('AC_BIND '))
+  if (!line) return null
+  try {
+    const v = JSON.parse(line.slice('AC_BIND '.length)) as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string | number>) : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Judge one bind-mount attempt: the container's report plus what the host sees afterwards.
+ * `host` is null where ownership can't be checked (no uid on this OS).
+ */
+export function judgeBind(
+  out: Record<string, string | number> | null,
+  host: { owner: { uid: number; gid: number } | null; kept: { uid: number; gid: number } | null; dir: { uid: number; gid: number } | null; modified: boolean; leftovers: string[] },
+): { ok: boolean; message: string } {
+  if (!out) return { ok: false, message: 'the test container didn\'t start' }
+  const bad = BIND_STEPS.filter((s) => out[s] !== 'ok').map((s) => `${s}: ${String(out[s] ?? 'not run')}`)
+  if (out.uid !== BOT_UID) bad.push(`runs as uid ${String(out.uid)}, expected ${BOT_UID}`)
+  if (out.readRo !== BIND_RO_TEXT) bad.push(`reading the read-only mount: ${String(out.readRo ?? 'not run')}`)
+  if (out.writeRo !== 'EROFS') bad.push(`writing to the read-only mount gave ${String(out.writeRo ?? 'nothing')}, expected EROFS`)
+  if (!bad.length) {
+    if (!host.modified) bad.push('the change to the server\'s file didn\'t reach the host')
+    if (host.leftovers.length) bad.push(`renamed or deleted files are still on the host: ${host.leftovers.join(', ')}`)
+    if (host.owner) {
+      for (const [what, st] of [['the new file', host.kept], ['the new folder', host.dir]] as const) {
+        if (!st) bad.push(`${what} is missing on the host`)
+        else if (st.uid !== host.owner.uid || st.gid !== host.owner.gid) bad.push(`${what} is owned by ${st.uid}:${st.gid} on the host, expected the server user ${host.owner.uid}:${host.owner.gid}`)
+      }
+    }
+  }
+  return bad.length
+    ? { ok: false, message: bad.join('; ') }
+    : { ok: true, message: `uid 1000 can modify, create, rename and delete in a writable mount${host.owner ? ', the files stay owned by the server user' : ''}, and a read-only mount gives EROFS` }
+}
+
 /** What the probe container reported. */
 export interface ProbeFacts {
   uid?: number
@@ -109,6 +226,8 @@ export interface RuntimeProbeRun {
   runtime: ContainerRuntime
   /** Runtime flags it needed to start (runsc only). */
   flags: string[]
+  /** BE-P2-5: the uid mapping whose bind_mount check passed (null: none did, or Docker). */
+  uidMapping?: UidMapping | null
   started: boolean
   /** The engine refused the memory/pids flags; the container ran without them. */
   limitsRejected?: boolean
@@ -118,7 +237,7 @@ export interface RuntimeProbeRun {
   durationMs: number
 }
 
-/** VmProbeResult + the BE-P2-8 additions (additive; see docs/phase2-contract.md). */
+/** VmProbeResult + the BE-P2-8 / BE-P2-5 additions (additive; see docs/phase2-contract.md). */
 export interface RuntimeProbeResult extends VmProbeResult {
   standard: NonNullable<VmProbeResult['standard']> | null
   runscFlags: string[]
@@ -131,6 +250,12 @@ export interface RuntimeProbeDeps {
   image?: () => string
   /** Probe runsc at all (false: report not installed without trying). Default true. */
   tryRunsc?: boolean
+  /**
+   * BE-P2-5: a host folder the engine can bind-mount, under which the bind_mount check makes its
+   * temp folders (removed afterwards); null = skip that check (e.g. Windows WSL storage).
+   * Default: the OS temp dir when the engine is local, else null.
+   */
+  bindDir?: () => string | null
   now?: () => Date
   log?: (msg: string) => void
 }
@@ -207,7 +332,6 @@ export function probeRunArgv(o: { name: string; image: string; runtime: Containe
 
 const skipped = (id: ProbeCheck['id'], message: string): ProbeCheck => ({ id, status: 'skipped', message })
 const LATER_CHECKS: ProbeCheck[] = [
-  skipped('bind_mount', 'Checked by the isolation probe (BE-P2-5/7).'),
   skipped('snapshot_mount', 'Checked with the snapshot driver (BE-P2-9).'),
   skipped('chromium', 'Checked when a bot turns the browser on (BE-P2-15).'),
 ]
@@ -242,6 +366,90 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
       return { r: r2, limits: false }
     }
     return { r, limits: true }
+  }
+
+  /** One bind attempt with one mapping; the host folders are always removed. */
+  async function bindOnce(e: EngineRef, base: string, runtime: ContainerRuntime | null, flags: readonly string[], m: UidMapping | null): Promise<{ ok: boolean; message: string }> {
+    mkdirSync(base, { recursive: true })
+    const dir = mkdtempSync(path.join(base, '.ac-bind-probe-'))
+    try {
+      const rw = path.join(dir, 'rw')
+      const ro = path.join(dir, 'ro')
+      mkdirSync(rw)
+      mkdirSync(ro)
+      writeFileSync(path.join(rw, 'host.txt'), 'server\n')
+      writeFileSync(path.join(ro, 'in.txt'), `${BIND_RO_TEXT}\n`)
+      const name = `ac-probe-bind-${randomBytes(4).toString('hex')}`
+      const globals = e.cli === 'docker' ? [] : [...flags]
+      const r = await call(e, [...globals, ...bindProbeArgv({ name, image: image(), runtime, uidMapping: m, rw, ro })], PROBE_TIMEOUT_MS)
+      if (r.code !== 0) await call(e, ['rm', '--force', name]).catch(() => undefined)
+      const out = parseBindOutput(r.stdout)
+      const st = (p: string) => {
+        try {
+          const s = statSync(p)
+          return { uid: s.uid, gid: s.gid }
+        } catch {
+          return null
+        }
+      }
+      const uid = process.getuid?.()
+      const gid = process.getgid?.()
+      let modified = false
+      try {
+        modified = readFileSync(path.join(rw, 'host.txt'), 'utf8').includes('bot')
+      } catch {
+        modified = false
+      }
+      const j = judgeBind(out, {
+        owner: uid !== undefined && gid !== undefined ? { uid, gid } : null,
+        kept: st(path.join(rw, 'd', 'kept.txt')),
+        dir: st(path.join(rw, 'd')),
+        modified,
+        leftovers: ['a.txt', 'd/b.txt'].filter((f) => existsSync(path.join(rw, f))).concat(existsSync(path.join(ro, 'x.txt')) ? ['ro/x.txt'] : []),
+      })
+      return out ? j : { ok: false, message: `the test container didn't start: ${lastLine(r)}` }
+    } finally {
+      try {
+        rmSync(dir, { recursive: true, force: true })
+      } catch (err) {
+        log(`runtime-probe: couldn't remove ${dir}: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  /** The bind_mount check for one runtime: candidates in order, first pass wins. */
+  async function bindCheck(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[]): Promise<{ check: ProbeCheck; uidMapping: UidMapping | null }> {
+    const base = deps.bindDir ? deps.bindDir() : e.globalArgs.includes('--connection') ? null : tmpdir()
+    if (!base) return { check: skipped('bind_mount', 'Not checked: the bots\' files aren\'t on a folder the engine can mount from here yet.'), uidMapping: null }
+    const t0 = Date.now()
+    const candidates: (UidMapping | null)[] = e.cli === 'docker' ? [null] : [...UID_MAPPINGS]
+    const failed: string[] = []
+    for (const m of candidates) {
+      let res: { ok: boolean; message: string }
+      try {
+        res = await bindOnce(e, base, runtime, flags, m)
+      } catch (err) {
+        res = { ok: false, message: (err as Error).message }
+      }
+      const label = m ?? 'default mapping'
+      if (res.ok) {
+        const note = failed.length ? ` (${failed.join('; ')})` : ''
+        return { check: { id: 'bind_mount', status: 'pass', message: `${label}: ${res.message}${note}`, durationMs: Date.now() - t0 }, uidMapping: m }
+      }
+      failed.push(`${label} failed: ${res.message}`)
+    }
+    return { check: { id: 'bind_mount', status: 'fail', message: `The bot can't use its folders: ${failed.join('; ')}`, durationMs: Date.now() - t0 }, uidMapping: null }
+  }
+
+  /** Insert the bind_mount check after exec (only for a runtime that started). */
+  async function withBind(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], c: { checks: ProbeCheck[]; started: boolean }): Promise<{ checks: ProbeCheck[]; uidMapping: UidMapping | null }> {
+    if (!c.started) return { checks: c.checks, uidMapping: null }
+    const b = await bindCheck(e, runtime, flags)
+    log(`runtime-probe: ${runtime ?? 'default runtime'}: bind mounts ${b.check.status}${b.uidMapping ? ` with ${b.uidMapping}` : ''}${b.check.status === 'pass' ? '' : `: ${b.check.message ?? ''}`}`)
+    const i = c.checks.findIndex((x) => x.id === 'exec')
+    const checks = [...c.checks]
+    checks.splice(i < 0 ? checks.length : i + 1, 0, b.check)
+    return { checks, uidMapping: b.uidMapping }
   }
 
   function checksFor(r: CommandResult, facts: ProbeFacts | null, limitsAccepted: boolean, t0: number): { checks: ProbeCheck[]; started: boolean; limitsEnforced: boolean } {
@@ -300,13 +508,15 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     let t0 = Date.now()
     const std = await probeOne(e, null, [])
     const stdChecks = checksFor(std.r, parseProbeOutput(std.r.stdout), std.limits, t0)
-    const standard = { runtime: facts.std, version: facts.stdVersion, limitsEnforced: stdChecks.limitsEnforced, limitsAccepted: std.limits, checks: stdChecks.checks }
+    const stdBind = await withBind(e, null, [], stdChecks)
+    const standard = { runtime: facts.std, version: facts.stdVersion, limitsEnforced: stdChecks.limitsEnforced, limitsAccepted: std.limits, checks: stdBind.checks, uidMapping: stdBind.uidMapping }
     log(`runtime-probe: ${facts.std ?? 'default runtime'}: limits ${stdChecks.limitsEnforced ? 'enforced' : 'NOT enforced'}`)
 
     // gVisor.
     let runscInstalled = versions.runsc !== null
     let runscChecks: ProbeCheck[] | null = null
     let runscFlags: string[] = []
+    let runscMapping: UidMapping | null = null
     if (deps.tryRunsc !== false && (runscInstalled || e.globalArgs.includes('--connection'))) {
       for (const flags of RUNSC_FLAG_VARIANTS) {
         t0 = Date.now()
@@ -319,12 +529,18 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
         const c = checksFor(res.r, parseProbeOutput(res.r.stdout), res.limits, t0)
         runscChecks = c.checks
         runscFlags = [...flags]
-        if (c.started) break
+        if (c.started) {
+          const b = await withBind(e, 'runsc', flags, c)
+          runscChecks = b.checks
+          runscMapping = b.uidMapping
+          break
+        }
       }
     }
     if (!runscInstalled) {
       runscChecks = null
       runscFlags = []
+      runscMapping = null
     }
     const compatible = Boolean(runscChecks?.every((c) => c.status !== 'fail'))
     log(`runtime-probe: runsc ${!runscInstalled ? 'not installed' : compatible ? 'compatible' : `incompatible: ${runscChecks?.find((c) => c.status === 'fail')?.message ?? ''}`}`)
@@ -332,7 +548,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
       runsc: { installed: runscInstalled, ...(versions.runsc ? { version: versions.runsc } : {}) },
       checks: runscChecks,
       compatible,
-      uidMapping: null,
+      uidMapping: runscMapping,
       snapshotDriver: null,
       checkedAt,
       versions,

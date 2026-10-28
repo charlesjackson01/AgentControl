@@ -26,6 +26,7 @@ import { execCommandRunner, type CommandResult, type CommandRunner } from './com
 import { fail, failWithReason } from './http.js'
 import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, VM_LIMITS, type Agent, type AgentVm, type ContainerRuntime, type EnvVar, type ToolManifest } from './shared/types.js'
 import { envNameProblem } from './vm-defaults.js'
+import { bindMountOptions, checkBotMounts, usernsArgs, volumeMountOptions, type BotMount, type MountAllowList, type UidMapping } from './isolation.js'
 import {
   APT_PACKAGE,
   BOT_GID,
@@ -71,11 +72,7 @@ export interface EngineRef {
   command?: string
 }
 
-export interface BotMount {
-  source: string
-  target: string
-  readonly: boolean
-}
+export type { BotMount } from './isolation.js'
 
 /** Allowed container networks: none, or the bot's own egress network (BE-P2-9). Never `host`. */
 export function checkNetwork(slug: string, network: string): string {
@@ -101,8 +98,11 @@ export interface CreateArgvOptions {
   enforceLimits?: boolean
   /** BE-P2-7: e.g. 'runsc'. */
   runtime?: ContainerRuntime | null
-  /** BE-P2-5: e.g. ['--userns', 'auto']. */
-  usernsArgs?: string[]
+  /**
+   * BE-P2-5: uid mapping (Podman; see isolation.ts). null/absent = the engine's default (Docker).
+   * Part of the config hash, so a changed mapping recreates the container (volumes kept, re-owned by U).
+   */
+  uidMapping?: UidMapping | null
 }
 
 /** `create` argv (after the engine's global args), without the config label. */
@@ -123,14 +123,15 @@ export function createArgvBody(o: CreateArgvOptions): string[] {
     argv.push('--memory', `${VM_LIMITS.memoryMb}m`, '--memory-swap', `${VM_LIMITS.memoryMb}m`, '--cpus', String(VM_LIMITS.cpus), '--pids-limit', String(VM_LIMITS.pids))
   }
   if (o.runtime) argv.push('--runtime', o.runtime)
-  if (o.usernsArgs?.length) argv.push(...o.usernsArgs)
+  const uid = o.uidMapping ?? null
+  argv.push(...usernsArgs(uid))
   argv.push(
     '--tmpfs', `${BOT_PATHS.tmp}:rw,nosuid,nodev,size=${TMP_SIZE_MB}m,mode=1777`,
-    '--mount', `type=volume,source=${botToolsVolume(o.slug)},destination=${BOT_PATHS.home}`,
-    '--mount', `type=volume,source=${botOptVolume(o.slug)},destination=${BOT_PATHS.opt}`,
+    '--mount', `type=volume,source=${botToolsVolume(o.slug)},destination=${BOT_PATHS.home}${volumeMountOptions(uid)}`,
+    '--mount', `type=volume,source=${botOptVolume(o.slug)},destination=${BOT_PATHS.opt}${volumeMountOptions(uid)}`,
   )
   for (const m of o.mounts.map(checkMount)) {
-    argv.push('--mount', `type=bind,source=${m.source},destination=${m.target}${m.readonly ? ',readonly' : ''}`)
+    argv.push('--mount', `type=bind,source=${m.source},destination=${m.target}${m.readonly ? ',readonly' : ''}${bindMountOptions(uid)}`)
   }
   argv.push('--workdir', BOT_PATHS.workspace, o.image)
   return argv
@@ -233,7 +234,14 @@ export interface BotEnvDeps {
   /** False only when the engine refuses the cgroup limit flags (BE-P2-8 probe: limitsAccepted; default true). */
   enforceLimits?: () => boolean
   runtime?: (agent: Agent) => ContainerRuntime | null
-  usernsArgs?: (agent: Agent) => string[]
+  /** BE-P2-5: the uid mapping the probe chose for this bot's runtime (Podman); null for Docker. */
+  uidMapping?: (agent: Agent) => UidMapping | null
+  /**
+   * BE-P2-5: what this bot may mount. Every mount from `mounts` is checked against it (symlinks
+   * resolved) before the engine is called; a mismatch throws 500 mount_refused. Required for
+   * production wiring; tests may omit it.
+   */
+  allowedMounts?: (agent: Agent) => MountAllowList
   /**
    * Runtime flags passed as engine global args on start/stop/exec (BE-P2-8: runsc variants such
    * as --runtime-flag=ignore-cgroups). Podman doesn't store them in the container.
@@ -456,6 +464,8 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
 
   async function ensureLocked(agent: Agent, start: boolean): Promise<AgentVm> {
     const slug = agent.slug
+    // Mount guard first: nothing reaches the engine for a mount outside the bot's allow-list.
+    const mounts = deps.allowedMounts ? checkBotMounts(deps.mounts(agent), deps.allowedMounts(agent)) : deps.mounts(agent)
     await ensureVolume(botToolsVolume(slug), slug)
     await ensureVolume(botOptVolume(slug), slug)
     const image = await desiredImage(agent)
@@ -464,11 +474,11 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     const { argv, configHash } = createArgv({
       slug,
       image,
-      mounts: deps.mounts(agent),
+      mounts,
       network: 'none',
       enforceLimits: enforceLimits(),
       runtime: deps.runtime?.(agent) ?? null,
-      usernsArgs: deps.usernsArgs?.(agent) ?? [],
+      uidMapping: deps.uidMapping?.(agent) ?? null,
     })
     let st = await containerStatus(slug)
     if (st.state !== 'missing' && (st.imageId !== img.id || st.configHash !== configHash)) {

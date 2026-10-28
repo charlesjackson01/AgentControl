@@ -969,6 +969,11 @@ export interface VmProbeResult {
     /** The engine accepted the limit flags (false: containers are created without them). */
     limitsAccepted: boolean
     checks: ProbeCheck[]
+    /**
+     * BE-P2-5: uid mapping whose bind_mount check passed for the standard runtime (null: none did,
+     * Docker, or not checked). The top-level `uidMapping` is the same for runsc.
+     */
+    uidMapping?: 'idmap' | 'keep-id' | null
   } | null
   /** BE-P2-8 (additive): runtime flags runsc needed to start, e.g. ["--runtime-flag=ignore-cgroups", "--runtime-flag=network=none"]. */
   runscFlags?: string[]

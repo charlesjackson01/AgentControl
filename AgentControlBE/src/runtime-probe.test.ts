@@ -1,9 +1,15 @@
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import type { CommandResult, CommandRunner } from './command-runner.js'
 import {
+  bindProbeArgv,
   createRuntimeProbe,
+  judgeBind,
   judgeLimits,
+  parseBindOutput,
   LIMITS_NOT_ENFORCED,
   parseProbeOutput,
   PROBE_LIMITS,
@@ -23,7 +29,39 @@ const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' })
 const bad = (stderr: string, code = 126): CommandResult => ({ code, stdout: '', stderr })
 const probeOut = (f: ProbeFacts) => ok(`noise\nAC_PROBE ${JSON.stringify(f)}\n`)
 
+interface BindCall {
+  runtime: string | null
+  mapping: 'idmap' | 'keep-id' | null
+  rw: string
+  ro: string
+}
+const IDMAP_EPERM = bad('Error: crun: mount_setattr `/bot/shared`: Operation not permitted: OCI permission denied', 126)
+/** Does what the bind script does, on the host, as this process (so ownership = the server user). */
+function emulateBind(c: BindCall, over: { skip?: string[]; writeRo?: string } = {}): CommandResult {
+  const out: Record<string, string | number> = { uid: 1000 }
+  const step = (name: string, fn: () => void) => {
+    if (over.skip?.includes(name)) return void (out[name] = 'EACCES Permission denied')
+    try {
+      fn()
+      out[name] = 'ok'
+    } catch (e) {
+      out[name] = `${(e as NodeJS.ErrnoException).code} failed`
+    }
+  }
+  step('modify', () => appendFileSync(join(c.rw, 'host.txt'), 'bot\n'))
+  step('create', () => writeFileSync(join(c.rw, 'a.txt'), 'x'))
+  step('mkdir', () => mkdirSync(join(c.rw, 'd')))
+  step('rename', () => renameSync(join(c.rw, 'a.txt'), join(c.rw, 'd', 'b.txt')))
+  step('delete', () => unlinkSync(join(c.rw, 'd', 'b.txt')))
+  step('keep', () => writeFileSync(join(c.rw, 'd', 'kept.txt'), 'k'))
+  out.readRo = readFileSync(join(c.ro, 'in.txt'), 'utf8').trim()
+  out.writeRo = over.writeRo ?? 'EROFS'
+  return ok(`AC_BIND ${JSON.stringify(out)}\n`)
+}
+const defaultBind = (c: BindCall) => (c.mapping === 'idmap' ? IDMAP_EPERM : emulateBind(c))
+
 interface FakeOpts {
+  bind?: (c: BindCall) => CommandResult
   std?: () => CommandResult
   runsc?: (flags: string[]) => CommandResult
   runscVersion?: CommandResult
@@ -31,6 +69,7 @@ interface FakeOpts {
 }
 function fakeEngine(o: FakeOpts = {}) {
   const calls: { cmd: string; args: string[] }[] = []
+  const bindCalls: BindCall[] = []
   const exec: CommandRunner = async (cmd, args) => {
     const a = [...args]
     calls.push({ cmd, args: a })
@@ -41,6 +80,18 @@ function fakeEngine(o: FakeOpts = {}) {
     if (verb[0] === 'image' && verb[1] === 'inspect') return ok(`sha256:${o.imageId?.() ?? 'abcdef0123456789'}\n`)
     if (a.includes('rm')) return ok()
     const runAt = a.indexOf('run')
+    if (runAt >= 0 && a.includes('--mount')) {
+      const src = (dest: string) => a.find((x) => x.startsWith('type=bind,') && x.includes(`destination=${dest}`))!.split(',').find((x) => x.startsWith('source='))!.slice(7)
+      const userns = a[a.indexOf('--userns') + 1]
+      const c: BindCall = {
+        runtime: a.includes('--runtime') ? a[a.indexOf('--runtime') + 1]! : null,
+        mapping: !a.includes('--userns') ? null : userns === 'auto' ? 'idmap' : 'keep-id',
+        rw: src('/bot/workspace'),
+        ro: src('/bot/shared'),
+      }
+      bindCalls.push(c)
+      return (o.bind ?? defaultBind)(c)
+    }
     if (runAt >= 0) {
       const flags = a.slice(0, runAt).filter((x) => x.startsWith('--runtime-flag'))
       if (a.includes('--runtime')) return o.runsc ? o.runsc(flags) : bad('unknown runtime runsc', 125)
@@ -48,8 +99,9 @@ function fakeEngine(o: FakeOpts = {}) {
     }
     return bad(`unexpected ${a.join(' ')}`, 1)
   }
-  return { exec, calls }
+  return { exec, calls, bindCalls }
 }
+const isRun = (c: { args: string[] }) => c.args.includes('run') && !c.args.includes('--mount')
 const engine = async () => ({ cli: 'podman' as const, globalArgs: ['--root', '/tmp/r'] })
 
 describe('probe parsing and judging', () => {
@@ -96,17 +148,20 @@ describe('createRuntimeProbe', () => {
     expect(r.runscFlags).toEqual(['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none'])
     expect(r.checks?.map((c) => [c.id, c.status])).toEqual([
       ['start', 'pass'], ['network', 'pass'], ['cgroup_limits', 'fail'], ['exec', 'pass'],
-      ['bind_mount', 'skipped'], ['snapshot_mount', 'skipped'], ['chromium', 'skipped'],
+      ['bind_mount', 'pass'], ['snapshot_mount', 'skipped'], ['chromium', 'skipped'],
     ])
+    expect(r.uidMapping).toBe('keep-id')
+    expect(r.standard?.uidMapping).toBe('keep-id')
     expect(r.versions).toEqual({ engine: '5.4.2', runsc: '0.0~20240729.0', image: 'abcdef012345' })
     // All three runsc variants were tried, flags as global args before `run`; failures cleaned up by name.
-    const runs = f.calls.filter((c) => c.args.includes('run'))
+    const runs = f.calls.filter(isRun)
     expect(runs).toHaveLength(1 + RUNSC_FLAG_VARIANTS.length)
     for (const c of runs) {
       expect(c.args.slice(0, 2)).toEqual(['--root', '/tmp/r'])
       expect(c.args.join(' ')).not.toContain('network=host')
     }
-    expect(f.calls.filter((c) => c.args.includes('rm')).length).toBe(2)
+    // 2 failed runsc starts + the failed idmap bind attempt for crun and for runsc.
+    expect(f.calls.filter((c) => c.args.includes('rm')).length).toBe(4)
     expect(p.current()).toBe(r)
     // Resolution: auto → crun fallback, reason = limits can't be enforced, limits flagged.
     expect(resolveRuntime('auto', 'inherit', r, 'Analyst')).toMatchObject({
@@ -158,7 +213,7 @@ describe('createRuntimeProbe', () => {
     let t = Date.parse('2026-10-27T18:00:00Z')
     const f = fakeEngine({ imageId: () => image })
     const p = createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', now: () => new Date(t) })
-    const runs = () => f.calls.filter((c) => c.args.includes('run') && !c.args.includes('--runtime')).length
+    const runs = () => f.calls.filter((c) => isRun(c) && !c.args.includes('--runtime')).length
     const [a, b] = await Promise.all([p.refresh(), p.refresh()])
     expect(a).toBe(b)
     expect(runs()).toBe(1)
@@ -170,6 +225,135 @@ describe('createRuntimeProbe', () => {
     t += 25 * 60 * 60 * 1000
     await p.ensureFresh()
     expect(runs()).toBe(3)
+  })
+})
+
+describe('BE-P2-5 bind_mount check', () => {
+  const owner = { uid: 501, gid: 20 }
+  const okOut = { uid: 1000, modify: 'ok', create: 'ok', mkdir: 'ok', rename: 'ok', delete: 'ok', keep: 'ok', readRo: 'read only', writeRo: 'EROFS' }
+  const host = { owner, kept: owner, dir: owner, modified: true, leftovers: [] as string[] }
+  const withDir = async <T>(fn: (dir: string) => Promise<T>): Promise<T> => {
+    const dir = mkdtempSync(join(tmpdir(), 'ac-bindtest-'))
+    try {
+      return await fn(dir)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('the bind probe container is hardened and offline; userns and idmap per mapping; never U on binds', () => {
+    const base = { name: 'n', image: 'img', runtime: null, rw: '/h/rw', ro: '/h/ro' }
+    const keep = bindProbeArgv({ ...base, uidMapping: 'keep-id' }).join(' ')
+    for (const f of ['--network none', '--user 1000:1000', '--read-only', '--cap-drop ALL', '--security-opt no-new-privileges', '--userns keep-id:uid=1000,gid=1000',
+      'type=bind,source=/h/rw,destination=/bot/workspace --mount', 'type=bind,source=/h/ro,destination=/bot/shared,readonly img']) expect(keep).toContain(f)
+    expect(keep).not.toMatch(/idmap|U=true|--privileged|=host|--memory/)
+    const idmap = bindProbeArgv({ ...base, runtime: 'runsc', uidMapping: 'idmap' }).join(' ')
+    expect(idmap).toContain('--runtime runsc --userns auto')
+    expect(idmap).toContain('destination=/bot/workspace,idmap')
+    expect(idmap).toContain('destination=/bot/shared,readonly,idmap')
+    expect(bindProbeArgv({ ...base, uidMapping: null }).join(' ')).not.toContain('--userns')
+  })
+
+  it('parses AC_BIND and judges writes, EROFS and host ownership', () => {
+    expect(parseBindOutput(`x\nAC_BIND ${JSON.stringify(okOut)}`)).toEqual(okOut)
+    expect(parseBindOutput('AC_BIND [1]')).toBeNull()
+    expect(parseBindOutput('nothing')).toBeNull()
+    expect(judgeBind(okOut, host)).toMatchObject({ ok: true })
+    expect(judgeBind(okOut, host).message).toContain('owned by the server user')
+    expect(judgeBind(null, host)).toMatchObject({ ok: false })
+    expect(judgeBind({ ...okOut, create: 'EACCES Permission denied' }, host).message).toBe('create: EACCES Permission denied')
+    expect(judgeBind({ ...okOut, writeRo: 'writable' }, host).message).toContain('expected EROFS')
+    expect(judgeBind({ ...okOut, uid: 0 }, host).message).toContain('runs as uid 0')
+    expect(judgeBind(okOut, { ...host, kept: { uid: 100999, gid: 100999 } }).message).toBe('the new file is owned by 100999:100999 on the host, expected the server user 501:20')
+    expect(judgeBind(okOut, { ...host, dir: null }).message).toBe('the new folder is missing on the host')
+    expect(judgeBind(okOut, { ...host, modified: false }).ok).toBe(false)
+    expect(judgeBind(okOut, { ...host, leftovers: ['a.txt'] }).message).toContain('a.txt')
+    // No uid on this OS (Windows): ownership isn't judged.
+    expect(judgeBind(okOut, { ...host, owner: null, kept: null, dir: null })).toMatchObject({ ok: true })
+  })
+
+  it('idmap is tried first and wins where it works; keep-id is then not tried', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED), bind: (c) => emulateBind(c) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir }).refresh()
+      expect(r.standard?.uidMapping).toBe('idmap')
+      expect(r.uidMapping).toBe('idmap')
+      expect(f.bindCalls.map((c) => [c.runtime, c.mapping])).toEqual([[null, 'idmap'], ['runsc', 'idmap']])
+      expect(r.standard?.checks.find((c) => c.id === 'bind_mount')).toMatchObject({ status: 'pass', message: expect.stringMatching(/^idmap: /) })
+      expect(readdirSync(dir)).toEqual([])
+    })
+  })
+
+  it('idmap EPERM falls back to keep-id; the pass message says why', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir }).refresh()
+      expect(r.standard?.uidMapping).toBe('keep-id')
+      expect(r.compatible).toBe(true)
+      const check = r.standard!.checks.find((c) => c.id === 'bind_mount')!
+      expect(check.status).toBe('pass')
+      expect(check.message).toMatch(/^keep-id: .*\(idmap failed: the test container didn't start: .*mount_setattr/)
+      expect(r.standard!.checks.map((c) => c.id).slice(0, 5)).toEqual(['start', 'network', 'cgroup_limits', 'exec', 'bind_mount'])
+      // The failed idmap containers are removed by name; the host temp folders are gone.
+      expect(f.calls.filter((c) => c.args[c.args.length - 1]?.startsWith('ac-probe-bind-') && c.args.includes('rm'))).toHaveLength(2)
+      expect(readdirSync(dir)).toEqual([])
+    })
+  })
+
+  it('no mapping works → bind_mount fails, uidMapping null, and runsc is incompatible', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED), runsc: () => probeOut(ENFORCED), bind: (c) => (c.mapping === 'idmap' ? IDMAP_EPERM : emulateBind(c, { writeRo: 'writable' })) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir }).refresh()
+      expect(r.standard?.uidMapping).toBeNull()
+      expect(r.uidMapping).toBeNull()
+      const check = r.standard!.checks.find((c) => c.id === 'bind_mount')!
+      expect(check.status).toBe('fail')
+      expect(check.message).toContain('idmap failed')
+      expect(check.message).toContain('keep-id failed: writing to the read-only mount gave writable, expected EROFS')
+      expect(r.compatible).toBe(false)
+      expect(resolveRuntime('auto', 'inherit', r, 'A').effective).toBe('crun')
+    })
+  })
+
+  it('a step that fails (e.g. EACCES on create) fails that mapping', async () => {
+    await withDir(async (dir) => {
+      const f2 = fakeEngine({ bind: (c) => emulateBind(c, { skip: c.mapping === 'keep-id' ? ['create'] : [] }) })
+      const r = await createRuntimeProbe({ exec: f2.exec, engine, image: () => 'img', bindDir: () => dir, tryRunsc: false }).refresh()
+      expect(r.standard?.uidMapping).toBe('idmap')
+      const r2 = await createRuntimeProbe({
+        exec: fakeEngine({ bind: (c) => (c.mapping === 'idmap' ? IDMAP_EPERM : emulateBind(c, { skip: ['create'] })) }).exec,
+        engine, image: () => 'img', bindDir: () => dir, tryRunsc: false,
+      }).refresh()
+      expect(r2.standard?.checks.find((c) => c.id === 'bind_mount')?.message).toContain('keep-id failed: create: EACCES Permission denied')
+    })
+  })
+
+  it('Docker: one attempt with the engine default mapping (no --userns)', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ bind: (c) => emulateBind(c) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine: async () => ({ cli: 'docker' as const, globalArgs: [] }), image: () => 'img', bindDir: () => dir, tryRunsc: false }).refresh()
+      expect(f.bindCalls.map((c) => c.mapping)).toEqual([null])
+      expect(r.standard?.uidMapping).toBeNull()
+      expect(r.standard?.checks.find((c) => c.id === 'bind_mount')).toMatchObject({ status: 'pass', message: expect.stringMatching(/^default mapping: /) })
+    })
+  })
+
+  it('no mountable folder (bindDir null, or a remote --connection by default) → skipped, nothing run', async () => {
+    const f = fakeEngine()
+    const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false }).refresh()
+    expect(r.standard?.checks.find((c) => c.id === 'bind_mount')?.status).toBe('skipped')
+    expect(r.standard?.uidMapping).toBeNull()
+    const g = fakeEngine()
+    const r2 = await createRuntimeProbe({ exec: g.exec, engine: async () => ({ cli: 'podman' as const, globalArgs: ['--connection', 'agentcontrol'] }), image: () => 'img', tryRunsc: false }).refresh()
+    expect(r2.standard?.checks.find((c) => c.id === 'bind_mount')?.status).toBe('skipped')
+    expect([...f.bindCalls, ...g.bindCalls]).toHaveLength(0)
+  })
+
+  it('a runtime that did not start gets no bind check', async () => {
+    const f = fakeEngine({ std: () => bad('Error: image not known', 125) })
+    const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', tryRunsc: false }).refresh()
+    expect(r.standard?.checks.map((c) => c.id)).toEqual(['start'])
+    expect(f.bindCalls).toHaveLength(0)
   })
 })
 

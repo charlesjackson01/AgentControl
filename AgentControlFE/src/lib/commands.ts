@@ -1,6 +1,6 @@
 /* FE-2 slash commands (composer + palette). Pure; tests/commands.test.mjs. */
 
-export type CommandName = 'new' | 'group' | 'files' | 'skills' | 'memory' | 'settings' | 'sandbox'
+export type CommandName = 'new' | 'group' | 'files' | 'skills' | 'memory' | 'settings' | 'vm'
 
 export type CommandContext = {
   /** The open chat, if any. */
@@ -10,7 +10,7 @@ export type CommandContext = {
 }
 
 /** Bot settings tabs FE-3/FE-4 read from `?panel=settings&tab=`. */
-export type SettingsTab = 'profile' | 'memory' | 'skills' | 'files' | 'sandbox'
+export type SettingsTab = 'profile' | 'memory' | 'skills' | 'files' | 'vm'
 
 export type CommandDef = {
   name: CommandName
@@ -24,20 +24,21 @@ export type CommandDef = {
   unavailable: (ctx: CommandContext) => string | null
   /** Settings tab this command opens once it's available (`?panel=settings&tab=`). */
   tab?: SettingsTab
+  /** Old names that still run it (FE-P2-5: `/sandbox` -> `/vm`). */
+  aliases?: readonly string[]
 }
 
-const later = (reason: string) => () => reason
 /** Panel tabs need an open chat; a group opens its own panel (FE-6). */
 const needsChat = (ctx: CommandContext) => (!ctx.conversationId ? 'Open a chat first.' : null)
-/** Bot-only tabs (skills): each bot in a group keeps its own. */
-const needsDm = (ctx: CommandContext) =>
-  !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? "Groups don't have skills. Each bot keeps its own; open its chat." : null
+/** Bot-only tabs (skills, VM): each bot in a group keeps its own. */
+const needsDm = (what: string) => (ctx: CommandContext) =>
+  !ctx.conversationId ? 'Open a chat first.' : ctx.isGroup ? `Groups don't have ${what}. Each bot keeps its own; open its chat.` : null
 
 export const COMMANDS: readonly CommandDef[] = [
   { name: 'new', label: 'New bot', hint: 'Create a bot', unavailable: () => null },
   { name: 'group', label: 'New group', hint: 'Start a group chat', unavailable: () => null },
   { name: 'files', label: 'Files', hint: "Open this chat's folder", unavailable: needsChat, tab: 'files' },
-  { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: needsDm, tab: 'skills' },
+  { name: 'skills', label: 'Skills', hint: "This bot's skills", unavailable: needsDm('skills'), tab: 'skills' },
   { name: 'memory', label: 'Memory', hint: 'What this chat remembers', unavailable: needsChat, tab: 'memory' },
   {
     name: 'settings',
@@ -45,12 +46,13 @@ export const COMMANDS: readonly CommandDef[] = [
     hint: "This chat's settings",
     unavailable: needsChat,
   },
-  { name: 'sandbox', label: 'Sandbox', hint: 'Where scripts run', unavailable: later('The Sandbox tab is coming (needs BE-8).'), tab: 'sandbox' },
+  // FE-P2-5: the VM tab replaces Sandbox; /sandbox stays as an alias.
+  { name: 'vm', label: 'VM', hint: "This bot's computer, where scripts run", unavailable: needsDm('a VM'), tab: 'vm', aliases: ['sandbox'] },
 ]
 
 export function findCommand(name: string): CommandDef | undefined {
   const n = name.toLowerCase()
-  return COMMANDS.find((c) => c.name === n)
+  return COMMANDS.find((c) => c.name === n) ?? COMMANDS.find((c) => c.aliases?.includes(n))
 }
 
 /**
@@ -66,7 +68,7 @@ export function slashPrefix(draft: string): string | null {
 export function matchCommands(query: string): CommandDef[] {
   const q = query.trim().replace(/^\//, '').toLowerCase()
   if (!q) return [...COMMANDS]
-  const starts = COMMANDS.filter((c) => c.name.startsWith(q))
+  const starts = COMMANDS.filter((c) => c.name.startsWith(q) || c.aliases?.some((a) => a.startsWith(q)))
   const rest = COMMANDS.filter((c) => !starts.includes(c) && (c.name.includes(q) || c.label.toLowerCase().includes(q)))
   return [...starts, ...rest]
 }
@@ -87,8 +89,9 @@ export type CommandAction =
   | { kind: 'unavailable'; reason: string }
 
 /** What running a command does. The caller performs it (open a dialog, navigate, show the reason). */
-export function commandAction(name: CommandName, ctx: CommandContext, args = ''): CommandAction {
-  const def = findCommand(name)
+export function commandAction(asked: CommandName, ctx: CommandContext, args = ''): CommandAction {
+  const def = findCommand(asked)
+  const name = def?.name ?? asked
   const reason = def ? def.unavailable(ctx) : 'Unknown command.'
   if (reason) return { kind: 'unavailable', reason }
   if (name === 'new') return { kind: 'new-bot', args }
@@ -104,7 +107,7 @@ export function commandAction(name: CommandName, ctx: CommandContext, args = '')
 
 /**
  * Deep link to a chat with a side panel open. Agreed with FE-3/FE-4:
- * `?panel=settings[&tab=profile|memory|skills|files|sandbox]` and `?panel=files&path=…`.
+ * `?panel=settings[&tab=profile|memory|skills|files|vm]` (`tab=sandbox` still opens vm) and `?panel=files&path=…`.
  */
 export function chatPanelPath(
   conversationId: string,

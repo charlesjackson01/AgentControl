@@ -174,8 +174,8 @@ describe('files: URL', () => {
   it('browsing sets panel=files&path, drops tab, keeps other keys', () => {
     assert.equal(withFilesPath(P('panel=settings&tab=files&m=9'), 'shared/site-photos').toString(), 'panel=files&m=9&path=shared%2Fsite-photos')
   })
-  it('Sandbox tab stays, disabled as coming soon; Files is live', () => {
-    assert.equal(SETTINGS_TABS.find((t) => t.id === 'sandbox').comingSoon, true)
+  it('Files and VM (was Sandbox, FE-P2-5) are live', () => {
+    assert.equal(SETTINGS_TABS.find((t) => t.id === 'vm').comingSoon, undefined)
     assert.equal(SETTINGS_TABS.find((t) => t.id === 'files').comingSoon, undefined)
   })
 })

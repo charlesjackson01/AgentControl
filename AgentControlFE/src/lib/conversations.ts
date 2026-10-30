@@ -1,5 +1,5 @@
 /* Pure helpers for the chat-first sidebar and thread (tests/conversations.test.mjs). */
-import type { Agent, ChatMessage, ConversationSummary } from './types.ts'
+import type { Agent, ChatMessage, ChatRunSummary, ConversationSummary } from './types.ts'
 import { attachmentsPreview } from './attachments.ts'
 
 type AgentLike = Pick<Agent, 'id' | 'name' | 'isPrimary'> & Partial<Pick<Agent, 'pinned' | 'hidden'>>
@@ -53,11 +53,29 @@ export function isErrorPreview(last: Pick<ChatMessage, 'role' | 'error'> | null 
   return !!last && last.role === 'assistant' && last.error === true
 }
 
+/**
+ * A run message's preview when its content is empty (older messages only): a minimal "Ran report.py"
+ * / "Undo of report.py" from the summary's name (scriptName, else name). BE 3a70c34 fills `content`
+ * from runMessageContent(); whenever it has any, previewText shows it as is.
+ */
+export function runPreview(run: Pick<ChatRunSummary, 'kind' | 'name' | 'scriptName' | 'undoOfName'> | undefined): string {
+  const name = run?.scriptName?.trim() || run?.name?.trim() || 'script'
+  // BE be7afe4: an undo run's preview names the run it reversed (undoOfName) when the BE sends it.
+  return run?.kind === 'undo' ? `Undo of ${run.undoOfName?.trim() || name}` : `Ran ${name}`
+}
+
 /** One-line preview: "You: " for the user, "Failed: " for a failed reply, whitespace collapsed, clipped to `max` characters. */
-export function previewText(last: (Pick<ChatMessage, 'role' | 'content' | 'error'> & { attachments?: readonly { name: string }[] }) | null | undefined, max = 80): string {
+export function previewText(
+  last: (Pick<ChatMessage, 'role' | 'content' | 'error'> & Partial<Pick<ChatMessage, 'kind' | 'scriptRun'>> & { attachments?: readonly { name: string }[] }) | null | undefined,
+  max = 80,
+): string {
   if (!last) return 'No messages yet'
   // FE-7: a files-only message previews as "You: 📎 plan.pdf" / "You: 📎 3 files".
-  const body = last.content.replace(/\s+/g, ' ').trim() || attachmentsPreview(last.attachments) || (isErrorPreview(last) ? 'The run failed.' : '…')
+  const body =
+    last.content.replace(/\s+/g, ' ').trim() ||
+    (last.kind === 'run' ? runPreview(last.scriptRun) : '') ||
+    attachmentsPreview(last.attachments) ||
+    (isErrorPreview(last) ? 'The run failed.' : '…')
   const prefix = last.role === 'user' ? 'You: ' : isErrorPreview(last) ? 'Failed: ' : ''
   const full = prefix + body
   const chars = Array.from(full)

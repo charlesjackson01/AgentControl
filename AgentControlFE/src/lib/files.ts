@@ -19,7 +19,7 @@
  *   GAP-F11 read-only folders: Upload and Folder disabled with a title.
  *   GAP-F12 search: filters the open folder by name.
  *   GAP-F13 a path refused in the UI (?path= with "..", etc.): alert line, nothing requested.
- *   GAP-F14 Sandbox tab disabled ("Coming soon"); needs BE-8.
+ *   GAP-F14 (closed by FE-P2-5) Sandbox tab was disabled; the VM tab replaces it.
  *   GAP-F15 breadcrumb segments are clickable (03d shows plain text).
  */
 import type { FileEntry, FileListing, FileZone } from './types.ts'

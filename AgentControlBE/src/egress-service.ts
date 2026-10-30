@@ -22,6 +22,7 @@ import type { EngineRef } from './bot-env.js'
 import type { EgressRulesConfig } from './egress-rules.js'
 import { EGRESS_PROXY_PORT, type EgressCredential } from './egressd.js'
 import { SCRIPT_RUN_HOSTS_MAX, type EnvVar, type HostContact } from './shared/types.js'
+import { GVPROXY_CIDR, SLIRP_CIDR } from './user-only.js'
 import { sharedImageRef } from './vm-images.js'
 
 export const EGRESS_DAEMON_NAME = 'ac-egressd'
@@ -75,6 +76,8 @@ export interface EgressServiceDeps {
   /** Test-only name overrides (so a test never touches the real daemon/networks). */
   names?: { daemon?: string; outNetwork?: string; networkPrefix?: string }
   log?: (msg: string) => void
+  /** Review item 7: true when a bot or build uses the engine's default (pasta/slirp) network. */
+  defaultNetworkInUse?: () => boolean
 }
 
 export interface EgressService {
@@ -98,6 +101,14 @@ export interface EgressService {
    * without a credential, 403 for this computer with one, and no direct connection at all.
    */
   connectCheck(opts?: { runtimeFlags?: readonly string[]; image?: string }): Promise<{ status: 'pass' | 'fail'; message?: string }>
+  /**
+   * Review item 7: the container-side CIDRs for the user-only wall, from what AgentControl uses:
+   * the subnets of its own networks (last read from the engine), gvproxy's subnet on the Podman
+   * machine, slirp's when slirp is in use. Synchronous (read on every request).
+   */
+  userOnlyCidrs(): string[]
+  /** Re-read the subnets of AgentControl's networks (BE start, after a network is created). */
+  refreshSubnets(): Promise<void>
 }
 
 /** Slug of the probe's own egress network (never a bot: agent slugs are [a-z0-9-] only). */
@@ -240,6 +251,10 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
   const image = () => deps.image?.() ?? sharedImageRef('botvm')
   let lock: Promise<unknown> = Promise.resolve()
   let pushedConfig = ''
+  let subnets: string[] = []
+  const subnetsRead = new Set<string>()
+  let onMachine = false
+  let slirp = false
 
   /** One engine sequence at a time (daemon create, network connect). */
   function serial<T>(fn: () => Promise<T>): Promise<T> {
@@ -384,6 +399,10 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     if (!(await networkExists(name))) {
       await must(['network', 'create', '--internal', '--disable-dns', '--ipv6=false', '--label', `${EGRESS_LABEL}=${slug}`, name], 'create the bot\'s egress network')
     }
+    if (!subnetsRead.has(name)) {
+      await refreshSubnets()
+      subnetsRead.add(name)
+    }
     if (!nets[name]) {
       await must(['network', 'connect', name, daemon], 'attach the proxy to the bot\'s network')
     }
@@ -393,8 +412,33 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     return ip
   }
 
+  async function refreshSubnets(): Promise<void> {
+    try {
+      const e = await engine()
+      onMachine = e.globalArgs.includes('--connection')
+      const r = await cli(['network', 'ls', '--filter', `label=${EGRESS_LABEL}`, '--format', '{{range .Subnets}}{{.Subnet}} {{end}}'])
+      if (r.code !== 0) throw new Error(lastLine(r))
+      const found = r.stdout.split(/\s+/).filter((c) => /^[0-9a-f.:]+\/\d+$/i.test(c))
+      // The test outbound network (names override) has no label: read it by name.
+      if (deps.names?.outNetwork) {
+        const o = await cli(['network', 'inspect', '--format', '{{range .Subnets}}{{.Subnet}} {{end}}', outNet])
+        if (o.code === 0) found.push(...o.stdout.split(/\s+/).filter((c) => /^[0-9a-f.:]+\/\d+$/i.test(c)))
+      }
+      subnets = [...new Set(found)]
+      if (deps.defaultNetworkInUse?.()) {
+        const i = await cli(['info', '--format', '{{.Host.RootlessNetworkCmd}}'])
+        slirp = i.code === 0 && i.stdout.trim() === 'slirp4netns'
+      } else slirp = false
+    } catch (err) {
+      log(`user_only: couldn't read the subnets of AgentControl's networks, so the address check uses the last known list (${subnets.join(', ') || 'none'}): ${(err as EgressUnavailableError).detail ?? (err as Error).message}`)
+    }
+  }
+
   return {
     networkFor,
+
+    userOnlyCidrs: () => [...subnets, ...(onMachine ? [GVPROXY_CIDR] : []), ...(slirp ? [SLIRP_CIDR] : [])],
+    refreshSubnets,
 
     async available() {
       try {

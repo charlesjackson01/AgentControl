@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { AddressInfo } from 'node:net'
+import { createServer, type AddressInfo } from 'node:net'
 import { buildApp } from './app.js'
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
 import { execCommandRunner } from './command-runner.js'
@@ -145,9 +145,14 @@ describe.skipIf(!engineReady)('@vm BE-P2-13 egress proxy', () => {
     for (const sub of ['workspace', 'shared', 'state']) mkdirSync(join(dir, sub), { recursive: true })
     // This app's own server, on the docker0 address the proxy can reach (pasta maps it to the host).
     process.env.AGENTCONTROL_SECRET = 'be13-test-secret'
-    be = buildApp(createStore(join(dir, 'state', 'store.json')))
-    await be.listen({ host: BE_HOST, port: 0 })
-    bePort = (be.server.address() as AddressInfo).port
+    // The port is needed by the web relay before the egress service (which the app uses) exists:
+    // reserve one, then listen on it below.
+    bePort = await new Promise<number>((resolve) => {
+      const s = createServer().listen(0, BE_HOST, () => {
+        const p = (s.address() as AddressInfo).port
+        s.close(() => resolve(p))
+      })
+    })
 
     if (pm('network', 'create', '--ipv6=false', '--subnet', SUBNET, OUT) === null) throw new Error('could not create the test outbound network')
     const web = pmr(['run', '--detach', '--name', WEB, '--network', OUT, '--ip', WEB_IP, '--user', '0:0', '--label', 'io.agentcontrol.be13=1', '--read-only',
@@ -172,6 +177,9 @@ describe.skipIf(!engineReady)('@vm BE-P2-13 egress proxy', () => {
     // Record every credential minted, to prove none is left in images, records or logs.
     egress = { ...svc, grant: async (slug, kind) => { const g = await svc.grant(slug, kind); minted.push(g); return g } }
     process.env[ALLOW_UNLIMITED_RUNS_ENV] = '1'
+    // The app's user-only wall reads the subnets from this (test-named) egress service.
+    be = buildApp(createStore(join(dir, 'state', 'store.json')), { egress })
+    await be.listen({ host: BE_HOST, port: bePort })
     botEnv = createBotEnvService({
       exec: execCommandRunner,
       engine: async () => ENGINE,

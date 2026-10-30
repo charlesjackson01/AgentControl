@@ -20,7 +20,7 @@ function fakePodman() {
   let daemon: { running: boolean; hash: string; nets: Record<string, string>; args: string[] } | null = null
   let proxy: EgressProxy = createEgressProxy()
   let nextIp = 2
-  const state = { ctlDown: false, runFails: false, probeOut: '{"noAuth":"407","blocked":"403","direct":"error:ENETUNREACH"}' }
+  const state = { ctlDown: false, runFails: false, lsFails: false, rootlessNet: 'pasta', probeOut: '{"noAuth":"407","blocked":"403","direct":"error:ENETUNREACH"}' }
   const exec: CommandRunner = async (cmd, args, opts) => {
     const a = [...args]
     calls.push(a)
@@ -44,6 +44,11 @@ function fakePodman() {
       if (daemon) delete daemon.nets[a[3]!]
       return ok()
     }
+    if (verb === 'network' && sub === 'ls') {
+      if (state.lsFails) return fail('Error: engine gone')
+      return ok([...networks.keys()].map((_n, i) => `10.89.${100 + i}.0/24 `).join('\n') + '\n')
+    }
+    if (verb === 'info') return ok(`${state.rootlessNet}\n`)
     if (verb === 'network' && sub === 'rm') return networks.delete(a[2]!) ? ok() : fail('Error: unable to find network')
     if (verb === 'rm') {
       daemon = null
@@ -295,5 +300,42 @@ describe('BE-P2-13: the probe script', () => {
     expect(() => new Function(CONNECT_CHECK_SCRIPT)).not.toThrow()
     expect(CONNECT_CHECK_SCRIPT).toContain(String.raw`/^HTTP\/1\.[01] (\d{3})/`)
     expect(CONNECT_CHECK_SCRIPT).toContain(String.raw`HTTP/1.1\r\nHost`)
+  })
+})
+
+describe('review item 7: user-only CIDRs from the networks AgentControl uses', () => {
+  it('the subnets of its own networks; gvproxy only on the Podman machine; slirp only when slirp is in use', async () => {
+    const svc = make()
+    expect(svc.userOnlyCidrs()).toEqual([])
+    await svc.grant('analyst', 'run')
+    expect(fake.calls.some((c) => c[0] === 'network' && c[1] === 'ls' && c.includes('label=io.agentcontrol.egress'))).toBe(true)
+    expect(svc.userOnlyCidrs()).toEqual(['10.89.100.0/24', '10.89.101.0/24'])
+    expect(svc.userOnlyCidrs()).not.toContain('192.168.127.0/24')
+    expect(svc.userOnlyCidrs()).not.toContain('10.0.2.0/24')
+
+    const mac = make({ engine: async () => ({ cli: 'podman', globalArgs: ['--connection', 'agentcontrol'] }) })
+    await mac.refreshSubnets()
+    expect(mac.userOnlyCidrs()).toContain('192.168.127.0/24')
+
+    fake.state.rootlessNet = 'slirp4netns'
+    const slirpOff = make()
+    await slirpOff.refreshSubnets()
+    expect(slirpOff.userOnlyCidrs()).not.toContain('10.0.2.0/24')
+    const slirpOn = make({ defaultNetworkInUse: () => true })
+    await slirpOn.refreshSubnets()
+    expect(slirpOn.userOnlyCidrs()).toContain('10.0.2.0/24')
+    fake.state.rootlessNet = 'pasta'
+    const pasta = make({ defaultNetworkInUse: () => true })
+    await pasta.refreshSubnets()
+    expect(pasta.userOnlyCidrs()).not.toContain('10.0.2.0/24')
+  })
+  it('an engine error keeps the last list and logs the cause', async () => {
+    const svc = make()
+    await svc.grant('analyst', 'run')
+    const before = svc.userOnlyCidrs()
+    fake.state.lsFails = true
+    await svc.refreshSubnets()
+    expect(svc.userOnlyCidrs()).toEqual(before)
+    expect(logs.join('\n')).toMatch(/user_only: couldn't read the subnets of AgentControl's networks.*engine gone/)
   })
 })

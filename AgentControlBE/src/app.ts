@@ -1,6 +1,6 @@
 import { DEFAULT_VM_SETTINGS, defaultAgentVm } from './vm-defaults.js'
 import { createEgressService, hostInterfaceAddresses, modelServersOf, testAllowFromEnv, type EgressService } from './egress-service.js'
-import { createUserOnlyCheck, USER_ONLY_MESSAGE, USER_ONLY_REASON } from './user-only.js'
+import { createUserOnlyCheck, USER_ONLY_EXTRA_ENV, USER_ONLY_MESSAGE, USER_ONLY_REASON, userOnlyExtraCidrs } from './user-only.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
@@ -503,9 +503,16 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
 
   // BE-P2-13 (M2 contract review): user-only. Nothing from a bot's side (a container address, or
   // relayed by the bot proxy) may call the API; the proxy also refuses this computer outright.
-  const userOnly = createUserOnlyCheck()
+  // Review B1: every request from the bot side is refused, whatever the path (/health and any
+  // static file included), so no raw-vs-decoded path trick can get past it.
+  // Item 7: the address list comes from the networks AgentControl uses (read lazily: `egress` is
+  // set up further down), plus AC_USER_ONLY_EXTRA_CIDRS.
+  const userOnlyExtra = userOnlyExtraCidrs()
+  const userOnly = createUserOnlyCheck(
+    () => [...(egress.userOnlyCidrs?.() ?? []), ...userOnlyExtra],
+    (c) => app.log.error(`user_only: ignoring "${c}" in ${USER_ONLY_EXTRA_ENV}: not a CIDR`),
+  )
   app.addHook('onRequest', async (request, reply) => {
-    if (!request.url.startsWith('/api/')) return
     const why = userOnly.check(request.socket?.remoteAddress ?? request.ip, request.headers)
     if (!why) return
     request.log.warn(`user_only: refused ${request.method} ${request.url.split('?')[0]} (${why})`)
@@ -1669,8 +1676,13 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       testAllow: testAllowFromEnv(),
     }),
     log: (msg) => app.log.info(msg),
+    // Builds and bots never use the engine's default network today (builds: none or egress).
+    defaultNetworkInUse: () => false,
   })
   app.decorate('vmEgress', egress)
+  // Item 7: learn the subnets of AgentControl's existing networks (bots from before a restart).
+  // Not under vitest: tests never touch the user's engine.
+  if (process.env.NODE_ENV !== 'test') app.addHook('onReady', async () => void egress.refreshSubnets())
 
   // BE-P2-4: each bot's container, tools volumes and image layer.
   const botEnv =

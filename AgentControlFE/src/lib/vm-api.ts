@@ -8,6 +8,7 @@
 import {
   PERMISSION_CSRF_HEADER,
   type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type ToolBuildAccepted,
   type ScriptRun, type ScriptRunSummary, type UndoConflict, type UndoGone, type UndoPreview, type UndoRequest, type UndoResult,
   type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
 } from './types.ts'
@@ -72,8 +73,8 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     /** 409 while a run is active. */
     resetVm: (agentId: string) => request<VmInfo>(`${vmPaths.agentVm(agentId)}/reset`, post({ confirm: true })),
     getVmTools: (agentId: string) => request<VmToolsInfo>(`${vmPaths.agentVm(agentId)}/tools`),
-    /** A kind 'tool_build' run. */
-    rebuildTools: (agentId: string) => request<ScriptRun>(`${vmPaths.agentVm(agentId)}/tools/rebuild`, post()),
+    /** M2 (BE-P2-21): 202 with the live kind 'tool_build' run; 409 build_active / run_active / internet_never / proxy_unavailable / low_disk. */
+    rebuildTools: (agentId: string) => request<ToolBuildAccepted>(`${vmPaths.agentVm(agentId)}/tools/rebuild`, post()),
     rollbackTools: (agentId: string) => request<ScriptRun>(`${vmPaths.agentVm(agentId)}/tools/rollback`, post()),
     listRuns: (agentId: string, opts?: { before?: string; limit?: number }) => request<ScriptRunPage>(vmPaths.agentRuns(agentId, opts)),
 
@@ -81,7 +82,7 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     getRun: (runId: string) => request<ScriptRun>(vmPaths.run(runId)),
     /** Full log as text; 410 once evicted. */
     getRunOutput: (runId: string, stream: RunOutputStream = 'stdout') => requestText(vmPaths.runOutput(runId, stream)),
-    /** 409 when the run isn't active. */
+    /** 409 when the run isn't active. Also the build's Stop (chat card and the VM tab's "Stop build", activeBuild.runId). */
     stopRun: (runId: string) => request<ScriptRun>(`${vmPaths.run(runId)}/stop`, post()),
     /** 409 UndoConflict{reason:'run_active'}, 410 UndoGone: read them with undoErrorOf. */
     getUndoPreview: (runId: string) => request<UndoPreview>(`${vmPaths.run(runId)}/undo/preview`),
@@ -101,6 +102,20 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     /** 409 while runs are active, 400 when the host disk is low. */
     growMachine: (toGb: number) => request<VmHostInfo>('/api/vm/machine/grow', post({ toGb })),
 
+    /* ---- browser add-on (M2, BE-P2-15; FE-P2-3 / FE-P2-10, contract fec4670) ---- */
+    /** The shared Chromium download. */
+    getBrowser: () => request<BrowserAddonInfo>(vmPaths.browser()),
+    /**
+     * No agentId: the shared download; with it, that bot's failed step (download, rebuild or check).
+     * 409 nothing_to_retry / low_disk.
+     */
+    retryBrowser: (agentId?: string) => {
+      const body: BrowserRetryRequest = agentId ? { agentId } : {}
+      return request<BrowserAddonInfo>(vmPaths.browserRetry(), post(body))
+    },
+    /** "Remove download". Needs the confirm header (403 without); 409 browser_in_use / browser_busy. */
+    removeBrowser: () => request<BrowserAddonInfo>(vmPaths.browser(), { method: 'DELETE', headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
+
     /* ---- permissions (M2 routes; shapes fixed by BE-P2-1 @ 4bf9429) ---- */
     listPendingPermissions: (filters?: { agentId?: string; conversationId?: string }) =>
       request<PermissionListResponse>(vmPaths.pendingPermissions(filters)),
@@ -114,14 +129,6 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     },
     /** FE-P2-3 (fec4670): one request, any status (a card whose request isn't in the store). 404 not_found. */
     getPermission: (requestId: string) => request<PermissionRequest>(vmPaths.permission(requestId)),
-
-    /* ---- browser add-on (FE-P2-3; contract fec4670) ---- */
-    getBrowser: () => request<BrowserAddonInfo>(vmPaths.browser()),
-    /** With agentId: that bot's failed step (download, rebuild or check). 409 nothing_to_retry / low_disk. */
-    retryBrowser: (agentId?: string) => {
-      const body: BrowserRetryRequest = agentId ? { agentId } : {}
-      return request<BrowserAddonInfo>(vmPaths.browserRetry(), post(body))
-    },
   }
 }
 

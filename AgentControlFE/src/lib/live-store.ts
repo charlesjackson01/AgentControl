@@ -14,7 +14,7 @@
  */
 import {
   CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE,
-  type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type LiveEvent, type PermissionRequest, type ScriptRun,
+  type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type InternetUse, type LiveEvent, type PermissionRequest, type ScriptRun,
   type ScriptRunStatus, type ScriptRunSummary, type VmInfo,
 } from './types.ts'
 import type { LiveConnectionStatus } from './live-events.ts'
@@ -41,7 +41,10 @@ export type LiveState = {
    * so a card's countdown from expiresAt ignores clock skew. 0 until a list carried `now`.
    */
   clockSkewMs: number
-  /** FE-P2-3: the shared Chromium download (browser.updated, GET /api/vm/browser), for a setup card's live progress. */
+  /**
+   * The shared Chromium download (GET /api/vm/browser, then `browser.updated`): a setup card's live progress (FE-P2-3)
+   * and the VM tab's browser row (FE-P2-10). Absent until loaded.
+   */
   browser?: BrowserAddonInfo
 }
 
@@ -57,7 +60,7 @@ export type LiveAction =
   | { type: 'pending'; requests: PermissionRequest[]; skewMs?: number }
   /** FE-P2-3: requests from GET /api/permissions/:id, an answer's reply or its 409 body (any status). */
   | { type: 'permissions'; requests: PermissionRequest[] }
-  /** FE-P2-3: GET /api/vm/browser or a retry's reply. */
+  /** FE-P2-3 / FE-P2-10: GET /api/vm/browser, or a retry/remove answer. */
   | { type: 'browser'; browser: BrowserAddonInfo }
   | { type: 'reset' }
 
@@ -143,8 +146,18 @@ function m2Summary(run: ScriptRun, prev?: ChatRunSummary): Partial<ChatRunSummar
   return out
 }
 
-/** The VM tab's history row for a run. */
-export function runSummaryRow(run: ScriptRun): ScriptRunSummary {
+/** "internet once" / "internet always" for a run, from its network and the grant it ran under. */
+export function runInternetUse(run: Pick<ScriptRun, 'network' | 'permissions'>): InternetUse {
+  if (run.network !== 'on') return 'off'
+  const grant = (run.permissions ?? []).find((p) => p.type === 'internet')
+  return grant?.decision === 'always' ? 'always' : 'once'
+}
+
+/** Up to 3 reached host names (the history row's list). */
+export const HISTORY_HOSTS_MAX = 3
+
+/** The VM tab's history row for a run. `prev`: the row held before (keeps queuedReason, which ScriptRun lacks). */
+export function runSummaryRow(run: ScriptRun, prev?: ScriptRunSummary, summary?: ChatRunSummary): ScriptRunSummary {
   const row: ScriptRunSummary = {
     id: run.id, agentId: run.agentId, conversationId: run.conversationId, kind: run.kind, argv: run.argv, status: run.status,
     queuedAt: run.queuedAt, runtime: run.runtime, undo: run.undo, filesChangedCount: run.filesChanged.length,
@@ -156,6 +169,14 @@ export function runSummaryRow(run: ScriptRun): ScriptRunSummary {
   if (run.durationMs !== undefined) row.durationMs = run.durationMs
   if (run.undoOfRunId !== undefined) row.undoOfRunId = run.undoOfRunId
   if (run.groupId !== undefined) row.groupId = run.groupId
+  // FE-P2-10 (M2 contract): the history row's internet, hosts, build and queue reason.
+  if (run.network !== undefined) row.network = run.network
+  if (run.network === 'on') row.internet = runInternetUse(run)
+  const reached = (run.hostsContacted ?? []).filter((c) => !c.blocked).map((c) => c.host)
+  if (reached.length) row.hosts = reached.slice(0, HISTORY_HOSTS_MAX)
+  if (run.build) row.build = run.build
+  const queuedReason = summary?.queuedReason ?? prev?.queuedReason
+  if (run.status === 'queued' && queuedReason) row.queuedReason = queuedReason
   return row
 }
 
@@ -226,7 +247,7 @@ function applyRun(state: LiveState, incoming: ScriptRun, messageId?: string, sum
     next.summaries = { ...state.summaries, [msgId]: summary ?? summaryFromRun(run, state.summaries[msgId]) }
   }
   const vm = state.vms[run.agentId]
-  if (vm && !stale) next.vms = { ...state.vms, [run.agentId]: { ...vm, runs: upsertRunRow(vm.runs, runSummaryRow(run)) } }
+  if (vm && !stale) next.vms = { ...state.vms, [run.agentId]: { ...vm, runs: upsertRunRow(vm.runs, runSummaryRow(run, vm.runs.find((r) => r.id === run.id), summary)) } }
   if (!stale) next.permissions = permissionsAfterRun(state.permissions, run)
   return next
 }

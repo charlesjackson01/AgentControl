@@ -17,7 +17,7 @@ export type LiveContextValue = {
   loadPermission: LiveController['loadPermission']
   /** FE-P2-3: put a request from an answer's reply or its 409 body. */
   putPermission: (request: PermissionRequest) => void
-  /** FE-P2-3: put the shared download from a retry's reply. */
+  /** FE-P2-3 / FE-P2-10: put the shared download (GET /api/vm/browser, a retry's or remove's reply). */
   putBrowser: (browser: BrowserAddonInfo) => void
 }
 

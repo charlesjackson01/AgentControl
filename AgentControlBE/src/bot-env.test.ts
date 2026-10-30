@@ -462,7 +462,7 @@ describe('BotEnvService (fake engine)', () => {
     expect(e.calls.filter((x) => x[0] === 'build').pop()).toEqual(expect.arrayContaining(['--network', 'none']))
     await expect(svc.vmInstall(a, ['curl'])).rejects.toMatchObject({ statusCode: 409, reason: 'internet_unavailable', message: expect.stringMatching(/isn't available yet/) })
     buildNet = 'default'
-    await expect(svc.vmInstall({ ...a, internetPolicy: 'never' } as Agent, ['curl'])).rejects.toMatchObject({ reason: 'internet_never' })
+    await expect(svc.vmInstall({ ...a, internetPolicy: 'never' } as Agent, ['curl'])).rejects.toMatchObject({ reason: 'internet_never', message: `Internet is set to Never for ${a.name}, so this run didn't start. Change it in Settings › VM.` })
   })
 
   it('a failed build leaves the generation and packages alone and reports the last line', async () => {

@@ -272,7 +272,7 @@ describe('POST /api/agents/:id/vm/tools/rebuild and /rollback', () => {
     stored(a.id).internetPolicy = 'never'
     res = await inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)
     expect(res.statusCode).toBe(409)
-    expect(res.json()).toMatchObject({ statusCode: 409, reason: 'internet_never', message: 'Set internet to Ask or Always to install packages.' })
+    expect(res.json()).toMatchObject({ statusCode: 409, reason: 'internet_never', message: `Internet is set to Never for ${a.name}, so this run didn't start. Change it in Settings › VM.` })
     stored(a.id).internetPolicy = 'ask'
     egressOk = false
     res = await inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)

@@ -810,7 +810,7 @@ describe('BE-P2-21: live tool-build records', () => {
     expect(t.reason).toBeUndefined()
 
     const n0 = svc.list('a1', { limit: 500 }).runs.length
-    expect(await rejects(svc.startToolBuild(spec({ precheck: () => { const e = Object.assign(new Error('Set internet to Ask or Always to install packages.'), { statusCode: 409, reason: 'internet_never' }); throw e } })))).toMatchObject({ reason: 'internet_never' })
+    expect(await rejects(svc.startToolBuild(spec({ precheck: () => { const e = Object.assign(new Error("Internet is set to Never for Bot, so this run didn't start. Change it in Settings › VM."), { statusCode: 409, reason: 'internet_never' }); throw e } })))).toMatchObject({ reason: 'internet_never' })
     free = 1
     expect(await rejects(svc.startToolBuild(spec()))).toMatchObject({ statusCode: 409, reason: 'low_disk' })
     expect(await rejects(svc.startToolBuild(spec({ agentId: 'nope' })))).toMatchObject({ statusCode: 404 })

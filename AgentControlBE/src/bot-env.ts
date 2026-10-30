@@ -23,7 +23,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execCommandRunner, STOPPED_CODE, type CommandResult, type CommandRunner } from './command-runner.js'
-import { fail, failWithReason } from './http.js'
+import { fail, failWithReason, internetNeverText } from './http.js'
 import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, VM_LIMITS, type Agent, type AgentVm, type ContainerRuntime, type EnvVar, type HostContact, type ToolManifest } from './shared/types.js'
 import { envNameProblem } from './vm-defaults.js'
 import { capHostContacts, EGRESS_LABEL, egressNetworkName, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
@@ -804,7 +804,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
       serial(agent.slug, async () => {
         const plan = planInstall(agent.vm, raw)
         if (!plan) return { vm: agent.vm, generation: agent.vm.image.generation, log: 'Already installed.' }
-        if (agent.internetPolicy === 'never') failWithReason(409, 'internet_never', 'Installing system packages needs the internet, and this bot is set to never use it.')
+        if (agent.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverText(agent.name))
         if ((opts.network ?? buildNetwork()) === 'none') failWithReason(409, 'internet_unavailable', 'Installing system packages needs internet access, which isn\'t available yet.')
         return buildNext(agent, plan.packages, opts)
       }),

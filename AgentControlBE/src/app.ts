@@ -13,7 +13,7 @@ import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
-import { fail, failWithReason, uid } from './http.js'
+import { fail, failWithReason, internetNeverText, uid } from './http.js'
 import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
 import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
@@ -1933,7 +1933,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
         waitForRuns: false,
         precheck: async (a) => {
           if (!online) return
-          if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', 'Set internet to Ask or Always to install packages.')
+          if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverText(a.name))
           await buildProxyCheck()
         },
         build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', ...ctl })),

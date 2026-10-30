@@ -1,4 +1,4 @@
-import { defaultAgentVm } from './vm-defaults.js'
+import { DEFAULT_VM_SETTINGS, defaultAgentVm } from './vm-defaults.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
@@ -12,7 +12,7 @@ import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.j
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
-import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent, type FileContent } from './files.js'
+import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
 import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
@@ -22,8 +22,10 @@ import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
 import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
-import { botMountAllowList, botMounts, registerBotEnvRoutes, snapshotZones, storeSaveVm } from './bot-env-routes.js'
+import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm } from './bot-env-routes.js'
 import { createSnapshotService } from './snapshot.js'
+import { budgetLimits, createSnapshotBudget, type SnapshotBudget } from './snapshot-budget.js'
+import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
 import { checkVolume, LocalFs, storageFor } from './storage/index.js'
 import { KEEP_ID_NOTE, type UidMapping } from './isolation.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
@@ -419,6 +421,8 @@ declare module 'fastify' {
      * background. PATCH /api/vm/settings (BE-P2-17) uses it; the per-bot PATCH already does.
      */
     vmRuntimeModeChanged: () => void
+    /** BE-P2-10: undo snapshot budgets; enforce() after settings.vm.snapshotBudget changes (BE-P2-17). */
+    vmSnapshotBudget: SnapshotBudget
   }
 }
 
@@ -1533,6 +1537,17 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     zones: (agent) => snapshotZones(store, agent),
     log: (msg) => app.log.info(msg),
   })
+  // BE-P2-10: snapshot budgets and eviction (plan §7.4), with settings.vm.snapshotBudget read per call.
+  const snapshotBudget = createSnapshotBudget({
+    snapshots,
+    root: snapshotsRoot,
+    limits: () => budgetLimits(store.settings.vm?.snapshotBudget ?? DEFAULT_VM_SETTINGS.snapshotBudget),
+    busy: (slug) => {
+      const a = store.agents.find((x) => x.slug === slug)
+      return a ? (runner?.activeRuns(a.id) ?? 0) > 0 : false
+    },
+    log: (msg) => app.log.info(msg),
+  })
   const runtimeOf = (agent: Agent): ResolvedRuntime =>
     resolveRuntime(store.settings.vm?.gvisor ?? 'auto', agent.vm.gvisor, runtimeProbe.current(), agent.name)
   registerProbeRoutes(app, runtimeProbe)
@@ -1603,6 +1618,14 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       log: (msg) => app.log.info(msg),
     })
 
+  // BE-P2-10: personal data (folder + tools volumes + layer) against the 10 GB limit.
+  const personal = createPersonalUsage({
+    folder: (agent) => personalFolderParts(store, agent),
+    engine: async (agent) => (botEnv.measure && (await engineRef()) ? botEnv.measure(agent) : {}),
+    quotaBytes,
+  })
+  setPersonalExtraBytes((agent) => personal.engineBytes(agent))
+
   // BE-P2-8: script runs in the bot's container (Podman or Docker).
   runner = createContainerRunner({
     botEnv,
@@ -1612,9 +1635,30 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     // BE-P2-5: block runs unless a uid mapping passed the probe's bind_mount check (Team lead, 2026-10-28).
     mountsUsable: (agent) => bindCheckOf(agent)?.status === 'pass',
     snapshots,
+    personal: (agent) => personal.check(agent),
+    afterSnapshot: (slug, runId) => snapshotBudget.afterRun(slug, runId),
     log: (msg) => app.log.info(msg),
   })
   app.decorate('vmRunner', runner)
+  // BE-P2-10: PATCH /api/vm/settings (BE-P2-17) calls enforce() after a snapshotBudget change.
+  app.decorate('vmSnapshotBudget', snapshotBudget)
+  let stopBudget: (() => void) | null = null
+  let stopPersonal: ReturnType<typeof setInterval> | null = null
+  if (opts.probeOnStart) {
+    app.addHook('onReady', async () => {
+      // Every 10 min: the budgets and the free-space floor (eviction), and stale tools measurements.
+      stopBudget = snapshotBudget.startTimer()
+      stopPersonal = setInterval(() => {
+        for (const a of store.agents) void personal.refresh(a).catch(() => {})
+      }, PERSONAL_MEASURE_MS)
+      stopPersonal.unref?.()
+    })
+  }
+  app.addHook('onClose', async () => {
+    stopBudget?.()
+    if (stopPersonal) clearInterval(stopPersonal)
+    setPersonalExtraBytes(null)
+  })
   app.decorate('vmRuntimeProbe', runtimeProbe)
   let stopIdle: (() => void) | null = null
   app.addHook('onReady', async () => {
@@ -1635,6 +1679,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     isolationNote: isolationNoteOf,
     // BE-P2-7: a per-bot mode change re-probes; a browser permission change may change the feature set.
     onProbeInputChange: (what) => probeLater(what === 'mode' ? 'refresh' : 'ensureFresh'),
+    personal,
+    snapshotUsage: (agent) => snapshotBudget.usage(agent.slug),
   })
 
   return app

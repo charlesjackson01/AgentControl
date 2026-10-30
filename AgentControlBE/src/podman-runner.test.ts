@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
-import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
+import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, PERSONAL_QUOTA_REASON, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
 import { resolveRuntime, type ResolvedRuntime, type RuntimeProbeResult } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { StreamRunner } from './stream-runner.js'
@@ -441,5 +441,65 @@ describe('BE-P2-9: undo snapshots around runs', () => {
     const r = await b.runner.run(req())
     expect(r.snapshot).toBeNull()
     expect(n.raw.begin).not.toHaveBeenCalled()
+  })
+})
+
+describe('BE-P2-10: personal limit and snapshot eviction', () => {
+  const MSG = 'Analyst\'s files and tools use 10.2 of 10 GB. Free space in Files or remove tools in Settings › VM.'
+  const snaps = () => ({
+    driver: () => 'copy',
+    needsStop: () => false,
+    begin: vi.fn(async (_a: Agent, runId: string) => ({ runId }) as never),
+    finish: vi.fn(async (h: { runId: string }) => ({ snapshot: { id: h.runId, driver: 'copy' as const, retainedBytes: 5 }, filesChanged: [], meta: {} as never })),
+  }) as unknown as NonNullable<ContainerRunnerDeps['snapshots']>
+
+  it('over the personal limit: blocked with personal_quota and the exact message, nothing started', async () => {
+    const s = snaps()
+    const { runner, streamed, botEnv } = setup({ deps: { personal: async () => ({ blocked: MSG }), snapshots: s } })
+    const r = await runner.run(req())
+    expect(r).toMatchObject({ status: 'error', reason: PERSONAL_QUOTA_REASON, error: MSG })
+    expect(PERSONAL_QUOTA_REASON).toBe('personal_quota')
+    expect(streamed).toEqual([])
+    expect(botEnv.ensure).not.toHaveBeenCalled()
+    expect((s as unknown as { begin: ReturnType<typeof vi.fn> }).begin).not.toHaveBeenCalled()
+  })
+
+  it('under the limit, or the measurement failing: the run goes ahead', async () => {
+    for (const personal of [async () => ({ blocked: null }), async () => { throw new Error('du failed') }]) {
+      const logs: string[] = []
+      const { runner, streamed } = setup({ deps: { personal, log: (m) => void logs.push(m) } })
+      expect((await runner.run(req())).status).toBe('ok')
+      expect(streamed).toHaveLength(1)
+    }
+  })
+
+  it('the limits block is checked before the personal limit', async () => {
+    const personal = vi.fn(async () => ({ blocked: MSG }))
+    const { runner } = setup({ runtime: { ...crun, limitsEnforced: false }, deps: { personal } })
+    const r = await runner.run(req())
+    expect(r.reason).toBe('limits_unenforced')
+    expect(personal).not.toHaveBeenCalled()
+  })
+
+  it('after the snapshot: eviction runs and the run\'s undo state comes back', async () => {
+    const afterSnapshot = vi.fn(() => ({ state: 'unavailable' as const, reason: 'too_large' as const, changedBytes: 5 * 1024 ** 3, at: 'x' }))
+    const { runner } = setup({ deps: { snapshots: snaps(), afterSnapshot } })
+    const r = await runner.run(req({ runId: 'run-7' }))
+    expect(afterSnapshot).toHaveBeenCalledWith('analyst', 'run-7')
+    expect(r.undo).toMatchObject({ state: 'unavailable', reason: 'too_large' })
+    expect(r.snapshot?.id).toBe('run-7')
+  })
+
+  it('eviction throwing doesn\'t fail the run; no snapshot: no eviction, no undo', async () => {
+    const boom = vi.fn(() => { throw new Error('EIO') })
+    const a = setup({ deps: { snapshots: snaps(), afterSnapshot: boom, log: () => {} } })
+    const r = await a.runner.run(req())
+    expect(r.status).toBe('ok')
+    expect(r.undo).toBeUndefined()
+    const none = vi.fn(() => null)
+    const b = setup({ deps: { afterSnapshot: none } })
+    const r2 = await b.runner.run(req())
+    expect(none).not.toHaveBeenCalled()
+    expect(r2.undo).toBeUndefined()
   })
 })

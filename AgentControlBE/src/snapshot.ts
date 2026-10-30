@@ -22,6 +22,16 @@
  * index (`.index.json`) is updated from the post-run manifest. `.pending.json` marks a snapshot
  * whose run hasn't been finished; the next begin (or `recover`) finishes it, so a crashed run's
  * writes are still committed and undoable. Snapshots are per bot, with no sharing between bots.
+ *
+ * BE-P2-10: `evict` drops a run's retained originals (files/, manifest.json, post.json) and
+ * records `undo: {state:'unavailable', reason, at}` in its meta.json, which stays as the run's
+ * record; `gcBlobs` (copy) removes blobs no longer referenced by the index, a kept snapshot or
+ * the pending run. The eviction policy (budgets, §7.4) is in snapshot-budget.ts.
+ *
+ * Note (Team lead, BE-P2-9 review): the copy driver is close to the 2 s pre-run budget on a
+ * 10k-file workspace — about 1.3 s standalone before the hash-while-copying fix and about 2.0 s
+ * under the full parallel test suite (reflink: 0.78 s). Keep an eye on it before adding work to
+ * copy's begin.
  */
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -29,7 +39,7 @@ import {
   closeSync, constants, copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync, type Stats,
 } from 'node:fs'
 import path from 'node:path'
-import type { Agent, FileChange, SnapshotDriver } from './shared/types.js'
+import type { Agent, FileChange, ScriptRunUndo, SnapshotDriver, UndoUnavailableReason } from './shared/types.js'
 import type { BotMount } from './isolation.js'
 import {
   createHashIndex, diffManifests, hashChanged, indexFrom, openNoFollow, stillInside, takeManifest, type ManifestChange, type ManifestEntry,
@@ -133,6 +143,8 @@ export interface SnapshotMeta {
   zones: ZoneInfo[]
   changes: SnapshotChange[]
   retainedBytes: number
+  /** BE-P2-10: absent while the snapshot is kept; set when it's evicted (or, BE-P2-11, undone). */
+  undo?: ScriptRunUndo
 }
 
 export interface SnapshotOutcome {
@@ -179,6 +191,19 @@ export interface SnapshotService {
   undoSource(slug: string, runId: string): UndoSourceEntry[] | null
   /** overlay dirs of one zone (created). */
   overlayDirs(slug: string, zone: string): { upper: string; work: string } | null
+  /** BE-P2-10: bots with a snapshot folder. */
+  slugs(): string[]
+  /** BE-P2-10: the bot's finished snapshots (meta.json), kept or evicted; unordered. */
+  list(slug: string): SnapshotMeta[]
+  /** BE-P2-10: bytes a kept snapshot holds on disk: its retained originals plus its manifests. */
+  sizeOf(meta: SnapshotMeta): number
+  /**
+   * BE-P2-10: drop a snapshot's retained data and record why in its meta.json (kept as the run's
+   * record). Null when there's no such finished snapshot. Copy blobs go with `gcBlobs`.
+   */
+  evict(slug: string, runId: string, reason: UndoUnavailableReason, extra?: { changedBytes?: number }): SnapshotMeta | null
+  /** BE-P2-10 (copy): remove blobs nothing references any more; returns the bytes freed. Not while the bot's run is snapshotting. */
+  gcBlobs(slug: string): number
 }
 
 export const RUN_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/
@@ -648,7 +673,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     return readJson<SnapshotMeta>(path.join(d, runId, 'meta.json'))
   }
 
-  return {
+  const svc: SnapshotService = {
     driver: () => (deps.root() ? deps.driver() : null),
     needsStop(agent) {
       if (deps.root() === null) return false
@@ -677,7 +702,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     undoSource(slug, runId) {
       const meta = read(slug, runId)
       const d = slugDir(slug)
-      if (!meta || !d) return null
+      if (!meta || !d || meta.undo?.state === 'unavailable') return null
       const zones = new Map(meta.zones.map((z) => [z.key, z]))
       return meta.changes.map((c) => {
         const z = zones.get(c.zone)!
@@ -697,5 +722,91 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       })
     },
     overlayDirs,
+    slugs() {
+      const root = deps.root()
+      if (!root) return []
+      try {
+        return readdirSync(root).filter((n) => SLUG_RE.test(n) && lst(path.join(root, n))?.isDirectory())
+      } catch {
+        return []
+      }
+    },
+    list(slug) {
+      const d = slugDir(slug)
+      if (!d) return []
+      let names: string[]
+      try {
+        names = readdirSync(d)
+      } catch {
+        return []
+      }
+      const out: SnapshotMeta[] = []
+      for (const n of names) {
+        if (!RUN_ID_RE.test(n)) continue
+        const m = readJson<SnapshotMeta>(path.join(d, n, 'meta.json'))
+        if (m && m.runId === n && typeof m.endedAt === 'string') out.push(m)
+      }
+      return out
+    },
+    sizeOf(meta) {
+      const d = slugDir(meta.slug)
+      if (!d || meta.undo?.state === 'unavailable') return 0
+      const dir = path.join(d, meta.runId)
+      let bytes = meta.retainedBytes
+      for (const f of ['manifest.json', 'post.json', 'meta.json']) bytes += lst(path.join(dir, f))?.size ?? 0
+      return bytes
+    },
+    evict(slug, runId, reason, extra = {}) {
+      const d = slugDir(slug)
+      if (!d || !RUN_ID_RE.test(runId)) return null
+      const dir = path.join(d, runId)
+      const meta = readJson<SnapshotMeta>(path.join(dir, 'meta.json'))
+      if (!meta) return null
+      if (meta.undo?.state === 'unavailable') return meta
+      const undo: ScriptRunUndo = {
+        state: 'unavailable', reason, at: now().toISOString(),
+        ...(extra.changedBytes !== undefined ? { changedBytes: extra.changedBytes } : {}),
+      }
+      const next: SnapshotMeta = { ...meta, undo }
+      // The record first, so a crash in between leaves it unavailable rather than half there.
+      writeJson(path.join(dir, 'meta.json'), next)
+      for (const f of ['files', 'manifest.json', 'post.json', 'touched.json']) rmSync(path.join(dir, f), { recursive: true, force: true })
+      log(`snapshots: ${slug}: evicted run ${runId} (${reason})`)
+      return next
+    },
+    gcBlobs(slug) {
+      const d = slugDir(slug)
+      if (!d) return 0
+      const blobs = path.join(d, BLOBS)
+      let names: string[]
+      try {
+        names = readdirSync(blobs)
+      } catch {
+        return 0
+      }
+      const keep = new Set<string>()
+      // The current index (unchanged files reuse these at the next begin) …
+      for (const e of loadIndex(d).entries.values()) keep.add(e.sha256)
+      // … the originals kept snapshots need …
+      for (const m of svc.list(slug)) {
+        if (m.undo?.state === 'unavailable') continue
+        for (const c of m.changes) if (c.beforeSha) keep.add(c.beforeSha)
+      }
+      // … and everything the pending run's pre-run manifest refers to.
+      const pend = readJson<{ runId?: string }>(path.join(d, PENDING))
+      if (pend?.runId && RUN_ID_RE.test(pend.runId)) {
+        const m = readJson<{ pre?: Record<string, ManifestEntry[]> }>(path.join(d, pend.runId, 'manifest.json'))
+        for (const list of Object.values(m?.pre ?? {})) for (const e of list) if (e.sha256) keep.add(e.sha256)
+      }
+      let freed = 0
+      for (const n of names) {
+        if (!/^[0-9a-f]{64}$/.test(n) || keep.has(n)) continue
+        const f = path.join(blobs, n)
+        freed += lst(f)?.size ?? 0
+        rmSync(f, { force: true })
+      }
+      return freed
+    },
   }
+  return svc
 }

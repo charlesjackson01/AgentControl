@@ -207,7 +207,14 @@ export function folderUsage(store: WorkspaceStore, agent: Agent): { bytes: numbe
  * (trash only, never live files); 413 if it still does not fit.
  */
 export function ensureRoom(store: WorkspaceStore, agent: Agent, adding: number, freeing = 0): void {
-  ensureRoomAt(storageReady(store), botVol(agent), trashVol(agent), adding, freeing, 'bot folder')
+  // BE-P2-10: the bot's tools volumes and image layer share its 10 GB personal limit (plan §5).
+  ensureRoomAt(storageReady(store), botVol(agent), trashVol(agent), adding + personalExtraBytes(agent), freeing, 'bot folder')
+}
+
+let personalExtraBytes: (agent: Agent) => number = () => 0
+/** BE-P2-10: bytes outside the folder counted in the bot's limit (its tools volumes and image layer, last measured). */
+export function setPersonalExtraBytes(fn: ((agent: Agent) => number) | null): void {
+  personalExtraBytes = fn ?? (() => 0)
 }
 
 /** ensureRoom for any folder with its own trash (BE-5 group folders use it too). */

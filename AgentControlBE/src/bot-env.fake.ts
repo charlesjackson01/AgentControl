@@ -8,7 +8,7 @@ import { baseImageFor } from './vm-images.js'
 export const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' })
 export const err = (stderr: string, code = 125): CommandResult => ({ code, stdout: '', stderr })
 
-interface FakeImage { id: string; labels: Record<string, string> }
+interface FakeImage { id: string; labels: Record<string, string>; /** BE-P2-10: image inspect .Size when set. */ size?: number }
 interface FakeContainer { imageId: string; labels: Record<string, string>; running: boolean; argv: string[] }
 
 /** A tiny podman: images, containers and volumes in memory; `build` reads the LABEL lines of the Containerfile. */
@@ -39,7 +39,7 @@ export function fakeEngine(opts: { globalArgs?: string[]; failBuild?: boolean } 
     }
     if (verb === 'image' && sub === 'inspect') {
       const i = images.get(a[2]!)
-      return i ? ok(JSON.stringify([{ Id: i.id, Labels: i.labels }])) : err(`Error: ${a[2]}: image not known`)
+      return i ? ok(JSON.stringify([{ Id: i.id, Labels: i.labels, ...(i.size !== undefined ? { Size: i.size } : {}) }])) : err(`Error: ${a[2]}: image not known`)
     }
     if (verb === 'image' && sub === 'ls') {
       const ref = flag('--filter')!.replace('reference=', '')

@@ -13,7 +13,7 @@
  * Fields owned by later tasks (runtime probe, usage of volumes/memory, snapshots, runs,
  * browser download) carry neutral values until those land.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync } from 'node:fs'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { BotEnvService, BotMount } from './bot-env.js'
@@ -21,7 +21,9 @@ import type { MountAllowList } from './isolation.js'
 import type { SnapshotZone } from './snapshot.js'
 import { envListProblem } from './bot-env.js'
 import { botRoot, folderBytes, quotaBytes } from './files.js'
-import { groupRoot } from './group-files.js'
+import { groupFolderFull, groupRoot } from './group-files.js'
+import { sumBreakdown, type PersonalUsage } from './personal-usage.js'
+import type { SnapshotUsage } from './snapshot-budget.js'
 import { fail, failWithReason } from './http.js'
 import {
   INTERNET_POLICIES,
@@ -56,7 +58,8 @@ export function botMounts(store: WorkspaceStore, agent: Agent): BotMount[] {
   for (const c of store.conversations) {
     if (c.kind !== 'group' || c.archivedAt || !c.memberAgentIds.includes(agent.id)) continue
     const shared = path.join(groupRoot(store, c.slug), 'shared')
-    if (existsSync(shared)) mounts.push({ source: shared, target: `${BOT_PATHS.groups}/${c.slug}`, readonly: false })
+    // BE-P2-10: a group folder at its 10 GB limit is mounted read-only (writes fail in runs).
+    if (existsSync(shared)) mounts.push({ source: shared, target: `${BOT_PATHS.groups}/${c.slug}`, readonly: groupFolderFull(store, c.slug) })
   }
   return mounts
 }
@@ -71,13 +74,18 @@ const memberGroups = (store: WorkspaceStore, agent: Agent): GroupConversation[] 
 export function botMountAllowList(store: WorkspaceStore, agent: Agent): MountAllowList {
   const root = botRoot(store, agent)
   const groups: Record<string, string> = {}
+  const readonlyGroups: string[] = []
   let groupsRoot: string | undefined
   for (const c of memberGroups(store, agent)) {
     const g = groupRoot(store, c.slug)
     groups[c.slug] = path.join(g, 'shared')
     groupsRoot ??= path.dirname(g)
+    if (groupFolderFull(store, c.slug)) readonlyGroups.push(c.slug)
   }
-  return { slug: agent.slug, workspace: path.join(root, 'workspace'), inputs: path.join(root, 'shared'), groups, botRoot: root, ...(groupsRoot ? { groupsRoot } : {}) }
+  return {
+    slug: agent.slug, workspace: path.join(root, 'workspace'), inputs: path.join(root, 'shared'), groups, botRoot: root,
+    ...(groupsRoot ? { groupsRoot } : {}), ...(readonlyGroups.length ? { readonlyGroups } : {}),
+  }
 }
 
 /**
@@ -89,7 +97,8 @@ export function snapshotZones(store: WorkspaceStore, agent: Agent): SnapshotZone
   const zones: SnapshotZone[] = [{ key: 'workspace', dir: path.join(botRoot(store, agent), 'workspace'), target: BOT_PATHS.workspace, root: 'agent', prefix: 'workspace' }]
   for (const c of memberGroups(store, agent)) {
     const shared = path.join(groupRoot(store, c.slug), 'shared')
-    if (!existsSync(shared)) continue
+    // A full group folder is mounted read-only (BE-P2-10), so it isn't a writable zone.
+    if (!existsSync(shared) || groupFolderFull(store, c.slug)) continue
     zones.push({ key: `group-${c.slug}`, dir: shared, target: `${BOT_PATHS.groups}/${c.slug}`, root: 'group', prefix: 'shared', groupId: c.id, groupName: c.name })
   }
   return zones
@@ -106,6 +115,27 @@ export interface BotEnvRouteDeps {
   isolationNote?: (agent: Agent, engine: VmHostInfo['engine'] | null) => string | undefined
   /** BE-P2-7: after a saved PATCH changed the bot's gVisor mode ('mode') or browser permission ('features'). */
   onProbeInputChange?: (what: 'mode' | 'features') => void
+  /** BE-P2-10: personal data (folder + tools volumes + layer); absent: the folder parts only. */
+  personal?: PersonalUsage
+  /** BE-P2-10: the bot's kept undo snapshots against its budget; absent: none. */
+  snapshotUsage?: (agent: Agent) => SnapshotUsage
+}
+
+/** The bot's folder parts of its personal data; memory includes BOT.md (plan §5). */
+export function personalFolderParts(store: WorkspaceStore, agent: Agent): { workspace: number; inputs: number; memory: number } {
+  const root = botRoot(store, agent)
+  let botMd = 0
+  try {
+    const st = lstatSync(path.join(root, 'BOT.md'))
+    if (st.isFile()) botMd = st.size
+  } catch {
+    botMd = 0
+  }
+  return {
+    workspace: folderBytes(path.join(root, 'workspace')),
+    inputs: folderBytes(path.join(root, 'shared')),
+    memory: folderBytes(path.join(root, 'memory')) + botMd,
+  }
 }
 
 export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore, deps: BotEnvRouteDeps): void {
@@ -136,10 +166,10 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       }
     }
     const root = botRoot(store, agent)
-    const workspace = folderBytes(path.join(root, 'workspace'))
-    const inputs = folderBytes(path.join(root, 'shared'))
-    const memory = folderBytes(path.join(root, 'memory'))
-    const breakdown = { workspace, inputs, memory, tools: 0, opt: 0, imageLayer: 0 }
+    // BE-P2-10: the tools volumes and layer as last measured (refreshed in the background when stale).
+    if (deps.personal) void deps.personal.refresh(agent).catch(() => {})
+    const breakdown = deps.personal?.breakdown(agent) ?? { ...personalFolderParts(store, agent), tools: 0, opt: 0, imageLayer: 0 }
+    const budgetBytes = (store.settings.vm?.snapshotBudget.perBotMb ?? 0) * 1024 * 1024
     const globalMode = store.settings.vm?.gvisor ?? 'auto'
     const idleStopAt = deps.runner?.idleStopAt(agent.id)
     const isolationNote = deps.isolationNote?.(agent, host?.engine ?? null)
@@ -160,10 +190,10 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       limits: VM_LIMITS,
       usage: {
         memoryMb: 0,
-        personalBytes: workspace + inputs + memory,
+        personalBytes: sumBreakdown(breakdown),
         personalQuotaBytes: quotaBytes(),
         breakdown,
-        snapshots: { bytes: 0, budgetBytes: (store.settings.vm?.snapshotBudget.perBotMb ?? 0) * 1024 * 1024, runsWithUndo: 0 },
+        snapshots: deps.snapshotUsage?.(agent) ?? { bytes: 0, budgetBytes, runsWithUndo: 0 },
       },
       env: vm.env,
       packages: vm.packages,

@@ -65,6 +65,14 @@ describe('checkBotMounts', () => {
     expect(refused([{ ...mounts[0]!, overlay: ov('workspace') }, { ...mounts[2]!, overlay: ov('workspace') }], a2)).toContain('used by another mount')
   })
 
+  it('BE-P2-10: a group at its limit must be mounted read-only; others must stay writable', () => {
+    const full = { ...allow, readonlyGroups: ['g1'] }
+    const ro = mounts.map((m) => (m.target === '/bot/groups/g1' ? { ...m, readonly: true } : m))
+    expect(checkBotMounts(ro, full)).toEqual(ro)
+    expect(refused(mounts, full)).toContain('it must be read-only')
+    expect(refused(ro)).toContain('it must be writable')
+  })
+
   it('the bot\'s own folders, its groups and skills pass', () => {
     expect(checkBotMounts(mounts, allow)).toEqual(mounts)
     expect(checkBotMounts([], allow)).toEqual([])

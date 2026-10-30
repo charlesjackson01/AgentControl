@@ -156,6 +156,18 @@ export function groupUsage(store: WorkspaceStore, group: GroupConversation): Fil
   return { bytes: fs.du(groupVol(group.slug)) + trashBytes, quotaBytes: quotaBytes(), trashBytes }
 }
 
+/**
+ * BE-P2-10: is the group folder at its 10 GB limit (live files, as ensureGroupRoom counts them)?
+ * Then bots get its shared/ read-only in runs, so script writes fail like uploads do (plan §5).
+ */
+export function groupFolderFull(store: WorkspaceStore, slug: string): boolean {
+  try {
+    return storageReady(store).du(groupVol(slug)) >= quotaBytes()
+  } catch {
+    return false
+  }
+}
+
 /** Make room in the group folder (trash counts and is pruned oldest-first, like a bot's). */
 export function ensureGroupRoom(store: WorkspaceStore, slug: string, adding: number, freeing = 0): void {
   ensureRoomAt(storageReady(store), groupVol(slug), groupTrashVol(slug), adding, freeing, 'group folder')

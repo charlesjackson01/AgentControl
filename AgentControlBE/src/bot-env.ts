@@ -315,6 +315,21 @@ export interface BotEnvService {
   reset(agent: Agent): Promise<AgentVm>
   /** Re-read pip/npm/opt-bin from the container and store it in vm.tools. */
   refreshTools(agent: Agent): Promise<AgentVm>
+  /**
+   * BE-P2-10: bytes in the bot's tools volumes (du in the container; only while it's running)
+   * and its own image layer (layer image size minus the base). Parts it couldn't measure are left out.
+   */
+  measure?(agent: Agent): Promise<{ tools?: number; opt?: number; imageLayer?: number }>
+}
+
+/** `du -s -B1 <dirs>` output → bytes per dir. */
+export function parseDu(out: string): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const line of out.split('\n')) {
+    const hit = /^(\d+)\s+(\S.*)$/.exec(line.trim())
+    if (hit) m.set(hit[2]!, Number(hit[1]))
+  }
+  return m
 }
 
 const lastLine = (r: CommandResult) =>
@@ -542,6 +557,33 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     return cli([...rtFlags(agent), ...execArgv({ slug: agent.slug, argv, env: agent.vm.env, extraEnv: opts.extraEnv, cwd: opts.cwd })], opts.timeoutMs ?? 60_000)
   }
 
+  async function imageSize(ref: string): Promise<number | null> {
+    const r = await cli(['image', 'inspect', ref])
+    const i = r.code === 0 ? parseInspect(r.stdout) : null
+    return i && typeof i.Size === 'number' ? i.Size : null
+  }
+
+  async function measure(agent: Agent): Promise<{ tools?: number; opt?: number; imageLayer?: number }> {
+    const out: { tools?: number; opt?: number; imageLayer?: number } = {}
+    try {
+      if ((await containerStatus(agent.slug)).state === 'running') {
+        const r = await exec(agent, ['du', '-s', '-B1', BOT_PATHS.home, BOT_PATHS.opt], { timeoutMs: 120_000 })
+        const du = parseDu(r.stdout)
+        if (du.has(BOT_PATHS.home)) out.tools = du.get(BOT_PATHS.home)!
+        if (du.has(BOT_PATHS.opt)) out.opt = du.get(BOT_PATHS.opt)!
+      }
+      const vm = agent.vm
+      if (vm.image.generation === 0) out.imageLayer = 0
+      else {
+        const [mine, base] = await Promise.all([imageSize(botImageRef(agent.slug, vm.image.generation)), imageSize(baseImageFor(vm.image.base, baseVersion()))])
+        if (mine !== null && base !== null) out.imageLayer = Math.max(0, mine - base)
+      }
+    } catch (err) {
+      log(`bot-env: ${agent.slug}: couldn't measure the tools: ${(err as Error).message}`)
+    }
+    return out
+  }
+
   return {
     status: (agent) => containerStatus(agent.slug),
     ensure: (agent, opts = {}) => serial(agent.slug, () => ensureLocked(agent, opts.start === true, opts.forRun === true)),
@@ -553,6 +595,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
         if (st.state === 'running') await must([...(st.runtimeFlags ?? rtFlags(agent)), 'stop', '--time', '10', botContainerName(agent.slug)], 'stop the bot\'s VM', 30_000)
       }),
     exec,
+    measure,
 
     vmInstall: (agent, raw) =>
       serial(agent.slug, async () => {

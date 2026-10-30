@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -210,6 +210,48 @@ describe('start / stop / reset / tools', () => {
     // Same folders as the writable mounts.
     const rw = botMounts(store, stored(a.id)).filter((m) => !m.readonly)
     expect(rw.map((m) => [m.target, m.source])).toEqual(zones.map((z) => [z.target, z.dir]))
+  })
+})
+
+describe('BE-P2-10: group folder limit and usage in VmInfo', () => {
+  async function team() {
+    await inject('POST', '/api/agents', { name: 'Primary', endpointId: 'ep_local_llama', modelId: 'llama-3-8b', isPrimary: true })
+    const a = await makeAgent('Member')
+    const b = await makeAgent('Other')
+    const g = (await inject('POST', '/api/groups', { name: 'Team', memberAgentIds: [a.id, b.id] })).json() as { slug: string; id: string }
+    return { a, g }
+  }
+
+  it('a group folder at its limit is mounted read-only, left out of the snapshot zones, and the allow-list agrees', async () => {
+    const { a, g } = await team()
+    const target = `/bot/groups/${g.slug}`
+    expect(botMounts(store, stored(a.id)).find((m) => m.target === target)?.readonly).toBe(false)
+    vi.stubEnv('AGENTCONTROL_BOT_QUOTA_BYTES', String(4096))
+    const shared = botMounts(store, stored(a.id)).find((m) => m.target === target)!.source
+    writeFileSync(join(shared, 'big.bin'), Buffer.alloc(5000))
+    const mounts = botMounts(store, stored(a.id))
+    expect(mounts.find((m) => m.target === target)?.readonly).toBe(true)
+    expect(snapshotZones(store, stored(a.id)).map((z) => z.key)).toEqual(['workspace'])
+    const allow = botMountAllowList(store, stored(a.id))
+    expect(allow.readonlyGroups).toEqual([g.slug])
+    expect(checkBotMounts(mounts, allow)).toEqual(mounts)
+    // Under the limit again: writable.
+    rmSync(join(shared, 'big.bin'))
+    expect(botMounts(store, stored(a.id)).find((m) => m.target === target)?.readonly).toBe(false)
+    expect(botMountAllowList(store, stored(a.id)).readonlyGroups ?? []).toEqual([])
+  })
+
+  it('VmInfo.usage: personal bytes include BOT.md, snapshot usage from the budget (2 GB per bot by default)', async () => {
+    const a = await makeAgent()
+    const r = botRoot(store, stored(a.id))
+    writeFileSync(join(r, 'workspace', 'w.bin'), Buffer.alloc(1000))
+    writeFileSync(join(r, 'BOT.md'), 'x'.repeat(200))
+    const u = (await inject('GET', `/api/agents/${a.id}/vm`)).json().usage
+    expect(u.breakdown.workspace).toBeGreaterThanOrEqual(1000)
+    expect(u.breakdown.memory).toBeGreaterThanOrEqual(200)
+    expect(u.personalBytes).toBe(Object.values(u.breakdown as Record<string, number>).reduce((t, n) => t + n, 0))
+    expect(u.snapshots).toEqual({ bytes: 0, budgetBytes: 2048 * 1024 * 1024, runsWithUndo: 0 })
+    expect(typeof app.vmSnapshotBudget.enforce).toBe('function')
   })
 })
 

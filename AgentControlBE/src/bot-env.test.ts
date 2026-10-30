@@ -16,6 +16,7 @@ import {
   envListProblem,
   execArgv,
   layerContainerfile,
+  parseDu,
   type BotEnvDeps,
   type EngineRef,
 } from './bot-env.js'
@@ -567,5 +568,49 @@ describe('tmp dirs', () => {
     await svc.rebuild(agent())
     expect(files).toHaveLength(1)
     expect(() => readFileSync(files[0]!)).toThrow()
+  })
+})
+
+describe('BE-P2-10: measuring the tools volumes and the image layer', () => {
+  it('parseDu reads `du -s -B1` lines', () => {
+    expect(parseDu('1234\t/home/bot\n56 /opt/bot\njunk\n')).toEqual(new Map([['/home/bot', 1234], ['/opt/bot', 56]]))
+  })
+
+  it('generation 0, stopped: layer 0 and no du (the volumes keep their last value)', async () => {
+    const e = fakeEngine()
+    const svc = service(e)
+    const a = agent()
+    await svc.ensure(a)
+    expect(await svc.measure!(a)).toEqual({ imageLayer: 0 })
+    expect(e.calls.some((c) => c[0] === 'exec')).toBe(false)
+  })
+
+  it('running: du of /home/bot and /opt/bot in the container; layer = bot image − base image', async () => {
+    const e = fakeEngine()
+    const svc = service(e)
+    const a = agent()
+    await svc.start(a)
+    await svc.rebuild(a)
+    await svc.ensure(a, { start: true })
+    e.images.get('localhost/ac-bot-analyst:1')!.size = 900_000_000
+    e.images.get(baseImageFor('base', '1.0.0'))!.size = 700_000_000
+    e.execHandler.fn = (argv) => {
+      const cmd = argv.slice(argv.indexOf('ac-bot-analyst') + 1)
+      expect(cmd).toEqual(['du', '-s', '-B1', '/home/bot', '/opt/bot'])
+      return ok('3000\t/home/bot\n4000\t/opt/bot\n')
+    }
+    expect(await svc.measure!(a)).toEqual({ tools: 3000, opt: 4000, imageLayer: 200_000_000 })
+  })
+
+  it('never throws: an unknown size or a failing engine leaves parts out', async () => {
+    const e = fakeEngine()
+    const svc = service(e)
+    const a = agent()
+    await svc.start(a)
+    await svc.rebuild(a)
+    e.execHandler.fn = () => err('boom', 1)
+    expect(await svc.measure!(a)).toEqual({})
+    const none = service(e, { engine: async () => null })
+    await expect(none.measure!(a)).resolves.toEqual({})
   })
 })

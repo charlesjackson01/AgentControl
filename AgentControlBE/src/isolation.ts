@@ -81,6 +81,8 @@ export interface MountAllowList {
   groupsRoot?: string
   /** BE-P2-9: overlay upper/work folders must resolve inside this folder (the bot's own snapshot overlay folder). */
   overlayRoot?: string
+  /** BE-P2-10: groups whose folder is at its limit; their mount must be read-only (others writable). */
+  readonlyGroups?: string[]
 }
 
 const real = (p: string): string | null => {
@@ -97,7 +99,7 @@ function refuse(slug: string, m: BotMount, why: string): never {
 /**
  * Throws (500, reason mount_refused) unless every mount is on the bot's allow-list:
  * /bot/workspace (rw), /bot/shared (ro), /bot/skills (ro) and /bot/groups/<g> (rw, member groups
- * only), each source resolving (symlinks followed) to exactly the allowed folder.
+ * only; ro for a group listed in readonlyGroups), each source resolving (symlinks followed) to exactly the allowed folder.
  */
 export function checkBotMounts(mounts: readonly BotMount[], allow: MountAllowList): BotMount[] {
   const seen = new Set<string>()
@@ -114,7 +116,7 @@ export function checkBotMounts(mounts: readonly BotMount[], allow: MountAllowLis
     else if (m.target.startsWith(`${BOT_PATHS.groups}/`) && !m.target.slice(BOT_PATHS.groups.length + 1).includes('/')) {
       const g = m.target.slice(BOT_PATHS.groups.length + 1)
       allowed = Object.prototype.hasOwnProperty.call(allow.groups, g) ? allow.groups[g] : undefined
-      readonly = false
+      readonly = allow.readonlyGroups?.includes(g) === true
       within = allow.groupsRoot
       if (allowed === undefined) refuse(allow.slug, m, `the bot isn't a member of group ${JSON.stringify(g.slice(0, 60))}`)
     } else refuse(allow.slug, m, 'that target isn\'t allowed')

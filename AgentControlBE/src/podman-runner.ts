@@ -15,9 +15,13 @@
  * probe result yet), runs fail with reason 'gvisor_unavailable' and the force_on message, before
  * anything else and before any container is created or started; never a quiet fallback to crun.
  * The override doesn't lift it. The check runs again when a queued run's turn comes.
+ * BE-P2-10: after those, a bot over its 10 GB personal limit (folder + tools volumes + layer) is
+ * blocked with reason 'personal_quota' and the exact §5 message (the override doesn't lift it).
+ * After a run's snapshot is finished, eviction runs (too_large, then the budgets) and the run's
+ * undo state comes back in `undo`.
  */
 import path from 'node:path'
-import type { Agent } from './shared/types.js'
+import type { Agent, ScriptRunUndo } from './shared/types.js'
 import { VM_LIMITS } from './shared/types.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import { checkCwd, execArgv, type BotEnvService, type EngineRef } from './bot-env.js'
@@ -26,6 +30,7 @@ import type { ResolvedRuntime } from './runtime-probe.js'
 import type { Runner, RunScriptRequest, RunScriptResult } from './runner.js'
 import { spawnStreamRunner, type StreamExit, type StreamHandle, type StreamRunner } from './stream-runner.js'
 import { newRunId, RUN_ID_RE, type SnapshotHandle, type SnapshotService } from './snapshot.js'
+import { PERSONAL_QUOTA_REASON } from './personal-usage.js'
 
 /** BE-P2-9: the run was refused because its undo snapshot couldn't be taken. */
 export const SNAPSHOT_FAILED_REASON = 'snapshot_failed'
@@ -38,6 +43,7 @@ export const NETWORK_UNAVAILABLE = 'Internet access isn\'t available yet.'
 export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
 export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
 export const MOUNTS_UNUSABLE_REASON = 'mounts_unusable'
+export { PERSONAL_QUOTA_REASON }
 export const GVISOR_UNAVAILABLE_REASON = 'gvisor_unavailable'
 export const MOUNTS_UNUSABLE_MESSAGE = "This computer can't give bot scripts safe access to their files, so scripts can't run here."
 /** Test-only override for the limits and mounts blocks. Never set by default, never exposed in the API/UI. */
@@ -111,6 +117,13 @@ export interface ContainerRunnerDeps {
   sleep?: (ms: number) => Promise<void>
   /** BE-P2-9: undo snapshots around every run (absent: no snapshots, filesChanged stays []). */
   snapshots?: SnapshotService
+  /**
+   * BE-P2-10: the bot's personal data against its 10 GB limit, checked before each run; a
+   * `blocked` message refuses the run (reason 'personal_quota'). Absent: not checked.
+   */
+  personal?: (agent: Agent) => Promise<{ blocked: string | null }>
+  /** BE-P2-10: eviction right after the run's snapshot (too_large, then the budgets); returns the run's undo state. */
+  afterSnapshot?: (slug: string, runId: string) => ScriptRunUndo | null
 }
 
 export interface ContainerRunner extends Runner {
@@ -196,6 +209,14 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     const rt = deps.runtime(agent)
     const no = blocked(agent, rt, t0)
     if (no) return no
+    if (deps.personal) {
+      // BE-P2-10: over the 10 GB personal limit, new runs are blocked (plan §5).
+      const q = await deps.personal(agent).catch((x: Error) => {
+        log(`runner: ${agent.slug}: couldn't measure the bot's files and tools: ${x.message}`)
+        return { blocked: null }
+      })
+      if (q.blocked) return err(t0, q.blocked, { reason: PERSONAL_QUOTA_REASON, runtime: rt.effective })
+    }
     const e = await deps.engine()
     if (!e) return err(t0, 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.', { runtime: null })
     // BE-P2-9: the undo snapshot. With the overlay driver the container is stopped first, so
@@ -222,6 +243,7 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       // Every outcome (succeeded, failed, timed out, stopped, crashed) commits and is undoable.
       let snapshot: RunScriptResult['snapshot'] = null
       let filesChanged: RunScriptResult['filesChanged'] = []
+      let undo: ScriptRunUndo | null = null
       try {
         if (snaps.needsStop(agent)) await deps.botEnv.stop(agent)
         const o = await snaps.finish(snap)
@@ -231,7 +253,15 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
         // Left pending: the next run (or a restart) finishes it.
         log(`runner: ${agent.slug}: finishing the undo snapshot of run ${snap.runId} failed (it's retried before the next run): ${(x as Error).message}`)
       }
-      if (result) result = { ...result, filesChanged, snapshot }
+      if (snapshot && deps.afterSnapshot) {
+        // BE-P2-10: still in the bot's run slot, so its copy blobs can be collected too.
+        try {
+          undo = deps.afterSnapshot(agent.slug, snap.runId)
+        } catch (x) {
+          log(`runner: ${agent.slug}: snapshot eviction after run ${snap.runId} failed: ${(x as Error).message}`)
+        }
+      }
+      if (result) result = { ...result, filesChanged, snapshot, ...(undo ? { undo } : {}) }
     } else if (result && snaps) result = { ...result, snapshot: null }
     if (thrown !== undefined) throw thrown
     return result!

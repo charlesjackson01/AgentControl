@@ -122,6 +122,12 @@ export interface RunListPage {
   hasMore: boolean
 }
 
+export type ToolBuildAction = 'rebuild' | 'rollback'
+const TOOL_BUILD_WHY: Record<ToolBuildAction, string> = {
+  rebuild: "Rebuild the bot's tools",
+  rollback: "Go back to the previous version of the bot's tools",
+}
+
 export interface RunService extends RunLogs {
   /** Validate, then create the queued run and its card. 404/400/409 via fail(). */
   start(input: StartRunInput): Promise<ScriptRunWithReason>
@@ -139,6 +145,13 @@ export interface RunService extends RunLogs {
   /** All queued or running runs RunService holds (any bot). */
   activeCount(): number
   undo(runId: string, opts?: { force?: boolean }): Promise<{ run: ScriptRunWithReason; undoRun: ScriptRunWithReason }>
+  /**
+   * BE-P2-17: a tool rebuild or rollback (VM tab), kept as a `ScriptRun` (kind `tool_build`, no
+   * chat card). 409 `run_active` while the bot has a run queued or running (or an undo). A 4xx
+   * from `build` (e.g. no_previous_generation, internet_unavailable) is passed on with no record; any
+   * other failure is recorded as a failed run and then passed on (e.g. 502 build_failed).
+   */
+  toolBuild(agentId: string, action: ToolBuildAction, build: () => Promise<{ generation: number; log: string }>): Promise<ScriptRunWithReason>
   /** The 8 KB-per-stream view the model gets. */
   modelResult(run: ScriptRun): ModelRunResult
   recover(): Promise<number>
@@ -329,6 +342,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
   /** Create or update the run's card. `persist`: save the store (status changes only). */
   function syncCard(run: ScriptRun, persist: boolean): ChatRunSummary {
     const summary = chatSummary(run)
+    // BE-P2-17: tool builds are started from the VM tab; they show in its run history, not in chat.
+    if (run.kind === 'tool_build') return summary
     const msgs = deps.messages()
     let msg = run.messageId ? msgs.find((m) => m.id === run.messageId) : undefined
     if (!msg) {
@@ -436,6 +451,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
   }
 
   /** Jobs in or waiting for the bot's runner slot that aren't RunService runs (undo, recovery). */
+  /** BE-P2-17: bots with a tool rebuild/rollback in progress (one at a time per bot). */
+  const building = new Set<string>()
+
   function outside(agentId: string): number {
     const n = deps.runner.activeRuns?.(agentId) ?? 0
     if (!n) return 0
@@ -894,6 +912,56 @@ export function createRunService(deps: RunServiceDeps): RunService {
       deps.onRunsChanged?.(agent.id)
       refreshUndo(agent.id)
       return { run: full, undoRun }
+    },
+    async toolBuild(agentId, action, build) {
+      load()
+      const agent = deps.getAgent(agentId)
+      if (!agent) fail(404, 'Bot not found.')
+      let busy = outside(agent.id)
+      for (const l of live.values()) if (l.run.agentId === agent.id) busy++
+      if (busy > 0) failWithReason(409, 'run_active', "Wait for the bot's run to finish first.")
+      if (building.has(agent.id)) failWithReason(409, 'run_active', "Wait for the bot's tools to finish building first.")
+      const dm = deps.conversations().find((c) => c.kind === 'dm' && c.agentId === agent.id)
+      const startedAt = now().toISOString()
+      const record = (status: ScriptRunStatus, out: { log: string; error?: string; reason?: string }) => {
+        const run: ScriptRunWithReason = {
+          ...baseRun({ agentId: agent.id, conversationId: dm?.id ?? '', context: { kind: 'dm' }, argv: [action], cwd: 'workspace', why: TOOL_BUILD_WHY[action], kind: 'tool_build' }, agent, deps.newRunId()),
+          status,
+          queuedAt: startedAt,
+          startedAt,
+          endedAt: now().toISOString(),
+          ...(status === 'succeeded' ? { exitCode: 0 } : {}),
+          ...(out.error ? { error: out.error } : {}),
+          ...(out.reason ? { reason: out.reason } : {}),
+        }
+        run.durationMs = Math.max(0, Date.parse(run.endedAt!) - Date.parse(startedAt))
+        const text = Buffer.from(out.log, 'utf8')
+        run.outputBytes = text.length
+        run.stdoutTail = tailUtf8(out.log, 64 * 1024)
+        run.outputTruncated = text.length > 64 * 1024
+        createLogs(agent.slug, run.id)
+        try {
+          writeFileSync(fileOf(agent.slug, run.id, 'stdout.log'), text)
+        } catch (err) {
+          log(`runs: couldn't write the build log for ${run.id}: ${(err as Error).message}`)
+        }
+        changed({ run, slug: agent.slug })
+        deps.onRunsChanged?.(agent.id)
+        return run
+      }
+      let res: { generation: number; log: string }
+      building.add(agent.id)
+      try {
+        res = await build()
+      } catch (err) {
+        const e = err as Error & { statusCode?: number; reason?: string }
+        if (e.statusCode !== undefined && e.statusCode < 500) throw err
+        record('failed', { log: `${e.message}\n`, error: e.message, reason: e.reason ?? 'build_failed' })
+        throw err
+      } finally {
+        building.delete(agent.id)
+      }
+      return record('succeeded', { log: res.log })
     },
     modelResult(run) {
       return {

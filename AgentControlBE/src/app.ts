@@ -24,6 +24,7 @@ import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMe
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRoutes } from './bot-env-routes.js'
 import { registerRunRoutes } from './run-routes.js'
+import { registerVmSettingsRoutes } from './vm-settings-routes.js'
 import { createSnapshotService, newRunId } from './snapshot.js'
 import { createUndoService, type UndoService } from './undo.js'
 import { budgetLimits, createSnapshotBudget, freeBytesAt, type RunLogs, type SnapshotBudget } from './snapshot-budget.js'
@@ -422,6 +423,8 @@ export interface BuildAppOptions {
   vmFreeBytes?: () => number | null
   /** BE-P2-12: test-only SSE heartbeat and run.output coalescing intervals. */
   liveTimers?: { heartbeatMs?: number; outputFlushMs?: number }
+  /** BE-P2-17: test-only engine (e.g. Podman with a throwaway --root) for the app's own botEnv and runner. */
+  vmEngine?: EngineRef
 }
 
 declare module 'fastify' {
@@ -1536,6 +1539,10 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
 
   let engineCli: EngineRef['cli'] | null = null
   const engineRef = async (): Promise<EngineRef | null> => {
+    if (opts.vmEngine) {
+      engineCli = opts.vmEngine.cli
+      return opts.vmEngine
+    }
     const host = await vmHost.hostInfo()
     engineCli = host.engine ?? null
     if (!host.engine) return null
@@ -1803,7 +1810,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     await runs.recover().catch((err: Error) => app.log.warn(`run recovery failed: ${err.message}`))
   })
   registerLiveEventRoutes(app, liveEvents, { heartbeatMs: opts.liveTimers?.heartbeatMs, runAgent: (runId) => runs.agentOf(runId) })
-  registerRunRoutes(app, store, runs)
+  // BE-P2-17: undo preview/apply (app.vmUndo via RunService.undo, which records the undo run).
+  registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => undo.preview(agent, runId), activeRuns: activeOf })
 
   botEnvRoutesRef = registerBotEnvRoutes(app, store, {
     botEnv,
@@ -1825,6 +1833,28 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     onProbeInputChange: (what) => probeLater(what === 'mode' ? 'refresh' : 'ensureFresh'),
     personal,
     snapshotUsage: (agent) => snapshotBudget.usage(agent.slug),
+    // BE-P2-17: tool rebuild/rollback, recorded as ScriptRuns (kind tool_build).
+    toolBuild: (agent, action, build) => runs.toolBuild(agent.id, action, build),
+  })
+
+  // BE-P2-17: GET/PATCH /api/vm/settings.
+  registerVmSettingsRoutes(app, store, {
+    runtimeModeChanged: () => app.vmRuntimeModeChanged(),
+    budgetChanged: () => {
+      try {
+        const evicted = snapshotBudget.enforce()
+        if (evicted.length) app.log.info(`vm settings: new undo budget evicted ${evicted.length} snapshot(s)`)
+      } catch (err) {
+        app.log.warn(`vm settings: budget enforce failed: ${(err as Error).message}`)
+      }
+      // The budget shows in every bot's VmInfo (usage.snapshots.budgetBytes).
+      for (const agent of store.agents) {
+        void botEnvRoutesRef
+          ?.vmInfo(agent)
+          .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId: agent.id, vm }))
+          .catch(() => {})
+      }
+    },
   })
 
   return app

@@ -8,8 +8,9 @@
  *   POST  /api/agents/:id/vm/reset      → VmInfo ({confirm:true}; M1: no backup)
  *   GET   /api/agents/:id/vm/tools      → VmToolsInfo
  *
- * Tool rebuild/rollback routes return a ScriptRun (kind tool_build) and arrive with the
- * run service (BE-P2-8/16); the service methods are here already.
+ *   POST  /api/agents/:id/vm/tools/rebuild   → ScriptRun (kind tool_build; BE-P2-17)
+ *   POST  /api/agents/:id/vm/tools/rollback  → ScriptRun (kind tool_build; BE-P2-17)
+ *
  * Fields owned by later tasks (runtime probe, usage of volumes/memory, snapshots, runs,
  * browser download) carry neutral values until those land.
  */
@@ -25,6 +26,7 @@ import { botRoot, botVol, folderBytes, quotaBytes } from './files.js'
 import { groupFolderFull, groupRoot, groupVol } from './group-files.js'
 import { sumBreakdown, type PersonalUsage } from './personal-usage.js'
 import type { SnapshotUsage } from './snapshot-budget.js'
+import type { ToolBuildAction } from './run-service.js'
 import { fail, failWithReason } from './http.js'
 import {
   INTERNET_POLICIES,
@@ -36,6 +38,7 @@ import {
   type GroupConversation,
   type InternetPolicy,
   type RuntimeMode,
+  type ScriptRun,
   type VmHostInfo,
   type VmInfo,
   type VmState,
@@ -149,6 +152,8 @@ export interface BotEnvRouteDeps {
   snapshotUsage?: (agent: Agent) => SnapshotUsage
   /** BE-P2-12: the bot's newest script runs for VmInfo.runs (RunService); absent: none. */
   runs?: (agent: Agent) => { runs: VmInfo['runs']; hasMore: boolean }
+  /** BE-P2-17: tool rebuild/rollback as a ScriptRun (kind tool_build); RunService.toolBuild. Absent: 503. */
+  toolBuild?: (agent: Agent, action: ToolBuildAction, build: () => Promise<{ generation: number; log: string }>) => Promise<ScriptRun>
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -339,7 +344,31 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     }
   })
 
+  /** BE-P2-17: rebuild/rollback through RunService (409 run_active first, then the service's own 409s). */
+  async function toolBuild(agent: Agent, action: ToolBuildAction): Promise<ScriptRun> {
+    if (!deps.toolBuild) fail(503, 'Tool builds aren\'t available right now.')
+    return deps.toolBuild(agent, action, async () => {
+      const fresh = agentOf(agent.id)
+      if (action === 'rebuild') {
+        const r = await botEnv.rebuild(fresh)
+        return { generation: r.generation, log: r.log }
+      }
+      const vm = await botEnv.rollback(fresh)
+      return { generation: vm.image.generation, log: rollbackLog(vm) }
+    })
+  }
+
+  app.post('/api/agents/:id/vm/tools/rebuild', async (request) => toolBuild(agentOf(idOf(request)), 'rebuild'))
+  app.post('/api/agents/:id/vm/tools/rollback', async (request) => toolBuild(agentOf(idOf(request)), 'rollback'))
+
   return { vmInfo }
+}
+
+/** The text a rollback's ScriptRun carries as its output. */
+export function rollbackLog(vm: AgentVm): string {
+  const where = vm.image.generation === 0 ? 'the shared base image (generation 0)' : `generation ${vm.image.generation}`
+  const pkgs = vm.packages.length ? vm.packages.join(', ') : 'none'
+  return `Went back to ${where}. System packages: ${pkgs}.\n`
 }
 
 /** Store-backed saveVm for the service: replace Agent.vm and save (rolls back on failure). */

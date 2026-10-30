@@ -181,7 +181,8 @@ describe.skipIf(!engineReady)('@vm BE-P2-9 snapshots', () => {
   it('overlay: writes made by an exec between runs are committed into the next run', async ({ skip }) => {
     overlaySkip(skip)
     seed()
-    await botEnv.ensure(agent)
+    // The overlay driver stops the container after every run, so start it for the exec.
+    await botEnv.start(agent)
     const e = await botEnv.exec(agent, ['sh', '-c', 'echo idle > /bot/workspace/idle.txt'])
     expect(e.code).toBe(0)
     expect(existsSync(join(ws(), 'idle.txt'))).toBe(false) // still in the upper layer

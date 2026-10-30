@@ -16,6 +16,11 @@ export interface FakeRunner extends ContainerRunner {
 
 export function fakeRunner(): FakeRunner {
   const counts = new Map<string, number>()
+  const listeners = new Set<(agentId: string) => void>()
+  const setCount = (agentId: string, n: number) => {
+    counts.set(agentId, n)
+    for (const fn of [...listeners]) fn(agentId)
+  }
   const r: FakeRunner = {
     pending: [],
     requests: [],
@@ -28,7 +33,7 @@ export function fakeRunner(): FakeRunner {
     },
     run(req) {
       r.requests.push(req)
-      counts.set(req.agentId, (counts.get(req.agentId) ?? 0) + 1)
+      setCount(req.agentId, (counts.get(req.agentId) ?? 0) + 1)
       return new Promise<RunScriptResult>((resolve) => {
         let done = false
         const p: PendingRun = {
@@ -36,8 +41,8 @@ export function fakeRunner(): FakeRunner {
           end(result = {}) {
             if (done) return
             done = true
-            counts.set(req.agentId, (counts.get(req.agentId) ?? 1) - 1)
             r.pending.splice(r.pending.indexOf(p), 1)
+            setCount(req.agentId, (counts.get(req.agentId) ?? 1) - 1)
             resolve({ status: 'ok', outcome: 'succeeded', exitCode: 0, durationMs: 7, stdout: '', stderr: '', filesChanged: [], runtime: 'runsc', ...result })
           },
           out(stream, text) {
@@ -49,7 +54,18 @@ export function fakeRunner(): FakeRunner {
       })
     },
     activeRuns: (agentId) => counts.get(agentId) ?? 0,
-    exclusive: async (_agentId, fn) => fn(),
+    async exclusive(agentId, fn) {
+      setCount(agentId, (counts.get(agentId) ?? 0) + 1)
+      try {
+        return await fn()
+      } finally {
+        setCount(agentId, (counts.get(agentId) ?? 1) - 1)
+      }
+    },
+    onSlotChange(fn) {
+      listeners.add(fn)
+      return () => listeners.delete(fn)
+    },
     stopRuns(agentId) {
       for (const p of [...r.pending]) if (p.req.agentId === agentId) p.end({ status: 'error', outcome: 'stopped', error: 'The run was stopped.' })
     },

@@ -139,6 +139,12 @@ export interface ContainerRunner extends Runner {
    * queued after it), counted by `activeRuns` while it waits and runs. Used by undo.
    */
   exclusive<T>(agentId: string, fn: () => Promise<T>): Promise<T>
+  /**
+   * BE-P2-12: `fn(agentId)` whenever the bot's `activeRuns` count changes (a run or exclusive
+   * job joins or leaves its slot). RunService uses it to start a bot's queued run only once the
+   * bot's slot is free. Returns a function that removes the listener.
+   */
+  onSlotChange(fn: (agentId: string) => void): () => void
   /** Stop the bot's running and queued runs (VM stop / reset). */
   stopRuns(agentId: string): void
   /** When the bot's container stops if nothing else runs (VmInfo.idleStopAt). */
@@ -167,6 +173,18 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
   /** Bumped by stopRuns: queued runs from an older epoch don't start. */
   const epochs = new Map<string, number>()
   const lastActivity = new Map<string, number>()
+  const slotListeners = new Set<(agentId: string) => void>()
+  function setCount(agentId: string, n: number): void {
+    if (n > 0) counts.set(agentId, n)
+    else counts.delete(agentId)
+    for (const fn of [...slotListeners]) {
+      try {
+        fn(agentId)
+      } catch (x) {
+        log(`runner: slot listener failed: ${(x as Error).message}`)
+      }
+    }
+  }
 
   const err = (t0: number, message: string, extra: Partial<RunScriptResult> = {}): RunScriptResult => ({
     status: 'error', outcome: 'failed', error: message, durationMs: Date.now() - t0, stdout: '', stderr: message, filesChanged: [], ...extra,
@@ -404,7 +422,7 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
 
     // One run at a time per bot; queued runs wait their turn.
     const epoch = epochs.get(agent.id) ?? 0
-    counts.set(agent.id, (counts.get(agent.id) ?? 0) + 1)
+    setCount(agent.id, (counts.get(agent.id) ?? 0) + 1)
     lastActivity.set(agent.id, now().getTime())
     const prev = queues.get(agent.id) ?? Promise.resolve()
     const next = prev.catch(() => {}).then(async () => {
@@ -415,9 +433,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     })
     queues.set(agent.id, next)
     return next.finally(() => {
-      counts.set(agent.id, (counts.get(agent.id) ?? 1) - 1)
-      if (!counts.get(agent.id)) counts.delete(agent.id)
       if (queues.get(agent.id) === next) queues.delete(agent.id)
+      setCount(agent.id, (counts.get(agent.id) ?? 1) - 1)
     })
   }
 
@@ -439,16 +456,15 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
   }
 
   function exclusive<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
-    counts.set(agentId, (counts.get(agentId) ?? 0) + 1)
+    setCount(agentId, (counts.get(agentId) ?? 0) + 1)
     lastActivity.set(agentId, now().getTime())
     const prev = queues.get(agentId) ?? Promise.resolve()
     const next = prev.catch(() => {}).then(fn)
     queues.set(agentId, next)
     return next.finally(() => {
-      counts.set(agentId, (counts.get(agentId) ?? 1) - 1)
-      if (!counts.get(agentId)) counts.delete(agentId)
       if (queues.get(agentId) === next) queues.delete(agentId)
       lastActivity.set(agentId, now().getTime())
+      setCount(agentId, (counts.get(agentId) ?? 1) - 1)
     })
   }
 
@@ -462,6 +478,10 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       return 'status' in pre ? pre : null
     },
     exclusive,
+    onSlotChange(fn) {
+      slotListeners.add(fn)
+      return () => slotListeners.delete(fn)
+    },
     activeRuns: (agentId) => counts.get(agentId) ?? 0,
     stopRuns(agentId) {
       epochs.set(agentId, (epochs.get(agentId) ?? 0) + 1)

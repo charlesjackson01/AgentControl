@@ -81,6 +81,10 @@ export interface RunRunner {
   /** The checks `run` makes before queueing (null: it would run). */
   check(req: RunScriptRequest): RunScriptResult | null
   stopRuns(agentId: string): number | Promise<number> | void
+  /** Runs and exclusive jobs (undo) in or waiting for the bot's slot. Absent: only RunService's own runs count. */
+  activeRuns?(agentId: string): number
+  /** Called when a bot's `activeRuns` changes; returns an unsubscribe. */
+  onSlotChange?(fn: (agentId: string) => void): () => void
 }
 
 export interface RunServiceDeps {
@@ -229,6 +233,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const live = new Map<string, Live>()
   const queue: string[] = []
   const running = new Set<string>()
+  /** Launched runs whose runner.run call is in progress (counted by runner.activeRuns). */
+  const inRunner = new Set<string>()
   const inflight = new Set<Promise<unknown>>()
   let loaded = false
 
@@ -419,12 +425,35 @@ export function createRunService(deps: RunServiceDeps): RunService {
     for (const id of queue) {
       const l = live.get(id)
       if (!l) continue
-      if (l.run.queuePosition !== ahead) {
-        l.run.queuePosition = ahead
+      // Plus whatever holds the bot's slot outside RunService (an undo).
+      const pos = ahead + outside(l.run.agentId)
+      if (l.run.queuePosition !== pos) {
+        l.run.queuePosition = pos
         emit(l.run, false)
       }
       ahead++
     }
+  }
+
+  /** Jobs in or waiting for the bot's runner slot that aren't RunService runs (undo, recovery). */
+  function outside(agentId: string): number {
+    const n = deps.runner.activeRuns?.(agentId) ?? 0
+    if (!n) return 0
+    let ours = 0
+    for (const id of inRunner) if (live.get(id)?.run.agentId === agentId) ours++
+    return Math.max(0, n - ours)
+  }
+
+  /** Back into the queue in queuedAt order (its bot's slot was taken while it launched). */
+  function requeue(l: Live): void {
+    running.delete(l.run.id)
+    let i = queue.findIndex((id) => {
+      const o = live.get(id)?.run
+      return !!o && (o.queuedAt > l.run.queuedAt || (o.queuedAt === l.run.queuedAt && o.id > l.run.id))
+    })
+    if (i < 0) i = queue.length
+    queue.splice(i, 0, l.run.id)
+    updatePositions()
   }
 
   function finish(l: Live, patch: Partial<ScriptRunWithReason>): void {
@@ -441,7 +470,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const qi = queue.indexOf(run.id)
     if (qi >= 0) queue.splice(qi, 1)
     l.resolve(run)
-    pruneLogs(run.agentId, l.slug)
+    prune(run.agentId, l.slug)
     deps.onRunsChanged?.(run.agentId)
     refreshUndo(run.agentId, run.id)
     void pump()
@@ -469,14 +498,51 @@ export function createRunService(deps: RunServiceDeps): RunService {
     return u ? { ...run, undo: u } : run
   }
 
-  /** Logs of runs without a snapshot past the bot's last 20 runs and 7 days (snapshot runs' logs go with their snapshot). */
-  function pruneLogs(agentId: string, slug: string): void {
+  /** Whether the run's snapshot is still kept (its record is needed for undo). */
+  function snapshotKept(slug: string, r: ScriptRunWithReason): boolean {
+    if (!r.snapshot) return false
+    if (!deps.undoState) return true
+    const u = deps.undoState(slug, r.id)
+    return u !== null && u.state !== 'unavailable'
+  }
+
+  /**
+   * Past the bot's last 20 runs and 7+ days old: logs of runs without a snapshot are removed
+   * (snapshot runs' logs go with their snapshot), and records too unless the run's snapshot is
+   * still kept or a kept run points at it (undoOfRunId / undo.undoRunId).
+   */
+  function prune(agentId: string, slug: string): void {
     const cutoff = now().getTime() - LOG_KEEP_MS
-    runsOf(agentId).forEach((r, i) => {
-      if (i < LOG_KEEP_RUNS || isActive(r.status) || r.snapshot) return
+    const all = runsOf(agentId)
+    const old = (r: ScriptRunWithReason, i: number) => {
+      if (i < LOG_KEEP_RUNS || isActive(r.status) || live.has(r.id)) return false
       const at = Date.parse(r.endedAt ?? r.queuedAt)
-      if (Number.isFinite(at) && at < cutoff) removeLogs(slug, r.id)
+      return Number.isFinite(at) && at < cutoff
+    }
+    const keep = new Set<string>()
+    all.forEach((r, i) => {
+      if (!old(r, i)) keep.add(r.id)
+      else if (!r.snapshot) removeLogs(slug, r.id)
+      else if (snapshotKept(slug, r)) keep.add(r.id)
     })
+    // Links from kept runs (an undo run names its run; an undone run names its undo run), transitively.
+    const byId = new Map(all.map((r) => [r.id, r]))
+    const stack = [...keep]
+    while (stack.length) {
+      const r = byId.get(stack.pop()!)
+      for (const id of [r?.undoOfRunId, r?.undo.undoRunId]) {
+        if (id && byId.has(id) && !keep.has(id)) {
+          keep.add(id)
+          stack.push(id)
+        }
+      }
+    }
+    for (const r of all) {
+      if (keep.has(r.id)) continue
+      removeLogs(slug, r.id)
+      rmSync(fileOf(slug, r.id, 'json'), { force: true })
+      index.delete(r.id)
+    }
   }
 
   function removeLogs(slug: string, runId: string): void {
@@ -498,6 +564,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const floor = await freeFloorBlock()
       if (l.controller.signal.aborted) return finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
       if (floor) return finish(l, { status: 'failed', error: floor.message, reason: floor.reason })
+      // The bot's slot was taken while the floor was checked (e.g. an undo): wait without a machine slot.
+      if (outside(run.agentId) > 0) {
+        requeue(l)
+        void pump()
+        return
+      }
       const fds: Live['fds'] = {}
       try {
         mkdirSync(dirOf(l.slug), { recursive: true })
@@ -512,7 +584,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       delete run.queuePosition
       changed({ run, slug: l.slug })
       const req = requestOf(run, l)
-      const res = await deps.runner.run(req).catch((err: Error): RunScriptResult => ({
+      inRunner.add(run.id)
+      const res = await deps.runner.run(req).finally(() => inRunner.delete(run.id)).catch((err: Error): RunScriptResult => ({
         status: 'error', durationMs: 0, stdout: '', stderr: '', filesChanged: [], outcome: 'failed', error: `The run couldn't start: ${err.message}`,
       }))
       finish(l, resultPatch(run, res))
@@ -577,7 +650,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
           if (running.size >= limit) break
           const l = live.get(id)
           if (!l) continue
-          if (busy.has(l.run.agentId)) continue
+          // A machine slot is taken only once the bot's own slot is free (its run or an undo).
+          if (busy.has(l.run.agentId) || outside(l.run.agentId) > 0) continue
           busy.add(l.run.agentId)
           queue.splice(queue.indexOf(id), 1)
           running.add(id)
@@ -640,6 +714,11 @@ export function createRunService(deps: RunServiceDeps): RunService {
       log(`runs: couldn't create logs for ${runId}: ${(err as Error).message}`)
     }
   }
+
+  // A bot's slot freed (or taken) outside RunService: start what can start, refresh positions.
+  deps.runner.onSlotChange?.(() => {
+    void pump()
+  })
 
   const service: RunService = {
     async start(input) {
@@ -865,6 +944,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         n++
       }
       if (n) log(`runs: ${n} run(s) left by a restart were marked failed`)
+      // Old records and logs of every bot (a bot that never runs again is pruned here only).
+      const bots = new Map<string, string>()
+      for (const e of index.values()) bots.set(e.run.agentId, e.slug)
+      for (const [agentId, slug] of bots) prune(agentId, slug)
       return n
     },
     async idle() {

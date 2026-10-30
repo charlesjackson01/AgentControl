@@ -208,4 +208,28 @@ describe('GET /api/events', () => {
     await reset.until(/event: reset\ndata: \{\}/)
     reset.close()
   })
+
+  it('with AGENTCONTROL_AUTH_TOKEN: 401 without the Authorization header, 200 streaming with it', async () => {
+    vi.stubEnv('AGENTCONTROL_AUTH_TOKEN', 'be12-events-token')
+    const gated = build()
+    try {
+      const base = await gated.listen({ port: 0, host: '127.0.0.1' })
+      const no = await fetch(`${base}/api/events`)
+      expect(no.status).toBe(401)
+      const bad = await fetch(`${base}/api/events`, { headers: { authorization: 'Bearer nope' } })
+      expect(bad.status).toBe(401)
+      // A token in the URL isn't accepted (EventSource can't send headers; the FE uses fetch streaming).
+      expect((await fetch(`${base}/api/events?token=be12-events-token`)).status).toBe(401)
+      const s = await connect(`${base}/api/events`, { authorization: 'Bearer be12-events-token' })
+      expect(s.res.status).toBe(200)
+      expect(s.res.headers.get('content-type')).toMatch(/text\/event-stream/)
+      await s.until(/retry: 3000/)
+      gated.liveEvents.publish({ type: 'vm.updated', agentId: 'a-x', vm: {} as never })
+      await s.until(/event: vm\.updated/)
+      await s.until(/: ping/)
+      s.close()
+    } finally {
+      await gated.close()
+    }
+  })
 })

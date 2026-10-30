@@ -683,7 +683,10 @@ export interface ScriptRun {
   runtime: ContainerRuntime | null
   permissions: { requestId: string; type: PermissionType; decision: PermissionDecision | 'timeout' | 'pending' }[]
   status: ScriptRunStatus
-  /** status 'queued': runs ahead of this one on the machine (0 = next). */
+  /**
+   * status 'queued': how many runs are ahead of this one, counting the ones running now
+   * (with 1 run at a time, a run queued behind a running one is 1: "Queued · 1 ahead").
+   */
   queuePosition?: number
   exitCode?: number
   /** Plain-language reason for failed / denied / timed_out / stopped. */
@@ -732,6 +735,7 @@ export interface ChatRunSummary {
   name: string
   files: { added: number; modified: number; deleted: number }
   undo: ScriptRunUndo
+  /** status 'queued': runs ahead of it, running ones included (ScriptRun.queuePosition). */
   queuePosition?: number
   exitCode?: number
   /** The script's file name (argv[1] or argv[0]) for the card title; `name` stays the skill. */

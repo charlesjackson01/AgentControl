@@ -406,3 +406,96 @@ describe('records', () => {
     expect(svc.get('run_u2')).toMatchObject({ kind: 'undo', status: 'failed', error: 'Undo stopped partway.' })
   })
 })
+
+describe('record pruning (same rule as logs)', () => {
+  const DAY = 24 * 3600 * 1000
+  async function runAt(agentId: string, end: Record<string, unknown> = {}) {
+    const r = await start(agentId)
+    await until(() => runner.pending.some((p) => p.req.runId === r.id))
+    runner.pending.find((p) => p.req.runId === r.id)!.end(end as never)
+    await svc.wait(r.id)
+    return r.id
+  }
+  const has = (id: string, ext: string) => existsSync(join(dir, 'runs', 'a1', `${id}.${ext}`))
+
+  it('removes records and logs past the last 20 runs and 7 days, keeping snapshot and linked runs', async () => {
+    let clock = Date.now() - 8 * DAY
+    const undo: Record<string, ScriptRunUndo> = {
+      run_0002: { state: 'available' },
+      run_0003: { state: 'unavailable', reason: 'evicted' as never },
+      run_0004: { state: 'done', undoRunId: 'run_0001' },
+    }
+    svc = make({ now: () => new Date((clock += 1000)), undoState: (_slug, id) => undo[id] ?? null })
+    const snap = (id: string) => ({ snapshot: { id, driver: 'copy', retainedBytes: 1 } })
+    const ids: string[] = []
+    for (let i = 1; i <= 26; i++) {
+      const id = `run_${String(i).padStart(4, '0')}`
+      ids.push(await runAt('a1', id === 'run_0002' || id === 'run_0003' ? snap(id) : id === 'run_0004' ? { ...snap(id), undo: undo.run_0004 } : {}))
+    }
+    expect(ids.every((id) => has(id, 'json'))).toBe(true)
+    // Today: the 27th run makes runs 1–7 fall outside the last 20; all are 8 days old.
+    clock = Date.now()
+    await runAt('a1')
+    expect(has('run_0002', 'json')).toBe(true) // its snapshot is kept (undo available)
+    expect(has('run_0004', 'json')).toBe(true) // snapshot kept (undone; undo of the undo needs it)
+    expect(has('run_0001', 'json')).toBe(true) // run_0004's undo run
+    for (const id of ['run_0003', 'run_0005', 'run_0006', 'run_0007']) {
+      expect(has(id, 'json')).toBe(false)
+      expect(has(id, 'stdout.log')).toBe(false)
+      expect(svc.get(id)).toBeNull()
+    }
+    expect(has('run_0001', 'stdout.log')).toBe(false) // a kept record's log still follows the log rule
+    expect(has('run_0008', 'json')).toBe(true) // 20th newest
+    const listed = svc.list('a1').runs.map((r) => r.id)
+    expect(listed).toHaveLength(23)
+    expect(listed).not.toContain('run_0005')
+  })
+
+  it('keeps every record under 7 days old, even past the last 20', async () => {
+    let clock = Date.now() - 3 * DAY
+    svc = make({ now: () => new Date((clock += 1000)) })
+    for (let i = 0; i < 24; i++) await runAt('a1')
+    clock = Date.now()
+    await runAt('a1')
+    expect(svc.list('a1').runs).toHaveLength(25)
+    expect(has('run_0001', 'json')).toBe(true)
+    expect(has('run_0001', 'stdout.log')).toBe(true)
+  })
+
+  it('recover() prunes old records of bots that no longer run', async () => {
+    let clock = Date.now() - 9 * DAY
+    svc = make({ now: () => new Date((clock += 1000)) })
+    for (let i = 0; i < 22; i++) await runAt('a1')
+    clock = Date.now()
+    await svc.idle()
+    svc = make({ now: () => new Date(clock) })
+    await svc.recover()
+    expect(svc.list('a1').runs).toHaveLength(20)
+    expect(has('run_0001', 'json')).toBe(false)
+  })
+})
+
+describe('bot slot before machine slot', () => {
+  it("a bot busy with an undo doesn't hold the machine: another bot's run starts", async () => {
+    concurrency = 1
+    let release!: () => void
+    const held = runner.exclusive('a1', () => new Promise<void>((r) => (release = r)))
+    const a = await start('a1')
+    // a1's slot is taken (undo): its run waits without a machine slot, 1 ahead.
+    expect(svc.get(a.id)).toMatchObject({ status: 'queued', queuePosition: 1 })
+    const b = await start('a2')
+    await until(() => runner.pending.some((p) => p.req.runId === b.id))
+    expect(svc.get(b.id)!.status).toBe('running')
+    expect(runner.requests.some((r) => r.runId === a.id)).toBe(false)
+    expect(svc.get(a.id)!.queuePosition).toBe(2) // a2's run + the undo
+    release()
+    await held
+    // The undo is done; a1's run now waits for the machine slot (a2's run).
+    await until(() => svc.get(a.id)!.queuePosition === 1)
+    expect(svc.get(a.id)!.status).toBe('queued')
+    runner.pending.find((p) => p.req.runId === b.id)!.end()
+    await until(() => runner.pending.some((p) => p.req.runId === a.id))
+    expect(svc.get(a.id)!.status).toBe('running')
+    expect(svc.get(a.id)!.queuePosition).toBeUndefined()
+  })
+})

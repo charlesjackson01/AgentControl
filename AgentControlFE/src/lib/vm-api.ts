@@ -119,6 +119,8 @@ export type VmApi = ReturnType<typeof createVmApi>
 export type UndoError =
   | { kind: 'run_active'; message: string }
   | { kind: 'conflicts'; message: string; conflicts: UndoPreview['conflicts'] }
+  /** BE-P2-11: 409 already_undone (undo its undo run instead); `message` is the BE's text. */
+  | { kind: 'already_undone'; message: string }
   | { kind: 'gone'; message: string; reason: UndoGone['reason'] }
   | { kind: 'other'; message: string; status?: number }
 
@@ -126,7 +128,8 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 
 /**
  * Reads a failed preview/undo call (an ApiError carrying `status` and the parsed `body`)
- * into what the undo dialog needs: 409 run_active, 409 conflicts (the list), 410 gone (why).
+ * into what the undo dialog needs: 409 run_active, 409 conflicts (the list), 409 already_undone,
+ * 410 gone (why; BE-P2-11 also answers 410 'expired' when there's no snapshot record).
  */
 export function undoErrorOf(err: unknown): UndoError {
   const message = err instanceof Error ? err.message : String(err)
@@ -139,6 +142,7 @@ export function undoErrorOf(err: unknown): UndoError {
     const b = body as Partial<UndoConflict>
     if (b.reason === 'run_active') return { kind: 'run_active', message: own(b) }
     if (b.reason === 'conflicts') return { kind: 'conflicts', message: own(b), conflicts: Array.isArray(b.conflicts) ? b.conflicts : [] }
+    if (b.reason === 'already_undone') return { kind: 'already_undone', message: own(b) }
   }
   if (status === 410 && body && typeof body.reason === 'string') {
     const b = body as Partial<UndoGone>

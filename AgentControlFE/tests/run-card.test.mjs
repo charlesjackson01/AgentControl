@@ -85,6 +85,8 @@ describe('status pill', () => {
   })
   it('GAP states', () => {
     assert.equal(statusText('queued', { queuePosition: 2 }), 'Queued · 2 ahead')
+    // BE-P2-12: queuePosition = runs ahead, running ones included (1 → "Queued · 1 ahead", no off-by-one).
+    assert.equal(statusText('queued', { queuePosition: 1 }), 'Queued · 1 ahead')
     assert.equal(statusText('queued', { queuePosition: 0 }), 'Queued · next')
     assert.equal(statusText('queued', {}), 'Queued')
     assert.equal(statusText('timed_out', { durationMs: 600_000 }), 'Timed out · 10 min')

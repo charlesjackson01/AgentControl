@@ -546,7 +546,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ eb1d418 (BE-P2-1), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ e4f3bb4 (BE-P2-12), section "Phase 2",
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -664,6 +664,12 @@ export interface ScriptRun {
   exitCode?: number
   /** Plain-language reason for failed / denied / timed_out / stopped. */
   error?: string
+  /**
+   * BE-P2-12 (additive): status 'failed' because a block hit at the run's turn — the same reasons
+   * a start answers 409 with (gvisor_unavailable, limits_unenforced, mounts_unusable,
+   * personal_quota, snapshot_failed, low_disk). Show `error`; branch on `reason`.
+   */
+  reason?: string
   queuedAt: string
   startedAt?: string
   endedAt?: string
@@ -744,6 +750,12 @@ export interface VmInfo {
     checkedAt?: string
     mode: RuntimeMode
     globalMode: GlobalRuntimeMode
+    /** BE-P2-8 (additive): false when the runtime in use can't enforce the memory/process limits. Absent: unknown. */
+    limitsEnforced?: boolean
+    /** BE-P2-8 (additive): why, when limitsEnforced is false (starts with "limits can't be enforced"). */
+    limitsReason?: string
+    /** BE-P2-7 (additive, needs OK): the probe check that failed (incompatible_fallback / required_unavailable). */
+    failedCheck?: ProbeCheckId
   }
   internetPolicy: InternetPolicy
   permissions: { browser: boolean; browserState: BrowserState; /** 0–1 while downloading */ progress?: number }
@@ -862,7 +874,8 @@ export interface UndoConflict {
   error: string
   /** Plain-language text the FE shows as is. */
   message: string
-  reason: 'run_active' | 'conflicts'
+  /** BE-P2-11 (needs OK): 'already_undone' when the run was undone already (undo its undo run instead). */
+  reason: 'run_active' | 'conflicts' | 'already_undone'
   conflicts?: UndoPreview['conflicts']
 }
 /**
@@ -932,6 +945,27 @@ export interface VmProbeResult {
   checkedAt: string | null
   /** The cache key parts, for display/debug. */
   versions: { engine: string | null; runsc: string | null; image: string | null }
+  /** BE-P2-8 (additive): the standard runtime (crun/runc) probed with the same test container. */
+  standard?: {
+    runtime: ContainerRuntime | null
+    version: string | null
+    /** Memory and process limits really stopped an over-limit allocation and fork. */
+    limitsEnforced: boolean
+    /** The engine accepted the limit flags (false: containers are created without them). */
+    limitsAccepted: boolean
+    checks: ProbeCheck[]
+    /**
+     * BE-P2-5: uid mapping whose bind_mount check passed for the standard runtime (null: none did,
+     * Docker, or not checked). The top-level `uidMapping` is the same for runsc.
+     */
+    uidMapping?: 'idmap' | 'keep-id' | null
+  } | null
+  /** BE-P2-8 (additive): runtime flags runsc needed to start, e.g. ["--runtime-flag=ignore-cgroups", "--runtime-flag=network=none"]. */
+  runscFlags?: string[]
+  /** BE-P2-7 (additive, needs OK): optional checks this result covers (part of the cache key), e.g. ["chromium"]. */
+  features?: string[]
+  /** BE-P2-7 (additive, needs OK): how long the probe took (plan §4 budget: under 30 s). */
+  durationMs?: number
 }
 
 /** GET /api/permissions?status=pending[&agentId=][&conversationId=]: newest first. */

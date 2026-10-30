@@ -121,6 +121,25 @@ describe('phases', () => {
     assert.equal(undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(409, { error: 'x', reason: 'run_active' })) }).kind, 'run_active')
     assert.deepEqual(undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(410, { error: 'x', reason: 'expired' })) }), { kind: 'gone', reason: 'expired', error: 'x' })
   })
+  it('BE-P2-11 409 already_undone: shows the BE message (not a generic error), Close only, from the preview or the POST', () => {
+    const TEXT = 'This run was already undone. To bring its changes back, undo the undo.'
+    const body = { statusCode: 409, error: 'Request Error', message: TEXT, reason: 'already_undone' }
+    assert.deepEqual(undoErrorOf(apiErr(409, body, 'Request failed')), { kind: 'already_undone', message: TEXT })
+    const fromPreview = step({ type: 'preview_failed', error: undoErrorOf(apiErr(409, body)) })
+    assert.deepEqual(fromPreview, { kind: 'already_undone', message: TEXT })
+    const sub = step({ type: 'preview', preview: preview() }, { type: 'submit' })
+    assert.deepEqual(undoReducer(sub, { type: 'undo_failed', error: undoErrorOf(apiErr(409, body)) }), { kind: 'already_undone', message: TEXT })
+    assert.deepEqual(undoFooter(fromPreview), { dismiss: 'Close', busy: false })
+    assert.equal(undoReducer(fromPreview, { type: 'submit' }), fromPreview)
+    const html = render(fromPreview, {})
+    assert.ok(html.includes('role="alert"') && html.includes('undo the undo.'), html)
+  })
+  it('BE-P2-11 410 expired with no snapshot record → gone (§7.4 expired line), keeping the BE message', () => {
+    const msg = "Undo isn't available for this run: it's older than 7 days and not in the last 20 runs."
+    const gone = step({ type: 'preview_failed', error: undoErrorOf(apiErr(410, { statusCode: 410, error: 'Request Error', message: msg, reason: 'expired' })) })
+    assert.deepEqual(gone, { kind: 'gone', reason: 'expired', error: msg })
+    assert.ok(render(gone, {}).includes('older than 7 days and not in the last 20 runs'))
+  })
   it('other failures: the preview → error; the POST → back to confirm with the message', () => {
     assert.deepEqual(step({ type: 'preview_failed', error: undoErrorOf(new Error('Boom')) }), { kind: 'error', message: 'Boom' })
     const sub = step({ type: 'preview', preview: preview() }, { type: 'submit' })

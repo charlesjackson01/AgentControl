@@ -84,6 +84,8 @@ export function renderUndoBody(phase: UndoPhase, ctx: UndoBodyContext = {}): Rea
       return h('div', { className: 'undo-body' }, h('div', { className: 'notice notice--info', role: 'status' }, runActiveText(ctx.botName)))
     case 'gone':
       return h('div', { className: 'undo-body' }, h('div', { className: 'notice', role: 'alert' }, undoGoneText(phase.reason, { ...ctx, budgetBytes: phase.budgetBytes ?? ctx.budgetBytes, error: phase.error })))
+    case 'already_undone':
+      return h('div', { className: 'undo-body' }, h('div', { className: 'notice', role: 'alert' }, phase.message))
     case 'error':
       return h('div', { className: 'undo-body' }, h('div', { className: 'notice notice--warn', role: 'alert' }, phase.message))
     case 'done':

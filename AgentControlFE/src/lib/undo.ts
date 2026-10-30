@@ -174,6 +174,8 @@ export type UndoPhase =
    * `budgetBytes`: the preview's budget.limitBytes when a preview had loaded.
    */
   | { kind: 'gone'; reason: UndoUnavailableReason; error?: string; budgetBytes?: number }
+  /** BE-P2-11 409 already_undone: shows the BE's message as is; nothing to retry. GAP. */
+  | { kind: 'already_undone'; message: string }
   /** The preview call failed otherwise. GAP. */
   | { kind: 'error'; message: string }
   /** Undone: the caller closes the dialog. */
@@ -202,6 +204,7 @@ export function undoReducer(phase: UndoPhase, action: UndoAction): UndoPhase {
       const e = action.error
       if (e.kind === 'run_active') return { kind: 'run_active' }
       if (e.kind === 'gone') return { kind: 'gone', reason: e.reason, error: e.message }
+      if (e.kind === 'already_undone') return { kind: 'already_undone', message: e.message }
       return { kind: 'error', message: e.message }
     }
     case 'submit':
@@ -217,6 +220,7 @@ export function undoReducer(phase: UndoPhase, action: UndoAction): UndoPhase {
         const budgetBytes = phase.preview.budget?.limitBytes
         return { kind: 'gone', reason: e.reason, error: e.message, ...(budgetBytes !== undefined ? { budgetBytes } : {}) }
       }
+      if (e.kind === 'already_undone') return { kind: 'already_undone', message: e.message }
       // Someone changed files between the preview and the click: show them and offer Undo anyway.
       if (e.kind === 'conflicts') return withConflicts(phase.preview, e.conflicts.length > 0 ? e.conflicts : phase.conflicts)
       return withConflicts(phase.preview, phase.conflicts, e.message)
@@ -254,6 +258,7 @@ export function undoFooter(phase: UndoPhase): UndoFooter {
     case 'error':
       return { dismiss: 'Close', primary: { label: 'Try again', danger: false, disabled: false, action: 'retry' }, busy: false }
     case 'gone':
+    case 'already_undone':
     case 'done':
       return { dismiss: 'Close', busy: false }
   }

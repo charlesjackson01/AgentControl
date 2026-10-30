@@ -28,6 +28,11 @@ describe('SSE parser', () => {
     const r = parseAll(['id: 5\ndata: a\ndata: b\n\nevent: reset\n\n'])
     assert.deepEqual(r.frames, [{ id: '5', event: 'message', data: 'a\nb' }, { id: '5', event: 'reset', data: '' }])
   })
+  it('reads BE-P2-12 frames: retry first, pings between events, data with no space after the colon', () => {
+    const r = parseAll(['retry: 3000\n\n', ': ping\n', '\nid: 12\nevent: run.output\ndata:{"x":', '1}\n\n: ping\n\n'])
+    assert.deepEqual(r.frames, [{ id: '12', event: 'run.output', data: '{"x":1}' }])
+    assert.deepEqual(r.comments, ['ping', 'ping'])
+  })
   it('ignores a non-numeric retry and an empty frame', () => {
     const r = parseAll(['retry: soon\n\n\n\n'])
     assert.deepEqual(r.frames, [])
@@ -84,6 +89,20 @@ describe('connectLiveEvents', () => {
     assert.equal(c.lastEventId(), '42')
     await until(() => statuses.at(-1) === 'closed')
     assert.deepEqual(statuses.slice(0, 3), ['connecting', 'open', 'reconnecting'])
+  })
+
+  it('sends the auth header on every reconnect and never puts a token in the URL', async () => {
+    const f = fakeEventsFetch([{ throws: true }, { frames: [frame('1', ev1)] }, { frames: [frame('2', ev2)], end: false }])
+    const seen = []
+    const c = connectLiveEvents({ url: '/api/events', fetch: f.fetch, headers: { Authorization: 'Bearer t' }, retryMs: 1, onEvent: (e, id) => seen.push(id), onReset: () => {} })
+    await until(() => seen.length === 2)
+    c.close()
+    assert.equal(f.calls.length, 3)
+    for (const call of f.calls) {
+      assert.equal(call.headers.Authorization, 'Bearer t')
+      assert.ok(!/token|bearer/i.test(call.url ?? ''), call.url)
+    }
+    assert.equal(f.calls[2].headers['Last-Event-ID'], '1')
   })
 
   it('calls onReset for event: reset', async () => {

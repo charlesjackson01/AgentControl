@@ -409,6 +409,8 @@ export interface BuildAppOptions {
    * key change or after a day) and after a runtime mode change (index.ts; off in tests).
    */
   probeOnStart?: boolean
+  /** BE-P2-10: test-only intervals for the eviction sweep and the tools measurement refresh (default 10 min each). */
+  vmTimers?: { budgetSweepMs?: number; personalMeasureMs?: number }
 }
 
 declare module 'fastify' {
@@ -1642,21 +1644,24 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   app.decorate('vmRunner', runner)
   // BE-P2-10: PATCH /api/vm/settings (BE-P2-17) calls enforce() after a snapshotBudget change.
   app.decorate('vmSnapshotBudget', snapshotBudget)
+  // Every 10 min, always (not tied to probeOnStart): the budgets, the free-space floor and record
+  // pruning (eviction sweep), and stale tools measurements. Both stop on close.
   let stopBudget: (() => void) | null = null
   let stopPersonal: ReturnType<typeof setInterval> | null = null
-  if (opts.probeOnStart) {
-    app.addHook('onReady', async () => {
-      // Every 10 min: the budgets and the free-space floor (eviction), and stale tools measurements.
-      stopBudget = snapshotBudget.startTimer()
+  app.addHook('onReady', async () => {
+    if (!stopBudget) stopBudget = snapshotBudget.startTimer(opts.vmTimers?.budgetSweepMs)
+    if (!stopPersonal) {
       stopPersonal = setInterval(() => {
         for (const a of store.agents) void personal.refresh(a).catch(() => {})
-      }, PERSONAL_MEASURE_MS)
+      }, opts.vmTimers?.personalMeasureMs ?? PERSONAL_MEASURE_MS)
       stopPersonal.unref?.()
-    })
-  }
+    }
+  })
   app.addHook('onClose', async () => {
     stopBudget?.()
+    stopBudget = null
     if (stopPersonal) clearInterval(stopPersonal)
+    stopPersonal = null
     setPersonalExtraBytes(null)
   })
   app.decorate('vmRuntimeProbe', runtimeProbe)

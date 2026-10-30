@@ -202,6 +202,8 @@ export interface SnapshotService {
    * record). Null when there's no such finished snapshot. Copy blobs go with `gcBlobs`.
    */
   evict(slug: string, runId: string, reason: UndoUnavailableReason, extra?: { changedBytes?: number }): SnapshotMeta | null
+  /** BE-P2-10: remove an evicted run's record (its folder). False unless the run is evicted (undo unavailable). */
+  prune(slug: string, runId: string): boolean
   /** BE-P2-10 (copy): remove blobs nothing references any more; returns the bytes freed. Not while the bot's run is snapshotting. */
   gcBlobs(slug: string): number
 }
@@ -773,6 +775,16 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       for (const f of ['files', 'manifest.json', 'post.json', 'touched.json']) rmSync(path.join(dir, f), { recursive: true, force: true })
       log(`snapshots: ${slug}: evicted run ${runId} (${reason})`)
       return next
+    },
+    prune(slug, runId) {
+      const d = slugDir(slug)
+      if (!d || !RUN_ID_RE.test(runId)) return false
+      const dir = path.join(d, runId)
+      const meta = readJson<SnapshotMeta>(path.join(dir, 'meta.json'))
+      if (meta?.runId !== runId || meta.undo?.state !== 'unavailable') return false
+      rmSync(dir, { recursive: true, force: true })
+      log(`snapshots: ${slug}: pruned the record of run ${runId}`)
+      return true
     },
     gcBlobs(slug) {
       const d = slugDir(slug)

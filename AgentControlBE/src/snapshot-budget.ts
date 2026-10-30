@@ -15,6 +15,8 @@
  *  5. right after a run: a run retaining more than 2× the per-bot budget is
  *     dropped at once                                                         → 'too_large'
  * Every evicted run gets `undo: {state:'unavailable', reason, at}` in its snapshot meta.json.
+ * That record is pruned (its folder removed) once it is outside both the bot's last 20 runs and
+ * the 7-day window (`planPrune`), during every enforce (the sweep and after each run's eviction).
  */
 import { statfsSync } from 'node:fs'
 import path from 'node:path'
@@ -45,6 +47,8 @@ export interface BudgetRecord {
   bytes: number
   /** False once evicted (or undone): it still counts as one of the bot's runs. */
   kept: boolean
+  /** True once evicted (undo unavailable): only such records are ever pruned. */
+  evicted?: boolean
 }
 
 export interface Eviction {
@@ -123,6 +127,25 @@ export function planEviction(records: readonly BudgetRecord[], o: PlanOptions): 
   return out
 }
 
+/**
+ * Evicted-run records a bot no longer needs (pure): evicted, outside its last `retention.runs`
+ * runs (ranked over every record, kept or not) and at least `retention.days` old. A record in
+ * the last 20 or under 7 days old is kept, so the 20-run window never shifts onto older runs.
+ */
+export function planPrune(records: readonly BudgetRecord[], o: { nowMs: number; retention?: { runs: number; days: number } }): BudgetRecord[] {
+  const retention = o.retention ?? UNDO_RETENTION
+  const bySlug = new Map<string, BudgetRecord[]>()
+  for (const r of records) bySlug.set(r.slug, [...(bySlug.get(r.slug) ?? []), r])
+  const out: BudgetRecord[] = []
+  for (const list of bySlug.values()) {
+    list.sort(newestFirst)
+    list.forEach((r, rank) => {
+      if (r.evicted && rank >= retention.runs && o.nowMs - r.endedAtMs >= retention.days * DAY_MS) out.push(r)
+    })
+  }
+  return out
+}
+
 /** Step 5: a run retaining more than 2× the per-bot budget is dropped right after it. */
 export const isTooLarge = (retainedBytes: number, limits: BudgetLimits): boolean => retainedBytes > 2 * limits.perBotBytes
 
@@ -193,9 +216,11 @@ export interface SnapshotBudget {
    * the full eviction. Returns the run's undo state.
    */
   afterRun(slug: string, runId: string): ScriptRunUndo | null
-  /** Steps 1–4 over every bot; then unreferenced copy blobs of every idle bot (and `gcSlug`) are collected. */
+  /** Steps 1–4 over every bot, then `prune`; then unreferenced copy blobs of every idle bot (and `gcSlug`) are collected. */
   enforce(opts?: { gcSlug?: string }): Eviction[]
   usage(slug: string): SnapshotUsage
+  /** Remove evicted-run records outside both the last 20 runs and the 7-day window (`planPrune`); returns how many. Part of every enforce. */
+  prune(): number
   /** A run's undo state from its snapshot record (null: no snapshot). */
   undoState(slug: string, runId: string): ScriptRunUndo | null
   /** enforce every `ms` (default 10 min: the floor and budgets are checked between runs too). */
@@ -227,7 +252,11 @@ export function createSnapshotBudget(deps: SnapshotBudgetDeps): SnapshotBudget {
   const recordOf = (m: SnapshotMeta): BudgetRecord => {
     const kept = m.undo === undefined || m.undo.state === 'available'
     const t = Date.parse(m.endedAt)
-    return { slug: m.slug, runId: m.runId, endedAtMs: Number.isFinite(t) ? t : 0, kept, bytes: kept ? snaps.sizeOf(m) + logBytes(m.slug, m.runId) : 0 }
+    return {
+      slug: m.slug, runId: m.runId, endedAtMs: Number.isFinite(t) ? t : 0, kept,
+      ...(m.undo?.state === 'unavailable' ? { evicted: true } : {}),
+      bytes: kept ? snaps.sizeOf(m) + logBytes(m.slug, m.runId) : 0,
+    }
   }
   const records = (): BudgetRecord[] => snaps.slugs().flatMap((slug) => snaps.list(slug).map(recordOf))
 
@@ -240,10 +269,25 @@ export function createSnapshotBudget(deps: SnapshotBudgetDeps): SnapshotBudget {
     }
   }
 
+  /** Remove evicted-run records outside both the last 20 runs and the 7-day window. */
+  function prune(): number {
+    let n = 0
+    for (const r of planPrune(records(), { nowMs: now().getTime() })) {
+      try {
+        if (snaps.prune(r.slug, r.runId)) n++
+      } catch (x) {
+        log(`snapshots: ${r.slug}: couldn't prune the record of run ${r.runId}: ${(x as Error).message}`)
+      }
+    }
+    if (n) log(`snapshots: pruned ${n} evicted-run record(s)`)
+    return n
+  }
+
   function enforce(opts: { gcSlug?: string } = {}): Eviction[] {
     if (!snaps.driver() && snaps.slugs().length === 0) return []
     const plan = planEviction(records(), { nowMs: now().getTime(), limits: deps.limits(), freeBytes: freeBytes() })
     for (const e of plan) apply(e)
+    prune()
     // Every idle bot (an eviction deferred while it was busy is collected later), plus gcSlug.
     for (const slug of snaps.slugs()) {
       if (slug !== opts.gcSlug && deps.busy?.(slug)) continue
@@ -253,7 +297,7 @@ export function createSnapshotBudget(deps: SnapshotBudgetDeps): SnapshotBudget {
     return plan
   }
 
-  return {
+  const budget: SnapshotBudget = {
     afterRun(slug, runId) {
       if (!snaps.read(slug, runId)) return null
       // This run, and a crashed run its snapshot start just finished (recovered), if too large.
@@ -266,6 +310,7 @@ export function createSnapshotBudget(deps: SnapshotBudgetDeps): SnapshotBudget {
       return after ? undoOf(after) : null
     },
     enforce,
+    prune,
     usage(slug) {
       const kept = snaps.list(slug).map(recordOf).filter((r) => r.kept)
       return { bytes: kept.reduce((t, r) => t + r.bytes, 0), budgetBytes: deps.limits().perBotBytes, runsWithUndo: kept.length }
@@ -277,7 +322,7 @@ export function createSnapshotBudget(deps: SnapshotBudgetDeps): SnapshotBudget {
     startTimer(ms = BUDGET_SWEEP_MS) {
       const t = setInterval(() => {
         try {
-          enforce()
+          budget.enforce()
         } catch (x) {
           log(`snapshots: eviction failed: ${(x as Error).message}`)
         }
@@ -286,4 +331,5 @@ export function createSnapshotBudget(deps: SnapshotBudgetDeps): SnapshotBudget {
       return () => clearInterval(t)
     },
   }
+  return budget
 }

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Agent, SnapshotDriver } from './shared/types.js'
 import { createSnapshotService, type SnapshotService, type SnapshotZone } from './snapshot.js'
 import {
-  budgetLimits, createSnapshotBudget, freeBytesAt, gbText, isTooLarge, planEviction, undoUnavailableText,
+  budgetLimits, createSnapshotBudget, freeBytesAt, gbText, isTooLarge, planEviction, planPrune, undoUnavailableText,
   type BudgetLimits, type BudgetRecord, type RunLogs,
 } from './snapshot-budget.js'
 
@@ -135,6 +135,32 @@ describe('planEviction (plan §7.4)', () => {
   it('records already not kept never count or get evicted', () => {
     const rs = runs('a', 3, 3 * GB, (i) => (3 - i) * 60_000).map((r, i) => (i < 2 ? { ...r, kept: false, bytes: 0 } : r))
     expect(plan(rs)).toEqual([])
+  })
+})
+
+describe('planPrune: evicted-run records', () => {
+  const ev = (rs: BudgetRecord[], ids: number[]) => rs.map((r, i) => (ids.includes(i) ? { ...r, kept: false, evicted: true } : r))
+  const pruned = (rs: BudgetRecord[]) => planPrune(rs, { nowMs: NOW }).map((r) => `${r.slug}/${r.runId}`).sort()
+  it('removes an evicted record only outside both the last 20 runs and the 7-day window', () => {
+    // 25 runs, oldest first, all 30+ days old; the oldest 5 (ranks 20–24) are outside the last 20.
+    const rs = ev(runs('a', 25, MB, (i) => (60 - i) * DAY), [0, 1, 2, 3, 4, 10, 24])
+    expect(pruned(rs)).toEqual([id(0), id(1), id(2), id(3), id(4)].map((r) => `a/${r}`))
+  })
+  it('keeps an evicted record in the last 20 however old, and one under 7 days old however far back', () => {
+    // r000 is outside the last 20 but under 7 days old; r005 is old but in the last 20.
+    const rs = ev(runs('a', 25, MB, (i) => (i === 0 ? 7 * DAY - 1 : i < 5 ? 30 * DAY : (25 - i) * 60_000)), [0, 5])
+    expect(pruned(rs)).toEqual([])
+    // Exactly 7 days counts as 7+ days.
+    expect(pruned(ev(runs('a', 21, MB, (i) => (i === 0 ? 7 * DAY : 60_000)), [0]))).toEqual(['a/r000'])
+  })
+  it('never removes kept or undone (not evicted) records', () => {
+    const rs = runs('a', 25, MB, () => 30 * DAY).map((r, i) => (i === 1 ? { ...r, kept: false } : r))
+    expect(pruned(rs)).toEqual([])
+  })
+  it('ranks per bot', () => {
+    const a = ev(runs('a', 21, MB, (i) => (40 - i) * DAY), [0])
+    const b = ev(runs('b', 20, MB, (i) => (40 - i) * DAY), [0])
+    expect(pruned([...a, ...b])).toEqual(['a/r000'])
   })
 })
 
@@ -356,6 +382,86 @@ describe.each(['reflink', 'copy'] as const)('createSnapshotBudget (%s)', (driver
       const n = spy.mock.calls.length
       vi.advanceTimersByTime(3000)
       expect(spy.mock.calls.length).toBe(n)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('prune: an evicted record outside the last 20 and 7+ days old is removed by enforce; the rest stay', async () => {
+    const e = env(driver)
+    // 24 runs: r001–r003 are 10 days old, r004 6 days old (rank 20), the rest recent.
+    for (let i = 1; i <= 24; i++) {
+      fill(e.zoneOf('a'), 'f.txt', i)
+      await e.run('a', id(i), (z) => fill(z, 'f.txt', i + 100), { endAgo: i <= 3 ? 10 * DAY - i * 60_000 : i === 4 ? 6 * DAY : (30 - i) * 60_000 })
+    }
+    e.svc.evict('a', id(4), 'budget_bot')
+    e.svc.evict('a', id(10), 'budget_bot')
+    const b = createSnapshotBudget({ snapshots: e.svc, limits: () => DEFAULTS, freeBytes: () => null, now: () => new Date(e.clock.t) })
+    // r001–r003 expire (step 1) and, being evicted, outside the 20 and 7+ days old, are pruned.
+    expect(b.enforce().map((x) => [x.runId, x.reason]).sort()).toEqual([[id(1), 'expired'], [id(2), 'expired'], [id(3), 'expired']])
+    const dirsOf = () => readdirSync(path.join(e.root, 'a')).filter((n) => /^r\d+$/.test(n)).sort()
+    expect(dirsOf()).not.toContain(id(1))
+    expect(dirsOf()).not.toContain(id(3))
+    // r004: outside the 20 but under 7 days old; r010: in the 20. Both records stay.
+    expect(e.svc.read('a', id(4))!.undo).toMatchObject({ state: 'unavailable', reason: 'budget_bot' })
+    expect(e.svc.read('a', id(10))!.undo).toMatchObject({ state: 'unavailable', reason: 'budget_bot' })
+    expect(dirsOf()).toHaveLength(21)
+    // Two days later r004 is 8 days old and goes too; nothing else changes.
+    e.clock.t = NOW + 2 * DAY
+    expect(b.enforce()).toEqual([])
+    expect(e.svc.read('a', id(4))).toBeNull()
+    expect(dirsOf()).toHaveLength(20)
+    expect(e.svc.read('a', id(10))).not.toBeNull()
+    expect(b.prune()).toBe(0)
+  })
+
+  it('prune runs with a run\'s eviction (afterRun): the 21st run pushes an old evicted record out', async () => {
+    const e = env(driver)
+    for (let i = 1; i <= 20; i++) {
+      fill(e.zoneOf('a'), 'f.txt', i)
+      await e.run('a', id(i), (z) => fill(z, 'f.txt', i + 100), { endAgo: i === 1 ? 9 * DAY : (30 - i) * 60_000 })
+    }
+    e.svc.evict('a', id(1), 'budget_bot')
+    const b = createSnapshotBudget({ snapshots: e.svc, limits: () => DEFAULTS, freeBytes: () => null })
+    expect(b.enforce()).toEqual([])
+    expect(e.svc.read('a', id(1))).not.toBeNull() // still one of the last 20
+    fill(e.zoneOf('a'), 'f.txt', 5)
+    await e.run('a', id(21), (z) => fill(z, 'f.txt', 6))
+    expect(b.afterRun('a', id(21))).toEqual({ state: 'available' })
+    expect(e.svc.read('a', id(1))).toBeNull()
+    expect(existsSync(path.join(e.root, 'a', id(1)))).toBe(false)
+  })
+
+  it('prune (service): only evicted records; a kept or unknown run is left alone', async () => {
+    const e = env(driver)
+    fill(e.zoneOf('a'), 'f.txt', 3)
+    await e.run('a', id(1), (z) => fill(z, 'f.txt', 4))
+    await e.run('a', id(2), (z) => fill(z, 'f.txt', 5))
+    expect(e.svc.prune('a', id(1))).toBe(false)
+    expect(e.svc.prune('a', 'nope')).toBe(false)
+    expect(e.svc.prune('a', '../x')).toBe(false)
+    expect(e.svc.read('a', id(1))).not.toBeNull()
+    e.svc.evict('a', id(1), 'budget_bot')
+    expect(e.svc.prune('a', id(1))).toBe(true)
+    expect(existsSync(path.join(e.root, 'a', id(1)))).toBe(false)
+    expect(e.svc.read('a', id(2))).not.toBeNull()
+  })
+
+  it('the sweep (startTimer) prunes', async () => {
+    const e = env(driver)
+    for (let i = 1; i <= 21; i++) {
+      fill(e.zoneOf('a'), 'f.txt', i)
+      await e.run('a', id(i), (z) => fill(z, 'f.txt', i + 100), { endAgo: i === 1 ? 9 * DAY : (30 - i) * 60_000 })
+    }
+    e.svc.evict('a', id(1), 'budget_bot')
+    vi.useFakeTimers()
+    try {
+      const b = createSnapshotBudget({ snapshots: e.svc, limits: () => DEFAULTS, freeBytes: () => null })
+      const stop = b.startTimer(1000)
+      expect(e.svc.read('a', id(1))).not.toBeNull()
+      vi.advanceTimersByTime(1000)
+      expect(e.svc.read('a', id(1))).toBeNull()
+      stop()
     } finally {
       vi.useRealTimers()
     }

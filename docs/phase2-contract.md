@@ -241,3 +241,237 @@ One check now decides `files_missing` for a bot, used by the VM tab and the file
 - **Needs OK: per-bot workspace rule.** When a bot's `workspace/` is missing, that bot's file routes (list, shared list, read, write, folder, move, delete), `PUT /api/conversations/:id/uploads` for its DM and its file tools answer the same **409 `reason:'files_missing'`** with the same message. They no longer quietly re-create the folder. Other bots and group files are unaffected (groups use the volume check only).
 - **Needs OK: runs and undo.** A run start (RunService, so `run_script` too), undo and undo preview for that bot answer **409 `reason:'files_missing'`** with the same message (the contract already said runs are paused).
 - A bot's folder is created only when the bot is created, and at startup if the bot has no folder at all. A bot folder that exists without `workspace/` stays `files_missing` across restarts until the folder is put back.
+
+## M2 contract: PermissionGate, browser add-on, live tool builds (BE-P2-14/15/21, on `p2/be-m2-contract`; additive, every item Needs OK)
+
+Written ahead of the code so the FE can start FE-P2-3/7/9/10 on fake data. Source: `M2_PLAN.md` §3/§4/§5 (approved with the nine §8 defaults) and mockups 01–15. Types are in `AgentControlBE/src/shared/types.ts` (the M1 Phase 2 block plus a new block at the end, "Phase 2 M2 contract"); nothing serves them yet. Errors keep M1's Fastify shape `{statusCode, error, message, reason?}`: show `message`, branch on `reason`, never show `error`. `<Bot>` below is the bot's name. Every item is **Needs OK**.
+
+### Shared types (all three tasks)
+- **Needs OK: `ScriptRun` additions.**
+  - `status` already has `waiting_permission` (active: it is in `SCRIPT_RUN_ACTIVE`, but **holds no queue slot**, default 7) and `denied`.
+  - `waitingFor?: 'permission'|'browser'` (status `waiting_permission` only).
+  - `waitingOnRequestId?`: the pending request it waits on. With one pending request per bot, a 2nd run of the same bot waits on the 1st run's request and gets its own card only if that one ends in Allow once or Deny (Always lets it go on).
+  - `permissions: ScriptRunPermission[]`, each `{type, decision, requestId?, source?}`. `decision` uses the answer words (`allow_once`/`always`/`enable`/`deny`, plus `timeout`/`pending`). `requestId` is absent when there was no card. `source` is `card` | `policy` (Always, or the browser already on) | `rebuild` (a user Rebuild click, default 1).
+  - `hostsContacted?: HostContact[]`, each `{host, port?, ip?, count, blocked, reason?}`. `reason` is one of `home_network` | `tailscale` | `this_computer` | `model_server` | `metadata` | `private_name` | `port` | `reserved` (`HOST_BLOCK_REASONS`). `port` is set when it isn't 443. `ip` is the checked IP, absent for names refused before resolving.
+  - `build?: ToolBuildInfo` (kind `tool_build`, below).
+  - `queuedReason?` is BE-P2-20's field (`'slot'|'tool_build'`), not added here.
+  - `reason?` gains the M2 run reasons in `M2RunReason`.
+- **Needs OK: `ChatRunSummary` additions**, so a card renders from the message alone, as in M1: `waitingFor?`, `network?`, `browser?`, `internet?: 'off'|'once'|'always'`, `hostsContacted?` (blocked first, at most 20), `reason?`, `error?`, `build?`.
+  - Card meta, Internet row: `off` · "asked" (`waitingFor:'permission'`) · "asks after the browser" (`waitingFor:'browser'` and `network:'on'`) · "on (allowed once)" · "on (always allowed)".
+  - Card meta, Browser row: "on" · "asked".
+- **Needs OK: `ScriptRunSummary` additions** (history rows): `internet?`, `hosts?` (up to 3 reached names) and `build?`. These are added in the `& {}` part; the `Pick` list is left to BE-P2-20.
+- **Needs OK: `PermissionRequest` additions:**
+  - `resolvedBy?: 'user'`, set only when the user answered.
+  - `closedBy?: 'run_stopped'|'run_ended'`: status `denied` because the run was stopped or ended while the card was pending.
+  - `runKind?` and `scriptName?`, for "To run `fetch_rates.py`" or "the tool build".
+  - `groupId?`, for "in Q3 report".
+  - `internetNext?`: on a browser request, whether an internet card follows ("Next: internet").
+  - `hosts?` (the expected hosts) and `why?` were already in the type.
+- **Needs OK: screenshot thumbnail (mockup 06).** There is no new field. A browser run's card thumbnail is the first `.png`/`.jpg`/`.webp` in its `filesChanged`, opened through the existing file routes.
+
+### BE-P2-14 PermissionGate
+**Routes** (user session only; a call from a bot or a non-session caller → **403 `user_only`**):
+
+| Method | Path | 200 | Errors |
+|---|---|---|---|
+| GET | `/api/permissions?status=pending&agentId=&conversationId=` | `PermissionListResponse {requests}` newest first (`status` may also be `all`; default `pending`) | 400 bad `status` |
+| GET | `/api/permissions/:requestId` | `PermissionRequest` | 404 `not_found` |
+| POST | `/api/permissions/:requestId` `PermissionAnswer {decision}` + header `x-agentcontrol-confirm: 1` | the updated `PermissionRequest` | 400 `bad_decision`; 403 `confirm_required`; 403 `user_only`; 404 `not_found`; 409 `already_resolved` (`PermissionAlreadyResolved`, with `request`); 507 `low_disk` (browser `enable`, see BE-P2-15) |
+
+- **Needs OK: decisions.** Internet takes `allow_once` | `always` | `deny`; browser takes `enable` | `deny` (`PERMISSION_DECISIONS`). Anything else → **400 `bad_decision`**: "“<decision>” isn't an answer for an <internet|browser> request."
+- **Needs OK: what each answer does** (the request `status` follows):
+  - `allow_once` → `allowed_once`: the run gets a credential for that run only; it is revoked when the run ends.
+  - `always` → `always`: also sets `agent.vm.internetPolicy='always'` (`vm.updated` follows), and lets the bot's other waiting runs go on.
+  - `enable` → `enabled`: sets `agent.vm.permissions.browser=true` and starts setup (BE-P2-15). The run becomes `waitingFor:'browser'`.
+  - `deny` → `denied`.
+  - No answer by `expiresAt` (createdAt + 10 min, `PERMISSION_TIMEOUT_MS`) → `timeout`.
+  - Every resolution publishes `permission.resolved`. `resolvedAt` is always set; `resolvedBy:'user'` only for answers.
+- **Needs OK: order (plan §4 flow).** `run_script` / `vm_install` → RunService → PermissionGate. The run is recorded first (`waiting_permission`, a card message `kind:'run'`).
+  - The browser is needed and off → a browser request first (`waitingFor:'permission'`). After `enable` the run waits as `waitingFor:'browser'`.
+  - The internet is needed and the policy is `ask` → the internet request is raised only once the browser is ready (default 5).
+  - With the policy `always` or after `allow_once`, the run queues (`status:'queued'`) for a slot.
+  - Policy `never` → no card; the run ends at once `denied`, `reason:'internet_never'`.
+  - Only the user can answer. In groups the card is posted in the group conversation under the running bot's name (`authorAgentId`), and the grant belongs to that bot.
+- **Needs OK: permission card messages.** Each request gets one `ChatMessage` `{role:'assistant', kind:'permission', permissionRequestId, authorAgentId}`, created with the request and updated in place. It arrives through the messages `?after=` fetch, like run cards. `PermissionRequest.messageId` points at it. Its `content` (previews):
+  - pending: "<Bot> wants to use the internet" / "<Bot> wants to use a browser"
+  - resolved: "Internet allowed once" / "Internet always allowed for <Bot>" / "Internet denied" / "Internet request expired" / "Browser turned on for <Bot>" / "Browser denied"
+- **Needs OK: denied runs.** Status `denied`, no files changed, `undo` unavailable. The `reason`, the card's `error` (shown as is) and what the model is told:
+
+  | `reason` | Card `error` | Model is told |
+  |---|---|---|
+  | `permission_denied` | "You denied internet access, so this run didn't start. No files changed." (browser: "You denied the browser, so this run didn't start. No files changed.") | "The user declined internet access." / "The user declined the browser." |
+  | `permission_timeout` | "No answer in 10 minutes, so this run didn't start. No files changed." | "No answer in 10 minutes." |
+  | `internet_never` | "Internet is set to Never for <Bot>, so this run didn't start. Change it in Settings › VM." | "<Bot>'s internet is set to Never." |
+
+- **Needs OK: Stop while waiting.** `POST /api/runs/:id/stop` on a `waiting_permission` run ends it `stopped` ("The run was stopped before it started."). Its pending request ends `denied` with `closedBy:'run_stopped'` (no `resolvedBy`), and the card shows "Run stopped".
+- **Needs OK: run end reasons** (`M2RunReason`; the card shows `error` as is):
+  - **`network_off`** (status `failed`): the run had `network:'off'` and stderr shows "network is off". Error: "This run was started with the internet off, so connecting failed. <Bot> can run it again with the internet on."
+  - **`proxy_unavailable`** (status `failed`, before start): "AgentControl's internet proxy isn't running, so this run couldn't get the internet. Try again; if it keeps failing, re-check in Settings › VM."
+  - **`host_blocked`** (status `failed`, new; only when the script failed and the proxy blocked a host). The error by block reason:
+    - `tailscale`: "The script tried to reach your Tailscale network. Home network and Tailscale are always blocked in Phase 2."
+    - `home_network` / `private_name`: "The script tried to reach your home network. …" (same second sentence)
+    - `this_computer`: "…this computer…"
+    - `model_server`: "…your model server…"
+    - `metadata`: "…a cloud metadata address…"
+    - `port`: "The script tried a port other than 80 or 443, which is blocked."
+
+    A run that still succeeds keeps its blocked rows in "Sites used" and gets no error.
+  - **Proxy refusal text** (BE-P2-13's body; the script sees it, e.g. `ProxyError: 403 Blocked: …`): "Blocked: <ip or name> is on your <home network|Tailscale network|…>".
+  - M1's `internet_unavailable` and the "Internet access isn't available yet." failure are **retired**.
+  - `run_script` `network:'on'` and `browser:true` are no longer refused.
+- **Needs OK: `run_script` arg `hosts?: string[]`** (≤ 10, display only, never enforced): it fills the card's "Expects to reach" (`PermissionRequest.hosts`). `why` is reused for the card's quote.
+- **Events:**
+  - `permission.requested {conversationId, request}` and `permission.resolved {conversationId, request}`, already in `LiveEvent`.
+  - `run.updated` for every run status change: queued, waiting, running, ended.
+  - After an SSE `reset`, re-fetch `GET /api/permissions?status=pending`.
+- **Card copy the FE builds** (from the mockups; FE-owned, no API text):
+  - pending: "Nothing in this run reaches the internet until you choose."; footer "Public sites only, through AgentControl's proxy. Your home network, Tailscale, this computer and your model server stay blocked."; timer from `expiresAt`.
+  - group: "Only you can answer; other bots in this group can't."
+  - allowed once: "You allowed this run at <time>. <Bot> asks again next time."
+  - always: "<Bot>'s Internet rule is now Always allow. Change it in Settings › VM."
+  - denied: "You denied it at <time>. <Bot> was told “The user declined internet access.”"
+  - expired: "No answer in 10 minutes, so it counted as Deny (<time>). <Bot> can ask again if you want it to."
+  - 409: "This was already answered in another window (<status> at <resolvedAt>)."
+  - network error: "Couldn't send your answer: <message>. Try again."
+
+### BE-P2-15 Browser add-on
+| Method | Path | 200 | Errors |
+|---|---|---|---|
+| GET | `/api/vm/browser` | `BrowserAddonInfo` | |
+| POST | `/api/vm/browser/retry` `BrowserRetryRequest {agentId?}` | `BrowserAddonInfo` | 404 unknown bot; 409 `nothing_to_retry` ("There's nothing to retry."); 507 `low_disk` |
+| DELETE | `/api/vm/browser` + header `x-agentcontrol-confirm: 1` | `BrowserAddonInfo` (`state:'absent'`) | 403 `confirm_required`; 409 `browser_in_use` ("Turn off the browser for every bot first (used by <names>)."); 409 `browser_busy` (download in progress) |
+| PATCH | `/api/agents/:id/vm` `{permissions:{browser:true\|false}}` | `VmInfo` | `true` now works (M1's 400 is lifted); 507 `low_disk`; `egress` still 400 `egress_reserved` "Home network access isn't available in Phase 2" |
+| POST | `/api/agents` with `browser?: boolean` (`AgentInput`, create only) | as before | same as PATCH `true` (507 `low_disk` creates nothing) |
+
+- **Needs OK: name.** The plan's `BrowserState {state, progress, bytes, totalBytes, error, usedBy}` object is **`BrowserAddonInfo`**, because `BrowserState` is already M1's `'absent'|'downloading'|'ready'|'error'` union (used by `VmInfo.permissions.browserState`, kept in step).
+  - `BrowserAddonInfo` = `{state, progress?, bytes?, totalBytes, etaSec?, error?: BrowserError, usedBy: agentId[], readyAt?}`.
+  - "Remove download" shows when `state:'ready'` and `usedBy` is empty.
+- **Needs OK: per bot, `VmInfo.browser?: BotBrowserInfo`.** It has `{state, setup?, error?, chromium?: {version, checkedAt}}`. The plan's `vm.browser` states are `off` | `setting_up` (waiting for the shared download) | `rebuilding` | `waiting_idle` | `ready` | `error`.
+  - `setup: BrowserSetup` is the setup card's steps: `{turnedOnAt, turnedOnBy:'user', requestId?, runId?, download{startedAt?, endedAt?, bytes?, totalBytes?, reused?}, rebuild{runId?, startedAt?, endedAt?}, check{status, at?, message?}, readyAt?}`. From it the FE gets "download 1 min 42 s, rebuild 52 s, Chromium check passed" and "Step 2 of 3".
+  - `error: BrowserError {reason:'download_failed'|'low_disk'|'build_failed'|'chromium_check_failed', message, at, neededBytes?, freeBytes?, bytes?}`.
+  - `permissions.browser` stays `true` in `error`; the user picks Try again or Turn off.
+- **Needs OK: turn-on flow** (from a card `enable`, a VM tab PATCH after the FE's confirm dialog (default 6), or create):
+  1. Low-disk check: free space must cover the download (`SHARED_IMAGE_APPROX_BYTES` browser, 1343 MB) plus the 3 GB run floor. If not → 507 `low_disk` ("The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.").
+  2. The shared `botvm-browser` download (skipped with `reused:true` when present), with `browser.updated` about every 1 s.
+  3. A `tool_build` run with `build.via:'browser'`, `base:'browser'`, which keeps the bot's packages and tools.
+  4. `waiting_idle`: the container is recreated once the bot's current run ends.
+  5. A re-probe with the real `chromium` check for that bot. Then `ready`, and the waiting run carries on (internet card next if the policy is ask).
+- **Needs OK: a card `enable` with low disk** still answers 200 (`enabled`), and the setup fails at once with `error.reason:'low_disk'` (mockup 09 shows it as a resolved card). The 507 is only for PATCH, create and retry.
+- **Needs OK: setup failures end the waiting run** `failed` (it never started; no files changed):
+
+  | Failure | Run `reason` | Run `error` |
+  |---|---|---|
+  | Download | `browser_unavailable` | "The browser couldn't be turned on, so this run didn't start." |
+  | Low disk | `browser_unavailable` | "The browser couldn't be turned on, so this run didn't start." |
+  | Build | `browser_unavailable` | "The browser couldn't be turned on, so this run didn't start." |
+  | Check | `chromium_check_failed` | "Chromium didn't start for <Bot>, so this run didn't start." |
+
+  The bot's previous tools generation is kept. Setup error messages (`BrowserError.message`):
+  - download: "The Chromium download stopped at <n> MB (<cause>)."
+  - check: "Chromium was installed but didn't start (<cause>)." (probe detail, e.g. "libnss3.so missing")
+  - build: the build's failure text.
+- **Needs OK: retry.** `POST /api/vm/browser/retry {}` restarts a failed shared download. With `{agentId}` it retries that bot's failed step (download, rebuild or check); this is the check-error "Re-check" / "Try again".
+- **Needs OK: turning off** (`browser:false`). The bot is rebuilt back onto the base when idle (a `tool_build`, `via:'browser'`, `base:'base'`); during a setup this cancels it. The shared download stays until "Remove download".
+- **Needs OK: Never + browser.** The browser runs with `--network none`, so only `file://` pages work. `browser-basics` (a seeded skill) tells the bot this, plus `BROWSER_LAUNCH_NOTE`.
+- **Events:**
+  - `browser.updated {browser: BrowserAddonInfo}`: new in `LiveEvent`, global, sent to every subscriber whatever the filters.
+  - `vm.updated` for every per-bot state change (`VmInfo.browser`).
+  - `run.updated` for the waiting run and the rebuild.
+  - After `reset`, re-fetch `GET /api/vm/browser`.
+- **VM tab copy** (FE-owned, mockups 11–15):
+  - downloading: "<bytes> of 1.3 GB · about <etaSec> left"
+  - rebuilding: "Step 2 of 3 · rebuild <elapsed>"
+  - waiting_idle: "Ready; <Bot>'s VM restarts after the current run finishes."
+  - ready: "Chromium <version> · checked <time> · download shared by <n> bots (1.3 GB)"
+  - unused download: "The Chromium download (1.3 GB) is still on this computer and no bot uses it."
+  - Size copy everywhere: "about 1.3 GB" (default 8).
+
+### BE-P2-21 Live tool builds with Stop
+| Method | Path | Answer | Errors |
+|---|---|---|---|
+| POST | `/api/agents/:id/vm/tools/rebuild` | **202 `ToolBuildAccepted {run}`** (`kind:'tool_build'`, `queued` or `running`; was 200 with a finished run) | 404; 409 `build_active` ("<Bot>'s tools are already building."); 409 `internet_never` ("Set internet to Ask or Always to install packages.") when `vm.packages` is non-empty and the policy is never; 503 `proxy_unavailable` (same text as the run reason); 507 `low_disk` (the M1 run floor) |
+| POST | `/api/agents/:id/vm/tools/rollback` | 200 `ScriptRun` (unchanged, still synchronous) | 409 `build_active`, 409 `run_active`, 409 `no_previous_generation` |
+| POST | `/api/agents/:id/vm/reset` · `/vm/stop` | as M1 | **409 `build_active`** ("Wait for <Bot>'s tools to finish building, or stop the build.") |
+| POST | `/api/runs/:runId/stop` | `ScriptRun` | also for `tool_build`, as in M1 |
+| GET | `/api/runs/:runId/output?stream=stdout` | build log (live while running) | as M1 |
+
+- **Needs OK: the record.** Rebuild and `vm_install` builds are `ScriptRun`s with `kind:'tool_build'`. They go `queued` → (`waiting_permission`) → `running` → `succeeded` | `failed` | `timed_out` | `stopped`.
+  - `build: ToolBuildInfo {generation, fromGeneration, packages, added, removed?, startedBy:'user'|'bot', via:'rebuild'|'vm_install'|'browser', base, progress?: {step, steps, label}}`.
+  - `argv` stays `['rebuild']`; `vm_install` builds use `['vm_install', ...packages]`.
+  - `network` is `'on'` when packages need installing.
+  - Builds have a 20 min limit (`TOOL_BUILD_TIMEOUT_MS`).
+- **Needs OK: internet for builds.** A user Rebuild is its own one-build grant, with no card (default 1): `permissions:[{type:'internet', decision:'allow_once', source:'rebuild'}]`.
+  - A `vm_install` under `ask` raises a normal internet card (`runKind:'tool_build'`; resolved title "Internet allowed for the tool build").
+  - Under `always`, no card.
+  - Under `never`, the tool returns the M1 409 `internet_never` as a tool error, and no record is made.
+  - No registry pinning (default 2). Ports 80/443 only (default 3).
+- **Needs OK: chat card.** Every build posts a `kind:'run'` card (`ChatRunSummary.kind:'tool_build'` with `build`). It goes in the conversation where `vm_install` was called, or in the bot's DM for a user Rebuild (created if missing).
+  - Card name: "Rebuild tools".
+  - `content`: "Building <Bot>'s tools (version N)" / "Built <Bot>'s tools (version N)" / "Tool build (failed)" / "(stopped)" / "(timed out)".
+  - Meta: "Started by <Bot> (vm_install)" or "Started by you".
+  - This replaces M1's "no chat card".
+- **Needs OK: live progress.**
+  - `run.output` streams the log (M1 coalescing).
+  - `run.updated` carries `build.progress` and `hostsContacted` ("Sites used so far") at most once per second, plus every status change.
+  - `vm.updated` carries `VmInfo.activeBuild` (`{runId, status, startedAt?, build, internet, hosts}`, the "Building tools" head), and `VmToolsInfo.activeBuild` carries the same.
+- **Needs OK: Stop.** `POST /api/runs/:id/stop` on a build ends it `stopped`, `reason:'build_stopped'`, with "Stopped. <Bot> keeps its current tools (version N)." The generation `fromGeneration` is kept, and runs queued after the build (BE-P2-20) then start on it (default 4).
+- **Needs OK: failure.**
+  - `failed`, `reason:'build_failed'`, "The build failed, so <Bot> keeps its current tools (version N). Nothing else changed." The engine's last line is in the log.
+  - A build failure is no longer a 502 on the rebuild route (it answers 202 first). The 502 stays only for `vm_install`'s tool error.
+  - Timeout: `timed_out`, "The build took longer than 20 minutes, so <Bot> keeps its current tools (version N)."
+- **Card and VM tab copy** (FE-owned):
+  - "Stopping keeps the current tools (version N)."
+  - "Adding <added> (version N) · <elapsed>. New runs wait for the build, then use the new tools."
+  - "Step <step> of <steps> · <label> · internet allowed once for this build"
+  - The queued run card ("Queued · after tool build", BE-P2-20).
+  - Rebuild and "Go back to version N" are disabled with "Available when the build finishes." while `activeBuild` is set.
+
+### Error and reason summary (M2)
+- **400:** `bad_decision`, `egress_reserved`.
+- **403:** `confirm_required`, `user_only`.
+- **404:** `not_found`.
+- **409:**
+  - `already_resolved` (+ `request`)
+  - `browser_in_use`
+  - `browser_busy`
+  - `build_active`
+  - `run_active`
+  - `internet_never`
+  - `nothing_to_retry`
+- **502:** `build_failed` (`vm_install` tool only).
+- **503:** `proxy_unavailable`.
+- **507:** `low_disk`.
+
+These are listed in `M2ErrorReason`; 5xx bodies carry no `reason`, as in M1. Run end reasons are listed in `M2RunReason`.
+
+### Open questions
+1. **Run events.** The plan lists `run.queued/started/updated/finished`; M1 has only `run.updated` (every status change) and `run.output`. Proposal: keep `run.updated` for all of them, with no new event types. Or should the four names be added as aliases?
+2. **Error body.** The plan writes `{error, reason, message}`; M1 sends Fastify's `{statusCode, error, message, reason}` with `message` as the text. Proposal: keep M1.
+3. **`internet_never`:** run status `denied` (mockup 08) or `failed` (plan: "fail at once")? Which copy, the plan's "<Bot>'s internet is set to Never." or the mockup's longer line? Proposal: `denied`, with the mockup line on the card and the plan line for the model.
+4. **Where "Expects to reach" hosts come from.** Proposal: a new display-only `run_script` arg `hosts?`. Also: is `vm_install`'s card filled from known registries (pypi.org, files.pythonhosted.org, deb mirrors)?
+5. **Stop on a waiting run:** the request ends `denied` with `closedBy:'run_stopped'`, or a new status `cancelled`?
+6. **Browser `enable` with low disk:** 200 with a failed setup (proposed, as mockup 09 shows), or 507 with the card left pending?
+7. **Retry scope.** `/api/vm/browser/retry` is global in the plan, but the check failure is per bot. Proposal: an optional `{agentId}`.
+8. **Waiting run on a setup failure.** Mockup 09 says "`snap_dashboard.py` was stopped". Proposal: `failed` with `browser_unavailable` / `chromium_check_failed`, not `stopped`, and the FE keeps the mockup sentence. OK?
+9. **Turning the browser off** rebuilds back onto the base (another build). OK, or keep the browser base until the next rebuild?
+10. **`POST /api/agents` `browser`** (mockup 15). The plan is silent. Proposal: create only; is the toggle itself consent (no confirm dialog)?
+11. **VM Stop during a build.** Mockup 14 disables Stop and Reset; the plan only names rollback/reset for `build_active`. Proposal: `/vm/stop` 409 `build_active` too.
+12. **Build progress steps** ("Step 4 of 6 · pip install"): which steps count (pull base, apt, pip, npm, commit, recreate)? Proposal: best effort `build.progress`; the FE hides the step text when absent.
+13. **The user Rebuild card's conversation:** the bot's DM (proposed, created if missing), or no card for user rebuilds?
+14. **`host_blocked`.** A new run reason and per-reason error lines for failed runs that hit a blocked host (mockup 08 has the Tailscale line only). Are the other lines OK?
+15. **The `port` and `reserved` block reasons** are new; the plan's list has neither, though default 3 shows "blocked · port".
+16. **Screenshot thumbnail** from the first image in `filesChanged` (no new field). OK?
+17. **Rollback** stays synchronous 200 (a tag switch, no download). OK?
+
+### Plan vs mockups (conflicts found)
+1. **Resolved IPs for refused names.** Mockups 06 and 08 show "metrics.internal.lan → 10.0.0.12" and "nas.tail1234.ts.net → 100.101.7.3". But plan §5 refuses `*.lan` and `*.ts.net` **before resolving**, so no IP exists. Contract: `ip` is absent for those (the FE shows just the name), and the proxy text names the host instead.
+2. **internet_never shown as "Denied"** (mockup 08) vs a run *failure* reason in the plan (question 3).
+3. **Mockup 09 "was stopped"** vs the plan's `browser_unavailable` failure reason (question 8).
+4. **Mockup 14 disables the VM head's Stop during a build**, while the plan says builds can be stopped. These are compatible: the build's Stop is on its run card and history row, and the disabled one is the VM Stop (question 11).
+5. **The plan's `BrowserState` object** clashes with M1's `BrowserState` union; renamed `BrowserAddonInfo`.
+6. **The plan's `permissions[].decision` example `'allowed_once'`** (§3) uses the request-status word; the M1 type and this contract use the answer word `allow_once`.
+7. **Mockup 08's proxy-down card** shows the meta label "runtime limit while waiting" next to a run that never started. The FE should drop that label; no API impact.
+8. **Task ID clash.** The plan's **BE-P2-20 is "Build queue carry-over"**, but this contract file already has a section "Files missing check (BE-P2-20, on `p2/be-20-files-missing`)" from an earlier task. One of them needs a new number.
+
+### Not in this change
+No server code: the routes and events above don't exist yet (they 404 / aren't sent). `types.ts` only gains types and optional fields; `tsc --noEmit` passes. `ScriptRun.permissions[].requestId` became optional (no code read it). `queuedReason` is left to BE-P2-20.

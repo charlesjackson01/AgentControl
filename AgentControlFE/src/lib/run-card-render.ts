@@ -3,6 +3,8 @@ import { createElement as h, type ReactNode, type Ref } from 'react'
 import { runCardLabel, type RunCardView } from './run-card.ts'
 
 export type RunCardHandlers = {
+  /** M2: the browser run's screenshot URL (RunCard resolves it through the files route). */
+  thumbUrl?: string | null
   /** Header toggle (the mockup's ▾); omitted = always open. */
   open?: boolean
   onToggle?: () => void
@@ -60,6 +62,38 @@ function actions(v: RunCardView, x: RunCardHandlers): ReactNode {
   return h('div', { className: `rc-acts${v.noteFirst ? ' rc-acts--note-first' : ''}` }, ...parts)
 }
 
+function log(v: RunCardView): ReactNode {
+  if (!v.log) return null
+  return h(
+    'div',
+    { key: 'log', className: `rc-log${v.log.error ? ' rc-log--err' : ''}${v.log.live ? ' rc-log--live' : ''}` },
+    h('span', { className: 'rc-log__txt' }, v.log.text, v.log.live ? h('span', { className: 'rc-caret', 'aria-hidden': 'true' }, ' ▍') : null),
+  )
+}
+
+function hosts(v: RunCardView): ReactNode {
+  if (!v.hosts) return null
+  return h(
+    'div',
+    { key: 'hosts', className: 'rc-hostsw' },
+    h('div', { className: 'rc-hosts__h' }, v.hosts.title),
+    h(
+      'ul',
+      { className: 'rc-hosts', 'aria-label': v.hosts.title },
+      ...v.hosts.rows.map((r) =>
+        h(
+          'li',
+          { key: r.key },
+          h('span', { className: `rc-hk${r.blocked ? ' rc-hk--bad' : ''}` }, r.label),
+          h('span', { className: 'rc-path' }, r.host),
+          h('span', { className: 'rc-size' }, r.note),
+        ),
+      ),
+      v.hosts.more > 0 ? h('li', { key: 'more', className: 'rc-more' }, `+ ${v.hosts.more} more ${v.hosts.more === 1 ? 'site' : 'sites'}`) : null,
+    ),
+  )
+}
+
 function body(v: RunCardView, x: RunCardHandlers): ReactNode[] {
   if (v.loading) {
     if (x.loadError)
@@ -104,14 +138,16 @@ function body(v: RunCardView, x: RunCardHandlers): ReactNode[] {
           v.moreFiles > 0 ? h('li', { key: 'more', className: 'rc-more' }, `+ ${v.moreFiles} more ${v.moreFiles === 1 ? 'file' : 'files'}`) : null,
         )
       : null,
-    v.error ? h('p', { key: 'err', className: 'rc-error' }, v.error) : null,
-    v.log
-      ? h(
-          'div',
-          { key: 'log', className: `rc-log${v.log.error ? ' rc-log--err' : ''}${v.log.live ? ' rc-log--live' : ''}` },
-          h('span', { className: 'rc-log__txt' }, v.log.text, v.log.live ? h('span', { className: 'rc-caret', 'aria-hidden': 'true' }, ' ▍') : null),
-        )
+    v.thumb && x.thumbUrl
+      ? h('img', { key: 'shot', className: 'rc-shot', src: x.thumbUrl, alt: `Screenshot preview: ${v.thumb.path}`, loading: 'lazy' })
       : null,
+    v.wait ? h('div', { key: 'wait', className: 'rc-wait' }, v.wait) : null,
+    // Mockup 07: a live log sits above "Sites used so far"; mockups 06/08: ended cards list sites first.
+    v.log?.live ? log(v) : null,
+    hosts(v),
+    v.error && !v.errorLast ? h('p', { key: 'err', className: 'rc-error' }, v.error) : null,
+    v.log && !v.log.live ? log(v) : null,
+    v.error && v.errorLast ? h('p', { key: 'err', className: 'rc-error' }, v.error) : null,
     v.truncated ? h('p', { key: 'trunc', className: 'rc-trunc' }, v.truncated) : null,
     actions(v, x),
     x.stopError ? h('p', { key: 'serr', className: 'field__err rc-stoperr', role: 'alert' }, x.stopError) : null,

@@ -649,6 +649,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (res.outputTruncated) patch.outputTruncated = true
     const block = blockedFromResult(res)
     if (block) patch.reason = block.reason
+    // BE-P2-13: the proxy was down, so the online run never started.
+    else if (res.reason === 'proxy_unavailable') patch.reason = res.reason
+    if (res.hostsContacted) {
+      patch.hostsContacted = res.hostsContacted
+      if (res.hostsContactedTotal !== undefined) patch.hostsContactedTotal = res.hostsContactedTotal
+    }
     timeouts.delete(run.id)
     return patch
   }

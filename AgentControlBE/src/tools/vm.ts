@@ -20,8 +20,12 @@ export const RUN_SCRIPT_MAX_SEC = 600
 export const RUN_SCRIPT_WAIT_MS = 14 * 60_000
 /** The tool's own limit in executeToolCall (above the wait, so the handler always answers first). */
 export const RUN_SCRIPT_TOOL_TIMEOUT_MS = RUN_SCRIPT_WAIT_MS + 60_000
-/** vm_install builds an image layer (apt over the network in M2). */
-export const VM_INSTALL_TOOL_TIMEOUT_MS = 20 * 60_000
+/**
+ * vm_install builds an image layer (apt over the network in M2). M2 contract (fec4670): at least
+ * 30 min, the permission wait (up to 10 min) plus the 20 min build limit (BUILD_TIMEOUT_MS); the
+ * extra minute lets the build's own limit end first. (BE-P2-13 landed this fix for BE-P2-21.)
+ */
+export const VM_INSTALL_TOOL_TIMEOUT_MS = 31 * 60_000
 /** Room for two 8 KB tails, JSON escaping and the other fields. */
 export const RUN_SCRIPT_RESULT_MAX_CHARS = 20_000
 export const MAX_SCRIPT_CHARS = 16_000

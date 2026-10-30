@@ -24,8 +24,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import { fail, failWithReason } from './http.js'
-import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, VM_LIMITS, type Agent, type AgentVm, type ContainerRuntime, type EnvVar, type ToolManifest } from './shared/types.js'
+import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, VM_LIMITS, type Agent, type AgentVm, type ContainerRuntime, type EnvVar, type HostContact, type ToolManifest } from './shared/types.js'
 import { envNameProblem } from './vm-defaults.js'
+import { capHostContacts, EGRESS_LABEL, egressNetworkName, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
 import { bindMountOptions, checkBotMounts, overlayMountOptions, usernsArgs, volumeMountOptions, type BotMount, type MountAllowList, type UidMapping } from './isolation.js'
 import {
   APT_PACKAGE,
@@ -60,7 +61,8 @@ export const BOT_ENV_LABELS = {
 } as const
 export const TMP_SIZE_MB = 512
 export const MAX_PACKAGES = 100
-export const BUILD_TIMEOUT_MS = 15 * 60_000
+/** Plan §8 risk row / contract review: a tool build gets 20 min. */
+export const BUILD_TIMEOUT_MS = 20 * 60_000
 
 export type EngineCli = 'podman' | 'docker'
 export interface EngineRef {
@@ -236,6 +238,13 @@ export function layerContainerfile(slug: string, generation: number, base: Agent
 
 // ───────────────────────── service ─────────────────────────
 
+/**
+ * BE-P2-13: the bot container's network. 'none' (default, every offline run and idle start) or
+ * 'egress': the bot's internal ac-egress-<slug> network, whose only peer is the proxy. A change
+ * recreates the container (volumes kept). Never host or the default network.
+ */
+export type BotNetwork = 'none' | 'egress'
+
 export interface BotEnvDeps {
   exec?: CommandRunner
   /** Which engine to drive, or null when none is installed. */
@@ -266,8 +275,14 @@ export interface BotEnvDeps {
    * container is created or started on the standard runtime instead.
    */
   runtimeBlocked?: (agent: Agent) => string | null
-  /** Network for tool builds (apt). Never 'host'. M1: 'none' (no internet yet). */
-  buildNetwork?: () => 'none' | 'default'
+  /**
+   * Network for tool builds (apt). Never 'host'. M1: 'none' (no internet yet). BE-P2-13:
+   * 'egress' builds on the bot's internal ac-egress-<slug> network with a build-only proxy
+   * credential (needs `egress`); BE-P2-14 decides when a build may use it.
+   */
+  buildNetwork?: () => 'none' | 'default' | 'egress'
+  /** BE-P2-13: the egress proxy, for 'egress' builds. */
+  egress?: Pick<EgressService, 'grant' | 'revoke'>
   /** Persist a changed Agent.vm; false when the save failed. */
   saveVm: (agentId: string, vm: AgentVm) => boolean
   /** Runs queued/running for this bot right now (BE-P2-8 wires the real count). */
@@ -290,6 +305,9 @@ export interface BuildResult {
   generation: number
   /** Last 64 KB of the build output. */
   log: string
+  /** BE-P2-13: hosts the build reached through the proxy ('egress' builds only). */
+  hostsContacted?: HostContact[]
+  hostsContactedTotal?: number
 }
 
 export interface BotEnvService {
@@ -300,7 +318,7 @@ export interface BotEnvService {
    * run is active in it. `forRun` (BE-P2-7): the caller is the bot's run about to start (runs are
    * one at a time per bot), so nothing else runs in the container and it may be recreated.
    */
-  ensure(agent: Agent, opts?: { start?: boolean; forRun?: boolean }): Promise<AgentVm>
+  ensure(agent: Agent, opts?: { start?: boolean; forRun?: boolean; network?: BotNetwork }): Promise<AgentVm>
   start(agent: Agent): Promise<AgentVm>
   stop(agent: Agent): Promise<void>
   /** Run a command in the (started) container; for the tool manifest, probes and tests. BE-P2-8 streams its own. */
@@ -335,6 +353,8 @@ export function parseDu(out: string): Map<string, number> {
 const lastLine = (r: CommandResult) =>
   (r.stderr || r.stdout).trim().split('\n').filter(Boolean).pop()?.slice(0, 300) ?? `exit code ${r.code}`
 const tail = (s: string, n = 64 * 1024) => (s.length > n ? s.slice(-n) : s)
+/** BE-P2-13: the proxy credential never reaches a log. */
+export const redactAll = (s: string, secrets: readonly string[]) => secrets.reduce((acc, x) => (x ? acc.split(x).join('***') : acc), s)
 const noSuch = (r: CommandResult) => /no such|not found|not known|does not exist|no container with/i.test(r.stderr + r.stdout)
 
 function parseInspect(stdout: string): Record<string, unknown> | null {
@@ -435,31 +455,96 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
   }
 
   /** Build `gen` of the layer; returns the build log. Throws 502 with the last line on failure. */
-  async function build(slug: string, generation: number, base: AgentVm['image']['base'], packages: readonly string[]): Promise<string> {
+  async function build(slug: string, generation: number, base: AgentVm['image']['base'], packages: readonly string[]): Promise<{ log: string; hosts?: HostContact[] }> {
     const e = await engine()
+    const net = buildNetwork()
+    if ((net as string) === 'host') throw new Error('build network host is never allowed')
+    if (net === 'egress') return buildThroughProxy(e, slug, generation, base, packages)
     const dir = mkdtempSync(path.join(tmpdir(), `ac-bot-${slug}-`))
     try {
       const file = path.join(dir, 'Containerfile')
       writeFileSync(file, layerContainerfile(slug, generation, base, packages, baseVersion()))
-      const net = buildNetwork()
-      if ((net as string) === 'host') throw new Error('build network host is never allowed')
-      // 'default' = the engine's normal build network (M2+, through the egress proxy); 'host' is never used.
+      // 'default' = the engine's normal build network (kept for tests); 'host' is never used.
       const args = ['build', '--file', file, '--tag', botImageRef(slug, generation), ...(net === 'none' ? ['--network', 'none'] : [])]
       if (e.cli === 'podman') args.push('--pull=never')
       args.push(dir)
       const r = await run(e.command ?? e.cli, [...e.globalArgs, ...args], { timeoutMs: BUILD_TIMEOUT_MS })
       const out = tail(`${r.stdout}${r.stderr ? `\n${r.stderr}` : ''}`)
-      if (r.code !== 0) {
-        await removeImage(botImageRef(slug, generation))
-        const err = new Error(`The tool build failed: ${lastLine(r)}`) as Error & { statusCode: number; reason: string; buildLog: string }
-        err.statusCode = 502
-        err.reason = 'build_failed'
-        err.buildLog = out
-        throw err
-      }
-      return out
+      if (r.code !== 0) await buildFailed(slug, generation, r, out)
+      return { log: out }
     } finally {
       rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  async function buildFailed(slug: string, generation: number, r: CommandResult, out: string, secrets: readonly string[] = []): Promise<never> {
+    await removeImage(botImageRef(slug, generation))
+    const err = new Error(`The tool build failed: ${redactAll(lastLine(r), secrets)}`) as Error & { statusCode: number; reason: string; buildLog: string }
+    err.statusCode = 502
+    err.reason = 'build_failed'
+    err.buildLog = out
+    throw err
+  }
+
+  /**
+   * BE-P2-13: an online tool build. Rootless `podman build` can't join a named network ("cannot
+   * use networks as rootless"), and the only other build networks (pasta/slirp, host) would
+   * give the build the whole LAN. So the layer is made by a throwaway container on the bot's
+   * internal ac-egress-<slug> network (the proxy is its only peer), then `podman commit`:
+   * - the credential goes in on stdin (`read`), so it is in no argv, env, Cmd, label or history
+   *   of the image; it is revoked right after;
+   * - the image gets the base's USER/ENTRYPOINT/CMD back and the same labels as a Containerfile build.
+   */
+  async function buildThroughProxy(e: EngineRef, slug: string, generation: number, base: AgentVm['image']['base'], packages: readonly string[]): Promise<{ log: string; hosts?: HostContact[] }> {
+    if (!deps.egress || e.cli !== 'podman') failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
+    const pkgs = [...new Set(packages)].sort()
+    const bad = pkgs.filter((p) => !APT_PACKAGE.test(p))
+    if (bad.length) throw new Error(`invalid apt package name: ${JSON.stringify(bad[0]!.slice(0, 80))}`)
+    const from = baseImageFor(base, baseVersion())
+    const cli = e.command ?? e.cli
+    const pm = (args: string[], opts?: { timeoutMs?: number; input?: string }) => run(cli, [...e.globalArgs, ...args], opts)
+    const inspect = await pm(['image', 'inspect', '--format', '{{json .Config}}', from])
+    if (inspect.code !== 0) failWithReason(409, 'base_missing', `The bot's base image ${from} isn't on this computer.`)
+    const cfg = JSON.parse(inspect.stdout) as { User?: string; Entrypoint?: string[] | null; Cmd?: string[] | null }
+    let grant: EgressGrant
+    try {
+      grant = await deps.egress.grant(slug, 'build')
+    } catch (err) {
+      log(`bot-env: ${slug}: no proxy for the build: ${(err as EgressUnavailableError).detail ?? (err as Error).message}`)
+      failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
+    }
+    const url = grant.env.find((v) => v.name === 'HTTP_PROXY')?.value ?? ''
+    const name = `ac-build-${slug}-${generation}`
+    let revoked = false
+    try {
+      await pm(['rm', '--force', '--ignore', name])
+      const script =
+        'IFS= read -r P || exit 90; export http_proxy="$P" https_proxy="$P" HTTP_PROXY="$P" HTTPS_PROXY="$P"; unset P; ' +
+        'apt-get update && apt-get install -y --no-install-recommends "$@" && rm -rf /var/lib/apt/lists/*'
+      const r = await pm(
+        ['run', '-i', '--name', name, '--pull=never', '--network', grant.network, '--user', '0:0', '--security-opt', 'no-new-privileges',
+          '--label', `${EGRESS_LABEL}=build`, '--label', `${IMAGE_LABELS.agent}=${slug}`, '--entrypoint', 'sh', from, '-c', script, 'sh', ...pkgs],
+        { timeoutMs: BUILD_TIMEOUT_MS, input: `${url}\n` },
+      )
+      const out = redactAll(tail(`${r.stdout}${r.stderr ? `\n${r.stderr}` : ''}`), grant.secrets)
+      if (r.code !== 0) await buildFailed(slug, generation, r, out, grant.secrets)
+      const labels: Record<string, string> = {
+        [IMAGE_LABELS.image]: 'ac-bot', [IMAGE_LABELS.agent]: slug, [IMAGE_LABELS.generation]: String(generation),
+        [BOT_ENV_LABELS.from]: from, [BOT_ENV_LABELS.packages]: pkgs.join(' '),
+      }
+      const changes = [
+        `USER ${cfg.User || `${BOT_UID}:${BOT_GID}`}`,
+        `ENTRYPOINT ${JSON.stringify(cfg.Entrypoint ?? [])}`,
+        `CMD ${JSON.stringify(cfg.Cmd ?? [])}`,
+        ...Object.entries(labels).map(([k, v]) => `LABEL ${k}=${JSON.stringify(v)}`),
+      ]
+      const c = await pm(['commit', '--quiet', ...changes.flatMap((x) => ['--change', x]), name, botImageRef(slug, generation)])
+      if (c.code !== 0) await buildFailed(slug, generation, c, out, grant.secrets)
+      revoked = true
+      return { log: out, hosts: await deps.egress.revoke(grant.id) }
+    } finally {
+      if (!revoked) await deps.egress.revoke(grant.id).catch(() => [])
+      await pm(['rm', '--force', '--ignore', name])
     }
   }
 
@@ -471,7 +556,8 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     const out = await build(slug, generation, cur.base, packages)
     const vm = save(agent, { ...agent.vm, packages: [...new Set(packages)].sort(), image: { generation, previous: cur.generation, builtAt: now().toISOString(), base: cur.base } })
     await pruneImages(slug, [generation, cur.generation])
-    return { vm, generation, log: out }
+    const hosts = out.hosts ? capHostContacts(out.hosts) : null
+    return { vm, generation, log: out.log, ...(hosts ? { hostsContacted: hosts.hosts, ...(hosts.total !== undefined ? { hostsContactedTotal: hosts.total } : {}) } : {}) }
   }
 
   /** Remove this bot's layer images except the given generations (one in use by the container just fails; next time). */
@@ -512,7 +598,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     }
   }
 
-  async function ensureLocked(agent: Agent, start: boolean, forRun = false): Promise<AgentVm> {
+  async function ensureLocked(agent: Agent, start: boolean, forRun = false, net: BotNetwork = 'none'): Promise<AgentVm> {
     const slug = agent.slug
     // BE-P2-7: gVisor required but unavailable: never fall back to the standard runtime.
     const rtBlock = deps.runtimeBlocked?.(agent)
@@ -528,7 +614,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
       slug,
       image,
       mounts,
-      network: 'none',
+      network: net === 'egress' ? egressNetworkName(slug) : 'none',
       enforceLimits: enforceLimits(),
       runtime: deps.runtime?.(agent) ?? null,
       runtimeFlags: rtFlags(agent),
@@ -586,7 +672,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
 
   return {
     status: (agent) => containerStatus(agent.slug),
-    ensure: (agent, opts = {}) => serial(agent.slug, () => ensureLocked(agent, opts.start === true, opts.forRun === true)),
+    ensure: (agent, opts = {}) => serial(agent.slug, () => ensureLocked(agent, opts.start === true, opts.forRun === true, opts.network ?? 'none')),
     start: (agent) => serial(agent.slug, () => ensureLocked(agent, true)),
     stop: (agent) =>
       serial(agent.slug, async () => {

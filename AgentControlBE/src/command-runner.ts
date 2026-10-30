@@ -14,6 +14,8 @@ export interface CommandResult {
 
 export interface CommandOptions {
   timeoutMs?: number
+  /** BE-P2-13: written to the program's stdin (then closed), e.g. a secret that mustn't be in argv. */
+  input?: string
 }
 
 export type CommandRunner = (cmd: string, args: readonly string[], opts?: CommandOptions) => Promise<CommandResult>
@@ -24,7 +26,7 @@ const MAX_BUFFER = 8 * 1024 * 1024
 /** The real runner: execFile without a shell, bounded time and output. */
 export const execCommandRunner: CommandRunner = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       cmd,
       [...args],
       { timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: 'utf8' },
@@ -36,4 +38,8 @@ export const execCommandRunner: CommandRunner = (cmd, args, opts = {}) =>
         resolve({ code: typeof e.code === 'number' ? e.code : 1, stdout, stderr: stderr || e.message })
       },
     )
+    if (opts.input !== undefined) {
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(opts.input)
+    }
   })

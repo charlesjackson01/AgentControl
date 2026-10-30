@@ -15,7 +15,8 @@ import type { Agent, AgentRun, ConversationSummary, ScriptRun, VmHostInfo } from
 import { createStore } from './store.js'
 import { builtinTools, executeToolCall } from './tools.js'
 import type { ToolContext } from './tools/types.js'
-import { BROWSER_NOT_ON, resolveCwd, RUN_SCRIPT_RESULT_MAX_CHARS, vmToolNames, type VmToolHost } from './tools/vm.js'
+import { BROWSER_NOT_ON, resolveCwd, RUN_SCRIPT_RESULT_MAX_CHARS, VM_INSTALL_TOOL_TIMEOUT_MS, vmToolNames, type VmToolHost } from './tools/vm.js'
+import { BUILD_TIMEOUT_MS } from './bot-env.js'
 import { BROWSER_LAUNCH_NOTE } from './vm-images.js'
 
 /** BE-P2-16: run_script and vm_install in the agent loop (fake LLM, fake runner, the app's RunService). */
@@ -250,6 +251,16 @@ describe('BE-P2-16 run_script (fake LLM end to end)', () => {
     const sent = llm([reply('hi')])
     await runDm(a, 'hi')
     expect(toolNamesOf(sent[0]!)).not.toContain('run_script')
+  })
+})
+
+describe('vm_install timeout (M2 contract fec4670, landed in BE-P2-13)', () => {
+  it('is at least 30 min: the 10 min permission wait plus the 20 min build, with the build ending first', () => {
+    expect(BUILD_TIMEOUT_MS).toBe(20 * 60_000)
+    expect(VM_INSTALL_TOOL_TIMEOUT_MS).toBeGreaterThanOrEqual(30 * 60_000)
+    expect(VM_INSTALL_TOOL_TIMEOUT_MS).toBeGreaterThan(10 * 60_000 + BUILD_TIMEOUT_MS)
+    const tool = builtinTools.get('vm_install')
+    expect(tool?.timeoutMs).toBe(VM_INSTALL_TOOL_TIMEOUT_MS)
   })
 })
 

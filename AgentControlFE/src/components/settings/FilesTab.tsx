@@ -16,6 +16,9 @@ import {
   fileSize,
   fileTarget,
   filesApi,
+  filesMissingOf,
+  paneDrop,
+  sharedHint,
   fileWhen,
   folderLine,
   imageLine,
@@ -78,6 +81,8 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
   const [renaming, setRenaming] = useState<FileEntry | null>(null)
   const [deleting, setDeleting] = useState<FileEntry | null>(null)
   const [dragging, setDragging] = useState(false)
+  /** files_missing (409 from a file route): the server's message. No drop text, no drops. */
+  const [missing, setMissing] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const loadedRef = useRef<Loaded>({})
   const paneRef = useRef<HTMLElement>(null)
@@ -99,8 +104,11 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
         // GAP-F2: totalFiles counts the whole folder (same on every path); the latest listing wins.
         onTotal?.(filesTotal(listing))
         setListError((e) => (e?.path === dir ? null : e))
+        setMissing(null)
         return listing
       } catch (err) {
+        const gone = filesMissingOf(err)
+        if (gone) setMissing(gone)
         setListError({ path: dir, message: errText(err, 'Could not load this folder.') })
         return null
       }
@@ -191,6 +199,7 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
   const view = current ? paneView(current.entries, path, query) : null
   const usage = usageView(loaded['']?.usage ?? current?.usage)
   const countOf = (dir: string) => loaded[dir]?.entries.length
+  const hint = path === 'shared' ? sharedHint({ group: !!group, ownerName, filesMissing: missing !== null }) : null
 
   const go = (p: string) => {
     setMenu(null)
@@ -430,21 +439,27 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
         <section
           ref={paneRef}
           tabIndex={-1}
-          className={`cf-files__pane${dragging ? ' cf-files__pane--drop' : ''}`}
+          className={`cf-files__pane${dragging && !missing ? ' cf-files__pane--drop' : ''}`}
           aria-label="Folder contents"
           onDragOver={(e) => {
-            if (!e.dataTransfer.types.includes('Files')) return
+            const how = paneDrop(e.dataTransfer.types, missing !== null)
+            if (how === 'ignore') return
             e.preventDefault()
+            if (how === 'refuse') {
+              e.dataTransfer.dropEffect = 'none'
+              return
+            }
             setDragging(true)
           }}
           onDragLeave={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false)
           }}
           onDrop={(e) => {
-            if (!e.dataTransfer.files.length) return
+            const how = paneDrop(e.dataTransfer.types, missing !== null)
+            if (how === 'ignore' || !e.dataTransfer.files.length) return
             e.preventDefault()
             setDragging(false)
-            void upload(e.dataTransfer.files)
+            if (how === 'accept') void upload(e.dataTransfer.files)
           }}
         >
           <div className="cf-files__crumbs">
@@ -462,8 +477,9 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
             {path === 'shared' && <span className="cf-files__note">{group ? 'Everything added in this group · newest first' : `Files you sent ${ownerName} in chat · newest first`}</span>}
           </div>
 
-          {listError?.path === path && <p className="field__err" role="alert">{listError.message}</p>}
-          {!current && listError?.path !== path && <p className="cf-files__empty">Loading…</p>}
+          {missing && !current && <p className="field__err" role="alert">{missing}</p>}
+          {!missing && listError?.path === path && <p className="field__err" role="alert">{listError.message}</p>}
+          {!missing && !current && listError?.path !== path && <p className="cf-files__empty">Loading…</p>}
           {view && view.images.length + view.folders.length + view.files.length === 0 && (
             <p className="cf-files__empty">{query ? 'No files match.' : 'This folder is empty.'}</p>
           )}
@@ -551,13 +567,7 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
               </div>
             ))}
 
-          {path === 'shared' && (
-            <p className="cf-files__hint">
-              {group
-                ? 'Files sent in the group chat land here. Your private chats with each bot keep their own folders.'
-                : `Drop files here, or send them in chat, to share them with ${ownerName}.`}
-            </p>
-          )}
+          {hint && <p className="cf-files__hint">{hint}</p>}
         </section>
       </div>
 

@@ -18,6 +18,9 @@ const GENERIC_ERRORS = new Set([
   'bad gateway',
   'service unavailable',
   'gateway timeout',
+  // Fastify's 507 phrase. M2 contract fec4670: low_disk is a 409 (`Conflict`, above),
+  // never a 507, so `message` shows either way.
+  'insufficient storage',
 ])
 
 export const DEFAULT_ERROR_MESSAGE = 'Request failed'

@@ -262,10 +262,11 @@ describe('blocks', () => {
     expect(await rejects(start())).toMatchObject({ statusCode: 409, reason: 'personal_quota', message: 'Over 10 GB.' })
   })
 
-  it('BE-P2-14: network on without a PermissionGate (no proxy wired) → 409 proxy_unavailable, no record', async () => {
-    const n = messages.length
-    expect(await rejects(start('a1', { network: 'on' }))).toMatchObject({ statusCode: 409, reason: 'proxy_unavailable', message: PROXY_UNAVAILABLE })
-    expect(messages.length).toBe(n)
+  it('BE-P2-14: network on without a PermissionGate (no proxy wired) → a recorded run ended failed proxy_unavailable', async () => {
+    const run = await start('a1', { network: 'on' })
+    expect(run).toMatchObject({ status: 'failed', reason: 'proxy_unavailable', error: PROXY_UNAVAILABLE, network: 'on' })
+    expect(svc.get(run.id)!.status).toBe('failed')
+    expect(messages.find((m) => m.scriptRunId === run.id)!.scriptRun).toMatchObject({ status: 'failed', reason: 'proxy_unavailable' })
     expect(runner.requests).toHaveLength(0)
   })
 

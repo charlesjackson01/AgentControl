@@ -223,9 +223,14 @@ describe.skipIf(!engineReady)('@vm BE-P2-16 run_script', () => {
     expect(store.chatMessages.filter((m) => m.scriptRun).length).toBe(before + 1)
   }, 300_000)
 
-  it('BE-P2-14: network "on" with no proxy for this app → the model is told 409 proxy_unavailable', async () => {
+  it('BE-P2-14: network "on" with no proxy for this app → a recorded run ended failed proxy_unavailable; the model is told', async () => {
+    const before = store.chatMessages.filter((m) => m.scriptRun).length
     const sent = llm([toolCall('run_script', { argv: ['true'], network: 'on' }), reply('no internet')])
     await dm(bots.worker, 'fetch it')
-    expect(toolResults(sent)[0]).toContain(PROXY_UNAVAILABLE)
+    expect(JSON.parse(toolResults(sent)[0]!)).toMatchObject({ status: 'failed', error: PROXY_UNAVAILABLE })
+    const cards = store.chatMessages.filter((m) => m.scriptRun)
+    expect(cards.length).toBe(before + 1)
+    expect(cards.at(-1)!.scriptRun).toMatchObject({ status: 'failed', reason: 'proxy_unavailable', network: 'on' })
+    expect(store.chatMessages.filter((m) => m.kind === 'permission')).toHaveLength(0)
   }, 300_000)
 })

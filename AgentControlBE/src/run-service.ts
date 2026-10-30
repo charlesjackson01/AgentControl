@@ -26,6 +26,7 @@ import {
   modelInternetNever,
   PERMISSION_DENIED_REASON,
   PERMISSION_TIMEOUT_REASON,
+  type GateAdmit,
   type GateRelease,
   type PermissionGate,
 } from './permission-gate.js'
@@ -1235,12 +1236,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const floor = await freeFloorBlock()
       if (floor) failWithReason(409, floor.reason, floor.message)
       const run = baseRun(input, agent, id)
-      // BE-P2-14: the gate decides before anything is recorded; a proxy that is down is a 409 like
-      // low_disk (no record, no card), as for M1's run start.
+      // BE-P2-14: the gate decides before the run is queued. A proxy that is down (or none wired) is a
+      // recorded run ended failed, reason proxy_unavailable (FE-9's run card, mockup 08), with no
+      // permission card: the gate checks the proxy before it would raise one.
       const gate = deps.gate
-      if (run.network === 'on' && !gate) failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
-      const d = gate && (run.network === 'on' || run.browser) ? await gate.admit(run, input.hosts?.length ? { hosts: input.hosts } : {}) : null
-      if (d?.kind === 'end' && d.reason === PROXY_UNAVAILABLE_REASON) failWithReason(409, PROXY_UNAVAILABLE_REASON, d.error)
+      const d: GateAdmit | null =
+        run.network === 'on' && !gate
+          ? { kind: 'end', status: 'failed', reason: PROXY_UNAVAILABLE_REASON, error: PROXY_UNAVAILABLE }
+          : gate && (run.network === 'on' || run.browser) ? await gate.admit(run, input.hosts?.length ? { hosts: input.hosts } : {}) : null
       timeouts.set(id, input.timeoutSec)
       const l = newLive(run, agent.slug)
       createLogs(agent.slug, id)

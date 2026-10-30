@@ -248,12 +248,18 @@ describe('admit without a card', () => {
     expect(svc.get(run.id)!.permissions).toEqual([{ type: 'internet', decision: 'always', source: 'policy' }])
     expect(pending()).toEqual([])
   })
-  it('Ask with the proxy down: 409 proxy_unavailable before anything is recorded (no card, no run)', async () => {
+  it('Ask with the proxy down: a recorded run ended failed proxy_unavailable (run card), no permission card', async () => {
     proxyUp = false
-    expect(await rejects(start('a1'))).toMatchObject({ statusCode: 409, reason: 'proxy_unavailable', message: PROXY_UNAVAILABLE })
+    const run = await start('a1')
+    expect(run).toMatchObject({ status: 'failed', reason: 'proxy_unavailable', error: PROXY_UNAVAILABLE, network: 'on' })
+    expect(svc.get(run.id)).toMatchObject({ status: 'failed', reason: 'proxy_unavailable', error: PROXY_UNAVAILABLE })
+    expect(svc.list('a1').runs.map((r) => [r.id, r.status])).toEqual([[run.id, 'failed']])
+    expect(runCard(run.id)!.scriptRun).toMatchObject({ status: 'failed', reason: 'proxy_unavailable' })
     expect(pending()).toEqual([])
-    expect(svc.list('a1').runs).toEqual([])
-    expect(messages).toEqual([])
+    expect(messages.filter((m) => m.kind === 'permission')).toEqual([])
+    expect(runner.requests).toHaveLength(0)
+    expect(svc.modelResult(run).error).toBe(PROXY_UNAVAILABLE)
+    expect(readFileSync(svc.outputPath(run.id, 'stdout'), 'utf8')).toBe('')
   })
   it('network off needs no gate decision', async () => {
     const run = await start('a1', { network: 'off' })

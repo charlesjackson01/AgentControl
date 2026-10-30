@@ -52,6 +52,9 @@ const engineReady = process.env.AC_VM_TESTS === '1' && cli === 'podman' && pm('i
 const T = 'be14t'
 const DAEMON = `ac-egressd-${T}`
 const OUT = `ac-egress-${T}-out`
+// 11.89.241.0/24 looks like a public range, but it exists only inside this test's own Podman
+// network (the outbound network the proxy uses here): deliberate, approved by the Team lead, so the
+// proxy's public-address rules apply to the test web server. Nothing leaves this computer for it.
 const SUBNET = '11.89.241.0/24'
 const WEB_IP = '11.89.241.10'
 const WEB = `${T}-web`

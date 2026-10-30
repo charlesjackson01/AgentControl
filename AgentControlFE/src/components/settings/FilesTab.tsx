@@ -17,6 +17,7 @@ import {
   fileTarget,
   filesApi,
   filesMissingOf,
+  addDisabled,
   paneDrop,
   sharedHint,
   fileWhen,
@@ -199,6 +200,7 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
   const view = current ? paneView(current.entries, path, query) : null
   const usage = usageView(loaded['']?.usage ?? current?.usage)
   const countOf = (dir: string) => loaded[dir]?.entries.length
+  const addOff = addDisabled({ writable, busy: !!busy, filesMissing: missing !== null })
   const hint = path === 'shared' ? sharedHint({ group: !!group, ownerName, filesMissing: missing !== null }) : null
 
   const go = (p: string) => {
@@ -386,10 +388,10 @@ export default function FilesTab({ agent, group, path: rawPath, onPath, onTotal 
           <span aria-hidden="true">⌕</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search files" aria-label="Search files in this folder" />
         </label>
-        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : group ? 'Open shared/ to upload' : 'Open shared/ or workspace/ to upload'} onClick={() => inputRef.current?.click()}>
+        <button type="button" className="cf-btn" disabled={addOff} title={writable ? undefined : group ? 'Open shared/ to upload' : 'Open shared/ or workspace/ to upload'} onClick={() => inputRef.current?.click()}>
           ⤒ Upload
         </button>
-        <button type="button" className="cf-btn" disabled={!writable || !!busy} title={writable ? undefined : group ? 'Open shared/ to add a folder' : 'Open shared/ or workspace/ to add a folder'} onClick={() => { setDialogError(null); setNewFolder(true) }}>
+        <button type="button" className="cf-btn" disabled={addOff} title={writable ? undefined : group ? 'Open shared/ to add a folder' : 'Open shared/ or workspace/ to add a folder'} onClick={() => { setDialogError(null); setNewFolder(true) }}>
           ＋ Folder
         </button>
         <input

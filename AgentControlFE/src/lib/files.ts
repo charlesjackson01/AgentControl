@@ -400,3 +400,8 @@ export function paneDrop(types: readonly string[] | undefined | null, filesMissi
   if (!types || !Array.from(types).includes('Files')) return 'ignore'
   return filesMissing ? 'refuse' : 'accept'
 }
+
+/** Upload and "+ Folder" are disabled outside shared/ and workspace/, while busy, and in files_missing. */
+export function addDisabled(o: { writable: boolean; busy: boolean; filesMissing: boolean }): boolean {
+  return !o.writable || o.busy || o.filesMissing
+}

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { FILES_MISSING_TEXT, filesMissingOf, paneDrop, sharedHint } from '../src/lib/files.ts'
+import { FILES_MISSING_TEXT, addDisabled, filesMissingOf, paneDrop, sharedHint } from '../src/lib/files.ts'
 // Same shape as lib/api.ts ApiError (api.ts itself isn't loadable under strip-types).
 class ApiError extends Error { constructor(m, status, body) { super(m); this.status = status; this.body = body } }
 import { vmHeader, vmTabModel } from '../src/lib/vm-tab.ts'
@@ -37,6 +37,18 @@ describe('files_missing: Files tab', () => {
     assert.equal(paneDrop(['Files'], true), 'refuse')
     assert.equal(paneDrop(['text/plain'], true), 'ignore')
     assert.equal(paneDrop(undefined, false), 'ignore')
+  })
+  it('Upload and + Folder are disabled in files_missing, enabled otherwise', () => {
+    assert.equal(addDisabled({ writable: true, busy: false, filesMissing: true }), true)
+    assert.equal(addDisabled({ writable: true, busy: false, filesMissing: false }), false)
+    assert.equal(addDisabled({ writable: false, busy: false, filesMissing: false }), true, 'outside shared/ and workspace/, as before')
+    assert.equal(addDisabled({ writable: true, busy: true, filesMissing: false }), true, 'busy, as before')
+    const src = readFileSync(new URL('../src/components/settings/FilesTab.tsx', import.meta.url), 'utf8')
+    assert.match(src, /const addOff = addDisabled\(\{ writable, busy: !!busy, filesMissing: missing !== null \}\)/)
+    for (const label of ['⤒ Upload', '＋ Folder']) {
+      const btn = src.slice(src.lastIndexOf('<button', src.indexOf(label)), src.indexOf(label))
+      assert.match(btn, /disabled=\{addOff\}/, `${label} uses addOff`)
+    }
   })
   it('FilesTab wires the guard: hint via sharedHint, upload only on accept, no drop class while missing', () => {
     const src = readFileSync(new URL('../src/components/settings/FilesTab.tsx', import.meta.url), 'utf8')

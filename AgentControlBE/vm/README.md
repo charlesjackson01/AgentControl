@@ -23,6 +23,7 @@ Layout: `/bot/workspace` (rw, workdir), `/bot/shared` and `/bot/skills` (ro moun
   Builds, then smoke-runs each image read-only, no network, cap-drop ALL, checking uid 1000 + python3 + node (+ Chromium launch).
   `--connection podman-machine-default` is refused.
 * Real build test: `AC_VM_TESTS=1 npx vitest run src/vm-images.test.ts` (needs Podman or Docker; skipped otherwise; `PODMAN_ARGS` is passed through).
+* Never run two `AC_VM_TESTS=1` runs against the same Podman store at the same time (one at a time per `--root`/`--runroot`): they share the `ac-egressd` proxy container name(s) and the `localhost/agentcontrol/egressd-nft` image tag, so overlapping runs remove or replace each other's proxy and firewall helper and break each other's egress and firewall tests.
   Passed on the dev box (Podman 5.4.2 rootless, crun, linux/amd64) on 2026-10-27: botvm 430.7 MB, botvm-browser 1343.4 MB (includes botvm;
   Chromium 403 MB; the headless-shell path is a 15 kB link layer; it was 1628.7 MB with the real 273 MB headless shell; bare and channel launches pass from Python and Node). That box does not enforce rootless cgroup limits,
   so this test checks no limits.

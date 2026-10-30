@@ -2,108 +2,13 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { CommandResult, CommandRunner } from './command-runner.js'
 import { capHostContacts, CONNECT_CHECK_SCRIPT, createEgressService, EGRESS_DAEMON_NAME, EgressUnavailableError, egressNetworkName, hostInterfaceAddresses, localAddressesFromProc, modelServersOf, PROBE_SLUG, PROXY_UNAVAILABLE, proxyEnv, testAllowFromEnv, resetTestAllowWarning, defaultGatewaysFromProc, BUILD_TTL_MS, PROBE_TTL_MS } from './egress-service.js'
-import { createEgressProxy, handleCtl, type CtlRequest, type EgressProxy } from './egressd.js'
+import { fail, fakePodman } from './egress-service.fake.js'
 import type { HostContact } from './shared/types.js'
 import { createEgressRules } from './egress-rules.js'
 import { BUILD_TIMEOUT_MS } from './bot-env.js'
 
 /** BE-P2-13: the BE side of the proxy against a fake Podman whose `exec … ctl` talks to a real in-process proxy. */
-
-const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' })
-const fail = (stderr: string, code = 125): CommandResult => ({ code, stdout: '', stderr })
-
-function fakePodman() {
-  const calls: string[][] = []
-  const inputs: string[] = []
-  const networks = new Map<string, string[]>()
-  let daemon: { running: boolean; hash: string; startedAt: string; nets: Record<string, string>; args: string[] } | null = null
-  let proxy: EgressProxy = createEgressProxy({ sweepMs: 0 })
-  let starts = 0
-  const stamp = () => `2026-10-30 12:00:${String(starts++).padStart(2, '0')} -0500 CDT`
-  let nextIp = 2
-  const state = {
-    ctlDown: false, runFails: false, lsFails: false, rootlessNet: 'pasta', probeOut: '{"noAuth":"407","blocked":"403","direct":"error:ENETUNREACH"}',
-    // The nftables helper: its image is there, loads work; `tables` = startedAt → loaded ruleset.
-    fwImage: true, fwFails: false, tables: new Map<string, string>(),
-  }
-  const exec: CommandRunner = async (cmd, args, opts) => {
-    const a = [...args]
-    calls.push(a)
-    if (opts?.input !== undefined) inputs.push(opts.input)
-    const flag = (n: string) => a[a.indexOf(n) + 1]
-    const [verb, sub] = a
-    if (verb === 'container' && sub === 'inspect') {
-      if (!daemon) return fail('Error: no such container ac-egressd')
-      const nets = Object.fromEntries(Object.entries(daemon.nets).map(([k, v]) => [k, { IPAddress: v, ...(k === 'ac-egress-out' ? { Gateway: '10.89.0.1' } : {}) }]))
-      return ok(`${daemon.running}|${daemon.hash}|${daemon.startedAt}|${JSON.stringify(nets)}\n`)
-    }
-    if (verb === 'network' && sub === 'exists') return networks.has(a[2]!) ? ok() : fail('', 1)
-    if (verb === 'network' && sub === 'create') {
-      networks.set(a[a.length - 1]!, a)
-      return ok()
-    }
-    if (verb === 'network' && sub === 'connect') {
-      daemon!.nets[a[2]!] = `10.89.${nextIp++}.2`
-      return ok()
-    }
-    if (verb === 'network' && sub === 'disconnect') {
-      if (daemon) delete daemon.nets[a[3]!]
-      return ok()
-    }
-    if (verb === 'network' && sub === 'ls') {
-      if (state.lsFails) return fail('Error: engine gone')
-      return ok([...networks.keys()].map((_n, i) => `10.89.${100 + i}.0/24 `).join('\n') + '\n')
-    }
-    if (verb === 'info') return ok(`${state.rootlessNet}\n`)
-    if (verb === 'network' && sub === 'rm') return networks.delete(a[2]!) ? ok() : fail('Error: unable to find network')
-    if (verb === 'rm') {
-      daemon = null
-      void proxy.close()
-      proxy = createEgressProxy({ sweepMs: 0 })
-      return ok()
-    }
-    if (verb === 'start') {
-      // A restarted proxy is a new process: no settings, no credentials.
-      daemon!.running = true
-      daemon!.startedAt = stamp()
-      void proxy.close()
-      proxy = createEgressProxy({ sweepMs: 0 })
-      return ok()
-    }
-    if (verb === 'run' && a.includes('--detach')) {
-      if (state.runFails) return fail('Error: image not known')
-      const hash = a.find((x) => x.startsWith('io.agentcontrol.egressd.hash='))!.split('=')[1]!
-      daemon = { running: true, hash, startedAt: stamp(), nets: { [flag('--network')!]: '10.89.0.2' }, args: a }
-      return ok('id\n')
-    }
-    if (verb === 'image' && sub === 'exists') return state.fwImage ? ok() : fail('', 1)
-    if (verb === 'run' && flag('--entrypoint') === 'nft') {
-      if (!state.fwImage) return fail('Error: localhost/agentcontrol/egressd-nft:1.0.0: image not known')
-      if (!daemon?.running) return fail('Error: cannot join network namespace of a stopped container')
-      if (a.includes('-f')) {
-        if (state.fwFails) return fail('Error: Could not process rule: Operation not permitted', 1)
-        state.tables.set(daemon.startedAt, opts!.input!)
-        return ok()
-      }
-      const t = state.tables.get(daemon.startedAt)
-      return t ? ok(t) : fail('Error: No such file or directory\nlist table inet ac_egressd', 1)
-    }
-    if (verb === 'run' && a.includes('--rm')) return ok(`${state.probeOut}\n`)
-    if (verb === 'exec') {
-      if (state.ctlDown || !daemon?.running) return fail('Error: can only exec into running containers')
-      try {
-        const out = handleCtl(proxy, JSON.parse(opts!.input!) as CtlRequest) as { ok?: boolean }
-        return ok(`${JSON.stringify({ ok: true, ...out })}\n`)
-      } catch (err) {
-        return { code: 1, stdout: `${JSON.stringify({ ok: false, error: (err as Error).message })}\n`, stderr: '' }
-      }
-    }
-    return fail(`fake: unexpected ${a.join(' ')}`)
-  }
-  return { exec, calls, inputs, networks, state, get daemon() { return daemon }, get proxy() { return proxy }, stop() { if (daemon) daemon.running = false } }
-}
 
 let dir: string
 let fake: ReturnType<typeof fakePodman>

@@ -114,6 +114,18 @@ describe('connectLiveEvents', () => {
     assert.equal(c.lastEventId(), '3')
   })
 
+  it('records the BE-P2-12 reset frame id (e0e1dde: id before event) and reconnects with it, so it does not reset again', async () => {
+    const f = fakeEventsFetch([{ frames: ['retry: 1\n\n', 'id: 1500\nevent: reset\ndata: {}\n\n'] }, { frames: [frame('1501', ev1)], end: false }])
+    const seen = []
+    const c = connectLiveEvents({ url: '/e', fetch: f.fetch, lastEventId: '12', retryMs: 1, onEvent: (e, id) => seen.push(id), onReset: () => seen.push('reset') })
+    await until(() => seen.length === 2)
+    c.close()
+    assert.deepEqual(seen, ['reset', '1501'])
+    assert.equal(f.calls[0].headers['Last-Event-ID'], '12')
+    assert.equal(f.calls[1].headers['Last-Event-ID'], '1500')
+    assert.equal(c.lastEventId(), '1501')
+  })
+
   it('starts from a given lastEventId, retries after errors and non-2xx answers', async () => {
     const f = fakeEventsFetch([{ throws: true }, { status: 503 }, { frames: [frame('8', ev1)], end: false }])
     const seen = []

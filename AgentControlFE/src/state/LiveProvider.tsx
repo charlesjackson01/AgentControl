@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { api, apiUrl, authHeaders } from '../lib/api'
 import { createLiveController } from '../lib/live-controller'
-import type { ScriptRun, VmInfo } from '../lib/types'
+import type { BrowserAddonInfo, ScriptRun, VmInfo } from '../lib/types'
 import { vmPaths } from '../lib/vm-api'
 import { LiveContext, type LiveContextValue } from './live-context'
 
@@ -34,6 +34,7 @@ export default function LiveProvider({ children }: { children: ReactNode }) {
       trackRuns: controller.trackRuns,
       putRun: (run: ScriptRun) => controller.dispatch({ type: 'run', run }),
       putVm: (vm: VmInfo) => controller.dispatch({ type: 'vm', vm }),
+      putBrowser: (browser: BrowserAddonInfo) => controller.dispatch({ type: 'browser', browser }),
     }),
     [state, controller],
   )

@@ -14,7 +14,7 @@
  */
 import {
   SCRIPT_RUN_ACTIVE,
-  type ChatMessage, type ChatRunSummary, type FileChange, type LiveEvent, type PermissionRequest, type ScriptRun,
+  type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type InternetUse, type LiveEvent, type PermissionRequest, type ScriptRun,
   type ScriptRunStatus, type ScriptRunSummary, type VmInfo,
 } from './types.ts'
 import type { LiveConnectionStatus } from './live-events.ts'
@@ -36,6 +36,8 @@ export type LiveState = {
   permissions: Record<string, PermissionRequest>
   /** Bumped on every `event: reset`, so views holding their own copies (thread pages) can re-fetch. */
   resets: number
+  /** FE-P2-10: the shared Chromium download (GET /api/vm/browser, then `browser.updated`). Absent until loaded. */
+  browser?: BrowserAddonInfo
 }
 
 export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0 }
@@ -49,6 +51,8 @@ export type LiveAction =
   /** GET /api/permissions?status=pending: the full pending list (unfiltered). */
   | { type: 'pending'; requests: PermissionRequest[] }
   | { type: 'reset' }
+  /** GET /api/vm/browser, or a retry/remove answer. */
+  | { type: 'browser'; browser: BrowserAddonInfo }
 
 /* ---------- status helpers ---------- */
 
@@ -105,8 +109,18 @@ export function summaryFromRun(run: ScriptRun, prev?: ChatRunSummary): ChatRunSu
   }
 }
 
-/** The VM tab's history row for a run. */
-export function runSummaryRow(run: ScriptRun): ScriptRunSummary {
+/** "internet once" / "internet always" for a run, from its network and the grant it ran under. */
+export function runInternetUse(run: Pick<ScriptRun, 'network' | 'permissions'>): InternetUse {
+  if (run.network !== 'on') return 'off'
+  const grant = (run.permissions ?? []).find((p) => p.type === 'internet')
+  return grant?.decision === 'always' ? 'always' : 'once'
+}
+
+/** Up to 3 reached host names (the history row's list). */
+export const HISTORY_HOSTS_MAX = 3
+
+/** The VM tab's history row for a run. `prev`: the row held before (keeps queuedReason, which ScriptRun lacks). */
+export function runSummaryRow(run: ScriptRun, prev?: ScriptRunSummary, summary?: ChatRunSummary): ScriptRunSummary {
   const row: ScriptRunSummary = {
     id: run.id, agentId: run.agentId, conversationId: run.conversationId, kind: run.kind, argv: run.argv, status: run.status,
     queuedAt: run.queuedAt, runtime: run.runtime, undo: run.undo, filesChangedCount: run.filesChanged.length,
@@ -118,6 +132,14 @@ export function runSummaryRow(run: ScriptRun): ScriptRunSummary {
   if (run.durationMs !== undefined) row.durationMs = run.durationMs
   if (run.undoOfRunId !== undefined) row.undoOfRunId = run.undoOfRunId
   if (run.groupId !== undefined) row.groupId = run.groupId
+  // FE-P2-10 (M2 contract): the history row's internet, hosts, build and queue reason.
+  if (run.network !== undefined) row.network = run.network
+  if (run.network === 'on') row.internet = runInternetUse(run)
+  const reached = (run.hostsContacted ?? []).filter((c) => !c.blocked).map((c) => c.host)
+  if (reached.length) row.hosts = reached.slice(0, HISTORY_HOSTS_MAX)
+  if (run.build) row.build = run.build
+  const queuedReason = summary?.queuedReason ?? prev?.queuedReason
+  if (run.status === 'queued' && queuedReason) row.queuedReason = queuedReason
   return row
 }
 
@@ -147,6 +169,8 @@ const PERMISSION_STATUS = { allow_once: 'allowed_once', always: 'always', enable
 function permissionsAfterRun(perms: Record<string, PermissionRequest>, run: ScriptRun): Record<string, PermissionRequest> {
   let next = perms
   for (const p of run.permissions ?? []) {
+    // M2: grants without a card (policy Always, a Rebuild click) carry no requestId.
+    if (!p.requestId) continue
     const known = perms[p.requestId]
     if (!known || known.status !== 'pending' || p.decision === 'pending') continue
     if (next === perms) next = { ...perms }
@@ -180,7 +204,7 @@ function applyRun(state: LiveState, incoming: ScriptRun, messageId?: string, sum
     next.summaries = { ...state.summaries, [msgId]: summary ?? summaryFromRun(run, state.summaries[msgId]) }
   }
   const vm = state.vms[run.agentId]
-  if (vm && !stale) next.vms = { ...state.vms, [run.agentId]: { ...vm, runs: upsertRunRow(vm.runs, runSummaryRow(run)) } }
+  if (vm && !stale) next.vms = { ...state.vms, [run.agentId]: { ...vm, runs: upsertRunRow(vm.runs, runSummaryRow(run, vm.runs.find((r) => r.id === run.id), summary)) } }
   if (!stale) next.permissions = permissionsAfterRun(state.permissions, run)
   return next
 }
@@ -197,6 +221,8 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       return { ...state, vms: { ...state.vms, [action.vm.agentId]: action.vm } }
     case 'pending':
       return { ...state, permissions: permissionsAfterList(state.permissions, action.requests) }
+    case 'browser':
+      return { ...state, browser: action.browser }
     case 'event': {
       const ev = action.event
       switch (ev.type) {
@@ -216,6 +242,8 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
         }
         case 'vm.updated':
           return { ...state, vms: { ...state.vms, [ev.agentId]: ev.vm } }
+        case 'browser.updated':
+          return { ...state, browser: ev.browser }
         default:
           return state
       }

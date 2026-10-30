@@ -47,6 +47,13 @@ export type LiveController = {
   loadPermission: (requestId: string) => Promise<PermissionRequest | undefined>
   /** Resolves when the in-flight resync (if any) settles. */
   resync: () => Promise<void>
+  /**
+   * Put a VM REST reply (e.g. PATCH /api/agents/:id/vm) into the store. When a `vm.updated` for the bot
+   * arrived while the request was out, the reply can be older than that event (BE-15 check: a Chromium
+   * download that fails at once sends vm.updated `error` before the PATCH reply `setting_up`), so the bot
+   * is re-read instead; if that read fails, the reply is used. Resolves with the reply.
+   */
+  vmReply: (agentId: string, call: () => Promise<VmInfo>) => Promise<VmInfo>
 }
 
 export function createLiveController(opts: LiveControllerOptions): LiveController {
@@ -83,6 +90,15 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
     } catch {
       return undefined
     }
+  }
+
+  // vm.updated frames seen per bot, so a REST reply can tell whether an event overtook it.
+  const vmEvents = new Map<string, number>()
+  const vmReply = async (agentId: string, call: () => Promise<VmInfo>): Promise<VmInfo> => {
+    const mark = vmEvents.get(agentId) ?? 0
+    const vm = await call()
+    if ((vmEvents.get(agentId) ?? 0) === mark || !(await loadVm(agentId))) dispatch({ type: 'vm', vm })
+    return vm
   }
 
   const loadPending = async () => {
@@ -160,7 +176,10 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
         // A stop/start (e.g. a provider remount) resumes where the last stream left off.
         lastEventId,
         onStatus: (status) => dispatch({ type: 'connection', status }),
-        onEvent: (event) => dispatch({ type: 'event', event }),
+        onEvent: (event) => {
+          if (event.type === 'vm.updated') vmEvents.set(event.agentId, (vmEvents.get(event.agentId) ?? 0) + 1)
+          dispatch({ type: 'event', event })
+        },
         onOpen: () => {
           void resync()
         },
@@ -182,5 +201,6 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
       for (const id of runIds) if (!state.runs[id]) tracked.add(id)
     },
     resync,
+    vmReply,
   }
 }

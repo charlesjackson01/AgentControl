@@ -13,6 +13,8 @@ export type LiveContextValue = {
   putRun: (run: ScriptRun) => void
   /** Put VM info from a REST response (start, stop, reset, PATCH) into the store. */
   putVm: (vm: VmInfo) => void
+  /** A VM REST reply that a vm.updated may have overtaken (the browser switch): re-read the bot then. */
+  vmReply: LiveController['vmReply']
   /** FE-P2-3: fetch a card's request (GET /api/permissions/:id). */
   loadPermission: LiveController['loadPermission']
   /** FE-P2-3: put a request from an answer's reply or its 409 body. */

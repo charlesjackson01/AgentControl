@@ -25,7 +25,7 @@ type Opened = { kind: 'undo' | 'output'; run: ScriptRun } | null
  * Stop build, the build's env row and history rows (mockup 14).
  */
 export default function VmTab({ agent }: { agent: Agent }) {
-  const { state, loadVm, loadRun, putRun, putVm, putBrowser } = useLive()
+  const { state, loadVm, loadRun, putRun, putVm, putBrowser, vmReply } = useLive()
   const { conversations } = useConversations()
   const vm = state.vms[agent.id]
   const [loadFailed, setLoadFailed] = useState(false)
@@ -191,8 +191,8 @@ export default function VmTab({ agent }: { agent: Agent }) {
     })
 
   const setBrowser = (on: boolean) =>
-    api.vm.updateVm(agent.id, { permissions: { browser: on } }).then((v) => {
-      putVm(v)
+    // vmReply: a setup that fails at once sends vm.updated `error` before this PATCH's `setting_up` reply.
+    vmReply(agent.id, () => api.vm.updateVm(agent.id, { permissions: { browser: on } })).then(() => {
       void api.vm.getBrowser().then(putBrowser, () => undefined)
     })
   const onBrowser = (on: boolean) => {

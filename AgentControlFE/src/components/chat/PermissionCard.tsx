@@ -32,7 +32,7 @@ type PermissionCardProps = {
  * Logic: lib/permission-card.ts; markup: lib/permission-card-render.ts.
  */
 export default function PermissionCard({ message, botName, agentId, groupName, settingsHref, onSettings, client = api.vm }: PermissionCardProps) {
-  const { state, loadPermission, loadVm, putPermission, putBrowser, putVm } = useLive()
+  const { state, loadPermission, loadVm, putPermission, putBrowser, vmReply } = useLive()
   const requestId = message.permissionRequestId
   const request = permissionFor(state, requestId)
   const [clientNow, setClientNow] = useState(() => Date.now())
@@ -108,7 +108,7 @@ export default function PermissionCard({ message, botName, agentId, groupName, s
     try {
       if (action === 'retry') putBrowser(await client.retryBrowser(bot))
       else {
-        putVm(await client.updateVm(bot, { permissions: { browser: false } }))
+        await vmReply(bot, () => client.updateVm(bot, { permissions: { browser: false } }))
         setTurnedOff(true)
       }
     } catch (err) {

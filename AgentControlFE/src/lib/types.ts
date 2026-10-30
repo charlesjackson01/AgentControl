@@ -553,7 +553,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ fec4670 (M2 contract, final), section "Phase 2" to the end,
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ 86af67b (int/phase2-m2: M2 contract fec4670 + BE-22/13/21), section "Phase 2" to the end,
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -622,6 +622,8 @@ export type StorageBackendKind = 'local' | 'wsl'
 export type ScriptRunStatus = 'queued' | 'waiting_permission' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'stopped' | 'denied' | 'undone'
 export const SCRIPT_RUN_ACTIVE: readonly ScriptRunStatus[] = ['queued', 'waiting_permission', 'running']
 export type ScriptRunKind = 'script' | 'tool_build' | 'undo'
+/** BE-P2-22: why a queued run waits (ScriptRun.queuedReason). */
+export type QueuedReason = 'slot' | 'tool_build'
 export type UndoUnavailableReason = 'expired' | 'budget_bot' | 'budget_global' | 'low_disk' | 'too_large' | 'machine_restored'
 export const UNDO_UNAVAILABLE_REASONS: readonly UndoUnavailableReason[] = ['expired', 'budget_bot', 'budget_global', 'low_disk', 'too_large', 'machine_restored']
 
@@ -670,8 +672,15 @@ export interface ScriptRun {
   /**
    * status 'queued': how many runs are ahead of this one, counting the ones running now
    * (with 1 run at a time, a run queued behind a running one is 1: "Queued · 1 ahead").
+   * BE-P2-22: a tool build of the same bot in progress counts as 1 ahead.
    */
   queuePosition?: number
+  /**
+   * BE-P2-22 (additive), status 'queued' only: why it waits. 'tool_build': the bot's tools are
+   * building ("Queued · after tool build"); it starts once the build ends, on the generation the
+   * build left. 'slot': waiting for a run slot (its bot's or the machine's). Dropped once it starts.
+   */
+  queuedReason?: QueuedReason
   exitCode?: number
   /** Plain-language reason for failed / denied / timed_out / stopped. */
   error?: string
@@ -714,7 +723,7 @@ export interface ScriptRun {
 
 /** Run history row (GET /api/agents/:id/script-runs and VmInfo.runs). */
 export type ScriptRunSummary = Pick<ScriptRun,
-  'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId'
+  'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId' | 'queuePosition' | 'queuedReason'
 > & {
   filesChangedCount: number
   groupId?: string
@@ -727,8 +736,6 @@ export type ScriptRunSummary = Pick<ScriptRun,
   hosts?: string[]
   /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
   build?: ToolBuildInfo
-  /** M2 contract (BE-P2-22's field, approved 2026-10-30): status 'queued': "Queued · after tool build" for 'tool_build'. */
-  queuedReason?: QueuedReason
 }
 
 /** The small run summary a kind 'run' ChatMessage carries. */
@@ -741,6 +748,8 @@ export interface ChatRunSummary {
   undo: ScriptRunUndo
   /** status 'queued': runs ahead of it, running ones included (ScriptRun.queuePosition). */
   queuePosition?: number
+  /** BE-P2-22: status 'queued': ScriptRun.queuedReason ('tool_build': "Queued · after tool build"). */
+  queuedReason?: QueuedReason
   exitCode?: number
   /** The script's file name (argv[1] or argv[0]) for the card title; `name` stays the skill. */
   scriptName?: string
@@ -764,8 +773,6 @@ export interface ChatRunSummary {
   build?: ToolBuildInfo
   /** M2 contract (approved 2026-10-30): status 'running' (and after): ScriptRun.startedAt, for the live "Running · 1:12". */
   startedAt?: string
-  /** M2 contract (BE-P2-22's field, approved 2026-10-30): status 'queued' only. */
-  queuedReason?: QueuedReason
   /** M2 contract (BE-P2-22, approved 2026-10-30): queuedReason 'tool_build': the build it waits for ("runs on the new tools (version 3)"). */
   afterBuild?: { runId: string; generation: number }
   /** M2 contract (approved 2026-10-30): ScriptRun.hostsContactedTotal (or the full count), for "+N more" beyond the 20. */
@@ -1067,12 +1074,6 @@ export interface PermissionAnswer {
 export const PERMISSION_CSRF_HEADER = 'x-agentcontrol-confirm'
 
 /* ───────────────────────── Phase 2 M2 contract (BE-P2-14/15/21): shapes only, approved with changes by Team lead 2026-10-30 ───────────────────────── */
-
-/**
- * Why a queued run waits. Owned by BE-P2-22 (p2/be-22-build-queue, not merged here): the same definition as there,
- * so the two agree; keep one copy when merging (BE-P2-22 also adds ScriptRun.queuedReason).
- */
-export type QueuedReason = 'slot' | 'tool_build'
 
 /** ScriptRun.hostsContacted cap (blocked hosts first); ChatRunSummary keeps 20. */
 export const SCRIPT_RUN_HOSTS_MAX = 200

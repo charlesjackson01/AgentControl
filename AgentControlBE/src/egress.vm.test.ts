@@ -300,7 +300,7 @@ describe.skipIf(!engineReady)('@vm BE-P2-13 egress proxy', () => {
     const tool = builtinTools.get('vm_install')!
     const ctx = {
       agentId: A.id,
-      vm: { vmInstall: (_id: string, pk: string[]) => botEnv.vmInstall(A, pk) },
+      vm: { vmInstall: (_id: string, pk: string[]) => botEnv.vmInstall(A, pk), dmConversation: () => 'c_dm' },
     } as unknown as ToolContext
     const n = minted.length
     const out = (await tool.handler({ apt: ['be13-hello'], why: 'BE-P2-13 test' }, ctx)) as { installed: string[]; generation: number; note: string; logTail?: string }

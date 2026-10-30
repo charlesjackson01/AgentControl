@@ -318,7 +318,7 @@ describe.each(['reflink', 'copy'] as const)('createSnapshotBudget (%s)', (driver
 
   it('the 21st run expires the oldest only when it is 7+ days old', async () => {
     const e = env(driver)
-    const b = createSnapshotBudget({ snapshots: e.svc, limits: () => DEFAULTS, freeBytes: () => null })
+    const b = createSnapshotBudget({ snapshots: e.svc, limits: () => DEFAULTS, freeBytes: () => null, now: () => new Date(e.clock.t) })
     for (let i = 1; i <= 21; i++) {
       fill(e.zoneOf('a'), 'f.txt', i)
       await e.run('a', id(i), (z) => fill(z, 'f.txt', i + 100), { endAgo: (i === 1 ? 6 : 0) * DAY + (30 - i) * 60_000 })

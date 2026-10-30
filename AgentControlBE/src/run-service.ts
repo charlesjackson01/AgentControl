@@ -102,6 +102,8 @@ export interface RunServiceDeps {
   freeBytes(): number | null | Promise<number | null>
   /** The 10 GB personal limit check (BE-P2-10). */
   personal?(agent: Agent): Promise<{ blocked: string | null }>
+  /** BE-P2-20: the bot's files check (botFilesMissingMessage); a message refuses runs and undos with 409 files_missing. */
+  filesMissing?(agent: Agent): string | null
   publish?(event: LiveEvent): void
   /** A run ended or changed (VmInfo.runs, vm.updated). */
   onRunsChanged?(agentId: string): void
@@ -748,6 +750,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (input.context.kind === 'dm' ? conv.kind !== 'dm' || conv.agentId !== agent.id : conv.kind !== 'group' || conv.id !== input.context.groupId || !conv.memberAgentIds.includes(agent.id)) {
         fail(400, "This run's chat doesn't match its bot.")
       }
+      const missing = deps.filesMissing?.(agent)
+      if (missing) failWithReason(409, 'files_missing', missing)
       const id = deps.newRunId()
       const probe: RunScriptRequest = {
         agentId: agent.id,
@@ -866,6 +870,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (!target) fail(404, 'Run not found.')
       const agent = deps.getAgent(target.agentId)
       if (!agent || !deps.undoApply) fail(404, 'Bot not found.')
+      const missing = deps.filesMissing?.(agent)
+      if (missing) failWithReason(409, 'files_missing', missing)
       const e = index.get(runId)!
       const startedAt = now().toISOString()
       const record = (id: string, part: { snapshot: ScriptRun['snapshot']; filesChanged: FileChange[]; undo: ScriptRunUndo }, status: ScriptRunStatus, error?: string) => {

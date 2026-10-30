@@ -15,13 +15,13 @@ import { extname, resolve, sep } from 'node:path'
 import { lstatSync, type Stats } from 'node:fs'
 import type { Readable } from 'node:stream'
 import { archiveStamp } from './archive.js'
-import { fail } from './http.js'
+import { fail, failWithReason } from './http.js'
 import type { Agent, FileEntry, FileListing, FileZone, Skill } from './shared/types.js'
 import { VM_LIMITS } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { skillFolder } from './tools/skills.js'
 import { archiveShares, moveShares, readShares, withShares } from './share-records.js'
-import { storageFor, storageReady, type StorageBackend, type StorageStat, type VolPath } from './storage/index.js'
+import { FILES_MISSING_TEXT, filesMissingMessage, storageFor, storageReady, type StorageBackend, type StorageStat, type VolPath } from './storage/index.js'
 
 // Phase 1 helpers now live with LocalFs; re-exported for older callers and tests.
 export {
@@ -114,22 +114,65 @@ function memoryMarkdown(store: WorkspaceStore, agent: Agent): string {
   return lines.join('\n')
 }
 
-/** Create the bot's folder (idempotent) and refresh BOT.md and memory/MEMORY.md. Returns its volume path. */
-export function ensureBotFolder(store: WorkspaceStore, agent: Agent): VolPath {
-  const fs = storageReady(store)
-  const root = botVol(agent)
-  fs.ensureDir(root)
+/**
+ * BE-P2-20: the one "are this bot's files there?" check, shared by the VM tab
+ * (VmInfo.state 'files_missing', vm/start|stop|reset), the bot's file routes
+ * and its runs, so they always agree. Files are missing when the volume
+ * marker is missing or belongs to another setup (BE-P2-6), or when the bot's
+ * workspace folder is gone. Returns the plain message (BE-P2-6's wording), or
+ * null when the files are fine.
+ */
+export function botFilesMissingMessage(store: WorkspaceStore, agent: Agent): string | null {
+  const volume = filesMissingMessage(store)
+  if (volume) return volume
+  return storageFor(store).backend.existsAt(`${botVol(agent)}/workspace`) ? null : FILES_MISSING_TEXT
+}
+
+/** 409 { reason: 'files_missing' } with botFilesMissingMessage's text unless the bot's files are there. */
+export function assertBotFilesAvailable(store: WorkspaceStore, agent: Agent): void {
+  const message = botFilesMissingMessage(store, agent)
+  if (message) failWithReason(409, 'files_missing', message)
+}
+
+/** Lay out a bot folder's zones and refresh BOT.md and memory/MEMORY.md. */
+function fillBotFolder(store: WorkspaceStore, fs: StorageBackend, agent: Agent, root: VolPath): VolPath {
   for (const z of ['shared', 'workspace', 'memory']) fs.mkdirs(root, [z])
   fs.writeIfChanged(root, [BOT_MD], botMarkdown(agent))
   fs.writeIfChanged(root, MEMORY_MD.split('/'), memoryMarkdown(store, agent))
   return root
 }
 
-/** Boot: a folder for every bot. Failures are logged, never fatal. */
+/**
+ * The bot's folder for file routes, file tools, uploads and BOT.md/MEMORY.md
+ * refreshes: 409 files_missing (botFilesMissingMessage) unless its files are
+ * there, then the zones, BOT.md and memory/MEMORY.md are refreshed. A missing
+ * workspace (or bot folder) is never re-created here.
+ */
+export function ensureBotFolder(store: WorkspaceStore, agent: Agent): VolPath {
+  const fs = storageReady(store)
+  const root = botVol(agent)
+  assertBotFilesAvailable(store, agent)
+  return fillBotFolder(store, fs, agent, root)
+}
+
+/**
+ * New bots and boot: creates the bot folder when there is none at all (a new
+ * bot, or one from before folders existed), else ensureBotFolder. A folder that
+ * exists without its workspace stays files_missing.
+ */
+export function createBotFolder(store: WorkspaceStore, agent: Agent): VolPath {
+  const fs = storageReady(store)
+  const root = botVol(agent)
+  if (fs.existsAt(root)) return ensureBotFolder(store, agent)
+  fs.ensureDir(root)
+  return fillBotFolder(store, fs, agent, root)
+}
+
+/** Boot: a folder for every bot (createBotFolder). Failures (including files_missing bots) are logged, never fatal. */
 export function ensureAllBotFolders(store: WorkspaceStore, log: (msg: string) => void = console.warn): void {
   for (const agent of store.agents) {
     try {
-      ensureBotFolder(store, agent)
+      createBotFolder(store, agent)
     } catch (err) {
       log(`[files] could not prepare the folder for ${agent.slug}: ${err instanceof Error ? err.message : String(err)}`)
     }

@@ -42,6 +42,8 @@ const SEED_SKILL_MANIFEST: { file: string; tag: string; source: string }[] = [
   // Added with seed-skill-upgrade-v3; existing stores gain them as never-offered seeds.
   { file: 'encoding-and-hashing', tag: 'Data', source: 'AgentControl' },
   { file: 'release-notes', tag: 'Text', source: 'AgentControl' },
+  // BE-P2-15: the browser add-on's bot-facing guide; existing stores gain it as a never-offered seed.
+  { file: 'browser-basics', tag: 'Browser', source: 'AgentControl' },
 ]
 
 const SEED_SKILLS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'seed-skills')

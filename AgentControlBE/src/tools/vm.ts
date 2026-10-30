@@ -60,6 +60,11 @@ export interface VmToolHost {
   dmConversation(agentId: string): string
   /** Whether the bot has the browser on (permissions.browser; always false in M1). */
   browserOn(agentId: string): boolean
+  /**
+   * BE-P2-15: the browser add-on is wired, so a browser:true run on a bot without the browser asks
+   * the user (a browser card) instead of being refused with BROWSER_NOT_ON.
+   */
+  browserCanAsk?(agentId: string): boolean
 }
 
 const hosts = new WeakMap<WorkspaceStore, VmToolHost>()
@@ -292,8 +297,9 @@ export const vmTools: ToolEntry[] = [
       const hostsBad = hostsProblem(args.hosts)
       if (hostsBad) throw argError(hostsBad, { ...RUN_EXAMPLE, network: 'on', hosts: ['api.example.com'] })
       const hostList = Array.isArray(args.hosts) ? [...new Set((args.hosts as string[]).map((h) => h.toLowerCase()))] : []
-      // M1: the browser is never on (PATCH permissions.browser → 400); the M2 browser request card is BE-P2-14.
-      if (browser && !host.browserOn(ctx.agentId)) throw new Error(BROWSER_NOT_ON)
+      // Without the add-on (M1, tests) a browser run on a bot without the browser is refused; with it
+      // (BE-P2-15) the gate raises the browser card and the run waits for the setup.
+      if (browser && !host.browserOn(ctx.agentId) && !host.browserCanAsk?.(ctx.agentId)) throw new Error(BROWSER_NOT_ON)
       // A group run always has its conversation; a DM run may be the bot's first (no DM yet).
       const conversationId = ctx.group ? ctx.group.id : (ctx.conversationId ?? host.dmConversation(ctx.agentId))
       let run: ScriptRun

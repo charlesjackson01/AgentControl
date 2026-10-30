@@ -28,8 +28,10 @@ const UPGRADED_V4 = [
 ]
 /** Seeds first shipped with v3; older stores never offered them. */
 const NEW_IN_V3 = ['core/encoding-and-hashing', 'core/release-notes']
+/** Seeds first shipped after v4 (BE-P2-15); every older store gains them as never-offered seeds. */
+const NEW_AFTER_V4 = ['core/browser-basics']
 /** Every seed id a v1 or v2 install offered, in seed order. */
-const OLD_IDS = seedSkills.map((s) => s.id).filter((id) => !NEW_IN_V3.includes(id))
+const OLD_IDS = seedSkills.map((s) => s.id).filter((id) => !NEW_IN_V3.includes(id) && !NEW_AFTER_V4.includes(id))
 
 const seedOf = (id: string): Skill => seedSkills.find((s) => s.id === id)!
 
@@ -208,9 +210,9 @@ describe('seed-skill-upgrade-v3', () => {
     writeV2Store(path)
     const upgraded = createStore(path)
     for (const id of UPGRADED_V3) expect(upgraded.skills.find((s) => s.id === id), id).toEqual(seedOf(id))
-    // Unchanged seeds stay as they were; the two new seeds are appended in seed order.
+    // Unchanged seeds stay as they were; the two new seeds (and the later ones) are appended in seed order.
     expect(upgraded.skills).toEqual(seedSkills)
-    expect(upgraded.skills.slice(-2).map((s) => s.id)).toEqual(NEW_IN_V3)
+    expect(upgraded.skills.slice(-3).map((s) => s.id)).toEqual([...NEW_IN_V3, ...NEW_AFTER_V4])
     expect(upgraded.meta.migrations.filter((m) => m.startsWith('seed-'))).toEqual([V1, V2, V3, V4])
     expect(upgraded.meta.seededSkillIds).toEqual(seedSkills.map((s) => s.id))
     // The upgrade was saved: a reload reads it back without migrating again.
@@ -283,8 +285,8 @@ describe('seed-skill-upgrade-v3', () => {
     writeV2Store(path, (skills) => [custom, ...skills])
     const loaded = createStore(path)
     expect(loaded.skills[0]).toEqual(custom)
-    expect(loaded.skills.slice(-2)).toEqual(NEW_IN_V3.map(seedOf))
-    for (const id of NEW_IN_V3) expect(loaded.skills.filter((s) => s.id === id), id).toHaveLength(1)
+    expect(loaded.skills.slice(-3)).toEqual([...NEW_IN_V3, ...NEW_AFTER_V4].map(seedOf))
+    for (const id of [...NEW_IN_V3, ...NEW_AFTER_V4]) expect(loaded.skills.filter((s) => s.id === id), id).toHaveLength(1)
   })
 
   it('brings a store from before any migration to the current seeds', () => {

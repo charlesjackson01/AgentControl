@@ -204,6 +204,15 @@ export interface ToolBuildSpec {
    * (`queuedReason:'slot'`) and started once the bot's current runs end; runs queued after it wait for it.
    */
   waitForRuns: boolean
+  /**
+   * BE-P2-15 (browser add-on): build alongside the bot's current runs instead of after them (no
+   * run_active refusal, nothing waited for), because the new image only reaches the container at the
+   * next idle recreate. A run waiting for the browser can't hold up the build it waits for. Runs
+   * queued meanwhile still wait for the build.
+   */
+  concurrent?: boolean
+  /** BE-P2-15: the base the new generation is built on (the browser on/off rebuild); default the current one. */
+  base?: ToolBuildInfo['base']
   /** Checks after build_active / run_active (e.g. internet_never, proxy_unavailable); throw to refuse with no record. */
   precheck?(agent: Agent): void | Promise<void>
   /** The build itself, given the bot as it is when the build starts. A thrown `stopped` / `timedOut` error ends it that way. */
@@ -1045,7 +1054,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       // The generation it starts from (a queued build may have waited).
       build.fromGeneration = agent.vm.image.generation
       build.generation = build.fromGeneration + 1
-      build.base = agent.vm.image.base
+      build.base = spec.base ?? agent.vm.image.base
       const fds: Live['fds'] = {}
       try {
         mkdirSync(dirOf(l.slug), { recursive: true })
@@ -1251,6 +1260,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (d && d.kind !== 'ask' && d.permission) setPermission(run, d.permission)
       if (d?.kind === 'end') {
         finish(l, { status: d.status, reason: d.reason, error: d.error })
+        return run
+      }
+      if (d?.kind === 'wait') {
+        // BE-P2-15: the bot's browser is still being set up; the gate moves it on when it's ready.
+        run.status = 'waiting_permission'
+        run.waitingFor = d.waitingFor
+        if (d.requestId) run.waitingOnRequestId = d.requestId
+        changed({ run, slug: agent.slug })
+        log(`runs: ${agent.slug}: ${id} waits for the ${d.waitingFor}`)
         return run
       }
       if (d?.kind === 'ask') {
@@ -1478,8 +1496,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (!agent) fail(404, 'Bot not found.')
       if (isBuilding(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
       const waitFor = new Set<string>()
-      for (const l of live.values()) if (l.run.agentId === agent.id) waitFor.add(l.run.id)
-      if (!spec.waitForRuns && waitFor.size + outside(agent.id) > 0) failWithReason(409, 'run_active', "Wait for the bot's run to finish first.")
+      if (!spec.concurrent) for (const l of live.values()) if (l.run.agentId === agent.id) waitFor.add(l.run.id)
+      if (!spec.concurrent && !spec.waitForRuns && waitFor.size + outside(agent.id) > 0) failWithReason(409, 'run_active', "Wait for the bot's run to finish first.")
       const missing = deps.filesMissing?.(agent)
       if (missing) failWithReason(409, 'files_missing', missing)
       await spec.precheck?.(agent)
@@ -1503,7 +1521,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
         ...(spec.removed?.length ? { removed: [...spec.removed] } : {}),
         startedBy: spec.startedBy,
         via: spec.via,
-        base: agent.vm.image.base,
+        base: spec.base ?? agent.vm.image.base,
       }
       const l = newLive(run, agent.slug)
       const b: BuildEntry = { l, spec, waitFor, started: false, timedOut: false, lastEmit: 0, vmDirty: false }

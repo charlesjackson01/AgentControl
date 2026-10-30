@@ -8,6 +8,7 @@ import type { Skill } from '../shared/types.js'
 import { listToolInfo, toolDeclaration } from '../tools.js'
 import { parseSkillMarkdown } from './skill-md.js'
 import { coreSkillId, seedSkills, vendoredSeedSkills } from './seed.js'
+import { BROWSER_LAUNCH_NOTE } from '../vm-images.js'
 
 /** Vendored seeds: bodies are pinned, so only the frontmatter tools line is ours. */
 const expectedVendoredTools: Record<string, string[]> = {
@@ -32,6 +33,7 @@ const expectedTools: Record<string, string[]> = {
   'workspace-audit': ['list_agents', 'list_skills', 'read_run_log', 'get_agent', 'workspace_overview', 'get_skill'],
   'encoding-and-hashing': ['encode_text'],
   'release-notes': ['diff_text', 'extract_entities'],
+  'browser-basics': ['run_script'],
 }
 
 const authored = seedSkills.filter((skill) => skill.source === 'AgentControl')
@@ -61,9 +63,9 @@ describe('vendored seed library', () => {
 })
 
 describe('authored seed library', () => {
-  it('adds exactly twelve distinct authored skills after the six vendored skills', () => {
+  it('adds exactly thirteen distinct authored skills after the six vendored skills', () => {
     expect(vendoredSeedSkills.map((skill) => skill.id)).toEqual(Object.keys(expectedVendoredTools).map(coreSkillId))
-    expect(seedSkills).toHaveLength(18)
+    expect(seedSkills).toHaveLength(19)
     expect(authored.map((skill) => skill.id)).toEqual(Object.keys(expectedTools).map(coreSkillId))
     expect(new Set(seedSkills.map((skill) => skill.id)).size).toBe(seedSkills.length)
     expect(seedSkills.slice(0, 6)).toEqual(vendoredSeedSkills)
@@ -133,5 +135,53 @@ describe('authored seed library', () => {
       content: 'Keep my local notes workflow', tools: [],
     })
     expect(reopened.skills.some((skill) => skill.id === 'core/csv-analysis' || skill.id === 'core/debugging')).toBe(false)
+  })
+})
+
+describe('browser-basics seed (BE-P2-15)', () => {
+  const seed = () => seedSkills.find((skill) => skill.id === coreSkillId('browser-basics'))!
+
+  it('is seeded like the other authored skills: run_script only, not on by default', () => {
+    expect(seed()).toMatchObject({ name: 'browser-basics', tag: 'Browser', source: 'AgentControl', sourceId: 'core', defaultOn: false, hasScripts: false, files: [] })
+    expect(seed().tools).toEqual([toolDeclaration('run_script')])
+    expect(seedSkills.at(-1)).toBe(seed())
+    const fresh = createStore(join(dir, 'fresh.json'))
+    expect(fresh.skills.find((skill) => skill.id === 'core/browser-basics')).toEqual(seed())
+    expect(fresh.meta.seededSkillIds).toContain('core/browser-basics')
+  })
+
+  it('tells the bot the launch note, the proxy, Never/file://, the blocked networks and how to ask', () => {
+    const text = seed().content
+    expect(text).toContain(BROWSER_LAUNCH_NOTE)
+    expect(text).toContain("Chromium's traffic goes only through AgentControl's egress proxy, using the run's own credential.")
+    expect(text).toContain('Under Internet = Never (or with `network:\'off\'`), the browser runs offline: only `file://` pages work.')
+    expect(text).toContain('Your home network, Tailscale, this computer and local model servers are always blocked')
+    expect(text).toContain("call `run_script` with `browser:true` and `network:'on'`")
+    expect(text).toContain('This raises a permission card')
+    expect(seed().description).toContain('run_script')
+  })
+
+  it('names no credential, proxy variable or proxy address', () => {
+    const md = markdown('browser-basics')
+    expect(md).not.toMatch(/[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@]+:[^\s/@]+@/) // user:secret@ URLs
+    expect(md).not.toMatch(/https?_proxy|PIP_PROXY|npm_config_|Proxy-Authorization|ac-egressd|AGENTCONTROL_/i)
+    expect(md).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)
+  })
+
+  it('an existing store that was offered the earlier 18 seeds gains it once; deleting it keeps it gone', () => {
+    const path = join(dir, 'store.json')
+    const earlier = seedSkills.filter((skill) => skill.id !== 'core/browser-basics')
+    const first = createStore(path)
+    first.skills = structuredClone(earlier)
+    first.meta.seededSkillIds = earlier.map((skill) => skill.id)
+    expect(first.save()).toBe(true)
+
+    const upgraded = createStore(path)
+    expect(upgraded.skills).toEqual([...earlier, seed()])
+    expect(upgraded.meta.seededSkillIds).toEqual(seedSkills.map((skill) => skill.id))
+
+    upgraded.skills = upgraded.skills.filter((skill) => skill.id !== 'core/browser-basics')
+    expect(upgraded.save()).toBe(true)
+    expect(createStore(path).skills.some((skill) => skill.id === 'core/browser-basics')).toBe(false)
   })
 })

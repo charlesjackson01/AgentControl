@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createBotEnvService } from './bot-env.js'
-import { botMountAllowList, botMounts, BROWSER_NOT_YET, snapshotZones, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
+import { botMountAllowList, botMounts, snapshotZones, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
 import { checkBotMounts, KEEP_ID_NOTE } from './isolation.js'
 import { botRoot } from './files.js'
@@ -116,7 +116,7 @@ describe('GET/PATCH /api/agents/:id/vm', () => {
     expect(res.json()).toMatchObject({ statusCode: 400, reason: 'egress_reserved', message: EGRESS_NOT_AVAILABLE })
   })
 
-  it('PATCH 400s: reserved names, browser:true (M1), egress, limits, unknown keys, bad values', async () => {
+  it('PATCH 400s: reserved names, egress, limits, unknown keys, bad values (browser:true is BE-P2-15, browser-addon.test.ts)', async () => {
     const a = await makeAgent()
     const bad = async (body: unknown, msg: RegExp | string) => {
       const res = await inject('PATCH', `/api/agents/${a.id}/vm`, body)
@@ -128,7 +128,7 @@ describe('GET/PATCH /api/agents/:id/vm', () => {
     await bad({ env: [{ name: 'HTTP_PROXY', value: 'http://x' }] }, /"HTTP_PROXY" is reserved/)
     await bad({ env: [{ name: 'PATH', value: '/x' }] }, /PATH_APPEND/)
     await bad({ env: [{ name: 'AC_FOO', value: 'x' }] }, /AC_/)
-    await bad({ permissions: { browser: true } }, BROWSER_NOT_YET)
+    await bad({ permissions: { browser: 'yes' } }, /"permissions.browser" must be true or false/)
     await bad({ limits: { memoryMb: 8192 } }, /Limits are fixed/)
     await bad({ packages: ['jq'] }, /can't be changed here/)
     await bad({ gvisor: 'maybe' }, /gvisor/)

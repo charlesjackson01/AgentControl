@@ -23,9 +23,9 @@ import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
 import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
 import { createBotEnvService, planInstall, type BotEnvService, type BuildResult, type EngineRef } from './bot-env.js'
-import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
+import { chromiumProbeArgv, createRuntimeProbe, parseChromiumOutput, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
-import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRoutes } from './bot-env-routes.js'
+import { BROWSER_NOT_YET, botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRoutes } from './bot-env-routes.js'
 import { registerRunRoutes } from './run-routes.js'
 import { registerVmSettingsRoutes } from './vm-settings-routes.js'
 import { createSnapshotService, newRunId } from './snapshot.js'
@@ -33,6 +33,10 @@ import { createUndoService, type UndoService } from './undo.js'
 import { budgetLimits, createSnapshotBudget, freeBytesAt, type RunLogs, type SnapshotBudget } from './snapshot-budget.js'
 import { createRunService, type RunRunner, type RunService } from './run-service.js'
 import { createPermissionGate, type PermissionGate } from './permission-gate.js'
+import { BROWSER_INTERNET_NEVER_TEXT, createBrowserAddon, type BrowserAddon } from './browser-addon.js'
+import { registerBrowserRoutes } from './browser-routes.js'
+import { execCommandRunner, type CommandRunner } from './command-runner.js'
+import { baseImageFor, botImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
@@ -434,6 +438,10 @@ export interface BuildAppOptions {
   egress?: EgressService
   /** BE-P2-14: test-only permission request lifetime (default PERMISSION_TIMEOUT_MS, 10 min). */
   permissionTimeoutMs?: number
+  /** BE-P2-15: test-only command runner for the browser add-on's engine calls (download, check, rmi). */
+  browserExec?: CommandRunner
+  /** BE-P2-15: test-only wait between "is the bot idle yet" checks (default 1 s). */
+  browserIdlePollMs?: number
 }
 
 declare module 'fastify' {
@@ -461,6 +469,7 @@ declare module 'fastify' {
     vmEgress: EgressService
     /** BE-P2-14: permission requests (internet / browser cards) and their answers. */
     vmPermissions: PermissionGate
+    vmBrowser: BrowserAddon
   }
 }
 
@@ -862,6 +871,9 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     // BE-7: a new bot with no "skillIds" in the body gets every defaultOn skill.
     const body = request.body as Record<string, unknown>
     const skillIds = body.skillIds === undefined ? defaultSkillIds(store.skills) : input.skillIds
+    // BE-P2-15: `browser` (create only) turns the browser on for the new bot (its setup starts after the save).
+    if (body.browser !== undefined && typeof body.browser !== 'boolean') fail(400, '"browser" must be true or false.')
+    const browserOn = body.browser === true
     const agent: Agent = mergeAgent(
       {
         id: uid('agt'),
@@ -885,6 +897,12 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       },
       { ...input, skillIds, isPrimary },
     )
+    if (browserOn) {
+      // The same 409s as PATCH (low_disk; a new bot has no packages); nothing is created on a refusal.
+      if (!browserAddon) fail(400, BROWSER_NOT_YET)
+      await browserAddon.checkChange(agent, true)
+      agent.vm = { ...agent.vm, permissions: { ...agent.vm.permissions, browser: true } }
+    }
     store.agents = [agent, ...store.agents]
     store.save()
     try {
@@ -892,6 +910,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     } catch (err) {
       request.log.warn(`[files] could not create the folder for ${agent.slug}: ${err instanceof Error ? err.message : String(err)}`)
     }
+    if (browserOn) browserAddon?.changed(agent.id, true)
     void reply.status(201)
     return agent
   })
@@ -1086,6 +1105,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     }
     // BE-P2-14: its pending cards close (denied, run_ended) and its waiting/queued runs stop.
     permissionGate?.agentDeleted(id)
+    browserAddon?.agentDeleted(id)
     await runService?.stopAgent(id).catch(() => {})
     // BE-2: the folder is archived (never removed) before the bot goes away.
     archiveBotFolder(store, agent)
@@ -1806,9 +1826,20 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
 
   let botEnvRoutesRef: BotEnvRoutes | null = null
+  // BE-P2-15: the browser add-on (created after the runs; the gate reaches it lazily).
+  let browserAddon: BrowserAddon | null = null
   // BE-P2-12: RunService — one machine-wide queue, records under data/runs, cards and live events.
   const vmRunnerNow = runner
   // BE-P2-14: the PermissionGate (internet / browser cards), data/permissions/requests.json.
+  const freeBytesNow = async (): Promise<number | null> => {
+    if (opts.vmFreeBytes) return opts.vmFreeBytes()
+    const host = await vmHost.hostInfo().catch(() => null)
+    // Windows: the machine's disk holds the bots' files; Mac/Linux: the host disk under the files volume.
+    if (host?.storage.backend === 'wsl' && host.machine && host.machine.state !== 'missing') {
+      return Math.max(0, (host.machine.diskGb - host.machine.diskUsedGb) * 1024 ** 3)
+    }
+    return freeBytesAt(snapshotsRoot() ?? store.dataDir) ?? freeBytesAt(store.dataDir)
+  }
   const gate = createPermissionGate({
     dataDir: () => store.dataDir,
     getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
@@ -1840,6 +1871,11 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     publish: (event) => {
       liveEvents.publish(event)
     },
+    // BE-P2-15: a card enable turns the browser on (the add-on's setup); browser runs wait for it.
+    browser: {
+      enable: (agentId, request) => browserAddon?.enable(agentId, request),
+      status: (agentId) => browserAddon?.status(agentId) ?? { state: 'ready' },
+    },
     log: (msg) => app.log.info(msg),
     ...(opts.permissionTimeoutMs ? { timeoutMs: opts.permissionTimeoutMs } : {}),
   })
@@ -1860,14 +1896,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     },
     root: () => join(store.dataDir, 'runs'),
     concurrency: async () => (await vmHost.hostInfo()).concurrency,
-    freeBytes: opts.vmFreeBytes ?? (async () => {
-      const host = await vmHost.hostInfo().catch(() => null)
-      // Windows: the machine's disk holds the bots' files; Mac/Linux: the host disk under the files volume.
-      if (host?.storage.backend === 'wsl' && host.machine && host.machine.state !== 'missing') {
-        return Math.max(0, (host.machine.diskGb - host.machine.diskUsedGb) * 1024 ** 3)
-      }
-      return freeBytesAt(snapshotsRoot() ?? store.dataDir) ?? freeBytesAt(store.dataDir)
-    }),
+    freeBytes: () => freeBytesNow(),
     personal: (agent) => personal.check(agent),
     publish: (event) => {
       liveEvents.publish(event)
@@ -1912,6 +1941,95 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     log: r.log,
     ...(r.hostsContacted ? { hosts: r.hostsContacted } : {}),
     ...(r.hostsContactedTotal !== undefined ? { hostsTotal: r.hostsContactedTotal } : {}),
+  })
+  const publishVm = (agentId: string) => {
+    const a = store.agents.find((x) => x.id === agentId)
+    if (!a) return
+    void botEnvRoutesRef
+      ?.vmInfo(a)
+      .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId, vm }))
+      .catch(() => {})
+  }
+  // BE-P2-15: the browser add-on: shared botvm-browser download, per-bot on/off rebuilds and Chromium check.
+  const addon = createBrowserAddon({
+    dataDir: () => store.dataDir,
+    getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
+    agents: () => store.agents,
+    saveBrowser: (agentId, on) => {
+      const previous = store.agents
+      store.agents = store.agents.map((a) => (a.id === agentId ? { ...a, vm: { ...a.vm, permissions: { ...a.vm.permissions, browser: on } } } : a))
+      if (!store.save()) {
+        store.agents = previous
+        throw new Error("couldn't save")
+      }
+    },
+    engine: () => engineRef().catch(() => null),
+    ...(opts.browserExec ? { exec: opts.browserExec } : {}),
+    freeBytes: () => freeBytesNow(),
+    // The on/off rebuild: a recorded tool_build (via 'browser'), alongside the bot's runs; internet only with packages.
+    startBuild: (agent, base, where) => {
+      const online = agent.vm.packages.length > 0
+      return runs.startToolBuild({
+        agentId: agent.id,
+        conversationId: where.conversationId ?? (() => ensureDm(store, agent.id).id),
+        context: { kind: 'dm' },
+        via: 'browser',
+        startedBy: 'user',
+        argv: ['browser', base === 'browser' ? 'on' : 'off'],
+        packages: [...agent.vm.packages],
+        added: [],
+        network: online ? 'on' : 'off',
+        permissions: online ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
+        waitForRuns: false,
+        concurrent: true,
+        base,
+        precheck: async (a) => {
+          if (!a.vm.packages.length) return
+          if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', BROWSER_INTERNET_NEVER_TEXT)
+          await buildProxyCheck()
+        },
+        build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', base, ...ctl })),
+      })
+    },
+    waitRun: (runId) => runs.wait(runId),
+    stopRun: (runId) => runs.stop(runId),
+    activeBuildRunId: (agentId) => runs.activeBuild(agentId)?.runId ?? null,
+    busy: (agentId) => vmRunnerNow.activeRuns(agentId),
+    recreate: async (agent) => {
+      await botEnv.ensure(agent)
+    },
+    // The real Chromium check, on the bot's own image with its runtime and uid mapping (no network).
+    chromiumCheck: async (agent) => {
+      const e = await engineRef().catch(() => null)
+      if (!e) return { ok: false, error: 'no container engine' }
+      const a = store.agents.find((x) => x.id === agent.id) ?? agent
+      const image = a.vm.image.generation > 0 ? botImageRef(a.slug, a.vm.image.generation) : baseImageFor('browser')
+      const rt = runtimeOf(a)
+      const flags = e.cli === 'docker' ? [] : rt.flags ?? []
+      const name = `ac-probe-chromium-${a.slug}-${Date.now().toString(36)}`
+      const exec = opts.browserExec ?? execCommandRunner
+      const r = await exec(e.command ?? e.cli, [...e.globalArgs, ...flags, ...chromiumProbeArgv({ name, image, runtime: rt.effective === 'runsc' ? 'runsc' : null, uidMapping: uidMappingOf(a, e.cli) })], { timeoutMs: 120_000 })
+      if (r.code !== 0) await exec(e.command ?? e.cli, [...e.globalArgs, 'rm', '--force', name], { timeoutMs: 30_000 }).catch(() => undefined)
+      const out = parseChromiumOutput(r.stdout)
+      if (out?.png && (out.bytes ?? 0) > 0) return { ok: true, version: out.version ?? 'unknown' }
+      const last = (r.stderr || r.stdout).trim().split('\n').filter(Boolean).pop() ?? `exit code ${r.code}`
+      return { ok: false, error: out?.error ?? (out ? "the screenshot wasn't a PNG" : r.code === 124 ? 'timed out' : last) }
+    },
+    gate: {
+      browserReady: (agentId) => gate.browserReady(agentId),
+      browserFailed: (agentId, reason) => gate.browserFailed(agentId, reason),
+      updateSetup: (requestId, setup, error) => gate.updateSetup(requestId, setup, error),
+    },
+    publish: (event) => liveEvents.publish(event),
+    vmChanged: publishVm,
+    featuresChanged: () => probeLater('ensureFresh'),
+    log: (msg) => app.log.info(msg),
+    ...(opts.browserIdlePollMs ? { idlePollMs: opts.browserIdlePollMs } : {}),
+  })
+  browserAddon = addon
+  app.decorate('vmBrowser', addon)
+  app.addHook('onClose', async () => {
+    addon.close()
   })
   bindVmTools(store, {
     start: (input) => runs.start(input),
@@ -1978,6 +2096,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       vmRunnerNow.check({ agentId, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 60, network: 'off' }) === null,
     dmConversation: (agentId) => ensureDm(store, agentId).id,
     browserOn: (agentId) => store.agents.find((a) => a.id === agentId)?.vm.permissions.browser === true,
+    // BE-P2-15: a browser run on a bot without the browser raises the browser card (the gate).
+    browserCanAsk: () => true,
   })
   app.addHook('onClose', async () => {
     bindVmTools(store, null)
@@ -1990,7 +2110,14 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     } catch (err) {
       app.log.warn(`permission recovery failed: ${(err as Error).message}`)
     }
+    // BE-P2-15: resume browser setups / off-rebuilds a restart interrupted.
+    try {
+      addon.recover()
+    } catch (err) {
+      app.log.warn(`browser recovery failed: ${(err as Error).message}`)
+    }
   })
+  registerBrowserRoutes(app, store, addon)
   registerPermissionRoutes(app, gate)
   registerLiveEventRoutes(app, liveEvents, {
     heartbeatMs: opts.liveTimers?.heartbeatMs,
@@ -2055,6 +2182,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       })
     },
     activeBuild: (agentId) => runs.activeBuild(agentId),
+    // BE-P2-15: the browser add-on (PATCH permissions.browser, VmInfo.browser / browserState).
+    browser: addon,
   })
 
   // BE-P2-17: GET/PATCH /api/vm/settings.

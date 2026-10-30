@@ -884,9 +884,9 @@ describe('fresh install', () => {
 })
 
 describe('skill seeds', () => {
-  it('preserves the six vendored skills alongside the twelve authored skills', async () => {
+  it('preserves the six vendored skills alongside the thirteen authored skills', async () => {
     const listed = (await inject('GET', '/api/skills')).json() as { skills: Skill[] }
-    expect(listed.skills).toHaveLength(18)
+    expect(listed.skills).toHaveLength(19)
     const skills = await Promise.all(listed.skills.map(async (s) =>
       (await inject('GET', `/api/skills/${encodeURIComponent(s.id)}`)).json() as Skill))
     const vendored = skills.filter((s) => s.source === 'seb1n/awesome-ai-agent-skills')

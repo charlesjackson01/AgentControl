@@ -358,6 +358,8 @@ export interface BuildOptions {
   onProgress?: (progress: BuildProgress) => void
   /** 'egress' builds: the hosts the proxy saw so far, about once a second. */
   onHosts?: (hosts: HostContact[]) => void
+  /** BE-P2-15: build onto this base instead of the current one (the browser add-on's on/off rebuild); saved with the new generation. */
+  base?: AgentVm['image']['base']
 }
 
 /** BE-P2-21: the build was stopped through BuildOptions.signal; nothing was saved. */
@@ -702,10 +704,11 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     const slug = agent.slug
     const cur = agent.vm.image
     const generation = cur.generation + 1
-    const out = await build(slug, generation, cur.base, packages, opts)
+    const base = opts.base ?? cur.base
+    const out = await build(slug, generation, base, packages, opts)
     // BE-P2-21: a Stop that came as the engine finished still keeps the current generation.
     await stoppedCheck(slug, generation, null, opts)
-    const vm = save(agent, { ...agent.vm, packages: [...new Set(packages)].sort(), image: { generation, previous: cur.generation, builtAt: now().toISOString(), base: cur.base } })
+    const vm = save(agent, { ...agent.vm, packages: [...new Set(packages)].sort(), image: { generation, previous: cur.generation, builtAt: now().toISOString(), base } })
     await pruneImages(slug, [generation, cur.generation])
     const hosts = out.hosts ? capHostContacts(out.hosts) : null
     return { vm, generation, log: out.log, ...(hosts ? { hostsContacted: hosts.hosts, ...(hosts.total !== undefined ? { hostsContactedTotal: hosts.total } : {}) } : {}) }
@@ -855,12 +858,17 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
         if (cur.previous === undefined || cur.previous >= cur.generation) failWithReason(409, 'no_previous_generation', 'There is no earlier version of the bot\'s tools to go back to.')
         if (activeRuns(agent.id) > 0) failWithReason(409, 'run_active', 'Wait for the bot\'s run to finish first.')
         let packages: string[] = []
+        let base = cur.base
         if (cur.previous > 0) {
           const prev = await imageInfo(botImageRef(agent.slug, cur.previous))
           if (!prev) failWithReason(409, 'no_previous_generation', 'The earlier version of the bot\'s tools is gone.')
           packages = (prev.labels[BOT_ENV_LABELS.packages] ?? '').split(' ').filter((p) => APT_PACKAGE.test(p))
+          // BE-P2-15: the earlier generation may be on the other base (built before a browser on/off).
+          const from = prev.labels[BOT_ENV_LABELS.from]
+          if (from === baseImageFor('browser', baseVersion())) base = 'browser'
+          else if (from === baseImageFor('base', baseVersion())) base = 'base'
         }
-        const vm = save(agent, { ...agent.vm, packages, image: { generation: cur.previous, base: cur.base, builtAt: now().toISOString() } })
+        const vm = save(agent, { ...agent.vm, packages, image: { generation: cur.previous, base, builtAt: now().toISOString() } })
         const wasRunning = (await containerStatus(agent.slug)).state === 'running'
         await ensureLocked(agent, wasRunning)
         await removeImage(botImageRef(agent.slug, cur.generation))

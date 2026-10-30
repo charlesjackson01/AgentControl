@@ -1,5 +1,5 @@
 import { DEFAULT_VM_SETTINGS, defaultAgentVm } from './vm-defaults.js'
-import { createEgressService, hostInterfaceAddresses, modelServersOf, testAllowFromEnv, type EgressService } from './egress-service.js'
+import { createEgressService, hostInterfaceAddresses, modelServersOf, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, testAllowFromEnv, type EgressService } from './egress-service.js'
 import { createUserOnlyCheck, USER_ONLY_MESSAGE, USER_ONLY_REASON } from './user-only.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
@@ -13,7 +13,7 @@ import { SkillMarkdownError, parseSkillMarkdown } from './db/skill-md.js'
 import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.js'
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
-import { fail, uid } from './http.js'
+import { fail, failWithReason, uid } from './http.js'
 import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
 import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
@@ -21,7 +21,7 @@ import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFro
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
 import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
-import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
+import { createBotEnvService, planInstall, type BotEnvService, type BuildResult, type EngineRef } from './bot-env.js'
 import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRoutes } from './bot-env-routes.js'
@@ -1830,14 +1830,50 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   app.decorate('vmRuns', runs)
   // BE-P2-16: run_script and vm_install in the agent loop, offered while the bot's runs would pass
   // the runner's checks on this machine (no bot computer, a failed mount check, a blocked runtime: not offered).
+  // BE-P2-21: an online tool build needs the proxy (Podman only); 409 proxy_unavailable with the run reason's text.
+  const buildProxyCheck = async (): Promise<void> => {
+    if ((await engineRef())?.cli !== 'podman') failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
+    const a = await egress.available().catch(() => ({ ok: false as const, message: PROXY_UNAVAILABLE }))
+    if (!a.ok) failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
+  }
+  const builtOf = (r: BuildResult) => ({
+    generation: r.generation,
+    log: r.log,
+    ...(r.hostsContacted ? { hosts: r.hostsContacted } : {}),
+    ...(r.hostsContactedTotal !== undefined ? { hostsTotal: r.hostsContactedTotal } : {}),
+  })
   bindVmTools(store, {
     start: (input) => runs.start(input),
     wait: (runId) => runs.wait(runId),
     stop: (runId) => runs.stop(runId),
     modelResult: (run) => runs.modelResult(run),
-    vmInstall: async (agentId, packages) => {
+    vmInstall: async (agentId, packages, where) => {
       const agent = store.agents.find((a) => a.id === agentId)
       if (!agent) fail(404, 'Bot not found.')
+      // BE-P2-21: under Always, a live recorded build through the proxy (card in the calling chat).
+      // It waits for the bot's current runs (queued, 'slot'); runs queued after it wait for it.
+      if (agent.internetPolicy === 'always' && where) {
+        const plan = planInstall(agent.vm, packages)
+        if (!plan) return { generation: agent.vm.image.generation, log: 'Already installed.' }
+        const run = await runs.startToolBuild({
+          agentId,
+          conversationId: where.conversationId,
+          context: where.context,
+          ...(where.agentRunId ? { agentRunId: where.agentRunId } : {}),
+          via: 'vm_install',
+          startedBy: 'bot',
+          argv: ['vm_install', ...new Set(packages)],
+          packages: plan.packages,
+          added: plan.added,
+          network: 'on',
+          permissions: [{ type: 'internet', decision: 'always', source: 'policy' }],
+          waitForRuns: true,
+          precheck: () => buildProxyCheck(),
+          build: async (ctl, a) => builtOf(await botEnv.vmInstall(a, packages, { network: 'egress', ...ctl })),
+        })
+        return { run }
+      }
+      // Never: 409 internet_never; Ask: 409 internet_unavailable until BE-P2-14's card (no record).
       // BE-P2-22: under the bot's build lock, so its queued runs wait and start on the new tools.
       return runs.withToolBuild(agentId, () => botEnv.vmInstall(agent, packages))
     },
@@ -1880,6 +1916,30 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     toolBuild: (agent, action, build) => runs.toolBuild(agent.id, action, build),
     // BE-P2-22: reset answers 409 build_active while the bot's tools are building.
     buildActive: (agentId) => runs.buildActive(agentId),
+    // BE-P2-21: Rebuild is a live build (202 {run}); a non-empty package list is its own one-build internet grant.
+    startRebuild: (agent) => {
+      const online = agent.vm.packages.length > 0
+      return runs.startToolBuild({
+        agentId: agent.id,
+        conversationId: () => ensureDm(store, agent.id).id,
+        context: { kind: 'dm' },
+        via: 'rebuild',
+        startedBy: 'user',
+        argv: ['rebuild'],
+        packages: [...agent.vm.packages],
+        added: [],
+        network: online ? 'on' : 'off',
+        permissions: online ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
+        waitForRuns: false,
+        precheck: async (a) => {
+          if (!online) return
+          if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', 'Set internet to Ask or Always to install packages.')
+          await buildProxyCheck()
+        },
+        build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', ...ctl })),
+      })
+    },
+    activeBuild: (agentId) => runs.activeBuild(agentId),
   })
 
   // BE-P2-17: GET/PATCH /api/vm/settings.

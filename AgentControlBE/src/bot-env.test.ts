@@ -17,6 +17,9 @@ import {
   execArgv,
   layerContainerfile,
   parseDu,
+  BuildStoppedError,
+  planInstall,
+  progressOf,
   type BotEnvDeps,
   type EngineRef,
 } from './bot-env.js'
@@ -612,5 +615,53 @@ describe('BE-P2-10: measuring the tools volumes and the image layer', () => {
     expect(await svc.measure!(a)).toEqual({})
     const none = service(e, { engine: async () => null })
     await expect(none.measure!(a)).resolves.toEqual({})
+  })
+})
+
+describe('BE-P2-21: live builds', () => {
+  it('planInstall: merged, sorted, null when nothing is new; bad names are a 400', () => {
+    const vm = { ...defaultAgentVm(), packages: ['jq'] }
+    expect(planInstall(vm, ['ffmpeg', 'jq', 'ffmpeg'])).toEqual({ packages: ['ffmpeg', 'jq'], added: ['ffmpeg'] })
+    expect(planInstall(vm, 'jq')).toBeNull()
+    expect(() => planInstall(vm, ['Bad Name'])).toThrow(/Debian package names/)
+    expect(() => planInstall(vm, [])).toThrow(/Debian package names/)
+  })
+
+  it('progressOf reads podman STEP lines and the proxy build markers', () => {
+    expect(progressOf('STEP 2/3: RUN apt-get update && apt-get install -y jq')).toEqual({ step: 2, steps: 3, label: 'RUN apt-get update && apt-get install -y jq' })
+    expect(progressOf('Step 1 of 3: apt-get update')).toEqual({ step: 1, steps: 3, label: 'apt-get update' })
+    expect(progressOf('STEP 1/1: ' + 'x'.repeat(100))!.label).toHaveLength(60)
+    expect(progressOf('Get:1 http://deb.debian.org bookworm InRelease')).toBeNull()
+  })
+
+  it('rebuild streams output and progress; Stop kills it, removes nothing saved and throws BuildStoppedError', async () => {
+    const e = fakeEngine()
+    let started!: () => void
+    const begun = new Promise<void>((r) => (started = r))
+    const exec: CommandRunner = async (cmd, args, opts) => {
+      if (args[0] === 'build') {
+        opts?.onOutput?.('stdout', 'STEP 1/2: FROM base\nSTEP 2/2: RUN apt-get')
+        started()
+        await new Promise<void>((r) => (opts?.signal?.aborted ? r() : opts?.signal?.addEventListener('abort', () => r())))
+        return { code: 130, stdout: '', stderr: 'stopped' }
+      }
+      return e.exec(cmd, args, opts)
+    }
+    const svc = service(e, { exec })
+    const a = agent({ packages: ['jq'] })
+    await svc.start(a)
+    saved = []
+    const ctl = new AbortController()
+    const out: string[] = []
+    const steps: number[] = []
+    const p = svc.rebuild(a, { signal: ctl.signal, onOutput: (_s, c) => out.push(c), onProgress: (g) => steps.push(g.step) })
+    await begun
+    ctl.abort()
+    await expect(p).rejects.toBeInstanceOf(BuildStoppedError)
+    // Whole lines only: the half line arrives at the end.
+    expect(out.join('')).toContain('STEP 1/2: FROM base\n')
+    expect(steps).toContain(1)
+    expect(saved).toEqual([])
+    expect(a.vm.image.generation).toBe(0)
   })
 })

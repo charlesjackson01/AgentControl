@@ -32,6 +32,7 @@ import {
   INTERNET_POLICIES,
   RUNTIME_MODES,
   VM_LIMITS,
+  type ActiveToolBuild,
   type Agent,
   type AgentVm,
   type EnvVar,
@@ -156,6 +157,13 @@ export interface BotEnvRouteDeps {
   toolBuild?: (agent: Agent, action: ToolBuildAction, build: () => Promise<{ generation: number; log: string }>) => Promise<ScriptRun>
   /** BE-P2-22: the bot's tools are building (RunService.buildActive); reset answers 409 build_active. */
   buildActive?: (agentId: string) => boolean
+  /**
+   * BE-P2-21: POST /vm/tools/rebuild as a live build: RunService.startToolBuild (404, build_active,
+   * run_active, internet_never, proxy_unavailable, low_disk), answered 202 {run}. Absent: M1's synchronous toolBuild.
+   */
+  startRebuild?: (agent: Agent) => Promise<ScriptRun>
+  /** BE-P2-21: VmInfo.activeBuild / VmToolsInfo.activeBuild. */
+  activeBuild?: (agentId: string) => ActiveToolBuild | null
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -247,7 +255,14 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       ...(isolationNote ? { isolationNote } : {}),
       storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root },
       ...runsOf(agent),
+      ...activeBuildOf(agent),
     }
+  }
+
+  /** BE-P2-21: the "Building tools" head (its runId is what "Stop build" stops). */
+  function activeBuildOf(agent: Agent): { activeBuild?: ActiveToolBuild } {
+    const b = deps.activeBuild?.(agent.id)
+    return b ? { activeBuild: b } : {}
   }
 
   function runsOf(agent: Agent): { runs: VmInfo['runs']; runsHasMore: boolean } {
@@ -322,6 +337,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
   app.post('/api/agents/:id/vm/stop', async (request) => {
     const agent = agentOf(idOf(request))
     assertBotFilesAvailable(store, agent)
+    // BE-P2-21: VM Stop is disabled during a build (the build has its own Stop).
+    if (deps.buildActive?.(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
     deps.runner?.stopRuns(agent.id)
     await botEnv.stop(agent)
     return vmInfo(agent)
@@ -348,6 +365,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       packages: vm.packages,
       image: vm.image,
       canRollback: vm.image.previous !== undefined && vm.image.previous < vm.image.generation,
+      ...activeBuildOf(agent),
     }
   })
 
@@ -365,7 +383,13 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     })
   }
 
-  app.post('/api/agents/:id/vm/tools/rebuild', async (request) => toolBuild(agentOf(idOf(request)), 'rebuild'))
+  app.post('/api/agents/:id/vm/tools/rebuild', async (request, reply) => {
+    const agent = agentOf(idOf(request))
+    if (!deps.startRebuild) return toolBuild(agent, 'rebuild')
+    // BE-P2-21: 202 with the live record (queued or running); the chat card and VM tab follow it.
+    const run = await deps.startRebuild(agent)
+    return reply.code(202).send({ run })
+  })
   app.post('/api/agents/:id/vm/tools/rollback', async (request) => toolBuild(agentOf(idOf(request)), 'rollback'))
 
   return { vmInfo }

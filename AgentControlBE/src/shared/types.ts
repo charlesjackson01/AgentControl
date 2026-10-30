@@ -683,7 +683,8 @@ export interface ScriptRun {
   browser: boolean
   /** null until resolved (queued runs, or a run that failed before start). */
   runtime: ContainerRuntime | null
-  permissions: { requestId: string; type: PermissionType; decision: PermissionDecision | 'timeout' | 'pending' }[]
+  /** M2 contract (approved 2026-10-30): see ScriptRunPermission (requestId is absent for grants without a card). */
+  permissions: ScriptRunPermission[]
   status: ScriptRunStatus
   /**
    * status 'queued': how many runs are ahead of this one, counting the ones running now
@@ -726,6 +727,8 @@ export interface ScriptRun {
   undo: ScriptRunUndo
   /** kind 'undo': the run it reversed. */
   undoOfRunId?: string
+  /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
+  build?: ToolBuildInfo
 }
 
 /** Run history row (GET /api/agents/:id/script-runs and VmInfo.runs). */
@@ -737,6 +740,12 @@ export type ScriptRunSummary = Pick<ScriptRun,
   /** Optional split of filesChangedCount for history rows. */
   files?: { added: number; modified: number; deleted: number }
   network?: ScriptRun['network']
+  /** M2 contract (approved 2026-10-30): history row "internet once" / "internet always". */
+  internet?: InternetUse
+  /** M2 contract (approved 2026-10-30): up to 3 reached host names, for the history row. */
+  hosts?: string[]
+  /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
+  build?: ToolBuildInfo
 }
 
 /** The small run summary a kind 'run' ChatMessage carries. */
@@ -758,6 +767,24 @@ export interface ChatRunSummary {
   undoOfName?: string
   durationMs?: number
   runtime?: ContainerRuntime | null
+  /** M2 contract (approved 2026-10-30): card meta "Internet" and "Browser" rows. */
+  network?: ScriptRun['network']
+  browser?: boolean
+  internet?: InternetUse
+  /** M2 contract (approved 2026-10-30): "Sites used" (blocked hosts first, at most 20 entries). */
+  hostsContacted?: HostContact[]
+  /** M2 contract (approved 2026-10-30): failed / denied runs: ScriptRun.reason, so the card can pick its error row. */
+  reason?: string
+  /** M2 contract (approved 2026-10-30): failed / denied / stopped runs: ScriptRun.error (shown as is). */
+  error?: string
+  /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
+  build?: ToolBuildInfo
+  /** M2 contract (approved 2026-10-30): status 'running' (and after): ScriptRun.startedAt, for the live "Running · 1:12". */
+  startedAt?: string
+  /** M2 contract (BE-P2-22, approved 2026-10-30): queuedReason 'tool_build': the build it waits for ("runs on the new tools (version 3)"). */
+  afterBuild?: { runId: string; generation: number }
+  /** M2 contract (approved 2026-10-30): ScriptRun.hostsContactedTotal (or the full count), for "+N more" beyond the 20. */
+  hostsContactedTotal?: number
 }
 
 export interface PermissionRequest {
@@ -801,6 +828,8 @@ export interface VmInfo {
   }
   internetPolicy: InternetPolicy
   permissions: { browser: boolean; browserState: BrowserState; /** 0–1 while downloading */ progress?: number }
+  /** M2 contract (BE-P2-21, approved 2026-10-30): the bot's tool build in progress ("Building tools" head). */
+  activeBuild?: ActiveToolBuild
   limits: VmLimits
   usage: {
     memoryMb: number
@@ -964,6 +993,8 @@ export interface VmToolsInfo {
   image: AgentVm['image']
   /** True when POST /vm/tools/rollback has a previous generation to go back to. */
   canRollback: boolean
+  /** M2 contract (BE-P2-21, approved 2026-10-30): the build in progress (Rebuild / rollback answer 409 build_active meanwhile). */
+  activeBuild?: ActiveToolBuild
 }
 
 export type ProbeCheckId = 'start' | 'bind_mount' | 'snapshot_mount' | 'network' | 'cgroup_limits' | 'exec' | 'chromium'
@@ -1040,3 +1071,68 @@ export interface HostContact {
   blocked: boolean
   reason?: HostBlockReason
 }
+
+// ---- BE-P2-21 (M2 contract, p2/be-m2-contract fec4670): copied here, only the tool-build parts ----
+
+export const CHAT_RUN_HOSTS_MAX = 20
+
+/** How a ScriptRun got (or didn't get) a permission. */
+export interface ScriptRunPermission {
+  type: PermissionType
+  decision: PermissionDecision | 'timeout' | 'pending'
+  /** The card's PermissionRequest; absent when no card was shown (policy Always, a user Rebuild click). */
+  requestId?: string
+  /**
+   * 'card': answered on a card; 'policy': the bot's rule (Always, or browser already on); 'rebuild': a user click that
+   * grants one build's internet: Rebuild, or turning the browser on/off (card enable, VM tab, create).
+   */
+  source?: 'card' | 'policy' | 'rebuild'
+}
+
+/** Card / history wording: "on (allowed once)", "on (always allowed)", "off". */
+export type InternetUse = 'off' | 'once' | 'always'
+
+/** ScriptRun.build for kind 'tool_build'. */
+export interface ToolBuildInfo {
+  /** The generation this build makes ("version 3"). */
+  generation: number
+  /** The generation in use when it started; kept if the build fails or is stopped ("version 2"). */
+  fromGeneration: number
+  /** The full package list the new generation has. */
+  packages: string[]
+  /** Packages new in this build ("adds matplotlib, pandas"); removed only for a rebuild that drops some. */
+  added: string[]
+  removed?: string[]
+  startedBy: 'user' | 'bot'
+  /** 'rebuild': VM tab Rebuild; 'vm_install': the bot's tool ("Primary (vm_install)"); 'browser': rebuild onto the browser base. */
+  via: 'rebuild' | 'vm_install' | 'browser'
+  base: 'base' | 'browser'
+  /** While running: "Step 4 of 6 · pip install". */
+  progress?: { step: number; steps: number; label: string }
+}
+
+/**
+ * VmInfo.activeBuild / VmToolsInfo.activeBuild. The VM tab's "Stop build" (Building tools header) and the chat
+ * card's Stop both call POST /api/runs/:runId/stop with this runId (one route, same semantics).
+ */
+export interface ActiveToolBuild {
+  runId: string
+  status: 'queued' | 'waiting_permission' | 'running'
+  startedAt?: string
+  build: ToolBuildInfo
+  internet: InternetUse
+  /** Reached host names so far. */
+  hosts: string[]
+}
+
+/** POST /api/agents/:id/vm/tools/rebuild → 202. */
+export interface ToolBuildAccepted {
+  run: ScriptRun
+}
+/** Build time limit (plan §8 risks): past it the build ends timed_out and the current generation is kept. */
+export const TOOL_BUILD_TIMEOUT_MS = 20 * 60 * 1000
+
+/** M2 run end reasons (ScriptRun.reason / ChatRunSummary.reason). M1's internet_unavailable is retired. */
+export type M2RunReason =
+  | 'internet_never' | 'network_off' | 'permission_denied' | 'permission_timeout' | 'proxy_unavailable'
+  | 'browser_unavailable' | 'chromium_check_failed' | 'host_blocked' | 'build_failed' | 'build_stopped'

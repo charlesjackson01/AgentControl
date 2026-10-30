@@ -105,9 +105,9 @@ describe.skipIf(!engineReady)('@vm BE-P2-17 routes', () => {
   it('rebuild builds generation 1 offline (a real image, the container runs on it); rollback goes back to 0', async () => {
     await py("print('warm')")
     const res = await inject('POST', `/api/agents/${bot.id}/vm/tools/rebuild`)
-    expect(res.statusCode, res.body).toBe(200)
-    const run = res.json() as ScriptRun
-    expect(run).toMatchObject({ kind: 'tool_build', status: 'succeeded', argv: ['rebuild'] })
+    expect(res.statusCode, res.body).toBe(202)
+    const run = await app.vmRuns.wait((res.json() as { run: ScriptRun }).run.id)
+    expect(run, run.error).toMatchObject({ kind: 'tool_build', status: 'succeeded', argv: ['rebuild'], build: { via: 'rebuild', generation: 1, fromGeneration: 0 } })
     expect(pm('image', 'inspect', '--format', '{{.Id}}', `localhost/ac-bot-${SLUG}:1`)).not.toBeNull()
     expect(store.agents.find((a) => a.id === bot.id)!.vm.image.generation).toBe(1)
     expect((await inject('GET', `/api/runs/${run.id}/output?stream=stdout`)).body.length).toBeGreaterThan(0)
@@ -145,20 +145,63 @@ describe.skipIf(!engineReady)('@vm BE-P2-17 routes', () => {
       expect(res.statusCode, `${url}: ${res.body}`).toBe(409)
       expect(res.json()).toMatchObject({ reason: 'build_active' })
     }
-    const res = await rebuild
-    expect(res.statusCode, res.body).toBe(200)
+    const started = await rebuild
+    expect(started.statusCode, started.body).toBe(202)
+    const built = await app.vmRuns.wait((started.json() as { run: ScriptRun }).run.id)
+    expect(built.status, built.error).toBe('succeeded')
     const gen1 = store.agents.find((a) => a.id === bot.id)!.vm.image.generation
     expect(gen1).toBe(gen0 + 1)
     const done = await app.vmRuns.wait(r.id)
     expect(done.status, done.error).toBe('succeeded')
     expect(done.stdoutTail).toBe('after the build\n')
     expect(done.queuedReason).toBeUndefined()
-    expect(Date.parse(done.startedAt!)).toBeGreaterThanOrEqual(Date.parse((res.json() as ScriptRun).endedAt!))
+    expect(Date.parse(done.startedAt!)).toBeGreaterThanOrEqual(Date.parse(built.endedAt!))
     expect(pm('container', 'inspect', '--format', '{{.ImageName}}', `ac-bot-${SLUG}`)).toContain(`ac-bot-${SLUG}:${gen1}`)
     // Back to where it was (the next tests don't depend on the generation).
     const back = await inject('POST', `/api/agents/${bot.id}/vm/tools/rollback`)
     expect(back.statusCode, back.body).toBe(200)
     expect(store.agents.find((a) => a.id === bot.id)!.vm.image.generation).toBe(gen0)
+  }, 600_000)
+
+  it('BE-P2-21: the live record of a real offline rebuild (activeBuild, the card, the STEP output), then cleared', async () => {
+    await py("print('warm')")
+    const gen0 = store.agents.find((a) => a.id === bot.id)!.vm.image.generation
+    const res = await inject('POST', `/api/agents/${bot.id}/vm/tools/rebuild`)
+    expect(res.statusCode, res.body).toBe(202)
+    const id = (res.json() as { run: ScriptRun }).run.id
+    const vm = (await inject('GET', `/api/agents/${bot.id}/vm`)).json()
+    expect(vm.activeBuild).toMatchObject({ runId: id, internet: 'off', build: { via: 'rebuild', generation: gen0 + 1, fromGeneration: gen0 } })
+    const done = await app.vmRuns.wait(id)
+    expect(done.status, done.error).toBe('succeeded')
+    expect(done.network).toBe('off')
+    const out = (await inject('GET', `/api/runs/${id}/output?stream=stdout`)).body
+    expect(out).toMatch(/STEP 1\/\d+: FROM/)
+    const card = store.chatMessages.find((m) => m.kind === 'run' && m.scriptRunId === id)!
+    expect(card.content).toBe(`Built Be17vmbot's tools (version ${gen0 + 1})`)
+    expect((await inject('GET', `/api/agents/${bot.id}/vm`)).json().activeBuild).toBeUndefined()
+    const back = await inject('POST', `/api/agents/${bot.id}/vm/tools/rollback`)
+    expect(back.statusCode, back.body).toBe(200)
+  }, 600_000)
+
+  it('BE-P2-21: Stop during a real rebuild: stopped, the generation kept, no half-built image, the container still runs', async () => {
+    await py("print('warm')")
+    const gen0 = store.agents.find((a) => a.id === bot.id)!.vm.image.generation
+    const res = await inject('POST', `/api/agents/${bot.id}/vm/tools/rebuild`)
+    expect(res.statusCode, res.body).toBe(202)
+    const id = (res.json() as { run: ScriptRun }).run.id
+    expect((await inject('POST', `/api/agents/${bot.id}/vm/stop`)).json()).toMatchObject({ reason: 'build_active' })
+    const stop = await inject('POST', `/api/runs/${id}/stop`)
+    expect(stop.statusCode, stop.body).toBe(200)
+    expect(stop.json()).toMatchObject({ id, status: 'stopped', reason: 'build_stopped', error: `Stopped. Be17vmbot keeps its current tools (version ${gen0}).` })
+    await app.vmRuns.idle()
+    expect(app.vmRuns.buildActive(bot.id)).toBe(false)
+    expect(store.agents.find((a) => a.id === bot.id)!.vm.image.generation).toBe(gen0)
+    expect(pm('image', 'inspect', '--format', '{{.Id}}', `localhost/ac-bot-${SLUG}:${gen0 + 1}`)).toBeNull()
+    expect((await inject('POST', `/api/runs/${id}/stop`)).json()).toMatchObject({ reason: 'not_active' })
+    expect((await inject('GET', `/api/agents/${bot.id}/vm`)).json().activeBuild).toBeUndefined()
+    // The bot still runs on its current tools.
+    await py("print('still on the old tools')")
+    expect(pm('container', 'inspect', '--format', '{{.ImageName}}', `ac-bot-${SLUG}`)).not.toContain(`ac-bot-${SLUG}:${gen0 + 1}`)
   }, 600_000)
 
   it('undo over HTTP: preview, 409 conflicts with the list, force, then already undone', async () => {

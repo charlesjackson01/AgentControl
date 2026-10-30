@@ -6,7 +6,7 @@ import {
   blankCard, canCreate, canRetry, cardFromDraft, composerLocked, createBody, createFailureText,
   draftFailureText, draftRequestBody, draftingStatus, elapsedLabel, folderLabel, isAbort, modelOptions,
   nameError, newBotApi, newBotNavState, newCommandPrompt, normalizeDefaults, normalizeDraft, phaseAfterDraft,
-  pickerChoices, placeholderFor, previousOf, profilePrefill, readNewBotNav, startingSkillsTotal, tooLongNotice,
+  pickerChoices, placeholderFor, previousOf, profilePrefill, withMissingDefaults, readNewBotNav, startingSkillsTotal, tooLongNotice,
 } from '../src/lib/new-bot.ts'
 
 /* A request() like lib/api.ts, over a mocked fetch: records calls, throws {message,status} like ApiError. */
@@ -359,5 +359,26 @@ describe('FE-P2-7 browser for scripts (mockup 15)', () => {
     assert.equal('browser' in previousOf({ ...off, browser: true }), false)
     assert.equal('browser' in draftRequestBody('a bot', previousOf({ ...off, browser: true })), false)
     assert.equal('browser' in createBody({ ...off, name: 'A' }, defaults), false)
+  })
+})
+
+describe('model dropdown: a card built before the defaults landed (390-GAP6-after "…")', () => {
+  const defaults = normalizeDefaults(DEFAULTS)
+  it('a draft card built with null defaults takes the defaults model, internet and chips', () => {
+    const early = cardFromDraft(null, normalizeDraft(DRAFT), null)
+    assert.equal(early.endpointId, '')
+    const card = withMissingDefaults(early, defaults)
+    assert.equal(card.endpointId, defaults.endpointId)
+    assert.equal(card.modelId, defaults.modelId)
+    assert.equal(card.internetPolicy, defaults.internetPolicy)
+    assert.deepEqual(card.sourcesOn, defaults.skills.map((s) => s.sourceId))
+    assert.equal(card.name, early.name)
+    assert.equal(card.browser, false)
+  })
+  it('a card that already has a model is left alone; no defaults is a no-op', () => {
+    const card = { ...blankCard(defaults), endpointId: 'ep_9', modelId: 'm', internetPolicy: 'never', sourcesOn: [] }
+    assert.equal(withMissingDefaults(card, defaults), card)
+    const early = blankCard(null)
+    assert.equal(withMissingDefaults(early, null), early)
   })
 })

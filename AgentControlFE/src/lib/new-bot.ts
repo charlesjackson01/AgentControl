@@ -189,6 +189,15 @@ export function cardFromDraft(current: CardDraft | null, draft: DraftResponse, d
   }
 }
 
+/**
+ * A card with no model yet takes the defaults' model, internet and chips (a card built before
+ * GET /api/agents/defaults landed). A card that has a model is returned as is.
+ */
+export function withMissingDefaults(card: CardDraft, defaults: AgentDefaults | null): CardDraft {
+  if (!defaults || card.endpointId) return card
+  return { ...card, endpointId: defaults.endpointId, modelId: defaults.modelId, internetPolicy: defaults.internetPolicy, sourcesOn: defaults.skills.map((s) => s.sourceId) }
+}
+
 /** What a draft response becomes: the card (S4 when it carries a warning), or S3 for a server-side cancel. */
 export function phaseAfterDraft(draft: DraftResponse): Phase {
   if (draft.warningCode === 'cancelled') return { kind: 'cancelled' }

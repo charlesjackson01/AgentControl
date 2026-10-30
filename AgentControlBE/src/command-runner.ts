@@ -16,6 +16,11 @@ export interface CommandOptions {
   timeoutMs?: number
   /** BE-P2-13: written to the program's stdin (then closed), e.g. a secret that mustn't be in argv. */
   input?: string
+  /**
+   * Review S2: the program's whole environment (default: this process's). Secrets go here and are
+   * named in argv (`--env NAME`), never written into argv.
+   */
+  env?: NodeJS.ProcessEnv
 }
 
 export type CommandRunner = (cmd: string, args: readonly string[], opts?: CommandOptions) => Promise<CommandResult>
@@ -29,7 +34,7 @@ export const execCommandRunner: CommandRunner = (cmd, args, opts = {}) =>
     const child = execFile(
       cmd,
       [...args],
-      { timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: 'utf8' },
+      { timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxBuffer: MAX_BUFFER, windowsHide: true, encoding: 'utf8', ...(opts.env ? { env: opts.env } : {}) },
       (err, stdout, stderr) => {
         if (!err) return resolve({ code: 0, stdout, stderr })
         const e = err as NodeJS.ErrnoException & { code?: string | number; killed?: boolean; signal?: string | null }

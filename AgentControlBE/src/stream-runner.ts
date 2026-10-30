@@ -8,6 +8,8 @@ import { spawn } from 'node:child_process'
 export interface StreamOptions {
   onStdout(chunk: Buffer): void
   onStderr(chunk: Buffer): void
+  /** Review S2: the program's whole environment (default: this process's); see CommandOptions.env. */
+  env?: NodeJS.ProcessEnv
 }
 export interface StreamExit {
   /** Exit code; 127 when the program isn't installed; 137 after kill(). */
@@ -23,7 +25,7 @@ export interface StreamHandle {
 export type StreamRunner = (cmd: string, args: readonly string[], opts: StreamOptions) => StreamHandle
 
 export const spawnStreamRunner: StreamRunner = (cmd, args, opts) => {
-  const child = spawn(cmd, [...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+  const child = spawn(cmd, [...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, ...(opts.env ? { env: opts.env } : {}) })
   child.stdout.on('data', (c: Buffer) => opts.onStdout(c))
   child.stderr.on('data', (c: Buffer) => opts.onStderr(c))
   const done = new Promise<StreamExit>((resolve) => {

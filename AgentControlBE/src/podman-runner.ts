@@ -24,8 +24,8 @@ import path from 'node:path'
 import type { Agent, ScriptRunUndo } from './shared/types.js'
 import { VM_LIMITS } from './shared/types.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
-import { checkCwd, execArgv, redactAll, type BotEnvService, type EngineRef } from './bot-env.js'
-import { capHostContacts, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
+import { checkCwd, envWith, execArgv, redactAll, type BotEnvService, type EngineRef } from './bot-env.js'
+import { capHostContacts, CREDENTIAL_GRACE_MS, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
 import { botContainerName } from './vm-images.js'
 import type { ResolvedRuntime } from './runtime-probe.js'
 import type { Runner, RunScriptRequest, RunScriptResult } from './runner.js'
@@ -308,7 +308,9 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     let grant: EgressGrant
     try {
       if (!deps.egress) throw new EgressUnavailableError('no proxy')
-      grant = await deps.egress.grant(agent.slug, 'run')
+      // Review B3: the credential expires on its own a minute after the run's time limit (counted
+      // from now, when the run gets its turn: a queued run's wait doesn't eat into it).
+      grant = await deps.egress.grant(agent.slug, 'run', { ttlMs: timeoutSec * 1000 + CREDENTIAL_GRACE_MS })
     } catch (x) {
       log(`runner: ${agent.slug}: no proxy for the run: ${(x as EgressUnavailableError).detail ?? (x as Error).message}`)
       return err(t0, PROXY_UNAVAILABLE, { reason: PROXY_UNAVAILABLE_REASON, runtime: rt.effective })
@@ -321,6 +323,11 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     } finally {
       // Revoked on every path (also a throw): the credential never outlives the run.
       if (!hosts) await deps.egress.revoke(grant.id).catch(() => [])
+      // Review B3: and the container leaves the egress network now (recreated on none, volumes
+      // kept), so nothing it left running can reach the proxy until the next online run.
+      await deps.botEnv
+        .ensure(agent, { forRun: true, network: 'none' })
+        .catch((x: unknown) => log(`runner: ${agent.slug}: moving the VM back to no network after the run failed: ${redactAll((x as Error).message, grant.secrets)}`))
     }
   }
 
@@ -337,8 +344,10 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     lastActivity.set(agent.id, now().getTime())
     const before = await readEvents(agent)
     const flags = e.cli === 'docker' ? [] : (rt.flags ?? [])
-    const extraEnv = [...(req.extraEnv ?? []), ...(req.runId ? [{ name: 'AC_RUN_ID', value: req.runId }] : []), ...(grant?.env ?? [])]
-    const args = [...e.globalArgs, ...flags, ...execArgv({ slug: agent.slug, argv: req.argv, env: agent.vm.env, extraEnv, cwd })]
+    const extraEnv = [...(req.extraEnv ?? []), ...(req.runId ? [{ name: 'AC_RUN_ID', value: req.runId }] : [])]
+    // Review S2: the proxy settings (they hold the credential) go by name; values in the engine's env.
+    const passEnv = grant?.env ?? []
+    const args = [...e.globalArgs, ...flags, ...execArgv({ slug: agent.slug, argv: req.argv, env: agent.vm.env, extraEnv, passEnv: passEnv.map((v) => v.name), cwd })]
 
     const out = new Tail(TAIL_BYTES)
     const errTail = new Tail(TAIL_BYTES)
@@ -364,7 +373,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       if (part.length) {
         ;(which === 'stdout' ? out : errTail).push(part)
         // BE-P2-13: the credential never reaches the log (a value split across two chunks isn't caught: gap).
-        req.onOutput?.(which, secrets.length && part.includes(secrets[0]!) ? Buffer.from(scrub(part.toString('utf8'))) : part)
+        // Review B4: every form of it (secret, URL, Basic header value, …), not just the first.
+        req.onOutput?.(which, secrets.some((x) => x && part.includes(x)) ? Buffer.from(scrub(part.toString('utf8'))) : part)
       }
       if (chunk.length > room) {
         truncated = true
@@ -372,7 +382,7 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       }
     }
     let handle: StreamHandle | null = null
-    const h = stream(e.command ?? e.cli, args, { onStdout: (c) => take('stdout', c), onStderr: (c) => take('stderr', c) })
+    const h = stream(e.command ?? e.cli, args, { onStdout: (c) => take('stdout', c), onStderr: (c) => take('stderr', c), ...(passEnv.length ? { env: envWith(passEnv) } : {}) })
     handle = h
     if (ended) h.kill()
     active.set(agent.id, { stop: () => terminate('stopped') })

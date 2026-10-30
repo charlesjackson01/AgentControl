@@ -17,7 +17,7 @@
 import http from 'node:http'
 import net from 'node:net'
 import dns from 'node:dns'
-import { timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { blockedText, createEgressRules, formatAddr, normalizeHost, parseAddressLiteral, toAddr, type EgressRules, type EgressRulesConfig, type HostBlockReason } from './egress-rules.js'
@@ -31,6 +31,19 @@ export const EGRESS_VIA = '1.1 ac-egressd'
 export const BLOCK_HEADER = 'x-agentcontrol-blocked'
 /** Distinct host rows kept per credential (the BE caps runs at 200 rows). */
 const MAX_HOST_ROWS = 2000
+/** Review B3: open connections (tunnels / forwarded requests) per credential; more get 429. */
+export const MAX_CONNECTIONS_PER_CREDENTIAL = 64
+/** Review B3: how often expired credentials are revoked (their sockets closed). */
+export const SWEEP_MS = 5_000
+/** An expired credential's host log is kept this long for the BE's revoke, then dropped. */
+const EXPIRED_KEEP_MS = 10 * 60_000
+/** Review S1: the text before the BE has sent the settings (after a restart). */
+export const NOT_READY_TEXT = 'AgentControl\'s internet proxy isn\'t ready yet (it has no settings). Try again in a moment.'
+
+/** The hash the BE compares with health().configHash (review S1). */
+export function configHash(cfg: EgressRulesConfig): string {
+  return createHash('sha256').update(JSON.stringify(cfg)).digest('hex').slice(0, 16)
+}
 
 export interface EgressCredential {
   /** The Basic username. */
@@ -43,6 +56,12 @@ export interface EgressCredential {
   slug: string
   network: string
   kind: 'run' | 'build' | 'probe'
+  /**
+   * Review B3: lifetime from the grant, in ms (the proxy's own clock, so a VM clock skew doesn't
+   * matter). Run: the run's timeout + 60 s from its start; build: BUILD_TIMEOUT_MS + 60 s;
+   * probe: 90 s. Missing or <= 0: 90 s.
+   */
+  ttlMs?: number
 }
 
 export interface EgressProxyOptions {
@@ -54,6 +73,22 @@ export interface EgressProxyOptions {
   connectTimeoutMs?: number
   idleTimeoutMs?: number
   log?: (msg: string) => void
+  /** Review B3: expiry sweep interval (tests); 0 turns the timer off (sweep() by hand). */
+  sweepMs?: number
+  now?: () => number
+  maxConnectionsPerCredential?: number
+}
+
+export interface EgressHealth {
+  ok: true
+  credentials: number
+  tunnels: number
+  uptimeSec: number
+  /** Review S1: false until the BE has sent the settings (requests get 503 until then). */
+  configured: boolean
+  configHash: string | null
+  /** The resolvers the proxy uses (the nftables layer lets port 53 through to them only). */
+  dns: string[]
 }
 
 export interface EgressProxy {
@@ -62,8 +97,12 @@ export interface EgressProxy {
   grant(c: EgressCredential): void
   /** Revoke a credential: closes its open tunnels, returns its host log. */
   revoke(id: string): HostContact[]
+  /** Review B3: revoke every credential (a new BE process: the old one's are orphans). */
+  revokeAll(): number
+  /** Review B3: revoke the expired credentials now (the timer does this every SWEEP_MS). */
+  sweep(): number
   hosts(id: string): HostContact[]
-  health(): { ok: true; credentials: number; tunnels: number; uptimeSec: number }
+  health(): EgressHealth
   close(): Promise<void>
 }
 
@@ -94,11 +133,19 @@ interface CredState {
   c: EgressCredential
   rows: Map<string, HostContact>
   sockets: Set<net.Socket>
+  expiresAt: number
+  /** Set by the sweep: refused, sockets closed, rows kept for the BE's revoke until dropAt. */
+  expired?: { dropAt: number }
+  /** Connections open or being opened (review B3 cap). */
+  open: number
 }
 
 export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
-  const started = Date.now()
+  const now = opts.now ?? Date.now
+  const started = now()
   let rules: EgressRules = createEgressRules(opts.config)
+  let hash: string | null = opts.config ? configHash(opts.config) : null
+  const maxConns = opts.maxConnectionsPerCredential ?? MAX_CONNECTIONS_PER_CREDENTIAL
   const resolve = opts.resolve ?? defaultResolve
   const connect = opts.connect ?? ((ip: string, port: number) => net.connect({ host: ip, port }))
   const connectTimeoutMs = opts.connectTimeoutMs ?? 15_000
@@ -132,7 +179,9 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
     const i = text.indexOf(':')
     if (i < 1) return null
     const st = creds.get(text.slice(0, i))
-    if (!st) return null
+    if (!st || st.expired) return null
+    // Review B3: an expired credential is refused even before the sweep gets to it.
+    if (now() >= st.expiresAt) return null
     const a = Buffer.from(text.slice(i + 1))
     const b = Buffer.from(st.c.secret)
     if (a.length !== b.length || !timingSafeEqual(a, b)) return null
@@ -167,7 +216,7 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
     if (!answers.length) return { ok: false, status: 502, text: `Couldn't find ${host}`, host }
     // Every answer must pass (a name that resolves to public and private addresses is refused).
     for (const a of answers) {
-      const v = rules.checkAddress(a, port)
+      const v = rules.checkAddress(a, port, host)
       if (!v.ok) {
         record(st, host, port, v.subject, true, v.reason)
         return { ok: false, status: 403, reason: v.reason!, text: blockedText(v.subject, v.reason!, port), host, ip: v.subject }
@@ -214,9 +263,14 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
       s.once('close', () => {
         st.sockets.delete(s)
         for (const o of socks) o.destroy()
-        if (++closed === 1) tunnels--
+        if (++closed === 1) {
+          tunnels--
+          freeSlot(st)
+        }
       })
   }
+  /** Still granted and not expired (checked again after the slow steps). */
+  const live = (st: CredState) => creds.get(st.c.id) === st && !st.expired && now() < st.expiresAt
 
   const plain = (status: number, text: string, extra: Record<string, string> = {}): string => {
     const body = `${text}\n`
@@ -227,6 +281,44 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
   }
   const AUTH_TEXT = 'AgentControl\'s internet proxy needs this run\'s credential (it ends with the run).'
   const AUTH_HEADERS = { 'Proxy-Authenticate': 'Basic realm="AgentControl"' }
+  const capText = () => `Too many open connections for this run (at most ${maxConns} at a time).`
+
+  /** Review B3: take a connection slot, or log and say no. */
+  function takeSlot(st: CredState): boolean {
+    if (st.open >= maxConns) {
+      log(`egressd: ${st.c.id} (${st.c.slug}, ${st.c.kind}) hit the ${maxConns}-connection cap; refused with 429`)
+      return false
+    }
+    st.open++
+    return true
+  }
+  const freeSlot = (st: CredState) => {
+    st.open = Math.max(0, st.open - 1)
+  }
+
+  function closeAll(st: CredState): void {
+    for (const sock of st.sockets) sock.destroy()
+  }
+
+  function sweep(): number {
+    const t = now()
+    let n = 0
+    for (const [id, st] of creds) {
+      if (st.expired) {
+        if (t >= st.expired.dropAt) creds.delete(id)
+        continue
+      }
+      if (t < st.expiresAt) continue
+      st.expired = { dropAt: t + EXPIRED_KEEP_MS }
+      closeAll(st)
+      n++
+      log(`egressd: ${id} (${st.c.slug}, ${st.c.kind}) expired; revoked and its connections closed`)
+    }
+    return n
+  }
+  const sweepMs = opts.sweepMs ?? SWEEP_MS
+  const sweepTimer = sweepMs > 0 ? setInterval(sweep, sweepMs) : null
+  sweepTimer?.unref()
 
   const server = http.createServer()
   server.headersTimeout = 20_000
@@ -235,33 +327,41 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
   // CONNECT host:port (TLS, and anything else tunnelled).
   server.on('connect', (req: http.IncomingMessage, client: net.Socket, head: Buffer) => {
     client.on('error', () => client.destroy())
+    if (hash === null) return void client.end(plain(503, NOT_READY_TEXT))
     const st = authenticate(req)
     if (!st) return void client.end(plain(407, AUTH_TEXT, AUTH_HEADERS))
     const target = parseAuthority(req.url ?? '')
     if (!target) return void client.end(plain(400, 'CONNECT needs host:port.'))
+    if (!takeSlot(st)) return void client.end(plain(429, capText()))
+    let handed = false
     void (async () => {
       const d = await decide(st, target.host, target.port)
       if (!d.ok) return void client.end(plain(d.status, d.text, d.reason ? { [BLOCK_HEADER]: d.reason } : {}))
-      if (!creds.has(st.c.id)) return void client.end(plain(407, AUTH_TEXT, AUTH_HEADERS))
+      if (!live(st)) return void client.end(plain(407, AUTH_TEXT, AUTH_HEADERS))
       let upstream: net.Socket
       try {
         upstream = await dial(d.ips, target.port)
       } catch (err) {
         return void client.end(plain(502, `Couldn't connect to ${d.host}: ${(err as Error).message}`))
       }
-      if (!creds.has(st.c.id) || client.destroyed) {
+      if (!live(st) || client.destroyed) {
         upstream.destroy()
         return void client.destroy()
       }
+      handed = true
       track(st, client, upstream)
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       if (head.length) upstream.write(head)
       client.pipe(upstream)
       upstream.pipe(client)
-    })().catch((err: Error) => {
-      log(`egressd: CONNECT failed: ${err.message}`)
-      client.destroy()
-    })
+    })()
+      .catch((err: Error) => {
+        log(`egressd: CONNECT failed: ${err.message}`)
+        client.destroy()
+      })
+      .finally(() => {
+        if (!handed) freeSlot(st)
+      })
   })
 
   // Absolute-form plain HTTP (http://host/path).
@@ -271,6 +371,7 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
       res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close', ...extra })
       res.end(`${text}\n`)
     }
+    if (hash === null) return send(503, NOT_READY_TEXT)
     const st = authenticate(req)
     if (!st) return send(407, AUTH_TEXT, AUTH_HEADERS)
     let url: URL
@@ -281,6 +382,8 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
     }
     if (url.protocol !== 'http:') return send(400, 'Only http:// URLs here; https goes through CONNECT.')
     const port = url.port ? Number(url.port) : 80
+    if (!takeSlot(st)) return send(429, capText())
+    let handed = false
     void (async () => {
       const d = await decide(st, url.hostname, port)
       if (!d.ok) return send(d.status, d.text, d.reason ? { [BLOCK_HEADER]: d.reason } : {})
@@ -290,17 +393,21 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
       } catch (err) {
         return send(502, `Couldn't connect to ${d.host}: ${(err as Error).message}`)
       }
-      if (!creds.has(st.c.id)) {
+      if (!live(st)) {
         sock.destroy()
         return send(407, AUTH_TEXT, AUTH_HEADERS)
       }
       const headers: http.OutgoingHttpHeaders = {}
       for (const [k, v] of Object.entries(req.headers)) if (!HOP.has(k) && v !== undefined) headers[k] = v
+      // Review S6: Host is the checked target's, never the client's (a mismatched Host could reach
+      // another virtual host on the same address than the one that was checked).
+      headers['host'] = url.host
       headers['via'] = EGRESS_VIA
       headers['connection'] = 'close'
       // No `agent` (agent:false would make a fresh Agent that ignores createConnection and dials
       // on its own): the request goes over the pinned, checked socket only.
       const up = http.request({ createConnection: () => sock, method: req.method, path: `${url.pathname}${url.search}`, headers, setHost: false })
+      handed = true
       track(st, req.socket, sock)
       up.on('response', (r) => {
         const out: http.OutgoingHttpHeaders = {}
@@ -314,33 +421,55 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
         else res.destroy()
       })
       req.pipe(up)
-    })().catch((err: Error) => {
-      log(`egressd: request failed: ${err.message}`)
-      if (!res.headersSent) send(502, 'The proxy failed.')
-    })
+    })()
+      .catch((err: Error) => {
+        log(`egressd: request failed: ${err.message}`)
+        if (!res.headersSent) send(502, 'The proxy failed.')
+      })
+      .finally(() => {
+        if (!handed) freeSlot(st)
+      })
   })
 
   return {
     server,
     configure(cfg) {
       rules = createEgressRules(cfg)
+      hash = configHash(cfg)
     },
     grant(c) {
       if (!c.id || !c.secret || !c.proxyAddress) throw new Error('credential needs id, secret and proxyAddress')
       const old = creds.get(c.id)
-      creds.set(c.id, { c: { ...c, proxyAddress: plainAddress(c.proxyAddress) }, rows: old?.rows ?? new Map(), sockets: old?.sockets ?? new Set() })
+      const ttl = typeof c.ttlMs === 'number' && c.ttlMs > 0 ? c.ttlMs : 90_000
+      creds.set(c.id, { c: { ...c, proxyAddress: plainAddress(c.proxyAddress) }, rows: old?.rows ?? new Map(), sockets: old?.sockets ?? new Set(), expiresAt: now() + ttl, open: old?.open ?? 0 })
     },
     revoke(id) {
       const st = creds.get(id)
       creds.delete(id)
-      if (st) for (const s of st.sockets) s.destroy()
+      if (st) closeAll(st)
       return rowsOf(st)
     },
+    revokeAll() {
+      const n = creds.size
+      for (const st of creds.values()) closeAll(st)
+      creds.clear()
+      return n
+    },
+    sweep,
     hosts: (id) => rowsOf(creds.get(id)),
-    health: () => ({ ok: true, credentials: creds.size, tunnels, uptimeSec: Math.round((Date.now() - started) / 1000) }),
+    health: () => ({
+      ok: true,
+      credentials: [...creds.values()].filter((st) => !st.expired).length,
+      tunnels,
+      uptimeSec: Math.round((now() - started) / 1000),
+      configured: hash !== null,
+      configHash: hash,
+      dns: dns.getServers(),
+    }),
     close: () =>
       new Promise<void>((r) => {
-        for (const st of creds.values()) for (const s of st.sockets) s.destroy()
+        if (sweepTimer) clearInterval(sweepTimer)
+        for (const st of creds.values()) closeAll(st)
         server.close(() => r())
         server.closeAllConnections?.()
       }),
@@ -354,6 +483,7 @@ export type CtlRequest =
   | { op: 'config'; config: EgressRulesConfig }
   | { op: 'grant'; credential: EgressCredential }
   | { op: 'revoke'; id: string }
+  | { op: 'revokeAll' }
   | { op: 'hosts'; id: string }
 
 export function handleCtl(proxy: EgressProxy, req: CtlRequest): unknown {
@@ -368,6 +498,8 @@ export function handleCtl(proxy: EgressProxy, req: CtlRequest): unknown {
       return { ok: true }
     case 'revoke':
       return { ok: true, hosts: proxy.revoke(req.id) }
+    case 'revokeAll':
+      return { ok: true, revoked: proxy.revokeAll() }
     case 'hosts':
       return { ok: true, hosts: proxy.hosts(req.id) }
     default:

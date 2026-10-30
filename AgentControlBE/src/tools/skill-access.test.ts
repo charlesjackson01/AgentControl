@@ -1,3 +1,4 @@
+import { defaultAgentVm } from '../vm-defaults.js'
 // Registry facade first: it must load standalone (see registry.test.ts).
 import { builtinTools, executeToolCall, type ToolContext } from '../tools.js'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -101,7 +102,7 @@ beforeEach(() => {
   const store = createStore(join(dir, 'store.json'))
   store.agents.push({ id: 'a1', name: 'Author', role: '', description: '', instructions: '', modelId: 'm',
     endpointId: 'ep_local_llama', skillIds: [], isPrimary: true, status: 'idle', createdAt: '', lastRunAt: null, runCount: 0,
-    slug: 'author', internetPolicy: 'ask', memoryLearn: true })
+    slug: 'author', internetPolicy: 'ask', memoryLearn: true, vm: defaultAgentVm() })
   store.skills = [
     makeSkill({
       id: 'core/code-review',

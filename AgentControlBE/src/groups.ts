@@ -7,6 +7,7 @@
 import { randomUUID } from 'node:crypto'
 import { groupTyping, messagesOf, runActivity, syncGroupLeads } from './conversations.js'
 import { archiveGroupFolder, ensureGroupFolder } from './group-files.js'
+import { isFilesMissingError } from './storage/index.js'
 import { fail } from './http.js'
 import { resolveMentions } from './mentions.js'
 import { executeRun } from './runs.js'
@@ -116,7 +117,7 @@ export function createGroup(store: WorkspaceStore, body: unknown): GroupConversa
     lastReadAt: now,
   }
   store.conversations.push(group)
-  ensureGroupFolder(store, group)
+  refreshGroupFolder(store, group)
   systemMessage(store, group, `You created "${name}" and added ${joinNames(members.map((id) => nameOf(store, id)))}.`)
   return group
 }
@@ -142,8 +143,21 @@ export function updateGroup(store: WorkspaceStore, group: GroupConversation, bod
   if (renamed) systemMessage(store, group, `You renamed the group "${name}".`)
   if (added.length > 0) systemMessage(store, group, `You added ${joinNames(added.map((id) => nameOf(store, id)))}.`)
   if (removed.length > 0) systemMessage(store, group, `You removed ${joinNames(removed.map((id) => nameOf(store, id)))}.`)
-  ensureGroupFolder(store, group)
+  refreshGroupFolder(store, group)
   return group
+}
+
+/**
+ * BE-P2-6: create/refresh the group's folder. While the bots' files are
+ * missing (files_missing) the chat side still works: the folder catches up
+ * once the files are back. Other errors still surface as before.
+ */
+function refreshGroupFolder(store: WorkspaceStore, group: GroupConversation): void {
+  try {
+    ensureGroupFolder(store, group)
+  } catch (err) {
+    if (!isFilesMissingError(err)) throw err
+  }
 }
 
 /** DELETE: the conversation is archived (kept, never listed) and the folder moves to data/archive/groups/. */
@@ -159,7 +173,7 @@ export function removeAgentFromGroups(store: WorkspaceStore, agent: Agent): void
     if (!group.memberAgentIds.includes(agent.id)) continue
     group.memberAgentIds = group.memberAgentIds.filter((id) => id !== agent.id)
     systemMessage(store, group, `${agent.name} was deleted and left the group.`)
-    ensureGroupFolder(store, group)
+    refreshGroupFolder(store, group)
   }
 }
 

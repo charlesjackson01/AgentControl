@@ -1,8 +1,9 @@
+import { DEFAULT_VM_SETTINGS, defaultAgentVm } from './vm-defaults.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
 import { NOTES_RETIRED, PROJECTS_RETIRED } from './archive.js'
 import { addMemory, deleteMemory, listMemory, memoryPromptBlock, parseCategory, parseText, sameScope, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
@@ -11,13 +12,29 @@ import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.j
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
-import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, readContent, trashPath, writeContent, type FileContent } from './files.js'
+import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
 import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
+import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
+import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
+import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
+import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
+import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRoutes } from './bot-env-routes.js'
+import { registerRunRoutes } from './run-routes.js'
+import { registerVmSettingsRoutes } from './vm-settings-routes.js'
+import { createSnapshotService, newRunId } from './snapshot.js'
+import { createUndoService, type UndoService } from './undo.js'
+import { budgetLimits, createSnapshotBudget, freeBytesAt, type RunLogs, type SnapshotBudget } from './snapshot-budget.js'
+import { createRunService, type RunRunner, type RunService } from './run-service.js'
+import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
+import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
+import { checkVolume, LocalFs, storageFor } from './storage/index.js'
+import { KEEP_ID_NOTE, type UidMapping } from './isolation.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
+import { bindVmTools, vmToolNames } from './tools/vm.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
@@ -45,6 +62,8 @@ import {
   type SkillSourceInfo,
   type SkillTool,
   SKILL_SOURCE_IDS,
+  type SnapshotDriver,
+  type WorkspaceSettings,
 } from './shared/types.js'
 import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
 
@@ -285,6 +304,11 @@ function parseProfileFields(raw: Record<string, unknown>): Partial<AgentInput> {
 }
 
 /** Apply an AgentInput onto an agent: null clears color/avatar, omitted keeps them. */
+/** GET/PATCH /api/settings: the Phase 1 fields only (VM settings live at /api/vm/settings). */
+function publicSettings(s: WorkspaceSettings): WorkspaceSettings {
+  return { autoRun: s.autoRun, notify: s.notify, telemetry: s.telemetry }
+}
+
 function mergeAgent(current: Agent, input: AgentInput): Agent {
   const { color, avatar, temperature, ...rest } = input
   const next: Agent = { ...current, ...rest }
@@ -379,7 +403,52 @@ function parseSkillInput(body: unknown): SkillInput {
   }
 }
 
-export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance {
+export interface BuildAppOptions {
+  /** BE-P2-2: engine/machine service; tests inject one with a fake CommandRunner. */
+  vmHost?: VmHostService
+  /** BE-P2-4: per-bot containers, volumes and image layers; tests inject one with a fake CommandRunner. */
+  botEnv?: BotEnvService
+  /** BE-P2-8: runtime/limits probe; tests inject one with a fake CommandRunner. */
+  runtimeProbe?: RuntimeProbe
+  /**
+   * BE-P2-8/7: run the probe when the server is ready, re-check it hourly (a new probe only on a
+   * key change or after a day) and after a runtime mode change (index.ts; off in tests).
+   */
+  probeOnStart?: boolean
+  /** BE-P2-10: test-only intervals for the eviction sweep and the tools measurement refresh (default 10 min each). */
+  vmTimers?: { budgetSweepMs?: number; personalMeasureMs?: number }
+  /** BE-P2-12: test-only script runner (a fake), instead of the Podman/Docker one. */
+  vmRunner?: ContainerRunner
+  /** BE-P2-12: test-only free bytes for the 3 GB run floor (null: unknown). */
+  vmFreeBytes?: () => number | null
+  /** BE-P2-12: test-only SSE heartbeat and run.output coalescing intervals. */
+  liveTimers?: { heartbeatMs?: number; outputFlushMs?: number }
+  /** BE-P2-17: test-only engine (e.g. Podman with a throwaway --root) for the app's own botEnv and runner. */
+  vmEngine?: EngineRef
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** BE-P2-8: the VM script runner (BE-P2-12's RunService drives it). */
+    vmRunner: ContainerRunner
+    vmRuntimeProbe: RuntimeProbe
+    /**
+     * BE-P2-7: call after the global gVisor mode (settings.vm.gvisor) changes; re-probes in the
+     * background. PATCH /api/vm/settings (BE-P2-17) uses it; the per-bot PATCH already does.
+     */
+    vmRuntimeModeChanged: () => void
+    /** BE-P2-10: undo snapshot budgets; enforce() after settings.vm.snapshotBudget changes (BE-P2-17). */
+    vmSnapshotBudget: SnapshotBudget
+    /** BE-P2-11: undo of a script run (preview / apply); the routes are BE-P2-17's. */
+    vmUndo: UndoService
+    /** BE-P2-12: queued script runs, their records, logs and cards (run_script in BE-P2-16 calls start()). */
+    vmRuns: RunService
+    /** BE-P2-12: the live event bus behind GET /api/events (PermissionGate publishes here too). */
+    liveEvents: LiveEventBus
+  }
+}
+
+export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOptions = {}): FastifyInstance {
   const app = Fastify({ logger: process.env.NODE_ENV !== 'test' })
 
   // Reflect the request origin so the app works from localhost, LAN, and
@@ -408,7 +477,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   })
 
   app.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number }
+    const err = error as Error & { statusCode?: number; reason?: unknown; conflicts?: unknown }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
     const message = redactUrlCredentials(err.message ?? '')
     if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
@@ -416,6 +485,10 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       statusCode: status,
       error: status >= 500 ? 'Internal Server Error' : 'Request Error',
       message,
+      // BE-P2-6: 409/410 carry a machine-readable reason (e.g. 'files_missing').
+      ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
+      // BE-P2-11: undo's 409 'conflicts' lists the files (UndoConflict.conflicts).
+      ...(typeof err.reason === 'string' && status < 500 && Array.isArray(err.conflicts) ? { conflicts: err.conflicts } : {}),
     })
   })
 
@@ -508,7 +581,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   }
   app.get('/api/archive/projects', async () => ({ files: store.meta.archive }))
 
-  app.get('/api/settings', async () => store.settings)
+  app.get('/api/settings', async () => publicSettings(store.settings))
 
   // Partial update; only known boolean fields.
   app.patch('/api/settings', async (request) => {
@@ -522,7 +595,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
     }
     store.settings = next
     store.save()
-    return store.settings
+    return publicSettings(store.settings)
   })
 
   app.get('/api/agents', async () => store.agents)
@@ -590,7 +663,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
       skills: attachedSkills(store.skills, skillIds),
       // BE-4: remember like a run's (memoryLearn defaults on); a saved bot adds its memories and recall.
       memory: memoryScope ? memoryPromptBlock(store, memoryScope) : '',
-      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
+      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES, ...(saved ? vmToolNames(store, saved.id) : [])],
       input: '',
       contextWindow: endpoint.contextWindow,
       responseReserve: replyReserve(endpoint),
@@ -766,6 +839,7 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
         slug: assignAgentSlug(input.name, isPrimary, new Set(store.agents.map((a) => a.slug))),
         internetPolicy: 'ask',
         memoryLearn: true,
+        vm: defaultAgentVm(),
         status: 'idle',
         createdAt: new Date().toISOString(),
         lastRunAt: null,
@@ -1424,9 +1498,364 @@ export function buildApp(store: WorkspaceStore = createStore()): FastifyInstance
   })
 
   // BE-2: every existing bot gets its folder on boot.
-  ensureAllBotFolders(store, (msg) => app.log.warn(msg))
+  // BE-P2-6: check the files volume marker first. A missing or foreign volume
+  // is files_missing: nothing is created or re-initialized; chats keep working
+  // and file operations answer 409 { reason: 'files_missing' }.
+  if (checkVolume(store, (msg) => app.log.warn(msg)) === 'ok') ensureAllBotFolders(store, (msg) => app.log.warn(msg))
 
   registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
+
+  // BE-P2-12: script runs (RunService), bound below; runs it still queues count as active.
+  let runService: RunService | null = null
+  let runner: ContainerRunner | null = null
+  const activeOf = (agentId: string) => (runner?.activeRuns(agentId) ?? 0) + (runService?.waiting(agentId) ?? 0)
+  const runLogs: RunLogs = {
+    bytes: (slug, runId) => runService?.bytes(slug, runId) ?? 0,
+    remove: (slug, runId) => runService?.remove(slug, runId),
+  }
+  const liveEvents = createLiveEvents()
+  app.decorate('liveEvents', liveEvents)
+  // BE-P2-9: set once the runtime probe exists (below).
+  let snapshotDriverNow: () => SnapshotDriver | null = () => null
+  // BE-P2-2: engine and the `agentcontrol` machine.
+  const vmHost =
+    opts.vmHost ??
+    createVmHostService({
+      // BE-P2-9: the snapshot driver the runtime probe picked (VmInfo.storage.driver).
+      storage: () => ({ driver: snapshotDriverNow(), volumeState: 'ok' as const }),
+      getDiskBudgetGb: () => store.settings.vm?.machine?.diskGb,
+      // BE-P2-12: grow is refused while any bot's run is active or queued.
+      activeRuns: () => store.agents.reduce((n, a) => n + activeOf(a.id), 0),
+      setDiskBudgetGb: (diskGb) => {
+        if (store.settings.vm) store.settings.vm.machine = { diskGb }
+        store.save()
+      },
+    })
+  app.get('/api/vm/host', async () => vmHost.hostInfo())
+  app.post('/api/vm/machine/grow', async (request) => {
+    const body = request.body as { toGb?: unknown } | null | undefined
+    return vmHost.grow(body && typeof body === 'object' ? body.toGb : undefined)
+  })
+
+  let engineCli: EngineRef['cli'] | null = null
+  const engineRef = async (): Promise<EngineRef | null> => {
+    if (opts.vmEngine) {
+      engineCli = opts.vmEngine.cli
+      return opts.vmEngine
+    }
+    const host = await vmHost.hostInfo()
+    engineCli = host.engine ?? null
+    if (!host.engine) return null
+    // Mac/Windows: always the dedicated machine, never podman-machine-default.
+    const globalArgs = host.engine === 'podman' && host.os !== 'linux' ? ['--connection', MACHINE_NAME] : []
+    return { cli: host.engine, globalArgs }
+  }
+
+  // BE-P2-8: which runtime each bot gets, and whether limits are really enforced.
+  const runtimeProbe = opts.runtimeProbe ?? createRuntimeProbe({
+      engine: engineRef,
+      // BE-P2-5: the bind_mount check uses a temp folder next to the bots' files (same mount path).
+      bindDir: () => {
+        const backend = storageFor(store).backend
+        return backend instanceof LocalFs ? backend.volumeRoot : null
+      },
+      // BE-P2-7: the Chromium check only when a bot has the browser on (part of the cache key).
+      features: () => (store.agents.some((a) => a.vm.permissions.browser) ? ['chromium'] : []),
+      cacheFile: join(store.dataDir, 'vm', 'runtime-probe.json'),
+      log: (msg) => app.log.info(msg),
+    })
+  // BE-P2-9: undo snapshots, with the driver the probe picked, under <filesRoot>/snapshots (plan §11).
+  // Off (no driver) where the bots' files have no host path (WslFs) or before the first probe.
+  const snapshotsRoot = (): string | null => {
+    const backend = storageFor(store).backend
+    return backend instanceof LocalFs ? join(backend.volumeRoot, 'snapshots') : null
+  }
+  snapshotDriverNow = () => (snapshotsRoot() ? (runtimeProbe.current()?.snapshotDriver ?? null) : null)
+  const snapshots = createSnapshotService({
+    root: snapshotsRoot,
+    driver: () => snapshotDriverNow(),
+    zones: (agent) => snapshotZones(store, agent),
+    log: (msg) => app.log.info(msg),
+  })
+  // BE-P2-10: snapshot budgets and eviction (plan §7.4), with settings.vm.snapshotBudget read per call.
+  const snapshotBudget = createSnapshotBudget({
+    snapshots,
+    root: snapshotsRoot,
+    limits: () => budgetLimits(store.settings.vm?.snapshotBudget ?? DEFAULT_VM_SETTINGS.snapshotBudget),
+    // BE-P2-12: run logs count in the snapshot budget and go with their snapshot (plan §7.4).
+    logs: runLogs,
+    busy: (slug) => {
+      const a = store.agents.find((x) => x.slug === slug)
+      return a ? activeOf(a.id) > 0 : false
+    },
+    log: (msg) => app.log.info(msg),
+  })
+  const runtimeOf = (agent: Agent): ResolvedRuntime =>
+    resolveRuntime(store.settings.vm?.gvisor ?? 'auto', agent.vm.gvisor, runtimeProbe.current(), agent.name)
+  registerProbeRoutes(app, runtimeProbe)
+
+  // BE-P2-5: uid mapping per bot (Podman). The probe's choice for the bot's runtime; keep-id when
+  // the probe hasn't run or no mapping passed (it works rootless on Linux, Mac and Windows).
+  const bindCheckOf = (agent: Agent) => {
+    const p = runtimeProbe.current()
+    return (runtimeOf(agent).effective === 'runsc' ? p?.checks : p?.standard?.checks)?.find((c) => c.id === 'bind_mount')
+  }
+  const uidMappingOf = (agent: Agent, cli: EngineRef['cli'] | null = engineCli): UidMapping | null => {
+    if (cli === 'docker') return null
+    const p = runtimeProbe.current()
+    const m = runtimeOf(agent).effective === 'runsc' ? p?.uidMapping : p?.standard?.uidMapping
+    return m ?? 'keep-id'
+  }
+  const isolationNoteOf = (agent: Agent, cli: EngineRef['cli'] | null): string | undefined => {
+    if (cli !== 'podman') return undefined
+    const check = bindCheckOf(agent)
+    const failed = check?.status === 'fail' ? ` ${check.message ?? 'The bot file access check failed.'}` : ''
+    return uidMappingOf(agent, cli) === 'keep-id' ? `${KEEP_ID_NOTE}${failed}` : failed.trim() || undefined
+  }
+  // BE-P2-7 triggers: BE start (the cached result for this key right away, then a fresh probe),
+  // hourly ensureFresh (key change or older than a day), mode changes, POST /api/vm/probe.
+  const probeLater = (what: 'refresh' | 'ensureFresh') => {
+    // Real probes only in the server (probeOnStart) or with an injected (test) probe.
+    if (!opts.probeOnStart && !opts.runtimeProbe) return
+    void runtimeProbe[what]().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
+  }
+  let stopProbeTimer: (() => void) | null = null
+  if (opts.probeOnStart) {
+    app.addHook('onReady', async () => {
+      void (async () => {
+        await runtimeProbe.restore().catch(() => null)
+        await runtimeProbe.refresh()
+      })().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
+      stopProbeTimer = runtimeProbe.startTimer()
+    })
+    app.addHook('onClose', async () => {
+      stopProbeTimer?.()
+    })
+  }
+  app.decorate('vmRuntimeModeChanged', () => probeLater('refresh'))
+
+  // BE-P2-4: each bot's container, tools volumes and image layer.
+  const botEnv =
+    opts.botEnv ??
+    createBotEnvService({
+      engine: engineRef,
+      // BE-P2-9: with the overlay driver, the writable zones are overlay mounts (upper/work per bot).
+      mounts: (agent) => snapshots.mountsFor(agent, botMounts(store, agent)),
+      allowedMounts: (agent) => {
+        const root = snapshotsRoot()
+        return { ...botMountAllowList(store, agent), ...(root ? { overlayRoot: join(root, agent.slug, '.overlay') } : {}) }
+      },
+      uidMapping: (agent) => uidMappingOf(agent),
+      saveVm: storeSaveVm(store),
+      // Only gVisor is named explicitly; the standard runtime stays the engine default (no recreate).
+      runtime: (agent) => (runtimeOf(agent).effective === 'runsc' ? 'runsc' : null),
+      runtimeBlocked: (agent) => runtimeBlockMessage(runtimeOf(agent)),
+      runtimeFlags: (agent) => {
+        const r = runtimeOf(agent)
+        return r.effective === 'runsc' ? (r.flags ?? []) : []
+      },
+      enforceLimits: () => runtimeProbe.current()?.standard?.limitsAccepted ?? true,
+      activeRuns: activeOf,
+      log: (msg) => app.log.info(msg),
+    })
+
+  // BE-P2-10: personal data (folder + tools volumes + layer) against the 10 GB limit.
+  const personal = createPersonalUsage({
+    folder: (agent) => personalFolderParts(store, agent),
+    engine: async (agent) => (botEnv.measure && (await engineRef()) ? botEnv.measure(agent) : {}),
+    quotaBytes,
+  })
+  setPersonalExtraBytes((agent) => personal.engineBytes(agent))
+
+  // BE-P2-8: script runs in the bot's container (Podman or Docker).
+  runner = opts.vmRunner ?? createContainerRunner({
+    botEnv,
+    engine: engineRef,
+    getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
+    runtime: runtimeOf,
+    // BE-P2-5: block runs unless a uid mapping passed the probe's bind_mount check (Team lead, 2026-10-28).
+    mountsUsable: (agent) => bindCheckOf(agent)?.status === 'pass',
+    snapshots,
+    personal: (agent) => personal.check(agent),
+    afterSnapshot: (slug, runId) => snapshotBudget.afterRun(slug, runId),
+    log: (msg) => app.log.info(msg),
+  })
+  app.decorate('vmRunner', runner)
+  // BE-P2-10: PATCH /api/vm/settings (BE-P2-17) calls enforce() after a snapshotBudget change.
+  app.decorate('vmSnapshotBudget', snapshotBudget)
+  // BE-P2-11: undo (plan §7.3), in the bot's run slot, files written through the StorageBackend.
+  const undo = createUndoService({
+    snapshots,
+    storage: () => storageFor(store).backend,
+    zone: (agent, info) => undoZone(store, agent, info),
+    volOf: (hostPath) => {
+      const backend = storageFor(store).backend
+      if (!(backend instanceof LocalFs)) return null
+      const rel = relative(backend.volumeRoot, hostPath)
+      if (!rel || isAbsolute(rel) || rel.split(sep).some((p) => p === '..')) return null
+      return rel.split(sep).join('/')
+    },
+    activeRuns: activeOf,
+    exclusive: (agentId, fn) => runner!.exclusive(agentId, fn),
+    stopBot: (agent) => botEnv.stop(agent),
+    newRunId,
+    afterUndo: (slug, runId) => snapshotBudget.afterRun(slug, runId),
+    usage: (slug) => snapshotBudget.usage(slug),
+    perBotBytes: () => budgetLimits(store.settings.vm?.snapshotBudget ?? DEFAULT_VM_SETTINGS.snapshotBudget).perBotBytes,
+    log: (msg) => app.log.info(msg),
+  })
+  app.decorate('vmUndo', undo)
+  // Every 10 min, always (not tied to probeOnStart): the budgets, the free-space floor and record
+  // pruning (eviction sweep), and stale tools measurements. Both stop on close.
+  let stopBudget: (() => void) | null = null
+  let stopPersonal: ReturnType<typeof setInterval> | null = null
+  app.addHook('onReady', async () => {
+    if (!stopBudget) stopBudget = snapshotBudget.startTimer(opts.vmTimers?.budgetSweepMs)
+    if (!stopPersonal) {
+      stopPersonal = setInterval(() => {
+        for (const a of store.agents) void personal.refresh(a).catch(() => {})
+      }, opts.vmTimers?.personalMeasureMs ?? PERSONAL_MEASURE_MS)
+      stopPersonal.unref?.()
+    }
+  })
+  app.addHook('onClose', async () => {
+    stopBudget?.()
+    stopBudget = null
+    if (stopPersonal) clearInterval(stopPersonal)
+    stopPersonal = null
+    setPersonalExtraBytes(null)
+  })
+  app.decorate('vmRuntimeProbe', runtimeProbe)
+  let stopIdle: (() => void) | null = null
+  app.addHook('onReady', async () => {
+    stopIdle = runner?.startIdleTimer() ?? null
+  })
+  app.addHook('onClose', async () => {
+    stopIdle?.()
+  })
+
+  let botEnvRoutesRef: BotEnvRoutes | null = null
+  // BE-P2-12: RunService — one machine-wide queue, records under data/runs, cards and live events.
+  const vmRunnerNow = runner
+  const runs = createRunService({
+    runner: vmRunnerNow as RunRunner,
+    getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
+    conversations: () => store.conversations,
+    messages: () => store.chatMessages,
+    save: () => {
+      store.save()
+    },
+    root: () => join(store.dataDir, 'runs'),
+    concurrency: async () => (await vmHost.hostInfo()).concurrency,
+    freeBytes: opts.vmFreeBytes ?? (async () => {
+      const host = await vmHost.hostInfo().catch(() => null)
+      // Windows: the machine's disk holds the bots' files; Mac/Linux: the host disk under the files volume.
+      if (host?.storage.backend === 'wsl' && host.machine && host.machine.state !== 'missing') {
+        return Math.max(0, (host.machine.diskGb - host.machine.diskUsedGb) * 1024 ** 3)
+      }
+      return freeBytesAt(snapshotsRoot() ?? store.dataDir) ?? freeBytesAt(store.dataDir)
+    }),
+    personal: (agent) => personal.check(agent),
+    publish: (event) => {
+      liveEvents.publish(event)
+    },
+    onRunsChanged: (agentId) => {
+      const agent = store.agents.find((a) => a.id === agentId)
+      if (!agent || !botEnvRoutesRef) return
+      void botEnvRoutesRef
+        .vmInfo(agent)
+        .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId, vm }))
+        .catch(() => {})
+    },
+    undoState: (slug, runId) => snapshotBudget.undoState(slug, runId),
+    undoApply: (agent, runId, o) => undo.apply(agent, runId, o),
+    recoverSnapshot: async (agent) => {
+      if (!snapshots.driver() || !snapshots.pending(agent)) return null
+      return vmRunnerNow.exclusive(agent.id, async () => {
+        if (snapshots.needsStop(agent)) await botEnv.stop(agent).catch(() => {})
+        const o = await snapshots.recover(agent)
+        if (!o) return null
+        const u = snapshotBudget.afterRun(agent.slug, o.snapshot.id) ?? o.meta.undo ?? { state: 'available' as const }
+        return { runId: o.snapshot.id, filesChanged: o.filesChanged, snapshot: o.snapshot, undo: u }
+      })
+    },
+    newRunId,
+    skillName: (skillId) => store.skills.find((sk) => sk.id === skillId)?.name,
+    flushMs: opts.liveTimers?.outputFlushMs,
+    log: (msg) => app.log.info(msg),
+  })
+  runService = runs
+  app.decorate('vmRuns', runs)
+  // BE-P2-16: run_script and vm_install in the agent loop, offered while the bot's runs would pass
+  // the runner's checks on this machine (no bot computer, a failed mount check, a blocked runtime: not offered).
+  bindVmTools(store, {
+    start: (input) => runs.start(input),
+    wait: (runId) => runs.wait(runId),
+    stop: (runId) => runs.stop(runId),
+    modelResult: (run) => runs.modelResult(run),
+    vmInstall: async (agentId, packages) => {
+      const agent = store.agents.find((a) => a.id === agentId)
+      if (!agent) fail(404, 'Bot not found.')
+      return botEnv.vmInstall(agent, packages)
+    },
+    offered: (agentId) =>
+      vmRunnerNow.check({ agentId, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 60, network: 'off' }) === null,
+    dmConversation: (agentId) => ensureDm(store, agentId).id,
+    browserOn: (agentId) => store.agents.find((a) => a.id === agentId)?.vm.permissions.browser === true,
+  })
+  app.addHook('onClose', async () => {
+    bindVmTools(store, null)
+  })
+  app.addHook('onReady', async () => {
+    await runs.recover().catch((err: Error) => app.log.warn(`run recovery failed: ${err.message}`))
+  })
+  registerLiveEventRoutes(app, liveEvents, { heartbeatMs: opts.liveTimers?.heartbeatMs, runAgent: (runId) => runs.agentOf(runId) })
+  // BE-P2-17: undo preview/apply (app.vmUndo via RunService.undo, which records the undo run).
+  registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => undo.preview(agent, runId), activeRuns: activeOf })
+
+  botEnvRoutesRef = registerBotEnvRoutes(app, store, {
+    botEnv,
+    hostInfo: () => vmHost.hostInfo(),
+    runtime: (agent) => {
+      const { flags: _flags, ...r } = runtimeOf(agent)
+      return r
+    },
+    // BE-P2-12: VM stop/reset also cancel the bot's queued runs.
+    runner: {
+      stopRuns: (agentId) => {
+        void runs.stopAgent(agentId).catch(() => {})
+      },
+      idleStopAt: (agentId) => vmRunnerNow.idleStopAt(agentId),
+    },
+    runs: (agent) => runs.list(agent.id, { limit: 50 }),
+    isolationNote: isolationNoteOf,
+    // BE-P2-7: a per-bot mode change re-probes; a browser permission change may change the feature set.
+    onProbeInputChange: (what) => probeLater(what === 'mode' ? 'refresh' : 'ensureFresh'),
+    personal,
+    snapshotUsage: (agent) => snapshotBudget.usage(agent.slug),
+    // BE-P2-17: tool rebuild/rollback, recorded as ScriptRuns (kind tool_build).
+    toolBuild: (agent, action, build) => runs.toolBuild(agent.id, action, build),
+  })
+
+  // BE-P2-17: GET/PATCH /api/vm/settings.
+  registerVmSettingsRoutes(app, store, {
+    runtimeModeChanged: () => app.vmRuntimeModeChanged(),
+    budgetChanged: () => {
+      try {
+        const evicted = snapshotBudget.enforce()
+        if (evicted.length) app.log.info(`vm settings: new undo budget evicted ${evicted.length} snapshot(s)`)
+      } catch (err) {
+        app.log.warn(`vm settings: budget enforce failed: ${(err as Error).message}`)
+      }
+      // The budget shows in every bot's VmInfo (usage.snapshots.budgetBytes).
+      for (const agent of store.agents) {
+        void botEnvRoutesRef
+          ?.vmInfo(agent)
+          .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId: agent.id, vm }))
+          .catch(() => {})
+      }
+    },
+  })
 
   return app
 }

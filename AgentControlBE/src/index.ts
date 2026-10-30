@@ -1,6 +1,6 @@
 import { buildApp } from './app.js'
 
-const app = buildApp()
+const app = buildApp(undefined, { probeOnStart: true })
 const port = Number(process.env.PORT ?? 3001)
 const host = process.env.HOST ?? '127.0.0.1'
 

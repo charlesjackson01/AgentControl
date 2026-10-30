@@ -209,19 +209,33 @@ describe('BE-P2-16 run_script (fake LLM end to end)', () => {
     expect(botMounts(store, other).map((m) => m.target)).toContain(`/bot/groups/${g.slug}`)
   })
 
-  it('refuses the browser (M1) and bad folders before starting anything', async () => {
+  it('refuses bad folders before starting anything', async () => {
     const a = await makeBot('Analyst')
     const sent = llm([
-      toolCall('run_script', { argv: ['python3', 'scrape.py'], browser: true }),
       toolCall('run_script', { argv: ['ls'], cwd: '../etc' }, 'c2'),
       toolCall('run_script', { argv: ['ls'], cwd: 'shared' }, 'c3'),
       reply('ok'),
     ])
     await runDm(a, 'scrape')
     const out = toolResults(sent)
-    expect(out[0]).toContain(BROWSER_NOT_ON)
-    expect(out[1]).toContain('"cwd" must be a folder inside workspace or groups/<group>')
-    expect(out[2]).toContain('"cwd" must be "workspace" or "groups/<group>"')
+    expect(out[0]).toContain('"cwd" must be a folder inside workspace or groups/<group>')
+    expect(out[1]).toContain('"cwd" must be "workspace" or "groups/<group>"')
+    expect(runner.requests).toHaveLength(0)
+  })
+
+  it('BE-P2-15: browser:true on a bot without the browser raises the browser card (not BROWSER_NOT_ON); deny ends the run', async () => {
+    const a = await makeBot('Analyst')
+    const sent = llm([toolCall('run_script', { argv: ['python3', 'scrape.py'], browser: true }), reply('ok')])
+    const done = runDm(a, 'scrape')
+    await until(() => app.vmPermissions.list().requests.some((r) => r.type === 'browser' && r.status === 'pending'))
+    const req = app.vmPermissions.list().requests.find((r) => r.type === 'browser')!
+    expect(req.agentId).toBe(a.id)
+    const res = await app.inject({ method: 'POST', url: `/api/permissions/${req.id}`, headers: { 'x-agentcontrol-confirm': '1' }, payload: { decision: 'deny' } })
+    expect(res.statusCode).toBe(200)
+    await done
+    const out = toolResults(sent)
+    expect(out[0]).not.toContain(BROWSER_NOT_ON)
+    expect(['denied', 'failed']).toContain((JSON.parse(out[0]!) as { status: string }).status)
     expect(runner.requests).toHaveLength(0)
   })
 

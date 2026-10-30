@@ -47,8 +47,10 @@ import {
 } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { BOT_PATHS } from './vm-images.js'
+import type { BrowserAddon } from './browser-addon.js'
 
 export const VM_PATCH_KEYS = ['internetPolicy', 'permissions', 'gvisor', 'env'] as const
+/** Without the browser add-on (M1, route tests): PATCH permissions.browser:true is refused. */
 export const BROWSER_NOT_YET = 'The browser arrives in a later update.'
 export const EGRESS_NOT_AVAILABLE = 'Home network access isn\'t available in Phase 2.'
 export const LIMITS_FIXED = `Limits are fixed: ${VM_LIMITS.memoryMb / 1024} GB memory, ${VM_LIMITS.cpus} CPUs and ${VM_LIMITS.timeoutSec / 60} minutes per run.`
@@ -166,6 +168,12 @@ export interface BotEnvRouteDeps {
   startRebuild?: (agent: Agent) => Promise<ScriptRun>
   /** BE-P2-21: VmInfo.activeBuild / VmToolsInfo.activeBuild. */
   activeBuild?: (agentId: string) => ActiveToolBuild | null
+  /**
+   * BE-P2-15: the browser add-on. PATCH permissions.browser answers its 409s (internet_never,
+   * low_disk) and starts the turn-on / turn-off; VmInfo.permissions.browserState and VmInfo.browser
+   * come from it. Absent: M1 (browser:true → 400, browserState 'absent').
+   */
+  browser?: Pick<BrowserAddon, 'sharedState' | 'botInfo' | 'checkChange' | 'changed'>
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -202,6 +210,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
 
   async function vmInfo(agent: Agent): Promise<VmInfo> {
     const host = await deps.hostInfo().catch(() => null)
+    const shared = deps.browser?.sharedState()
+    const browserInfo = deps.browser?.botInfo(agent.id)
     let state: VmState = 'not_setup'
     let stateMessage: string | undefined
     const missing = filesMissing(agent)
@@ -240,7 +250,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
         globalMode,
       },
       internetPolicy: agent.internetPolicy,
-      permissions: { browser: vm.permissions.browser, browserState: 'absent' },
+      permissions: { browser: vm.permissions.browser, browserState: shared?.state ?? 'absent', ...(shared?.progress !== undefined ? { progress: shared.progress } : {}) },
+      ...(browserInfo ? { browser: browserInfo } : {}),
       limits: VM_LIMITS,
       usage: {
         memoryMb: 0,
@@ -304,7 +315,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       if (Object.keys(rest).length) fail(400, `"permissions.${Object.keys(rest)[0]!.slice(0, 40)}" can't be changed here.`)
       if (browser !== undefined) {
         if (typeof browser !== 'boolean') fail(400, '"permissions.browser" must be true or false.')
-        if (browser) fail(400, BROWSER_NOT_YET)
+        if (browser && !deps.browser) fail(400, BROWSER_NOT_YET)
         vm = { ...vm, permissions: { browser } }
       }
     }
@@ -318,6 +329,10 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       vm = { ...vm, env: (raw.env as EnvVar[]).map((e) => ({ name: e.name, value: e.value })) }
     }
     const next: Agent = { ...agent, internetPolicy, vm }
+    // BE-P2-15: 409 internet_never / low_disk before anything is saved.
+    if (deps.browser && next.vm.permissions.browser !== agent.vm.permissions.browser) {
+      await deps.browser.checkChange(agent, next.vm.permissions.browser, next.internetPolicy)
+    }
     const previous = store.agents
     store.agents = store.agents.map((a) => (a.id === agent.id ? next : a))
     if (!store.save()) {
@@ -325,7 +340,10 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       fail(500, 'Couldn\'t save the change. Try again.')
     }
     if (next.vm.gvisor !== agent.vm.gvisor) deps.onProbeInputChange?.('mode')
-    if (next.vm.permissions.browser !== agent.vm.permissions.browser) deps.onProbeInputChange?.('features')
+    if (next.vm.permissions.browser !== agent.vm.permissions.browser) {
+      deps.browser?.changed(agent.id, next.vm.permissions.browser)
+      deps.onProbeInputChange?.('features')
+    }
     if (next.internetPolicy !== agent.internetPolicy || next.vm.permissions.browser !== agent.vm.permissions.browser) {
       deps.onPolicyChange?.(agent.id, { internetPolicy: agent.internetPolicy, browser: agent.vm.permissions.browser })
     }

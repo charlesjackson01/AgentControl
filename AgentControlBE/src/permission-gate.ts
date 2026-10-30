@@ -59,7 +59,13 @@ export type GateRelease =
   | { kind: 'end'; status: 'denied' | 'failed'; reason: string; error: string; permission?: ScriptRunPermission }
 
 /** admit() before the run is recorded: `ask` means record it waiting, then raise(). */
-export type GateAdmit = Exclude<GateRelease, { kind: 'wait' }> | { kind: 'ask'; type: PermissionType }
+export type GateAdmit = GateRelease | { kind: 'ask'; type: PermissionType }
+
+/** BE-P2-15: where the bot's browser setup is (GateBrowserHooks.status). */
+export type BrowserSetupStatus =
+  | { state: 'ready' }
+  | { state: 'pending' }
+  | { state: 'failed'; reason: 'browser_unavailable' | 'chromium_check_failed' }
 
 /** What RunService gives the gate. */
 export interface GateRunOps {
@@ -72,6 +78,12 @@ export interface GateRunOps {
 export interface GateBrowserHooks {
   /** A card `enable`: turn the browser on for the bot and start its setup (the gate already saved nothing). */
   enable(agentId: string, request: PermissionRequest): void
+  /**
+   * BE-P2-15: for a run with browser:true on a bot whose browser is on. 'pending' (setup not done):
+   * the run waits for the browser; 'failed' (setup error): the run ends failed with that reason.
+   * Absent: the browser counts as ready.
+   */
+  status?(agentId: string): BrowserSetupStatus
 }
 
 export interface PermissionGateDeps {
@@ -313,7 +325,18 @@ export function createPermissionGate(deps: PermissionGateDeps): PermissionGate {
       return { kind: 'end', status: 'denied', reason: INTERNET_NEVER_REASON, error: internetNeverText(agent.name) }
     }
     if (deps.browser && needsBrowser(run, agent)) return { kind: 'ask', type: 'browser' }
-    if (!internet) return { kind: 'queue', ...(run.browser ? { permission: { type: 'browser', decision: 'enable', source: 'policy' } } : {}) }
+    if (run.browser && agent.vm.permissions.browser && deps.browser?.status) {
+      const s = deps.browser.status(agent.id)
+      const enabled: ScriptRunPermission = run.permissions.find((p) => p.type === 'browser' && p.decision === 'enable') ?? { type: 'browser', decision: 'enable', source: 'policy' }
+      if (s.state === 'pending') return { kind: 'wait', waitingFor: 'browser', permission: enabled }
+      if (s.state === 'failed') {
+        const error = s.reason === CHROMIUM_CHECK_FAILED_REASON ? chromiumCheckFailedText(agent.name) : BROWSER_UNAVAILABLE_TEXT
+        return { kind: 'end', status: 'failed', reason: s.reason, error }
+      }
+    }
+    // An enable this run already got from its card stays on the record (with its request id).
+    const enabledBy = run.permissions.find((p) => p.type === 'browser' && p.decision === 'enable')
+    if (!internet) return { kind: 'queue', ...(run.browser ? { permission: enabledBy ?? { type: 'browser', decision: 'enable', source: 'policy' } } : {}) }
     if (policy === 'always') return { kind: 'queue', permission: internetPermission('always', undefined, 'policy') }
     // Ask: the proxy's health first, so no card is raised for a run that couldn't get the internet.
     const up = await deps.proxyAvailable().catch(() => false)
@@ -367,6 +390,10 @@ export function createPermissionGate(deps: PermissionGateDeps): PermissionGate {
     if (d.kind === 'ask') {
       const { requestId, own } = raise(run, d.type)
       ops.release(run.id, { kind: 'wait', waitingFor: 'permission', requestId, permission: { type: d.type, decision: 'pending', ...(own ? { requestId, source: 'card' as const } : {}) } })
+      return
+    }
+    if (d.kind === 'wait') {
+      ops.release(run.id, d)
       return
     }
     if (d.kind === 'end' || d.kind === 'queue') {
@@ -504,6 +531,12 @@ export function createPermissionGate(deps: PermissionGateDeps): PermissionGate {
           else if (agent.internetPolicy === 'always') await resolve(pending, 'always', {})
         }
         // Runs waiting for the browser that need the internet are decided once the browser is ready.
+      }
+      // BE-P2-15: turned on in the VM tab while a browser card was pending: the card counts as enabled
+      // (its runs wait for the setup the PATCH started).
+      if (!before.browser && agent.vm.permissions.browser) {
+        const p = pendingOf(agentId)
+        if (p?.type === 'browser') await resolve(p, 'enabled', {})
       }
       if (before.browser && !agent.vm.permissions.browser) {
         const p = pendingOf(agentId)

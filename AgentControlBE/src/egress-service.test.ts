@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CommandResult, CommandRunner } from './command-runner.js'
-import { capHostContacts, CONNECT_CHECK_SCRIPT, createEgressService, EGRESS_DAEMON_NAME, EgressUnavailableError, egressNetworkName, hostInterfaceAddresses, localAddressesFromProc, modelServersOf, PROBE_SLUG, PROXY_UNAVAILABLE, proxyEnv, testAllowFromEnv, resetTestAllowWarning, defaultGatewaysFromProc } from './egress-service.js'
+import { capHostContacts, CONNECT_CHECK_SCRIPT, createEgressService, EGRESS_DAEMON_NAME, EgressUnavailableError, egressNetworkName, hostInterfaceAddresses, localAddressesFromProc, modelServersOf, PROBE_SLUG, PROXY_UNAVAILABLE, proxyEnv, testAllowFromEnv, resetTestAllowWarning, defaultGatewaysFromProc, BUILD_TTL_MS, PROBE_TTL_MS } from './egress-service.js'
 import { createEgressProxy, handleCtl, type CtlRequest, type EgressProxy } from './egressd.js'
 import type { HostContact } from './shared/types.js'
 import { createEgressRules } from './egress-rules.js'
+import { BUILD_TIMEOUT_MS } from './bot-env.js'
 
 /** BE-P2-13: the BE side of the proxy against a fake Podman whose `exec … ctl` talks to a real in-process proxy. */
 
@@ -17,8 +18,10 @@ function fakePodman() {
   const calls: string[][] = []
   const inputs: string[] = []
   const networks = new Map<string, string[]>()
-  let daemon: { running: boolean; hash: string; nets: Record<string, string>; args: string[] } | null = null
-  let proxy: EgressProxy = createEgressProxy()
+  let daemon: { running: boolean; hash: string; startedAt: string; nets: Record<string, string>; args: string[] } | null = null
+  let proxy: EgressProxy = createEgressProxy({ sweepMs: 0 })
+  let starts = 0
+  const stamp = () => `2026-10-30 12:00:${String(starts++).padStart(2, '0')} -0500 CDT`
   let nextIp = 2
   const state = { ctlDown: false, runFails: false, lsFails: false, rootlessNet: 'pasta', probeOut: '{"noAuth":"407","blocked":"403","direct":"error:ENETUNREACH"}' }
   const exec: CommandRunner = async (cmd, args, opts) => {
@@ -29,7 +32,7 @@ function fakePodman() {
     const [verb, sub] = a
     if (verb === 'container' && sub === 'inspect') {
       if (!daemon) return fail('Error: no such container ac-egressd')
-      return ok(`${daemon.running}|${daemon.hash}|${JSON.stringify(Object.fromEntries(Object.entries(daemon.nets).map(([k, v]) => [k, { IPAddress: v }])))}\n`)
+      return ok(`${daemon.running}|${daemon.hash}|${daemon.startedAt}|${JSON.stringify(Object.fromEntries(Object.entries(daemon.nets).map(([k, v]) => [k, { IPAddress: v }])))}\n`)
     }
     if (verb === 'network' && sub === 'exists') return networks.has(a[2]!) ? ok() : fail('', 1)
     if (verb === 'network' && sub === 'create') {
@@ -52,17 +55,22 @@ function fakePodman() {
     if (verb === 'network' && sub === 'rm') return networks.delete(a[2]!) ? ok() : fail('Error: unable to find network')
     if (verb === 'rm') {
       daemon = null
-      proxy = createEgressProxy()
+      void proxy.close()
+      proxy = createEgressProxy({ sweepMs: 0 })
       return ok()
     }
     if (verb === 'start') {
+      // A restarted proxy is a new process: no settings, no credentials.
       daemon!.running = true
+      daemon!.startedAt = stamp()
+      void proxy.close()
+      proxy = createEgressProxy({ sweepMs: 0 })
       return ok()
     }
     if (verb === 'run' && a.includes('--detach')) {
       if (state.runFails) return fail('Error: image not known')
       const hash = a.find((x) => x.startsWith('io.agentcontrol.egressd.hash='))!.split('=')[1]!
-      daemon = { running: true, hash, nets: { [flag('--network')!]: '10.89.0.2' }, args: a }
+      daemon = { running: true, hash, startedAt: stamp(), nets: { [flag('--network')!]: '10.89.0.2' }, args: a }
       return ok('id\n')
     }
     if (verb === 'run' && a.includes('--rm')) return ok(`${state.probeOut}\n`)
@@ -158,10 +166,12 @@ describe('grant / revoke', () => {
     expect(g.proxyAddress).toMatch(/^10\.89\.\d+\.2$/)
     const url = g.env.find((e) => e.name === 'HTTPS_PROXY')!.value
     expect(url).toMatch(new RegExp(`^http://ac[0-9a-f]+:[0-9a-f]{48}@${g.proxyAddress.replace(/\./g, '\\.')}:3128$`))
-    expect(g.secrets).toContain(url)
-    expect(g.secrets.every((s) => url.includes(s))).toBe(true)
+    // Review B4: every form of the credential is redacted, longest first.
+    const secret = g.secret
+    expect(secret).toMatch(/^[0-9a-f]{48}$/)
+    expect([...g.secrets].sort()).toEqual([url, url.slice('http://'.length), Buffer.from(`${g.id}:${secret}`).toString('base64'), secret].sort())
+    expect(g.secrets.map((x) => x.length)).toEqual([...g.secrets.map((x) => x.length)].sort((a, b) => b - a))
     // The secret goes over stdin, never argv.
-    const secret = g.secrets[0]!
     expect(fake.calls.flat().some((x) => x.includes(secret))).toBe(false)
     expect(fake.inputs.some((i) => i.includes(secret))).toBe(true)
     expect(logs.join('\n')).not.toContain(secret)
@@ -179,13 +189,71 @@ describe('grant / revoke', () => {
     expect(a2.id).not.toBe(a.id)
     expect(fake.calls.filter((c) => c[0] === 'network' && c[1] === 'create' && c.includes('ac-egress-a')).length).toBe(1)
   })
-  it('revoke is best effort: [] and a log line when the proxy is gone', async () => {
+  it('a failed revoke is tried twice, then the proxy is removed so the credential dies with it', async () => {
     const svc = make()
-    const g = await svc.grant('bob', 'run')
+    const g = await svc.grant('bob', 'run', { ttlMs: 600_000 })
     fake.state.ctlDown = true
     expect(await svc.revoke(g.id)).toEqual([])
+    expect(logs.filter((l) => l.includes(`revoking ${g.id} failed`))).toHaveLength(2)
+    expect(fake.calls.at(-1)).toEqual(['rm', '--force', '--time', '2', EGRESS_DAEMON_NAME])
+    expect(fake.daemon).toBeNull()
+    expect(logs.at(-1)).toBe(`egress: removed ${EGRESS_DAEMON_NAME} so ${g.id} can't be used`)
     expect(await svc.hosts(g.id)).toEqual([])
-    expect(logs.some((l) => l.includes('revoking'))).toBe(true)
+  })
+  it('a revoke that works on the second try keeps the proxy', async () => {
+    const svc = make()
+    const g = await svc.grant('bob', 'run', { ttlMs: 600_000 })
+    let n = 0
+    const real = fake.exec
+    const flaky: typeof real = async (c, a, o) => (a[0] === 'exec' && o?.input?.includes('"revoke"') && n++ === 0 ? fail('Error: blip') : real(c, a, o))
+    const svc2 = make({ exec: flaky })
+    expect(await svc2.revoke(g.id)).toEqual([])
+    expect(fake.daemon).not.toBeNull()
+    expect(fake.proxy.health().credentials).toBe(0)
+    void svc
+  })
+  it('review B3: each credential carries its lifetime (run from the caller, build and probe defaults)', async () => {
+    const svc = make()
+    const ttl = () => (JSON.parse(fake.inputs.filter((i) => i.includes('"grant"')).at(-1)!) as { credential: { ttlMs: number } }).credential.ttlMs
+    await svc.grant('bob', 'run', { ttlMs: 123_456 })
+    expect(ttl()).toBe(123_456)
+    await svc.grant('bob', 'build')
+    expect(ttl()).toBe(BUILD_TTL_MS)
+    expect(BUILD_TTL_MS).toBe(BUILD_TIMEOUT_MS + 60_000)
+    await svc.grant(PROBE_SLUG, 'probe')
+    expect(ttl()).toBe(PROBE_TTL_MS)
+    expect(PROBE_TTL_MS).toBe(90_000)
+  })
+  it('review B3: the first contact of a BE process revokes credentials left by an earlier one (once)', async () => {
+    const old = make()
+    const g = await old.grant('bob', 'run', { ttlMs: 600_000 })
+    expect(fake.proxy.health().credentials).toBe(1)
+    const fresh = make()
+    await fresh.available()
+    expect(fake.proxy.health().credentials).toBe(0)
+    expect(logs).toContain('egress: revoked 1 credential(s) left from before this start')
+    await fresh.grant('bob', 'run', { ttlMs: 600_000 })
+    await fresh.available()
+    expect(fake.proxy.health().credentials).toBe(1)
+    expect(fake.inputs.filter((i) => i.includes('"revokeAll"'))).toHaveLength(2)
+    void g
+  })
+  it('review S1: settings are re-sent when the proxy restarted (health hash), and when they change', async () => {
+    let hostAddresses = ['192.0.2.10']
+    const svc = make({ config: () => ({ hostAddresses }) })
+    await svc.available()
+    const pushes = () => fake.inputs.filter((i) => i.includes('"op":"config"')).length
+    expect(pushes()).toBe(1)
+    await svc.available()
+    expect(pushes()).toBe(1)
+    fake.stop()
+    await svc.available()
+    expect(fake.proxy.health().configured).toBe(true)
+    expect(pushes()).toBe(2)
+    hostAddresses = ['192.0.2.11']
+    await svc.available()
+    expect(pushes()).toBe(3)
+    expect(logs).toContain('egress: sending the proxy its new settings')
   })
   it('removeNetwork disconnects the proxy then removes the network; a missing one is fine', async () => {
     const svc = make()
@@ -209,6 +277,13 @@ describe('connectCheck (the probe\'s CONNECT half)', () => {
     expect(run[run.indexOf('--network') + 1]).toBe(egressNetworkName(PROBE_SLUG))
     expect(run).toEqual(expect.arrayContaining(['--read-only', '--cap-drop', 'ALL']))
     expect(fake.inputs.some((i) => i.includes('"op":"revoke"'))).toBe(true)
+    // Review S2: the probe's credential goes in on stdin (-i), never argv or --env.
+    expect(run).toContain('-i')
+    expect(run.join(' ')).not.toMatch(/P_AUTH|ac[0-9a-f]{18}:/)
+    const grantIn = JSON.parse(fake.inputs.find((i) => i.includes('"op":"grant"'))!) as { credential: { id: string; secret: string } }
+    expect(fake.inputs).toContain(`${grantIn.credential.id}:${grantIn.credential.secret}\n`)
+    expect(CONNECT_CHECK_SCRIPT).toContain('process.stdin')
+    expect(CONNECT_CHECK_SCRIPT).not.toContain('P_AUTH')
   })
   it('fails with a reason on a direct route or a wrong status', async () => {
     fake.state.probeOut = '{"noAuth":"200","blocked":"403","direct":"connected"}'

@@ -17,4 +17,11 @@ describe('spawnStreamRunner (no shell, streaming, killable)', () => {
     setTimeout(() => h.kill(), 50)
     expect((await h.done).code).toBe(137)
   })
+
+  it('review S2: env sets the program\'s environment', async () => {
+    const out: string[] = []
+    const h = spawnStreamRunner(process.execPath, ['-e', 'process.stdout.write(String(process.env.AC_S2_PROBE))'], { onStdout: (c) => out.push(c.toString()), onStderr: () => {}, env: { ...process.env, AC_S2_PROBE: 'v-456' } })
+    expect(await h.done).toEqual({ code: 0 })
+    expect(out.join('')).toBe('v-456')
+  })
 })

@@ -13,4 +13,9 @@ describe('execCommandRunner (no shell, bounded)', () => {
     const r = await execCommandRunner(process.execPath, ['-e', 'process.stdout.write(process.argv[1])', '$(echo nope); ls *'])
     expect(r.stdout).toBe('$(echo nope); ls *')
   })
+
+  it('review S2: env sets the program\'s environment (a value never in argv)', async () => {
+    const r = await execCommandRunner(process.execPath, ['-e', 'process.stdout.write(String(process.env.AC_S2_PROBE) + "|" + process.argv.slice(1).join(","))'], { env: { ...process.env, AC_S2_PROBE: 'v-123' } })
+    expect(r.stdout).toBe('v-123|')
+  })
 })

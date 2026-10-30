@@ -26,7 +26,7 @@ import { execCommandRunner, type CommandResult, type CommandRunner } from './com
 import { fail, failWithReason } from './http.js'
 import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, VM_LIMITS, type Agent, type AgentVm, type ContainerRuntime, type EnvVar, type HostContact, type ToolManifest } from './shared/types.js'
 import { envNameProblem } from './vm-defaults.js'
-import { capHostContacts, EGRESS_LABEL, egressNetworkName, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
+import { capHostContacts, CREDENTIAL_GRACE_MS, EGRESS_LABEL, egressNetworkName, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
 import { bindMountOptions, checkBotMounts, overlayMountOptions, usernsArgs, volumeMountOptions, type BotMount, type MountAllowList, type UidMapping } from './isolation.js'
 import {
   APT_PACKAGE,
@@ -198,6 +198,29 @@ export function envArgs(env: readonly EnvVar[], extra: readonly EnvVar[] = []): 
   return out
 }
 
+/** Review S4: the online build container's capabilities: apt/dpkg as root, nothing else. */
+export const BUILD_CAPS = ['--cap-drop', 'ALL', '--cap-add', 'CHOWN,DAC_OVERRIDE,FOWNER,FSETID,SETUID,SETGID,SYS_CHROOT,KILL'] as const
+/** Review S4: the same memory/CPU/process limits as a bot's container (VM_LIMITS). */
+export function buildLimits(): string[] {
+  return ['--memory', `${VM_LIMITS.memoryMb}m`, '--memory-swap', `${VM_LIMITS.memoryMb}m`, '--cpus', String(VM_LIMITS.cpus), '--pids-limit', String(VM_LIMITS.pids)]
+}
+
+/** Review S2: `--env NAME` (no value) for each name; refuses anything but a plain variable name. */
+export function passEnvArgs(names: readonly string[]): string[] {
+  return names.flatMap((n) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) throw new Error(`bad env name ${JSON.stringify(n.slice(0, 40))}`)
+    return ['--env', n]
+  })
+}
+
+/**
+ * Review S2: the engine's environment for a call that passes `vars` by name: this process's own
+ * plus the values. Never logged.
+ */
+export function envWith(vars: readonly EnvVar[], base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return { ...base, ...Object.fromEntries(vars.map((v) => [v.name, v.value])) }
+}
+
 /** A run's working dir: /bot/workspace or /bot/groups/<slug> (and below). */
 export function checkCwd(cwd: string): string {
   const norm = path.posix.normalize(cwd)
@@ -212,6 +235,12 @@ export interface ExecArgvOptions {
   argv: string[]
   env: readonly EnvVar[]
   extraEnv?: readonly EnvVar[]
+  /**
+   * Review S2: variables passed by name only (`--env NAME`); their values go in the engine
+   * process's own environment (CommandOptions.env / StreamOptions.env), so a secret such as the
+   * proxy credential is never in argv (`ps`, engine logs). They go last, so they win.
+   */
+  passEnv?: readonly string[]
   cwd?: string
   interactive?: boolean
 }
@@ -224,6 +253,7 @@ export function execArgv(o: ExecArgvOptions): string[] {
     '--user', `${BOT_UID}:${BOT_GID}`,
     '--workdir', checkCwd(o.cwd ?? BOT_PATHS.workspace),
     ...envArgs(o.env, o.extraEnv),
+    ...passEnvArgs(o.passEnv ?? []),
     botContainerName(o.slug),
     ...o.argv,
   ]
@@ -504,11 +534,13 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     const cli = e.command ?? e.cli
     const pm = (args: string[], opts?: { timeoutMs?: number; input?: string }) => run(cli, [...e.globalArgs, ...args], opts)
     const inspect = await pm(['image', 'inspect', '--format', '{{json .Config}}', from])
-    if (inspect.code !== 0) failWithReason(409, 'base_missing', `The bot's base image ${from} isn't on this computer.`)
+    // Item 2 (Charles): same condition as M1's ensure (line ~601), so the same reason and text.
+    if (inspect.code !== 0) failWithReason(409, 'image_missing', `The bot image ${from} isn't built yet. Finish the setup steps in Settings › VMs first.`)
     const cfg = JSON.parse(inspect.stdout) as { User?: string; Entrypoint?: string[] | null; Cmd?: string[] | null }
     let grant: EgressGrant
     try {
-      grant = await deps.egress.grant(slug, 'build')
+      // Review B3: the credential dies a minute after the build's own time limit.
+      grant = await deps.egress.grant(slug, 'build', { ttlMs: BUILD_TIMEOUT_MS + CREDENTIAL_GRACE_MS })
     } catch (err) {
       log(`bot-env: ${slug}: no proxy for the build: ${(err as EgressUnavailableError).detail ?? (err as Error).message}`)
       failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
@@ -523,6 +555,8 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
         'apt-get update && apt-get install -y --no-install-recommends "$@" && rm -rf /var/lib/apt/lists/*'
       const r = await pm(
         ['run', '-i', '--name', name, '--pull=never', '--network', grant.network, '--user', '0:0', '--security-opt', 'no-new-privileges',
+          // Review S4: only what apt/dpkg need as root in the container, and the bots' limits.
+          ...BUILD_CAPS, ...(enforceLimits() ? buildLimits() : []),
           '--label', `${EGRESS_LABEL}=build`, '--label', `${IMAGE_LABELS.agent}=${slug}`, '--entrypoint', 'sh', from, '-c', script, 'sh', ...pkgs],
         { timeoutMs: BUILD_TIMEOUT_MS, input: `${url}\n` },
       )

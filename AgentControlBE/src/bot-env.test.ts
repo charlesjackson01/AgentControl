@@ -14,7 +14,7 @@ import {
   createBotEnvService,
   envArgs,
   envListProblem,
-  execArgv,
+  envWith, execArgv, passEnvArgs,
   layerContainerfile,
   parseDu,
   type BotEnvDeps,
@@ -212,6 +212,13 @@ describe('argv builders', () => {
     expect(checkCwd('/bot/groups/team/sub')).toBe('/bot/groups/team/sub')
     for (const bad of ['/etc', '/bot/workspace/../../etc', '/bot', '/bot/skills', 'workspace']) expect(() => checkCwd(bad)).toThrow(/run cwd/)
     expect(() => execArgv({ slug: 'analyst', argv: [], env: [] })).toThrow(/empty/)
+  })
+
+  it('review S2: passEnv names go last as `--env NAME` (no value); envWith carries the values', () => {
+    expect(execArgv({ slug: 'analyst', argv: ['true'], env: [{ name: 'FOO', value: '1' }], passEnv: ['HTTPS_PROXY', 'http_proxy'] }))
+      .toEqual(['exec', '--user', '1000:1000', '--workdir', '/bot/workspace', '--env', 'FOO=1', '--env', 'HTTPS_PROXY', '--env', 'http_proxy', 'ac-bot-analyst', 'true'])
+    for (const bad of ['A=B', '', '1X', 'A B']) expect(() => passEnvArgs([bad])).toThrow(/bad env name/)
+    expect(envWith([{ name: 'HTTPS_PROXY', value: 'u' }], { PATH: '/bin' })).toEqual({ PATH: '/bin', HTTPS_PROXY: 'u' })
   })
 
   it('layer Containerfile carries from + packages labels', () => {

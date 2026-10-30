@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
 import { testAllowCidr, type EgressRulesConfig } from './egress-rules.js'
-import { EGRESS_PROXY_PORT, type EgressCredential } from './egressd.js'
+import { configHash, EGRESS_PROXY_PORT, type EgressCredential, type EgressHealth } from './egressd.js'
 import { SCRIPT_RUN_HOSTS_MAX, type EnvVar, type HostContact } from './shared/types.js'
 import { GVPROXY_CIDR, SLIRP_CIDR } from './user-only.js'
 import { sharedImageRef } from './vm-images.js'
@@ -41,6 +41,12 @@ export const PROXY_UNAVAILABLE_REASON = 'proxy_unavailable'
  * most /24 or /120, and only for home_network / reserved / tailscale (egress-rules.ts).
  */
 export const EGRESS_TEST_ALLOW_ENV = 'AC_EGRESS_TEST_ALLOW'
+/** Review B3: a probe credential's lifetime. */
+export const PROBE_TTL_MS = 90_000
+/** Review B3: the margin after a run's timeout or a build's limit before its credential expires. */
+export const CREDENTIAL_GRACE_MS = 60_000
+/** Review B3: a build's credential when the caller doesn't say (BUILD_TIMEOUT_MS + 60 s). */
+export const BUILD_TTL_MS = 20 * 60_000 + CREDENTIAL_GRACE_MS
 export function egressNetworkName(slug: string): string {
   return `ac-egress-${slug}`
 }
@@ -62,7 +68,9 @@ export interface EgressGrant {
   proxyAddress: string
   /** HTTP(S)_PROXY and friends, for the run's exec env or a build's --build-arg. */
   env: EnvVar[]
-  /** Values to redact from run output and logs (the credential). Never stored. */
+  /** The credential's secret (the probe hands it to its container on stdin). Never stored or logged. */
+  secret: string
+  /** Values to redact from run output and logs: every form of the credential (credentialForms). Never stored. */
   secrets: string[]
 }
 
@@ -89,9 +97,16 @@ export interface EgressService {
   available(): Promise<{ ok: true } | { ok: false; message: string }>
   /** The bot's internal network name. */
   networkFor(slug: string): string
-  /** Mint a credential bound to the bot's network (creates the network, attaches the proxy). Throws EgressUnavailableError. */
-  grant(slug: string, kind: EgressCredential['kind']): Promise<EgressGrant>
-  /** Revoke it (closes its tunnels) and return its host log. Best effort: [] when the proxy is gone. */
+  /**
+   * Mint a credential bound to the bot's network (creates the network, attaches the proxy). Throws
+   * EgressUnavailableError. Review B3: it expires after `ttlMs` (run: timeout + 60 s from the
+   * run's start, passed by the runner; build: BUILD_TTL_MS; probe: PROBE_TTL_MS).
+   */
+  grant(slug: string, kind: EgressCredential['kind'], opts?: { ttlMs?: number }): Promise<EgressGrant>
+  /**
+   * Revoke it (closes its tunnels) and return its host log. Review B3: a failure is retried once;
+   * if that fails too the proxy container is removed (no credential outlives its run), and [].
+   */
   revoke(id: string): Promise<HostContact[]>
   /** The live host log of a credential. */
   hosts(id: string): Promise<HostContact[]>
@@ -121,7 +136,8 @@ export const PROBE_SLUG = '_probe'
 /** Runs in the probe container: three socket tries, one JSON line. Plain node, no shell input. */
 export const CONNECT_CHECK_SCRIPT = String.raw`
 const net = require('net')
-const [host, port, auth] = [process.env.P_HOST, Number(process.env.P_PORT), process.env.P_AUTH]
+const [host, port] = [process.env.P_HOST, Number(process.env.P_PORT)]
+let auth = ''
 const tryConnect = (h, p, line) => new Promise((done) => {
   const s = net.connect({ host: h, port: p })
   let buf = ''
@@ -133,12 +149,25 @@ const tryConnect = (h, p, line) => new Promise((done) => {
 })
 const connect = (a) => 'CONNECT 127.0.0.1:443 HTTP/1.1\r\nHost: 127.0.0.1:443\r\n' + (a ? 'Proxy-Authorization: Basic ' + Buffer.from(a).toString('base64') + '\r\n' : '') + '\r\n'
 ;(async () => {
+  // Review S2: the credential comes on stdin, never argv or the container's env.
+  for await (const c of process.stdin) auth += c
+  auth = auth.trim()
   const noAuth = await tryConnect(host, port, connect(null))
   const blocked = await tryConnect(host, port, connect(auth))
   const direct = await tryConnect('192.0.2.1', 80, null)
   console.log(JSON.stringify({ noAuth, blocked, direct }))
 })()
 `
+
+/**
+ * Review B4: every form the credential can take in output, longest first: the proxy URL, the
+ * URL without its scheme, base64 of `id:secret` (the Proxy-Authorization value, e.g. in `curl -v`),
+ * the URL-encoded secret and the secret itself.
+ */
+export function credentialForms(id: string, secret: string, url: string): string[] {
+  const forms = [url, url.replace(/^[a-z]+:\/\//i, ''), Buffer.from(`${id}:${secret}`).toString('base64'), encodeURIComponent(secret), secret]
+  return [...new Set(forms.filter(Boolean))].sort((a, b) => b.length - a.length)
+}
 
 /** Proxy env for a client: upper and lower case (curl reads lower), pip and npm too. NO_PROXY cleared. */
 export function proxyEnv(url: string): EnvVar[] {
@@ -303,7 +332,8 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
   const networkFor = (slug: string) => `${prefix}${slug}`
   const image = () => deps.image?.() ?? sharedImageRef('botvm')
   let lock: Promise<unknown> = Promise.resolve()
-  let pushedConfig = ''
+  /** Review B3: the first daemon contact of this BE process revokes every older credential. */
+  let revokedAll = false
   let subnets: string[] = []
   const subnetsRead = new Set<string>()
   let onMachine = false
@@ -347,12 +377,16 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
   function currentConfig(): EgressRulesConfig {
     return deps.config?.() ?? { hostAddresses: hostInterfaceAddresses() }
   }
-  async function pushConfig(force = false): Promise<void> {
+  /**
+   * Review S1: the proxy reports the hash of the settings it has (null after a restart, when it
+   * refuses everything with 503 "isn't ready"); send them whenever it differs.
+   */
+  async function pushConfig(health: EgressHealth): Promise<void> {
     const cfg = currentConfig()
-    const text = JSON.stringify(cfg)
-    if (!force && text === pushedConfig) return
+    if (health.configHash === configHash(cfg)) return
+    if (health.configHash !== null) log('egress: sending the proxy its new settings')
+    else log('egress: sending the proxy its settings (new or restarted proxy)')
     await ctl({ op: 'config', config: cfg })
-    pushedConfig = text
   }
 
   async function writeApp(): Promise<{ dir: string; hash: string }> {
@@ -369,20 +403,20 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     return { dir, hash }
   }
 
-  async function daemonState(): Promise<{ state: 'missing' | 'running' | 'stopped'; hash?: string; networks: Record<string, string> }> {
-    const r = await cli(['container', 'inspect', '--format', `{{.State.Running}}|{{index .Config.Labels "${HASH_LABEL}"}}|{{json .NetworkSettings.Networks}}`, daemon])
+  async function daemonState(): Promise<{ state: 'missing' | 'running' | 'stopped'; hash?: string; startedAt?: string; networks: Record<string, string> }> {
+    const r = await cli(['container', 'inspect', '--format', `{{.State.Running}}|{{index .Config.Labels "${HASH_LABEL}"}}|{{.State.StartedAt}}|{{json .NetworkSettings.Networks}}`, daemon])
     if (r.code !== 0) {
       if (noSuch(r)) return { state: 'missing', networks: {} }
       throw new EgressUnavailableError(`couldn't inspect the proxy: ${lastLine(r)}`)
     }
-    const [running, hash, nets] = r.stdout.trim().split('|')
+    const [running, hash, startedAt, nets] = r.stdout.trim().split('|')
     const networks: Record<string, string> = {}
     try {
       for (const [k, v] of Object.entries(JSON.parse(nets ?? '{}') as Record<string, { IPAddress?: string }>)) networks[k] = v?.IPAddress ?? ''
     } catch {
       // older engines: no networks map
     }
-    return { state: running === 'true' ? 'running' : 'stopped', hash, networks }
+    return { state: running === 'true' ? 'running' : 'stopped', hash, startedAt, networks }
   }
 
   async function networkExists(name: string): Promise<boolean> {
@@ -390,12 +424,11 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     return r.code === 0
   }
 
-  async function waitHealthy(): Promise<void> {
+  async function waitHealthy(): Promise<EgressHealth> {
     let last = ''
     for (let i = 0; i < 40; i++) {
       try {
-        await ctl({ op: 'health' })
-        return
+        return await ctl<EgressHealth>({ op: 'health' })
       } catch (err) {
         last = (err as EgressUnavailableError).detail ?? (err as Error).message
       }
@@ -433,15 +466,19 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
         'start the proxy',
         120_000,
       )
-      pushedConfig = ''
       st = await daemonState()
     } else if (st.state === 'stopped') {
       await must(['start', daemon], 'start the proxy')
-      pushedConfig = ''
       st = await daemonState()
     }
-    await waitHealthy()
-    await pushConfig()
+    const health = await waitHealthy()
+    if (!revokedAll) {
+      // Review B3: credentials minted by an earlier BE process (crash, restart) are orphans.
+      const r = await ctl<{ revoked?: number }>({ op: 'revokeAll' })
+      if (r.revoked) log(`egress: revoked ${r.revoked} credential(s) left from before this start`)
+      revokedAll = true
+    }
+    await pushConfig(health)
     return st.networks
   }
 
@@ -502,16 +539,16 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
       }
     },
 
-    grant: (slug, kind) =>
+    grant: (slug, kind, opts = {}) =>
       serial(async () => {
         try {
           const proxyAddress = await ensureNetwork(slug)
-          await pushConfig()
           const id = `ac${randomBytes(9).toString('hex')}`
           const secret = randomBytes(24).toString('hex')
-          await ctl({ op: 'grant', credential: { id, secret, proxyAddress, slug, network: networkFor(slug), kind } satisfies EgressCredential })
+          const ttlMs = Math.max(1_000, Math.round(opts.ttlMs ?? (kind === 'build' ? BUILD_TTL_MS : PROBE_TTL_MS)))
+          await ctl({ op: 'grant', credential: { id, secret, proxyAddress, slug, network: networkFor(slug), kind, ttlMs } satisfies EgressCredential })
           const url = `http://${id}:${secret}@${proxyAddress}:${EGRESS_PROXY_PORT}`
-          return { id, slug, network: networkFor(slug), proxyAddress, env: proxyEnv(url), secrets: [secret, url] }
+          return { id, slug, network: networkFor(slug), proxyAddress, env: proxyEnv(url), secret, secrets: credentialForms(id, secret, url) }
         } catch (err) {
           if (err instanceof EgressUnavailableError) {
             log(`egress: ${slug}: ${err.detail}`)
@@ -523,12 +560,19 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
       }),
 
     async revoke(id) {
-      try {
-        return (await ctl<{ hosts?: HostContact[] }>({ op: 'revoke', id })).hosts ?? []
-      } catch (err) {
-        log(`egress: revoking ${id} failed: ${(err as EgressUnavailableError).detail ?? (err as Error).message}`)
-        return []
+      const why = (err: unknown) => (err as EgressUnavailableError).detail ?? (err as Error).message
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          return (await ctl<{ hosts?: HostContact[] }>({ op: 'revoke', id })).hosts ?? []
+        } catch (err) {
+          log(`egress: revoking ${id} failed (try ${attempt} of 2): ${why(err)}`)
+        }
       }
+      // Review B3: never leave a live credential behind: remove the proxy (it is re-created on
+      // next use, with no credentials).
+      const rm = await cli(['rm', '--force', '--time', '2', daemon]).catch((err: Error) => ({ code: 1, stdout: '', stderr: err.message }) as CommandResult)
+      log(rm.code === 0 ? `egress: removed ${daemon} so ${id} can't be used` : `egress: couldn't remove ${daemon} after a failed revoke: ${lastLine(rm)}`)
+      return []
     },
 
     async hosts(id) {
@@ -557,10 +601,10 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
             ...(opts.runtimeFlags ?? []), 'run', '--rm', '--network', grant.network,
             '--label', 'io.agentcontrol.probe=1', '--label', `${EGRESS_LABEL}=probe`,
             '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--user', '1000:1000',
-            '--env', `P_HOST=${grant.proxyAddress}`, '--env', `P_PORT=${EGRESS_PROXY_PORT}`, '--env', `P_AUTH=${grant.id}:${grant.secrets[0]}`,
+            '--env', `P_HOST=${grant.proxyAddress}`, '--env', `P_PORT=${EGRESS_PROXY_PORT}`, '-i',
             opts.image ?? image(), 'node', '-e', CONNECT_CHECK_SCRIPT,
           ],
-          { timeoutMs: 60_000 },
+          { timeoutMs: 60_000, input: `${grant.id}:${grant.secret}\n` },
         )
         let res: { noAuth?: string; blocked?: string; direct?: string } = {}
         try {
@@ -585,7 +629,6 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
         await cli(['rm', '--force', '--time', '2', daemon])
         const r = await cli(['network', 'rm', outNet])
         if (r.code !== 0 && !noSuch(r)) log(`egress: remove ${outNet}: ${lastLine(r)}`)
-        pushedConfig = ''
       }),
   }
 }

@@ -77,6 +77,14 @@ export interface UndoApplyResult {
   skipped: UndoSkipped[]
 }
 
+/** BE-P2-12: set as `undoRun` on the error a partial undo throws (the undo run was recorded). */
+export interface UndoPartialRun {
+  undoRunId: string
+  snapshot: SnapshotOutcome['snapshot']
+  filesChanged: FileChange[]
+  undo: ScriptRunUndo
+}
+
 export interface UndoService {
   preview(agent: Agent, runId: string): UndoPreview
   apply(agent: Agent, runId: string, opts?: { force?: boolean }): Promise<UndoApplyResult>
@@ -267,6 +275,11 @@ export function createUndoService(deps: UndoDeps): UndoService {
         const o = await deps.snapshots.finish(h)
         if (thrown) {
           log(`undo: ${agent.slug}: undoing run ${runId} stopped partway (undo run ${undoRunId} recorded): ${(thrown as Error).message}`)
+          // BE-P2-12: the partial undo run, so RunService can record it (a failed kind 'undo' ScriptRun).
+          if (thrown && typeof thrown === 'object') {
+            const undoRun: UndoPartialRun = { undoRunId, snapshot: o.snapshot, filesChanged: o.filesChanged, undo: o.meta.undo ?? { state: 'available' } }
+            Object.assign(thrown, { undoRun })
+          }
           throw thrown
         }
         const undone = deps.snapshots.markUndone(agent.slug, runId, undoRunId)

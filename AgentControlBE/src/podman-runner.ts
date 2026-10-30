@@ -127,6 +127,11 @@ export interface ContainerRunnerDeps {
 }
 
 export interface ContainerRunner extends Runner {
+  /**
+   * BE-P2-12: the checks `run` makes before queueing (bot, network, argv, cwd, then the gVisor,
+   * limits and mounts blocks), without running anything. Null: `run` would queue it.
+   */
+  check(req: RunScriptRequest): RunScriptResult | null
   /** Runs queued or running for the bot (BotEnvService.activeRuns). */
   activeRuns(agentId: string): number
   /**
@@ -370,23 +375,31 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     return { ...base, status: 'error', outcome: 'failed', error }
   }
 
-  function run(req: RunScriptRequest): Promise<RunScriptResult> {
-    const t0 = Date.now()
+  /** The checks made before a run is queued: a refusal, or the bot and its container cwd. */
+  function precheck(req: RunScriptRequest, t0: number): RunScriptResult | { agent: Agent; cwd: string } {
     const agent = deps.getAgent(req.agentId)
-    if (!agent) return Promise.resolve(err(t0, 'Bot not found.'))
-    if (req.network === 'on') return Promise.resolve(err(t0, NETWORK_UNAVAILABLE))
+    if (!agent) return err(t0, 'Bot not found.')
+    if (req.network === 'on') return err(t0, NETWORK_UNAVAILABLE)
     if (!Array.isArray(req.argv) || !req.argv.length || req.argv.some((a) => typeof a !== 'string' || a.includes('\0'))) {
-      return Promise.resolve(err(t0, 'Give the command to run as a list of arguments.'))
+      return err(t0, 'Give the command to run as a list of arguments.')
     }
     let cwd: string
     try {
       if (path.posix.isAbsolute(req.cwd) || req.cwd.includes('\\')) throw new Error('absolute')
       cwd = checkCwd(path.posix.join('/bot', req.cwd || 'workspace'))
     } catch {
-      return Promise.resolve(err(t0, `A run's folder must be workspace or groups/<group> (got ${JSON.stringify(String(req.cwd).slice(0, 80))}).`))
+      return err(t0, `A run's folder must be workspace or groups/<group> (got ${JSON.stringify(String(req.cwd).slice(0, 80))}).`)
     }
     const no = blocked(agent, deps.runtime(agent), t0)
-    if (no) return Promise.resolve(no)
+    if (no) return no
+    return { agent, cwd }
+  }
+
+  function run(req: RunScriptRequest): Promise<RunScriptResult> {
+    const t0 = Date.now()
+    const pre = precheck(req, t0)
+    if ('status' in pre) return Promise.resolve(pre)
+    const { agent, cwd } = pre
     const timeoutSec = Math.min(Math.max(1, Math.floor(Number(req.timeoutSec) || VM_LIMITS.timeoutSec)), VM_LIMITS.timeoutSec)
 
     // One run at a time per bot; queued runs wait their turn.
@@ -444,6 +457,10 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       return (await deps.engine()) !== null
     },
     run,
+    check(req) {
+      const pre = precheck(req, Date.now())
+      return 'status' in pre ? pre : null
+    },
     exclusive,
     activeRuns: (agentId) => counts.get(agentId) ?? 0,
     stopRuns(agentId) {

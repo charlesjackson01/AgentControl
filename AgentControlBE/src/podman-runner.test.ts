@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
-import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, PERSONAL_QUOTA_REASON, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
+import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, NETWORK_UNAVAILABLE, parseCgroupEvents, PERSONAL_QUOTA_REASON, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
 import { resolveRuntime, type ResolvedRuntime, type RuntimeProbeResult } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { StreamRunner } from './stream-runner.js'
@@ -69,6 +69,20 @@ describe('parseCgroupEvents', () => {
 })
 
 describe('createContainerRunner', () => {
+  it('BE-P2-12: check() makes the same refusals as run() without running anything', async () => {
+    const { runner, streamed, botEnv } = setup()
+    expect(runner.check(req())).toBeNull()
+    expect(runner.check(req({ agentId: 'nope' }))).toMatchObject({ status: 'error', outcome: 'failed' })
+    expect(runner.check(req({ network: 'on' }))).toMatchObject({ outcome: 'failed', error: NETWORK_UNAVAILABLE })
+    expect(runner.check(req({ argv: [] }))).toMatchObject({ outcome: 'failed' })
+    const unlimited: ResolvedRuntime = { ...crun, limitsEnforced: false, limitsReason: 'x' }
+    expect(setup({ runtime: unlimited }).runner.check(req())).toMatchObject({ reason: 'limits_unenforced' })
+    expect(setup({ deps: { mountsUsable: () => false } }).runner.check(req())).toMatchObject({ reason: 'mounts_unusable' })
+    expect(streamed).toEqual([])
+    expect(botEnv.ensure).not.toHaveBeenCalled()
+    expect(runner.activeRuns('ag1')).toBe(0)
+  })
+
   it('blocks runs when limits are not enforced (or not confirmed), unless AC_ALLOW_UNLIMITED_RUNS=1', async () => {
     const unlimited: ResolvedRuntime = { ...crun, limitsEnforced: false, limitsReason: "limits can't be enforced" }
     for (const runtime of [unlimited, { ...crun, limitsEnforced: undefined }]) {

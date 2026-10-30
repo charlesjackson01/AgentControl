@@ -147,6 +147,13 @@ export interface BotEnvRouteDeps {
   personal?: PersonalUsage
   /** BE-P2-10: the bot's kept undo snapshots against its budget; absent: none. */
   snapshotUsage?: (agent: Agent) => SnapshotUsage
+  /** BE-P2-12: the bot's newest script runs for VmInfo.runs (RunService); absent: none. */
+  runs?: (agent: Agent) => { runs: VmInfo['runs']; hasMore: boolean }
+}
+
+/** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
+export interface BotEnvRoutes {
+  vmInfo(agent: Agent): Promise<VmInfo>
 }
 
 /** The bot's folder parts of its personal data; memory includes BOT.md (plan §5). */
@@ -166,7 +173,7 @@ export function personalFolderParts(store: WorkspaceStore, agent: Agent): { work
   }
 }
 
-export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore, deps: BotEnvRouteDeps): void {
+export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore, deps: BotEnvRouteDeps): BotEnvRoutes {
   const { botEnv } = deps
   const agentOf = (id: string): Agent => {
     const agent = store.agents.find((a) => a.id === id)
@@ -230,9 +237,18 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       ...(idleStopAt && state === 'running' ? { idleStopAt } : {}),
       ...(isolationNote ? { isolationNote } : {}),
       storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root },
-      runs: [],
-      runsHasMore: false,
+      ...runsOf(agent),
     }
+  }
+
+  function runsOf(agent: Agent): { runs: VmInfo['runs']; runsHasMore: boolean } {
+    try {
+      const page = deps.runs?.(agent)
+      if (page) return { runs: page.runs, runsHasMore: page.hasMore }
+    } catch {
+      // the history is best effort here; GET /script-runs reports errors
+    }
+    return { runs: [], runsHasMore: false }
   }
 
   const idOf = (request: { params: unknown }) => (request.params as { id: string }).id
@@ -322,6 +338,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       canRollback: vm.image.previous !== undefined && vm.image.previous < vm.image.generation,
     }
   })
+
+  return { vmInfo }
 }
 
 /** Store-backed saveVm for the service: replace Agent.vm and save (rolls back on failure). */

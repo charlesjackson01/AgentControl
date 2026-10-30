@@ -688,6 +688,12 @@ export interface ScriptRun {
   exitCode?: number
   /** Plain-language reason for failed / denied / timed_out / stopped. */
   error?: string
+  /**
+   * BE-P2-12 (additive): status 'failed' because a block hit at the run's turn — the same reasons
+   * a start answers 409 with (gvisor_unavailable, limits_unenforced, mounts_unusable,
+   * personal_quota, snapshot_failed, low_disk). Show `error`; branch on `reason`.
+   */
+  reason?: string
   queuedAt: string
   startedAt?: string
   endedAt?: string

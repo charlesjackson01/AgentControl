@@ -26,6 +26,7 @@ function mockApi(routes) {
       try { message = errorMessageFrom(JSON.parse(res.text)) } catch { /* non-JSON */ }
       const err = new Error(message)
       err.status = res.status
+      try { err.body = JSON.parse(res.text) } catch { /* non-JSON */ }
       throw err
     }
     return JSON.parse(res.text)
@@ -344,6 +345,32 @@ describe('FE-P2-7 browser for scripts (mockup 15)', () => {
     assert.equal(err.status, 409)
     assert.equal(createFailureText('Analyst', err),
       'Couldn\u2019t create Analyst: the download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
+  })
+  it('409 low_disk with freeBytes under 1.3 GB: the mockup sentence with the real figure (FE pick: freeBytes)', async () => {
+    const body = { statusCode: 409, error: 'Conflict', reason: 'low_disk', message: 'Not enough disk space.', freeBytes: 0.8 * 1024 ** 3 }
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, body) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: the download needs about 1.3 GB and this computer has 0.8 GB free. Free some space, then try again.')
+  })
+  it('409 low_disk with 1.3–4.3 GB free: the floor sentence with the real figure', async () => {
+    const body = { statusCode: 409, error: 'Conflict', reason: 'low_disk', message: 'Not enough disk space.', freeBytes: 2.5 * 1024 ** 3 }
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, body) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: the download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free. Free some space, then try again.')
+  })
+  it('409 low_disk with the download reused (only the floor counts): the server message', async () => {
+    const body = { statusCode: 409, error: 'Conflict', reason: 'low_disk', message: 'This computer has 2.1 GB free; runs need 3 GB.', freeBytes: 2.1 * 1024 ** 3, reused: true }
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, body) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err), 'Couldn\u2019t create Analyst: this computer has 2.1 GB free; runs need 3 GB.')
+  })
+  it('a freeBytes on a non-409 or another reason is ignored', () => {
+    const e1 = Object.assign(new Error('Boom'), { status: 500, body: { reason: 'low_disk', freeBytes: 1 } })
+    const e2 = Object.assign(new Error('Busy'), { status: 409, body: { reason: 'build_active', freeBytes: 1 } })
+    assert.equal(createFailureText('A', e1), 'Couldn\u2019t create A: boom')
+    assert.equal(createFailureText('A', e2), 'Couldn\u2019t create A: busy')
   })
   it('409 low_disk with no message falls back to the plain conflict text, never blank', async () => {
     const { api } = mockApi({ 'POST /api/agents': () => json(409, { statusCode: 409, error: 'Conflict', reason: 'low_disk' }) })

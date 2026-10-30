@@ -1,6 +1,7 @@
 /* FE-5: the /new bot draft card (mockup 02c, gap states S1–S9). Pure: no React or DOM,
    so tests/new-bot.test.mjs can import it. The requests take a `request` function
    (lib/api.ts `request` in the app, a mocked fetch in tests). */
+import { lowDiskTextOf } from './low-disk.ts'
 import { MAX_AGENT_RULE_CHARS, MAX_AGENT_RULES, type Endpoint, type InternetPolicy } from './types.ts'
 
 /** BE-8: POST /api/agents/draft rejects a prompt over this many characters (raw, before trimming). */
@@ -339,7 +340,9 @@ const lowerFirst = (s: string) => (s ? s[0].toLowerCase() + s.slice(1) : s)
 
 /** S9 text: "Couldn’t create Trip Planner: the setting could not be saved. Please retry." */
 export function createFailureText(name: string, err: unknown): string {
-  const raw = err instanceof Error ? err.message : ''
+  // 409 low_disk with a free-space figure: the low-disk sentence (lib/low-disk.ts); else the server's message.
+  const disk = statusOf(err) === 409 ? lowDiskTextOf((err as { body?: unknown }).body) : null
+  const raw = disk ?? (err instanceof Error ? err.message : '')
   const msg = !raw || raw === 'Failed to fetch' || raw === 'fetch failed' ? 'could not reach AgentControl. Check that the server is running.' : raw
   return `Couldn\u2019t create ${name.trim() || 'the bot'}: ${lowerFirst(msg)}`
 }

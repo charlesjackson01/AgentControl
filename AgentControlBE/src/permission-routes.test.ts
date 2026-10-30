@@ -4,12 +4,16 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from './app.js'
+import { createBotEnvService } from './bot-env.js'
+import { botMounts, storeSaveVm } from './bot-env-routes.js'
+import { fakeEngine } from './bot-env.fake.js'
 import type { EgressService } from './egress-service.js'
 import { EGRESS_VIA } from './egressd.js'
 import { liveEventMatches } from './live-events.js'
 import { CONFIRM_REQUIRED_TEXT } from './permission-routes.js'
-import { PERMISSION_CSRF_HEADER, type Agent, type LiveEvent, type PermissionRequest, type ScriptRun } from './shared/types.js'
+import { PERMISSION_CSRF_HEADER, type Agent, type LiveEvent, type PermissionRequest, type ScriptRun, type VmHostInfo } from './shared/types.js'
 import { createStore } from './store.js'
+import type { VmHostService } from './vm-host.js'
 import { USER_ONLY_MESSAGE } from './user-only.js'
 
 /** BE-P2-14: /api/permissions through the app (error bodies, confirm header, user-only). */
@@ -17,11 +21,28 @@ import { USER_ONLY_MESSAGE } from './user-only.js'
 let dir = ''
 let app: FastifyInstance
 const fakeEgress = { userOnlyCidrs: () => ['10.89.3.0/24'], refreshSubnets: async () => {}, available: async () => ({ ok: false, message: 'test' }) } as unknown as EgressService
+// CI fix (PR #31): PATCH /api/agents/:id/vm answers VmInfo, which reads the engine and the bot's
+// container. Without these fakes that was the host's real `podman --version` / `podman info` /
+// `podman container inspect` (on a GitHub runner: slow enough to time the test out).
+const host = {
+  engine: 'podman', version: '5.4.0', provider: 'native', os: 'linux', machine: null,
+  storage: { driver: 'overlay', backend: 'local', volumeState: 'ok' }, concurrency: 2, setupSteps: [],
+} as unknown as VmHostInfo
+const vmHost: VmHostService = { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host }
 
 beforeEach(async () => {
   vi.stubEnv('AGENTCONTROL_AUTH_TOKEN', '')
   dir = mkdtempSync(join(tmpdir(), 'agentcontrol-be14-routes-'))
-  app = buildApp(createStore(join(dir, 'store.json')), { egress: fakeEgress })
+  const store = createStore(join(dir, 'store.json'))
+  const engine = fakeEngine()
+  const botEnv = createBotEnvService({
+    exec: engine.exec,
+    engine: async () => ({ cli: 'podman', globalArgs: [] }),
+    mounts: (a) => botMounts(store, a),
+    saveVm: storeSaveVm(store),
+    activeRuns: () => 0,
+  })
+  app = buildApp(store, { egress: fakeEgress, vmHost, botEnv })
   await app.ready()
 })
 afterEach(async () => {

@@ -36,6 +36,7 @@ import { createPermissionGate, type PermissionGate } from './permission-gate.js'
 import { BROWSER_INTERNET_NEVER_TEXT, createBrowserAddon, type BrowserAddon } from './browser-addon.js'
 import { registerBrowserRoutes } from './browser-routes.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
+import type { StreamRunner } from './stream-runner.js'
 import { baseImageFor, botImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
@@ -428,6 +429,11 @@ export interface BuildAppOptions {
   vmTimers?: { budgetSweepMs?: number; personalMeasureMs?: number }
   /** BE-P2-12: test-only script runner (a fake), instead of the Podman/Docker one. */
   vmRunner?: ContainerRunner
+  /**
+   * CI fix (PR #31): test-only process I/O for the real container runner (its checks and wiring
+   * stay real; the `podman exec` and `podman stop` it would send go to these fakes, not the host).
+   */
+  vmRunnerIo?: { stream?: StreamRunner; exec?: CommandRunner }
   /** BE-P2-12: test-only free bytes for the 3 GB run floor (null: unknown). */
   vmFreeBytes?: () => number | null
   /** BE-P2-12: test-only SSE heartbeat and run.output coalescing intervals. */
@@ -1759,6 +1765,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
 
   // BE-P2-8: script runs in the bot's container (Podman or Docker).
   runner = opts.vmRunner ?? createContainerRunner({
+    ...(opts.vmRunnerIo?.stream ? { stream: opts.vmRunnerIo.stream } : {}),
+    ...(opts.vmRunnerIo?.exec ? { exec: opts.vmRunnerIo.exec } : {}),
     botEnv,
     engine: engineRef,
     getAgent: (agentId) => store.agents.find((a) => a.id === agentId),

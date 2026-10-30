@@ -6,6 +6,9 @@ import { buildApp } from './app.js'
 import { createBotEnvService } from './bot-env.js'
 import { botMountAllowList, botMounts, snapshotZones, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
+import { downEgress } from './egress-service.fake.js'
+import type { StreamRunner } from './stream-runner.js'
+import type { CommandRunner } from './command-runner.js'
 import { checkBotMounts, KEEP_ID_NOTE } from './isolation.js'
 import { botRoot } from './files.js'
 import { createStore } from './store.js'
@@ -28,6 +31,12 @@ let engine: ReturnType<typeof fakeEngine>
 let host: VmHostInfo
 let runs = 0
 let probeResult: RuntimeProbeResult | null = null
+const streamed: string[][] = []
+const fakeStream: StreamRunner = (cmd, args) => {
+  streamed.push([cmd, ...args])
+  return { done: Promise.resolve({ code: 0 }), kill: () => {} }
+}
+const fakeRunnerExec: CommandRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 const probeCalls: string[] = []
 const fakeProbe: RuntimeProbe = {
   current: () => probeResult,
@@ -55,7 +64,10 @@ beforeEach(() => {
     saveVm: storeSaveVm(store),
     activeRuns: () => runs,
   })
-  app = buildApp(store, { vmHost, botEnv, runtimeProbe: fakeProbe })
+  // CI fix (PR #31): the real container runner (its mount check is under test) with fake process
+  // I/O, and a down proxy: never `podman exec`/`podman stop` on the host's real containers.
+  streamed.length = 0
+  app = buildApp(store, { vmHost, botEnv, runtimeProbe: fakeProbe, egress: downEgress(), vmRunnerIo: { stream: fakeStream, exec: fakeRunnerExec } })
 })
 afterEach(async () => {
   await app.close()
@@ -294,8 +306,10 @@ describe('BE-P2-5: mount allow-list and isolation note', () => {
       probeResult = std(bind)
       expect(await go()).toMatchObject({ reason: 'mounts_unusable', error: "This computer can't give bot scripts safe access to their files, so scripts can't run here." })
     }
+    expect(streamed).toEqual([])
     probeResult = std('pass')
     expect((await go()).reason).toBeUndefined()
+    expect(streamed.at(-1)?.slice(0, 2)).toEqual(['podman', 'exec'])
     vi.stubEnv('AC_ALLOW_UNLIMITED_RUNS', '1')
     probeResult = std('fail')
     expect((await go()).reason).toBeUndefined()

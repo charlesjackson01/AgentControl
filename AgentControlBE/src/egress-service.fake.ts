@@ -3,6 +3,7 @@
  * Podman for EgressService whose `exec … ctl` talks to a real in-process egress proxy. Not used at run time.
  */
 import type { CommandResult, CommandRunner } from './command-runner.js'
+import { EgressUnavailableError, PROXY_UNAVAILABLE, type EgressService } from './egress-service.js'
 import { createEgressProxy, handleCtl, type CtlRequest, type EgressProxy, type EgressProxyOptions } from './egressd.js'
 
 export interface FakePodmanOptions {
@@ -104,4 +105,27 @@ export function fakePodman(fo: FakePodmanOptions = {}) {
     return fail(`fake: unexpected ${a.join(' ')}`)
   }
   return { exec, calls, inputs, networks, state, get daemon() { return daemon }, get proxy() { return proxy }, stop() { if (daemon) daemon.running = false } }
+}
+
+/**
+ * CI fix (PR #31): an egress proxy that is down, with no engine behind it. Unit tests that build the
+ * app pass this (or their own fake) so `available()` never reaches a real Podman on the host (on a
+ * GitHub runner the real service creates ac-egress-out and starts ac-egressd). Everything fails closed.
+ */
+export function downEgress(message = PROXY_UNAVAILABLE): EgressService {
+  const down = async (): Promise<never> => {
+    throw new EgressUnavailableError(message)
+  }
+  return {
+    available: async () => ({ ok: false, message }),
+    networkFor: (slug) => `ac-egress-${slug}`,
+    grant: down,
+    revoke: async () => [],
+    hosts: async () => [],
+    removeNetwork: async () => {},
+    shutdown: async () => {},
+    connectCheck: async () => ({ status: 'fail', message }),
+    userOnlyCidrs: () => [],
+    refreshSubnets: async () => {},
+  }
 }

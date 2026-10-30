@@ -429,9 +429,10 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
 })
 
 /** @vm: needs a real engine (AC_VM_TESTS=1). Honours PODMAN_ARGS (e.g. a throwaway --root/--runroot). */
-const engine = ['podman', 'docker'].find((e) => {
+// CI fix (PR #31): only looked for in @vm runs, and bounded (a unit run never calls the host's engine).
+const engine = process.env.AC_VM_TESTS !== '1' ? undefined : ['podman', 'docker'].find((e) => {
   try {
-    execFileSync(e, ['--version'], { stdio: 'ignore' })
+    execFileSync(e, ['--version'], { stdio: 'ignore', timeout: 30_000 })
     return true
   } catch {
     return false

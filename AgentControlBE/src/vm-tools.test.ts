@@ -9,6 +9,7 @@ import { fakeEngine } from './bot-env.fake.js'
 import { ensureDm } from './conversations.js'
 import { groupIdle } from './groups.js'
 import { PROXY_UNAVAILABLE, type EgressService } from './egress-service.js'
+import { downEgress } from './egress-service.fake.js'
 import { fakeRunner, until, type FakeRunner } from './run-service.fake.js'
 import type { RuntimeProbe } from './runtime-probe.js'
 import type { Agent, AgentRun, ConversationSummary, ScriptRun, VmHostInfo } from './shared/types.js'
@@ -79,6 +80,8 @@ beforeEach(async () => {
     app = buildApp(store, {
       vmHost: { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host },
       botEnv, runtimeProbe: probe, vmRunner: runner, vmFreeBytes: () => null, liveTimers: { heartbeatMs: 50, outputFlushMs: 10 },
+      // CI fix (PR #31): the proxy is down unless a test passes upEgress; never the host's real Podman.
+      egress: downEgress(),
       ...extra,
     })
     await app.ready()

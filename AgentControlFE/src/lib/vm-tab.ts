@@ -12,6 +12,7 @@ import { durationText, limitText } from './run-card.ts'
 import { scriptName } from './live-store.ts'
 import { undoGoneText, undoReasonText } from './undo.ts'
 import { humanSize } from './file-format.ts'
+import { FILES_MISSING_TEXT } from './files.ts'
 
 /**
  * States and notices with no mockup, built from the tab's own patterns (shots in shots/p2-fe-5/).
@@ -170,9 +171,8 @@ export function vmHeader(vm: VmInfo, botName: string, platform: VmPlatform, now:
         start: null,
         stop: false,
         reset: false,
-        banner:
-          vm.stateMessage ??
-          `${possessive(botName)} files aren't where AgentControl keeps them. Chats still work, but scripts and file changes are blocked until the files are back.`,
+        // The server's message (be-6 wording, same check as the file routes' 409); be-6's text if absent.
+        banner: vm.stateMessage?.trim() ? vm.stateMessage : FILES_MISSING_TEXT,
         message: 'Restoring from a backup arrives in a later update.',
       }
   }

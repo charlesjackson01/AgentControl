@@ -2,11 +2,11 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { errorMessageFrom } from '../src/lib/api-error.ts'
 import {
-  BLANK_AVATAR_CHOICES, DRAFT_NETWORK_ERROR, LONG_WAIT_MS, MAX_DRAFT_PROMPT_CHARS,
+  BLANK_AVATAR_CHOICES, BROWSER_DOWNLOAD_SIZE, DRAFT_NETWORK_ERROR, browserCopy, LONG_WAIT_MS, MAX_DRAFT_PROMPT_CHARS,
   blankCard, canCreate, canRetry, cardFromDraft, composerLocked, createBody, createFailureText,
   draftFailureText, draftRequestBody, draftingStatus, elapsedLabel, folderLabel, isAbort, modelOptions,
   nameError, newBotApi, newBotNavState, newCommandPrompt, normalizeDefaults, normalizeDraft, phaseAfterDraft,
-  pickerChoices, placeholderFor, previousOf, profilePrefill, readNewBotNav, startingSkillsTotal, tooLongNotice,
+  pickerChoices, placeholderFor, previousOf, profilePrefill, withMissingDefaults, readNewBotNav, startingSkillsTotal, tooLongNotice,
 } from '../src/lib/new-bot.ts'
 
 /* A request() like lib/api.ts, over a mocked fetch: records calls, throws {message,status} like ApiError. */
@@ -26,6 +26,7 @@ function mockApi(routes) {
       try { message = errorMessageFrom(JSON.parse(res.text)) } catch { /* non-JSON */ }
       const err = new Error(message)
       err.status = res.status
+      try { err.body = JSON.parse(res.text) } catch { /* non-JSON */ }
       throw err
     }
     return JSON.parse(res.text)
@@ -297,5 +298,121 @@ describe('routing and Open full settings', () => {
     assert.equal(p.avatarEmoji, '🧳')
     assert.equal('skillIds' in p, false)
     assert.deepEqual(profilePrefill({ ...card, sourcesOn: ['superpowers'] }, defaults).skillIds, ['sp/x'])
+  })
+})
+
+describe('FE-P2-7 browser for scripts (mockup 15)', () => {
+  const defaults = normalizeDefaults(DEFAULTS)
+  it('a new card has the browser off', () => {
+    assert.equal(blankCard(defaults).browser, false)
+    assert.equal(blankCard(null).browser, false)
+  })
+  it('a redraft keeps the browser choice (card and S4 fallback)', () => {
+    const card = { ...cardFromDraft(null, normalizeDraft(DRAFT), defaults), browser: true }
+    assert.equal(cardFromDraft(card, normalizeDraft({ ...DRAFT, name: 'Wanderer' }), defaults).browser, true)
+    assert.equal(cardFromDraft(card, normalizeDraft({ ...DRAFT, warning: 'No Primary.', warningCode: 'no_primary' }), defaults).browser, true)
+  })
+  it('Off copy is mockup 15 word for word (about 1.3 GB, M2 open question 8)', () => {
+    assert.equal(BROWSER_DOWNLOAD_SIZE, 'about 1.3 GB')
+    assert.equal(browserCopy({ name: 'Analyst', browser: false }),
+      'Off. Analyst asks in chat if a script needs a browser. Turning it on downloads Chromium once (about 1.3 GB, shared by all bots).')
+    assert.equal(browserCopy({ name: '  ', browser: false }).startsWith('Off. The bot asks in chat'), true)
+  })
+  it('On copy (GAP-P2-7a) names the bot and the one-time download', () => {
+    assert.equal(browserCopy({ name: ' Analyst ', browser: true }),
+      'On. Chromium downloads once when Analyst is created (about 1.3 GB, shared by all bots). Web pages still follow the Internet rule.')
+    assert.match(browserCopy({ name: '', browser: true }), /^On\. Chromium downloads once when the bot is created/)
+  })
+  it('off: the create body leaves browser out (master ignores it anyway)', () => {
+    const body = createBody({ ...blankCard(defaults), name: 'A' }, defaults)
+    assert.equal('browser' in body, false)
+  })
+  it('on: POST /api/agents carries browser:true (draft M2 contract 16160ae, create only); nothing else is sent', async () => {
+    const { calls, api } = mockApi({ 'POST /api/agents': () => json(201, { id: 'ag_2', name: 'Analyst' }) })
+    await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults))
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].body.browser, true)
+    assert.equal('vm' in calls[0].body, false)
+  })
+  it('Open full settings does not carry the browser (GAP: the full form has no browser field)', () => {
+    assert.equal('browser' in profilePrefill({ ...blankCard(defaults), name: 'A', browser: true }, defaults), false)
+  })
+  it('409 low_disk creates nothing: the server message shows inline on the card (S9)', async () => {
+    const message = 'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.'
+    const { calls, api } = mockApi({ 'POST /api/agents': () => json(409, { statusCode: 409, error: 'Conflict', reason: 'low_disk', message }) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(calls.length, 1)
+    assert.equal(err.status, 409)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: the download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
+  })
+  it('409 low_disk with freeBytes under 1.3 GB: the mockup sentence with the real figure (FE pick: freeBytes)', async () => {
+    const body = { statusCode: 409, error: 'Conflict', reason: 'low_disk', message: 'Not enough disk space.', freeBytes: 0.8 * 1024 ** 3 }
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, body) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: the download needs about 1.3 GB and this computer has 0.8 GB free. Free some space, then try again.')
+  })
+  it('409 low_disk with 1.3–4.3 GB free: the floor sentence with the real figure', async () => {
+    const body = { statusCode: 409, error: 'Conflict', reason: 'low_disk', message: 'Not enough disk space.', freeBytes: 2.5 * 1024 ** 3 }
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, body) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: the download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free.')
+  })
+  it('409 low_disk with the download reused under the 3 GB floor: M1\'s run-floor text', async () => {
+    const body = { statusCode: 409, error: 'Conflict', reason: 'low_disk', message: 'x', freeBytes: 2.1 * 1024 ** 3, reused: true }
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, body) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: this computer is almost out of disk space (less than 3 GB free), so scripts can\'t run until some space is freed.')
+  })
+  it('409 low_disk as at fec4670 (message only, no figures): the server\'s 2nd sentence shows as is', async () => {
+    const message = 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free.'
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, { statusCode: 409, error: 'Conflict', reason: 'low_disk', message }) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(createFailureText('Analyst', err), 'Couldn\u2019t create Analyst: t' + message.slice(1))
+  })
+  it('a freeBytes on a non-409 or another reason is ignored', () => {
+    const e1 = Object.assign(new Error('Boom'), { status: 500, body: { reason: 'low_disk', freeBytes: 1 } })
+    const e2 = Object.assign(new Error('Busy'), { status: 409, body: { reason: 'build_active', freeBytes: 1 } })
+    assert.equal(createFailureText('A', e1), 'Couldn\u2019t create A: boom')
+    assert.equal(createFailureText('A', e2), 'Couldn\u2019t create A: busy')
+  })
+  it('409 low_disk with no message falls back to the plain conflict text, never blank', async () => {
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, { statusCode: 409, error: 'Conflict', reason: 'low_disk' }) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.match(createFailureText('Analyst', err), /^Couldn\u2019t create Analyst: \S/)
+  })
+  it('M2 ruling: the model\'s /new draft can never pre-set browser:true', () => {
+    const raw = { ...DRAFT, browser: true, permissions: { browser: true } }
+    assert.equal('browser' in normalizeDraft(raw), false)
+    assert.equal(cardFromDraft(null, normalizeDraft(raw), defaults).browser, false)
+    const off = cardFromDraft(null, normalizeDraft(DRAFT), defaults)
+    assert.equal(cardFromDraft(off, normalizeDraft({ ...raw, name: 'Wanderer' }), defaults).browser, false)
+    assert.equal('browser' in previousOf({ ...off, browser: true }), false)
+    assert.equal('browser' in draftRequestBody('a bot', previousOf({ ...off, browser: true })), false)
+    assert.equal('browser' in createBody({ ...off, name: 'A' }, defaults), false)
+  })
+})
+
+describe('model dropdown: a card built before the defaults landed (390-GAP6-after "…")', () => {
+  const defaults = normalizeDefaults(DEFAULTS)
+  it('a draft card built with null defaults takes the defaults model, internet and chips', () => {
+    const early = cardFromDraft(null, normalizeDraft(DRAFT), null)
+    assert.equal(early.endpointId, '')
+    const card = withMissingDefaults(early, defaults)
+    assert.equal(card.endpointId, defaults.endpointId)
+    assert.equal(card.modelId, defaults.modelId)
+    assert.equal(card.internetPolicy, defaults.internetPolicy)
+    assert.deepEqual(card.sourcesOn, defaults.skills.map((s) => s.sourceId))
+    assert.equal(card.name, early.name)
+    assert.equal(card.browser, false)
+  })
+  it('a card that already has a model is left alone; no defaults is a no-op', () => {
+    const card = { ...blankCard(defaults), endpointId: 'ep_9', modelId: 'm', internetPolicy: 'never', sourcesOn: [] }
+    assert.equal(withMissingDefaults(card, defaults), card)
+    const early = blankCard(null)
+    assert.equal(withMissingDefaults(early, null), early)
   })
 })

@@ -9,13 +9,17 @@
  */
 import { connectLiveEvents, type LiveConnectionOptions } from './live-events.ts'
 import { initialLiveState, liveReducer, resyncPlan, type LiveAction, type LiveState } from './live-store.ts'
-import type { PermissionListResponse, ScriptRun, VmInfo } from './types.ts'
+import type { BrowserAddonInfo, PermissionListResponse, PermissionRequest, ScriptRun, VmInfo } from './types.ts'
 
 export type LiveClient = {
   getRun: (runId: string) => Promise<ScriptRun>
   getVm: (agentId: string) => Promise<VmInfo>
   /** GET /api/permissions?status=pending (unfiltered). An M1 BE may not have it yet: a failure keeps what we hold. */
   listPendingPermissions: () => Promise<PermissionListResponse>
+  /** FE-P2-3 (fec4670): GET /api/permissions/:id, for a chat card whose request isn't held. */
+  getPermission?: (requestId: string) => Promise<PermissionRequest>
+  /** FE-P2-3 (fec4670): GET /api/vm/browser, re-fetched on every resync (contract: after `reset`). */
+  getBrowser?: () => Promise<BrowserAddonInfo>
 }
 
 export type LiveControllerOptions = {
@@ -23,6 +27,8 @@ export type LiveControllerOptions = {
   /** Passed to connectLiveEvents (url, fetch, headers, timers, retry/idle overrides). */
   connection: Omit<LiveConnectionOptions, 'onEvent' | 'onReset' | 'onOpen' | 'onStatus'>
   initialState?: LiveState
+  /** Clock for the permission countdown's skew (tests). */
+  now?: () => number
 }
 
 export type LiveController = {
@@ -37,12 +43,15 @@ export type LiveController = {
   loadVm: (agentId: string) => Promise<VmInfo | undefined>
   /** Mark run ids a view shows as active (from a message's scriptRun) so resyncs cover them before they're loaded. */
   trackRuns: (runIds: Iterable<string>) => void
+  /** FE-P2-3: fetch one permission request (any status) into the store; one fetch at a time per id. */
+  loadPermission: (requestId: string) => Promise<PermissionRequest | undefined>
   /** Resolves when the in-flight resync (if any) settles. */
   resync: () => Promise<void>
 }
 
 export function createLiveController(opts: LiveControllerOptions): LiveController {
   let state = opts.initialState ?? initialLiveState
+  const clock = opts.now ?? (() => Date.now())
   const listeners = new Set<() => void>()
   const tracked = new Set<string>()
   let conn: ReturnType<typeof connectLiveEvents> | undefined
@@ -78,11 +87,41 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
 
   const loadPending = async () => {
     try {
-      const { requests } = await opts.client.listPendingPermissions()
-      if (Array.isArray(requests)) dispatch({ type: 'pending', requests })
+      const sentAt = clock()
+      const { requests, now } = await opts.client.listPendingPermissions()
+      // fec4670: `now` is the server time; skew = server - (the midpoint of our request).
+      const server = typeof now === 'string' ? Date.parse(now) : NaN
+      const skewMs = Number.isFinite(server) ? Math.round(server - (sentAt + clock()) / 2) : undefined
+      if (Array.isArray(requests)) dispatch(skewMs === undefined ? { type: 'pending', requests } : { type: 'pending', requests, skewMs })
     } catch {
       // Keep the requests we hold; the next (re)connect tries again.
     }
+  }
+
+  const loadBrowser = async () => {
+    if (!opts.client.getBrowser) return
+    try {
+      dispatch({ type: 'browser', browser: await opts.client.getBrowser() })
+    } catch {
+      // An M1 BE has no /api/vm/browser; cards fall back to their own setup snapshot.
+    }
+  }
+
+  const permissionLoads = new Map<string, Promise<PermissionRequest | undefined>>()
+  const loadPermission = (requestId: string): Promise<PermissionRequest | undefined> => {
+    const get = opts.client.getPermission
+    if (!get) return Promise.resolve(undefined)
+    const inflight = permissionLoads.get(requestId)
+    if (inflight) return inflight
+    const p = get(requestId).then(
+      (request) => {
+        dispatch({ type: 'permissions', requests: [request] })
+        return request
+      },
+      () => undefined,
+    ).finally(() => permissionLoads.delete(requestId))
+    permissionLoads.set(requestId, p)
+    return p
   }
 
   // One resync at a time; a request during one runs one more pass after it.
@@ -95,7 +134,7 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
       do {
         again = false
         const plan = resyncPlan(state, tracked)
-        await Promise.all([...plan.runIds.map(loadRun), ...plan.agentIds.map(loadVm), loadPending()])
+        await Promise.all([...plan.runIds.map(loadRun), ...plan.agentIds.map(loadVm), loadPending(), loadBrowser()])
         // Once loaded, the store's own active list covers them.
         for (const id of [...tracked]) if (state.runs[id]) tracked.delete(id)
       } while (again)
@@ -138,6 +177,7 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
     },
     loadRun,
     loadVm,
+    loadPermission,
     trackRuns(runIds) {
       for (const id of runIds) if (!state.runs[id]) tracked.add(id)
     },

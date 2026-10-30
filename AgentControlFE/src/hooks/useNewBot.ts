@@ -11,6 +11,7 @@ import {
   newBotApi,
   phaseAfterDraft,
   previousOf,
+  withMissingDefaults,
   type AgentDefaults,
   type CardDraft,
   type DraftRequest,
@@ -67,9 +68,12 @@ export function useNewBot(conversationId: string) {
     loadedRef.current = true
     nb.defaults().then(
       (defaults) => {
+        // Set the ref now, not after the next commit: a draft that lands before React re-renders
+        // would otherwise build its card from null defaults (empty model, "…" in the dropdown).
+        extrasRef.current = { ...extrasRef.current, defaults }
         setExtras((x) => ({ ...x, defaults }))
         // A card opened before the defaults landed picks them up (model, chips).
-        setSession((s) => (s?.card && !s.card.endpointId ? { ...s, card: { ...s.card, ...pickDefaults(defaults) } } : s))
+        setSession((s) => (s?.card ? { ...s, card: withMissingDefaults(s.card, defaults) } : s))
       },
       () => {},
     )
@@ -98,7 +102,7 @@ export function useNewBot(conversationId: string) {
         setSession((s) => {
           if (!s) return s
           if (phase.kind === 'cancelled') return { ...s, phase, turn: s.turn + 1 }
-          return { ...s, phase, card: cardFromDraft(s.card, draft, extrasRef.current.defaults), warningCode: draft.warningCode, turn: s.turn + 1 }
+          return { ...s, phase, card: withMissingDefaults(cardFromDraft(s.card, draft, extrasRef.current.defaults), extrasRef.current.defaults), warningCode: draft.warningCode, turn: s.turn + 1 }
         })
       },
       (err: unknown) => {
@@ -216,8 +220,5 @@ export function useNewBot(conversationId: string) {
   }
 }
 
-function pickDefaults(d: AgentDefaults): Partial<CardDraft> {
-  return { endpointId: d.endpointId, modelId: d.modelId, internetPolicy: d.internetPolicy, sourcesOn: d.skills.map((s) => s.sourceId) }
-}
 
 export type NewBotState = ReturnType<typeof useNewBot>

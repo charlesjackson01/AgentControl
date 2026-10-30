@@ -5,6 +5,7 @@
  */
 import {
   ENV_NAME, MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, RESERVED_ENV_NAMES, RESERVED_ENV_PREFIX, UNDO_RETENTION,
+  type ActiveToolBuild, type BotBrowserInfo, type BrowserAddonInfo, type InternetUse, type ToolBuildInfo,
   type EnvVar, type GlobalRuntimeMode, type InternetPolicy, type RuntimeMode, type ScriptRunSummary, type ToolManifest,
   type VmHostInfo, type VmInfo, type VmProbeResult,
 } from './types.ts'
@@ -13,6 +14,7 @@ import { scriptName } from './live-store.ts'
 import { undoGoneText, undoReasonText } from './undo.ts'
 import { humanSize } from './file-format.ts'
 import { FILES_MISSING_TEXT } from './files.ts'
+import { BROWSER_DOWNLOAD_BYTES, browserLowDiskText } from './low-disk.ts'
 
 /**
  * States and notices with no mockup, built from the tab's own patterns (shots in shots/p2-fe-5/).
@@ -32,6 +34,17 @@ export const VM_TAB_GAPS = {
   V10: 'Tab dot meaning: ● while the VM is running, ! when it needs attention (error, files missing, gVisor required but unavailable)',
   V11: 'files_missing offers Restore / Start empty in §14; Restore is hidden in M1 and there is no Start-empty route, so the tab explains and offers nothing',
   V12: 'Bot files & tools meter note reads "workspace N · tools and packages N" (mockup had "tools N · env N"; imageLayer is vm_install packages, BE be7afe4)',
+  // FE-P2-10 (M2, mockups m2-11…14; contract fec4670). Shots in shots/p2-fe-10/.
+  V13: 'Working "Stop build" in the "Building tools" head (Charles 2026-10-30; mockup 14 has none): enabled, stopping, error, plus "Stopping keeps the current tools (version N)."',
+  V14: 'Building tools head while the build is queued (vm_install behind a run) or waiting for the internet OK',
+  V15: 'Browser setup failed for low disk (BrowserError low_disk): the contract low-disk sentence under the row, Try again / Turn off',
+  V16: 'Browser setup failed in the rebuild (build_failed, including a stopped build): the server message under the row, Try again / Turn off',
+  V17: 'Browser being turned off (rebuild back onto the base): "Off. Rebuilding <Bot>\'s tools without the browser…", switch disabled',
+  V18: 'Turning the browser off has no confirm (mockup 13 is turn-on only); errors from the switch, Try again, Re-check and Remove download show under the Permissions card',
+  V19: 'Turn-on confirm dialog with a 409 (low_disk / internet_never): the server message in the dialog, which stays open',
+  V20: 'Browser on, waiting for the shared download to start (setting_up with no download progress yet): "On. Getting headless Chromium ready…"',
+  V21: 'History rows: tool builds list their sites (mockup 14 row); ended tool builds; internet always; "Queued · after tool build" only for queuedReason tool_build',
+  V22: 'build_active 409 (a click that raced the build starting): the mockup copy "Available when the build finishes." (Team lead), then the tab reloads',
 } as const
 
 /* ---- formatting ---- */
@@ -144,6 +157,8 @@ export function vmSubtitle(vm: VmInfo, botName: string, platform: VmPlatform, no
 
 export function vmHeader(vm: VmInfo, botName: string, platform: VmPlatform, now: Date = new Date()): VmHeaderView {
   const base = { title: `${possessive(botName)} VM`, subtitle: vmSubtitle(vm, botName, platform, now), message: null, banner: null, spinner: false, busy: false }
+  // Mockup 14: while tools build, Stop and Reset wait (both 409 build_active); "Stop build" is the build's own.
+  if (vm.activeBuild) return { ...base, badge: 'Building tools', tone: 'run', spinner: true, start: null, stop: true, reset: true, busy: true }
   switch (vm.state) {
     case 'running':
       return { ...base, badge: 'Running', tone: 'ok', start: null, stop: true, reset: true }
@@ -243,20 +258,224 @@ export const INTERNET_OPTIONS: readonly { value: InternetPolicy; label: string }
 
 export const INTERNET_TEXT = "Public internet only, through AgentControl's proxy. Every site used is listed on the run."
 export const HOME_NETWORK_TEXT = 'Blocked, including this computer and your model server.'
-/** M1 ruling: the toggle is shown but disabled. */
-export const BROWSER_LATER_TEXT = 'Turning the browser on is available in a later update.'
+/** Mockup 11: the line under the Internet choice, per policy. */
+export function internetSub(policy: InternetPolicy, botName: string): string {
+  if (policy === 'always') return 'Scripts get the internet without asking. Every site used is listed on the run.'
+  if (policy === 'never') return 'Scripts that need the internet are denied without asking.'
+  return `${botName} shows a card in the chat when a script needs it. No answer in 10 minutes counts as Deny.`
+}
+
+/** Mockup 11: what "Home network & Tailscale" blocks (plan §5). */
+export const BLOCKED_RANGES = ['192.168.0.0/16', '10.0.0.0/8', '172.16.0.0/12', '100.64.0.0/10 (Tailscale)', 'fd7a:115c:a1e0::/48', 'localhost', '169.254.169.254'] as const
 
 export function permissionsHint(botName: string): string {
   return `Scripts run without asking. ${botName} asks only for what is off here.`
 }
 
-export function browserText(vm: Pick<VmInfo, 'permissions'>, botName: string): string {
-  const p = vm.permissions
-  if (!p.browser)
-    return `Off. ${botName} asks in chat when a script needs a browser. Turning it on downloads headless Chromium once (about 1.1 GB, shared by all bots, not counted in ${possessive(botName)} 10 GB). Web pages still follow the Internet rule.`
-  if (p.browserState === 'downloading') return `On. Downloading headless Chromium${typeof p.progress === 'number' ? ` (${Math.round(p.progress * 100)}%)` : ''}…`
-  if (p.browserState === 'error') return "On, but headless Chromium couldn't be downloaded."
-  return 'On. Web pages still follow the Internet rule.'
+/* ---- low disk: lib/low-disk.ts (shared with FE-P2-3 / FE-P2-7) ---- */
+
+export { BROWSER_DOWNLOAD_BYTES, LOW_DISK_TEXT, RUN_FREE_FLOOR_BYTES, browserLowDiskText } from './low-disk.ts'
+
+/* ---- browser row (mockups 11, 12, 13) ---- */
+
+export const BROWSER_SIZE_TEXT = 'about 1.3 GB'
+
+export type BrowserRowView = {
+  on: boolean
+  text: string
+  /** Progress bar: pct null = no figure yet (indeterminate). */
+  progress: { pct: number | null; text: string } | null
+  sub: string | null
+  actions: ('retry' | 'recheck' | 'turn_off' | 'remove')[]
+  error: string | null
+  /** The switch waits while setup or turn-off is under way. */
+  locked: boolean
+  gap: keyof typeof VM_TAB_GAPS | null
+}
+
+const mbText = (bytes: number) => `${Math.round(bytes / 1000 ** 2)} MB`
+const gbDecimal = (bytes: number) => `${(bytes / 1000 ** 3).toFixed(1)} GB`
+
+/** "about 1 min left". */
+export function etaText(sec: number | undefined): string | null {
+  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec < 0) return null
+  return `about ${Math.max(1, Math.round(sec / 60))} min left`
+}
+
+/** "1:12" from start to now. */
+export function elapsedText(startIso: string | undefined, now: Date): string | null {
+  const t = startIso ? new Date(startIso).getTime() : NaN
+  if (Number.isNaN(t)) return null
+  const s = Math.max(0, Math.floor((now.getTime() - t) / 1000))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const ss = String(s % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`
+}
+
+/** "today 9:54 AM", else "Oct 19". */
+function checkedText(iso: string, now: Date): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return sameDay(d, now) ? `today ${clock(d)}` : historyTime(iso, now)
+}
+
+export function browserOffText(botName: string): string {
+  return `Off. ${botName} asks in chat when a script needs a browser. Turning it on downloads headless Chromium once (${BROWSER_SIZE_TEXT}, shared by all bots, not counted in ${possessive(botName)} 10 GB). Web pages still follow the Internet rule.`
+}
+
+export type BrowserInput = {
+  vm: Pick<VmInfo, 'permissions' | 'browser' | 'activeBuild'>
+  botName: string
+  addon?: BrowserAddonInfo | null
+  now?: Date
+}
+
+export function browserRow({ vm, botName, addon, now = new Date() }: BrowserInput): BrowserRowView {
+  const on = vm.permissions.browser
+  const b: BotBrowserInfo = vm.browser ?? { state: on ? 'setting_up' : 'off' }
+  const base: BrowserRowView = { on, text: '', progress: null, sub: null, actions: [], error: null, locked: false, gap: null }
+  const bot = possessive(botName)
+  const total = addon?.totalBytes ?? BROWSER_DOWNLOAD_BYTES
+  if (!on) {
+    if (b.state === 'rebuilding' || b.state === 'waiting_idle') return { ...base, text: `Off. Rebuilding ${bot} tools without the browser…`, locked: true, gap: 'V17' }
+    if (addon?.state === 'ready' && addon.usedBy.length === 0)
+      return { ...base, text: `Off. ${botName} asks in chat when a script needs a browser.`, sub: `The Chromium download (${gbDecimal(total)}) is still on this computer and no bot uses it.`, actions: ['remove'] }
+    return { ...base, text: browserOffText(botName) }
+  }
+  const at = (iso: string | undefined) => (iso ? checkedText(iso, now) : '')
+  switch (b.state) {
+    case 'off':
+    case 'setting_up': {
+      const p = addon?.state === 'downloading' ? addon.progress ?? vm.permissions.progress : vm.permissions.browserState === 'downloading' ? vm.permissions.progress : undefined
+      if (typeof p === 'number') {
+        const pct = Math.max(0, Math.min(100, Math.round(p * 100)))
+        const bytes = addon?.bytes ?? Math.round(p * total)
+        const text = [`${mbText(bytes)} of ${gbDecimal(total)}`, etaText(addon?.etaSec), `then ${bot} tools are rebuilt and its VM restarts when idle`].filter(Boolean).join(' · ')
+        return { ...base, text: `On. Downloading headless Chromium (${pct}%)…`, progress: { pct, text }, locked: true }
+      }
+      return { ...base, text: 'On. Getting headless Chromium ready…', progress: { pct: null, text: `then ${bot} tools are rebuilt and its VM restarts when idle` }, locked: true, gap: 'V20' }
+    }
+    case 'rebuilding': {
+      const build = vm.activeBuild?.build.via === 'browser' ? vm.activeBuild : undefined
+      const pg = build?.build.progress
+      const pct = pg && pg.steps > 0 ? Math.round((pg.step / pg.steps) * 100) : null
+      const started = build?.startedAt ?? b.setup?.rebuild.startedAt
+      const el = elapsedText(started, now)
+      const text = ['Step 2 of 3', el ? `rebuild ${el}` : null, 'next: restart when idle and check Chromium'].filter(Boolean).join(' · ')
+      return { ...base, text: `On. Rebuilding ${bot} tools on the browser base…`, progress: { pct, text }, locked: true }
+    }
+    case 'waiting_idle':
+      return { ...base, text: `On. Ready; ${bot} VM restarts after the current run finishes.`, locked: true }
+    case 'ready': {
+      const n = addon?.usedBy.length
+      const parts = [
+        b.chromium ? `Chromium ${b.chromium.version}` : null,
+        b.chromium ? `checked ${at(b.chromium.checkedAt)}` : null,
+        typeof n === 'number' && n > 0 ? `download shared by ${n} ${n === 1 ? 'bot' : 'bots'} (${gbDecimal(total)})` : null,
+      ].filter(Boolean)
+      return { ...base, text: 'On. Web pages still follow the Internet rule.', sub: parts.length ? parts.join(' · ') : null }
+    }
+    case 'error': {
+      const e = b.error
+      const when = e?.at ? at(e.at) : ''
+      const stamp = (label: string) => (when ? `${label} · ${when}` : label)
+      switch (e?.reason) {
+        case 'chromium_check_failed':
+          return {
+            ...base,
+            text: `On, but Chromium didn't start in ${bot} VM, so ${botName} kept its previous tools.`,
+            actions: ['recheck', 'turn_off'],
+            error: `Chromium check failed: ${e.detail ?? e.cause ?? e.message}`,
+          }
+        case 'low_disk':
+          return { ...base, text: "On, but headless Chromium couldn't be set up: this computer is low on disk space.", actions: ['retry', 'turn_off'], error: browserLowDiskText(e, b.setup?.download.reused === true), gap: 'V15' }
+        case 'build_failed':
+          return { ...base, text: `On, but ${bot} tools couldn't be rebuilt on the browser base.`, actions: ['retry', 'turn_off'], error: e.message, gap: 'V16' }
+        default: {
+          const why = e?.detail ? `: ${e.detail}` : ''
+          return { ...base, text: `On, but headless Chromium couldn't be downloaded${why}.`, actions: ['retry', 'turn_off'], error: stamp('Download failed') }
+        }
+      }
+    }
+  }
+}
+
+/** Mockup 13: the confirm before turning the browser on. */
+export function browserConfirm(botName: string, policy: InternetPolicy): { title: string; lead: string; items: string[]; rule: string; confirm: string } {
+  const bot = possessive(botName)
+  return {
+    title: `Turn on the browser for ${botName}?`,
+    lead: `${bot} scripts will be able to use headless Chromium (Playwright).`,
+    items: [
+      `Downloads Chromium once: ${BROWSER_SIZE_TEXT}, shared by all bots, not counted in ${bot} 10 GB.`,
+      `Rebuilds ${bot} tools and restarts its VM when it's idle (a few minutes).`,
+      `Web pages still follow ${bot} Internet rule: `,
+    ],
+    rule: INTERNET_OPTIONS.find((o) => o.value === policy)?.label ?? 'Ask each time',
+    confirm: 'Turn on browser',
+  }
+}
+
+/* ---- tool build in progress (mockup 14; BE-P2-21) ---- */
+
+/** "matplotlib and pandas", "a, b and c". */
+export function andList(items: readonly string[]): string {
+  if (items.length <= 1) return items.join('')
+  return `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
+}
+
+export function internetUseText(internet: InternetUse): string {
+  if (internet === 'always') return 'internet always allowed'
+  if (internet === 'off') return 'no internet needed'
+  return 'internet allowed once for this build'
+}
+
+export const BUILD_WAIT_TEXT = 'Available when the build finishes.'
+
+export type BuildHeadView = {
+  runId: string
+  /** "Adding matplotlib and pandas (version 3) · 1:12. New runs wait for the build, then use the new tools." */
+  text: string
+  progress: { pct: number | null; text: string }
+  /** V13: under the Stop build button. */
+  stopNote: string
+  gap: keyof typeof VM_TAB_GAPS | null
+}
+
+function buildWhat(b: ToolBuildInfo): string {
+  if (b.added.length) return `Adding ${andList(b.added)} (version ${b.generation})`
+  if (b.removed?.length) return `Removing ${andList(b.removed)} (version ${b.generation})`
+  if (b.via === 'browser') return `Rebuilding on the ${b.base === 'browser' ? 'browser' : 'standard'} base (version ${b.generation})`
+  return `Rebuilding tools (version ${b.generation})`
+}
+
+export function buildHead(a: ActiveToolBuild, botName: string, now: Date = new Date()): BuildHeadView {
+  const b = a.build
+  const stopNote = `Stopping keeps the current tools (version ${b.fromGeneration}).`
+  const tail = 'New runs wait for the build, then use the new tools.'
+  if (a.status === 'queued')
+    return { runId: a.runId, text: `${buildWhat(b)} · waits for ${possessive(botName)} current run to finish. ${tail}`, progress: { pct: null, text: 'Queued' }, stopNote, gap: 'V14' }
+  if (a.status === 'waiting_permission')
+    return { runId: a.runId, text: `${buildWhat(b)} · waiting for your OK in the chat to use the internet. ${tail}`, progress: { pct: null, text: 'Waiting for permission' }, stopNote, gap: 'V14' }
+  const el = elapsedText(a.startedAt, now)
+  const pg = b.progress
+  const pct = pg && pg.steps > 0 ? Math.round((pg.step / pg.steps) * 100) : null
+  const text = [pg ? `Step ${pg.step} of ${pg.steps}` : null, pg?.label || null, internetUseText(a.internet)].filter(Boolean).join(' · ')
+  return { runId: a.runId, text: `${buildWhat(b)}${el ? ` · ${el}` : ''}. ${tail}`, progress: { pct, text }, stopNote, gap: null }
+}
+
+/** Mockup 14 env card: "Version 2: … · building version 3: + matplotlib, pandas" (names shown as code). */
+export type BuildingTools = { from: number; generation: number; added: string[]; removed: string[] }
+
+export function buildingTools(b: ToolBuildInfo): BuildingTools {
+  return { from: b.fromGeneration, generation: b.generation, added: [...b.added], removed: [...(b.removed ?? [])] }
+}
+
+/** Plain-text form (tests, aria). */
+export function buildingToolsText(b: BuildingTools): string {
+  const parts = [b.added.length ? `+ ${b.added.join(', ')}` : null, b.removed.length ? `− ${b.removed.join(', ')}` : null].filter(Boolean)
+  return `building version ${b.generation}${parts.length ? `: ${parts.join(' ')}` : ''}`
 }
 
 /* ---- isolation ---- */
@@ -504,13 +723,27 @@ export const HISTORY_RETENTION_TEXT = (budgetBytes: number) =>
 
 const filesText = (n: number) => (n === 0 ? 'no files changed' : n === 1 ? '1 file changed' : `${n} files changed`)
 
+/** Mockup 14: "1 file added"; a mix: "1 file added, 2 modified". Falls back to the count. */
+export function filesSplitText(run: Pick<ScriptRunSummary, 'files' | 'filesChangedCount'>): string {
+  const f = run.files
+  if (!f || f.added + f.modified + f.deleted !== run.filesChangedCount || run.filesChangedCount === 0) return filesText(run.filesChangedCount)
+  const parts = (['added', 'modified', 'deleted'] as const).filter((k) => f[k] > 0).map((k) => [f[k], k] as const)
+  return parts.map(([n, k], i) => (i === 0 ? `${n} ${n === 1 ? 'file' : 'files'} ${k}` : `${n} ${k}`)).join(', ')
+}
+
+/** "internet once" / "internet always"; nothing for offline runs. */
+export function internetRowText(run: Pick<ScriptRunSummary, 'internet' | 'network'>): string | null {
+  const use = run.internet ?? (run.network === 'on' ? 'once' : 'off')
+  return use === 'off' ? null : `internet ${use}`
+}
+
 function where(run: ScriptRunSummary, names?: Readonly<Record<string, string>>): string {
   if (run.groupId) return names?.[run.groupId] ?? 'group'
   return 'DM'
 }
 
 function rowName(run: ScriptRunSummary, byId?: Readonly<Record<string, ScriptRunSummary>>): string {
-  if (run.kind === 'tool_build') return 'Tool build'
+  if (run.kind === 'tool_build') return run.build ? `Tool build · version ${run.build.generation}` : 'Tool build'
   if (run.kind === 'undo') {
     const of = run.undoOfRunId ? byId?.[run.undoOfRunId] : undefined
     return of ? `Undo of ${scriptName(of)}` : 'Undo'
@@ -537,8 +770,17 @@ export function historyRow(run: ScriptRunSummary, ctx: HistoryContext): HistoryR
   const dur = durationText(run.durationMs)
   const place = where(run, ctx.groupNames)
   const base = { id: run.id, name, time, gone: false }
-  const files = filesText(run.filesChangedCount)
+  const files = filesSplitText(run)
+  const net = internetRowText(run)
+  const sites = run.kind === 'tool_build' && run.hosts?.length ? run.hosts.join(', ') : null
 
+  if (run.status === 'queued' && run.queuedReason === 'tool_build') {
+    return { ...base, icon: '◌', iconTone: 'run', meta: ['Queued · after tool build', place].join(' · '), action: 'none' }
+  }
+  if (run.kind === 'tool_build' && run.status === 'running') {
+    const el = run.startedAt ? elapsedText(run.startedAt, now) : null
+    return { ...base, icon: '⚙', iconTone: 'run', meta: [el ? `Running ${el}` : 'Running', net, sites].filter(Boolean).join(' · '), action: 'output' }
+  }
   if (run.status === 'queued' || run.status === 'waiting_permission' || run.status === 'running') {
     const what = run.status === 'running' ? 'running' : run.status === 'queued' ? 'queued' : 'waiting for your OK'
     return { ...base, icon: '●', iconTone: 'run', meta: [what, place].join(' · '), action: 'none' }
@@ -560,7 +802,7 @@ export function historyRow(run: ScriptRunSummary, ctx: HistoryContext): HistoryR
           : run.status === 'denied'
             ? 'denied'
             : null
-  const meta = [head, files, dur, place].filter(Boolean).join(' · ')
+  const meta = (run.kind === 'tool_build' ? [head, dur, net, sites] : [head, files, dur, net, place]).filter(Boolean).join(' · ')
   const icon = { icon: '●', iconTone: ok ? ('ok' as const) : ('bad' as const) }
   if (run.undo.state === 'unavailable') {
     return { ...base, ...icon, meta: historyUndoGone(run.undo, ctx), action: 'none', gone: true }
@@ -584,8 +826,16 @@ export function vmTabDot(vm: Pick<VmInfo, 'state' | 'runtime'> | undefined): Tab
 /* ---- errors ---- */
 
 /** The server's message for a failed VM action, else a generic line. */
+/** A 409 build_active (BE-P2-22). */
+export function isBuildActive(err: unknown): boolean {
+  const e = err as { status?: unknown; body?: { reason?: unknown } } | null
+  return !!e && e.status === 409 && e.body?.reason === 'build_active'
+}
+
 export function vmActionError(err: unknown, fallback: string): string {
   const e = err as { status?: unknown; message?: unknown } | null
+  // GAP-V22 (Team lead): one build_active text server-side; the tab shows the mockup's copy.
+  if (isBuildActive(err)) return BUILD_WAIT_TEXT
   if (e && typeof e.status === 'number' && e.status >= 400 && e.status < 500 && typeof e.message === 'string' && e.message.trim()) return e.message
   return fallback
 }
@@ -605,6 +855,8 @@ export type VmTabInput = {
   groupNames?: Readonly<Record<string, string>>
   /** Rows from "Show older runs" pages, after vm.runs. */
   olderRuns?: readonly ScriptRunSummary[]
+  /** The shared Chromium download (GET /api/vm/browser, `browser.updated`). */
+  browserAddon?: BrowserAddonInfo | null
   now?: Date
 }
 
@@ -614,8 +866,15 @@ export type VmTabModel = {
   header: VmHeaderView
   meters: MeterView[]
   internetPolicy: InternetPolicy
-  browserOn: boolean
-  browserText: string
+  internetSub: string
+  browser: BrowserRowView
+  /** Mockup 14: the "Building tools" head and environment, while VmInfo.activeBuild is set. */
+  build: BuildHeadView | null
+  /** "building version 3: + matplotlib, pandas" (env card, during a build). */
+  buildingTools: BuildingTools | null
+  /** "Go back to version N" (env card during a build; disabled). */
+  previousGeneration: number | null
+  generation: number
   isolation: IsolationView
   runtimeMode: RuntimeMode
   modeOptions: { value: RuntimeMode; label: string }[]
@@ -626,7 +885,7 @@ export type VmTabModel = {
   notices: VmNotice[]
   retention: string
   rows: HistoryRowView[]
-  /** A run is going on (Reset and Grow wait). */
+  /** A run (or a tool build) is going on (Reset and Grow wait). */
   runActive: boolean
 }
 
@@ -644,8 +903,12 @@ export function vmTabModel(input: VmTabInput): VmTabModel {
     header: vmHeader(vm, botName, platform, now),
     meters: vmMeters(vm),
     internetPolicy: vm.internetPolicy,
-    browserOn: vm.permissions.browser,
-    browserText: browserText(vm, botName),
+    internetSub: internetSub(vm.internetPolicy, botName),
+    browser: browserRow({ vm, botName, addon: input.browserAddon, now }),
+    build: vm.activeBuild ? buildHead(vm.activeBuild, botName, now) : null,
+    buildingTools: vm.activeBuild ? buildingTools(vm.activeBuild.build) : null,
+    previousGeneration: vm.image.previous ?? null,
+    generation: vm.image.generation,
     isolation: isolationView(vm, botName, { probe: input.probe, now }),
     runtimeMode: vm.runtime.mode,
     modeOptions: RUNTIME_MODE_OPTIONS(vm.runtime.globalMode),
@@ -656,7 +919,7 @@ export function vmTabModel(input: VmTabInput): VmTabModel {
     notices: vmNotices(vm, botName, input.host),
     retention: HISTORY_RETENTION_TEXT(vm.usage.snapshots.budgetBytes),
     rows: runs.map((r) => historyRow(r, ctx)),
-    runActive: runs.some((r) => r.status === 'queued' || r.status === 'waiting_permission' || r.status === 'running'),
+    runActive: !!vm.activeBuild || runs.some((r) => r.status === 'queued' || r.status === 'waiting_permission' || r.status === 'running'),
   }
 }
 

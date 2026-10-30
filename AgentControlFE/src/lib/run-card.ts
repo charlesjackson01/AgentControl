@@ -9,7 +9,10 @@
  */
 import { humanSize } from './file-format.ts'
 import { isActiveStatus, scriptName } from './live-store.ts'
-import { VM_LIMITS, type ChatRunSummary, type FileChange, type ScriptRun, type ScriptRunKind, type ScriptRunStatus } from './types.ts'
+import {
+  VM_LIMITS, type ChatRunSummary, type FileChange, type HostBlockReason, type HostContact, type InternetUse, type M2RunReason,
+  type QueuedReason, type RunWaitingFor, type ScriptRun, type ScriptRunKind, type ScriptRunStatus, type ToolBuildInfo,
+} from './types.ts'
 import { undoGoneText, undoReasonText, type UndoReasonContext } from './undo.ts'
 
 export const RUN_CARD_GAPS = {
@@ -29,6 +32,12 @@ export const RUN_CARD_GAPS = {
   waiting: 'GAP-R14: waiting for permission (M2 only; not reachable in M1)',
   collapsed: 'GAP-R15: finished cards start collapsed (head from the message summary; the run loads on expand, contract 146cd18)',
   groupFile: 'GAP-R16: a group-folder file row names the folder ("TL-1 Launch Room group folder")',
+  // FE-P2-9 (M2): states with no mockup.
+  hostsMore: 'GAP-R17: more sites than the card lists ("+ N more sites", from hostsContactedTotal)',
+  hostReasons: 'GAP-R18: blocked-row labels for reasons no mockup shows (this computer, model server, cloud metadata, port, reserved)',
+  waitingBrowserMeta: 'GAP-R19: "Waiting for the browser" shows the contract meta (Browser on · Internet asks after the browser); mockup 04 shows none',
+  buildEnded: 'GAP-R20: tool build stopped / timed out / succeeded (mockups show running and failed only)',
+  deniedOther: 'GAP-R21: denied by timeout or a denied browser, and browser setup failures (mockup 02/08 pattern)',
 } as const
 
 export type RunTone = 'ok' | 'bad' | 'run' | 'undone'
@@ -36,6 +45,10 @@ export type RunTone = 'ok' | 'bad' | 'run' | 'undone'
 export type RunMetaItem = { key: string; label: string; value: string; suffix?: string }
 export type RunFileRow = { key: string; change: FileChange['change']; path: string; size: string | null; folder: string | null }
 export type RunLog = { text: string; error: boolean; live: boolean }
+export type RunHostRow = { key: string; blocked: boolean; label: 'reached' | 'blocked'; host: string; note: string }
+export type RunHosts = { title: string; rows: RunHostRow[]; more: number }
+/** A browser run's screenshot preview: a file the card opens through the files route. */
+export type RunThumb = { path: string; root: 'agent' | 'group'; groupId?: string }
 export type RunActions = {
   stop: boolean
   undo: boolean
@@ -63,8 +76,16 @@ export type RunCardView = {
   meta: RunMetaItem[]
   files: RunFileRow[]
   moreFiles: number
+  /** M2 "Sites used" ("Sites used so far" while active). */
+  hosts: RunHosts | null
+  /** M2: browser run screenshot under the files. */
+  thumb: RunThumb | null
+  /** M2: the line under the meta on a waiting card ("⏸ Not started. …"). */
+  wait: string | null
   /** run.error, when it isn't already the log box's text. */
   error: string | null
+  /** M2 (mockup 08): the red line goes under the log instead of above it. */
+  errorLast: boolean
   log: RunLog | null
   truncated: string | null
   actions: RunActions
@@ -146,6 +167,162 @@ export function tailLines(text: string, n: number = LOG_LINES): string {
   return lines.slice(-n).join('\n')
 }
 
+/* ---- M2: internet, sites used, thumbnails, error rows ---- */
+
+/** M2 run reasons whose card shows the error as a red line (no log box unless there's stderr). */
+export const M2_RUN_REASONS: readonly M2RunReason[] = [
+  'internet_never', 'network_off', 'permission_denied', 'permission_timeout', 'proxy_unavailable',
+  'browser_unavailable', 'chromium_check_failed', 'host_blocked', 'build_failed', 'build_stopped',
+]
+const isM2Reason = (r: string | undefined): r is M2RunReason => !!r && (M2_RUN_REASONS as readonly string[]).includes(r)
+
+/** Blocked-row label ("home network · 1 try"). */
+export const HOST_BLOCK_LABEL: Record<HostBlockReason, string> = {
+  home_network: 'home network',
+  tailscale: 'Tailscale',
+  this_computer: 'this computer',
+  model_server: 'model server',
+  metadata: 'cloud metadata',
+  private_name: 'private name',
+  port: 'port',
+  reserved: 'reserved address',
+}
+
+const ALWAYS_BLOCKED = 'Home network and Tailscale are always blocked in Phase 2.'
+/** host_blocked error lines, written out in full (review §1: every line, plus reserved). The BE's `error` wins when sent. */
+export const HOST_BLOCKED_TEXT: Record<HostBlockReason, string> = {
+  tailscale: `The script tried to reach your Tailscale network. ${ALWAYS_BLOCKED}`,
+  home_network: `The script tried to reach your home network. ${ALWAYS_BLOCKED}`,
+  private_name: `The script tried to reach your home network. ${ALWAYS_BLOCKED}`,
+  this_computer: `The script tried to reach this computer. ${ALWAYS_BLOCKED}`,
+  model_server: `The script tried to reach your model server. ${ALWAYS_BLOCKED}`,
+  metadata: `The script tried to reach a cloud metadata address. ${ALWAYS_BLOCKED}`,
+  port: 'The script tried a port other than 80 or 443, which is blocked.',
+  reserved: 'The script tried to reach a reserved address, which is always blocked.',
+}
+
+/** Card error copy when the run carries a reason but no `error` text (the BE's text is shown as is otherwise). */
+export function reasonErrorText(
+  reason: string | undefined,
+  ctx: { botName?: string; browser?: boolean; hosts?: readonly HostContact[]; build?: ToolBuildInfo; status?: ScriptRunStatus },
+): string | null {
+  const bot = ctx.botName || 'The bot'
+  const kept = ctx.build ? ` (version ${ctx.build.fromGeneration})` : ''
+  switch (reason) {
+    case 'permission_denied':
+      return ctx.browser ? "You denied the browser, so this run didn't start. No files changed." : "You denied internet access, so this run didn't start. No files changed."
+    case 'permission_timeout':
+      return "No answer in 10 minutes, so this run didn't start. No files changed."
+    case 'internet_never':
+      return `Internet is set to Never for ${bot}, so this run didn't start. Change it in Settings › VM.`
+    case 'network_off':
+      return `This run was started with the internet off, so connecting failed. ${bot} can run it again with the internet on.`
+    case 'proxy_unavailable':
+      return "AgentControl's internet proxy isn't running, so this run couldn't get the internet. Try again; if it keeps failing, re-check in Settings › VM."
+    case 'host_blocked': {
+      const first = ctx.hosts?.find((h) => h.blocked && h.reason)
+      return first?.reason ? HOST_BLOCKED_TEXT[first.reason] : null
+    }
+    case 'browser_unavailable':
+      return "The browser couldn't be turned on, so this run didn't start."
+    case 'chromium_check_failed':
+      return `Chromium didn't start for ${bot}, so this run didn't start.`
+    case 'build_failed':
+      return ctx.status === 'timed_out'
+        ? `The build took longer than 20 minutes, so ${bot} keeps its current tools${kept}.`
+        : `The build failed, so ${bot} keeps its current tools${kept}. Nothing else changed.`
+    case 'build_stopped':
+      return `Stopped. ${bot} keeps its current tools${kept}.`
+    default:
+      return null
+  }
+}
+
+/** InternetUse from the summary, else from the run's grants. */
+export function internetUseOf(run: ScriptRun | undefined, summary: ChatRunSummary | undefined): InternetUse | 'on' {
+  if (summary?.internet) return summary.internet
+  const network = run?.network ?? summary?.network
+  if (network !== 'on') return 'off'
+  const grant = run?.permissions.find((p) => p.type === 'internet' && p.decision !== 'pending')
+  if (grant?.decision === 'allow_once') return 'once'
+  if (grant?.decision === 'always' || grant?.decision === 'enable') return 'always'
+  return 'on'
+}
+
+const INTERNET_VALUE: Record<InternetUse | 'on', string> = { off: 'off', once: 'on (allowed once)', always: 'on (always allowed)', on: 'on' }
+
+/** Contract meta rows for a waiting card: Browser "asked"/"on", Internet "asked"/"asks after the browser"/"off". */
+function waitingMeta(run: ScriptRun, waitingFor: RunWaitingFor | undefined): RunMetaItem[] {
+  const pending = run.permissions.find((p) => p.decision === 'pending')?.type
+  const browserAsked = waitingFor !== 'browser' && pending === 'browser'
+  const meta: RunMetaItem[] = []
+  if (run.browser) meta.push({ key: 'br', label: 'Browser', value: browserAsked ? 'asked' : 'on' })
+  let net: string
+  if (run.network !== 'on') net = 'off'
+  else if (run.browser && (waitingFor === 'browser' || browserAsked)) net = 'asks after the browser'
+  else if (waitingFor === 'permission' || pending === 'internet') net = 'asked'
+  else net = INTERNET_VALUE[internetUseOf(run, undefined)]
+  meta.push({ key: 'net', label: 'Internet', value: net })
+  return meta
+}
+
+export const HOSTS_SHOWN = 8
+
+/**
+ * "Sites used" rows: reached first, then blocked (mockup 06). Blocked rows always make the cut.
+ * Names refused before resolving carry no IP, and no row shows one (Charles: no IP arrows).
+ * "+ N more" counts hostsContactedTotal (the BE caps the list) beyond the rows shown.
+ */
+export function hostRows(hosts: readonly HostContact[] | undefined, total?: number, active = false): RunHosts | null {
+  if (!hosts?.length) return null
+  const blocked = hosts.filter((h) => h.blocked)
+  const reached = hosts.filter((h) => !h.blocked)
+  const keepBlocked = blocked.slice(0, HOSTS_SHOWN)
+  const keepReached = reached.slice(0, Math.max(0, HOSTS_SHOWN - keepBlocked.length))
+  const row = (h: HostContact, i: number): RunHostRow => {
+    const host = h.port !== undefined && h.port !== 443 ? `${h.host}:${h.port}` : h.host
+    const note = h.blocked
+      ? [h.reason ? HOST_BLOCK_LABEL[h.reason] : null, plural(h.count, 'try', 'tries')].filter(Boolean).join(' · ')
+      : plural(h.count, 'request')
+    return { key: `${i}:${host}`, blocked: h.blocked, label: h.blocked ? 'blocked' : 'reached', host, note }
+  }
+  const rows = [...keepReached, ...keepBlocked].map(row)
+  const all = Math.max(total ?? hosts.length, hosts.length)
+  return { title: active ? 'Sites used so far' : 'Sites used', rows, more: all - rows.length }
+}
+
+const THUMB_EXT = /\.(png|jpe?g|webp)$/i
+/** Review: the first .png/.jpg/.jpeg/.webp the run added or modified; never SVG; none once undone. */
+export function thumbOf(run: ScriptRun, undone: boolean): RunThumb | null {
+  if (!run.browser || undone) return null
+  const f = run.filesChanged.find((c) => (c.change === 'added' || c.change === 'modified') && THUMB_EXT.test(c.path))
+  if (!f) return null
+  return f.root === 'group' && f.groupId ? { path: f.path, root: 'group', groupId: f.groupId } : { path: f.path, root: 'agent' }
+}
+
+/**
+ * The line under a waiting card: mockup 01 (a permission card is open below) and mockup 07 (a run queued behind its
+ * bot's tool build, "(version N)" from afterBuild.generation).
+ */
+export function waitLine(status: ScriptRunStatus | undefined, waitingFor: RunWaitingFor | undefined, summary: ChatRunSummary | undefined, botName?: string): string | null {
+  if (status === 'waiting_permission' && waitingFor !== 'browser') return '⏸ Not started. It starts as soon as you answer below; no answer in 10 min counts as Deny.'
+  if (status === 'queued' && summary?.queuedReason === 'tool_build') {
+    const who = botName ? `${botName}'s` : "the bot's"
+    const ver = summary.afterBuild ? ` (version ${summary.afterBuild.generation})` : ''
+    return `⏳ Waits for ${who} tools to finish building, then runs on the new tools${ver}.`
+  }
+  return null
+}
+
+/** Tool build card subtitle: "adds matplotlib, pandas · version 3". */
+export function buildSource(build: ToolBuildInfo): string {
+  const parts: string[] = []
+  if (build.added.length) parts.push(`adds ${build.added.join(', ')}`)
+  if (build.removed?.length) parts.push(`removes ${build.removed.join(', ')}`)
+  parts.push(`version ${build.generation}`)
+  return parts.join(' · ')
+}
+
 const durationOf = (run: ScriptRun | undefined): number | undefined => {
   if (!run) return undefined
   if (run.durationMs !== undefined) return run.durationMs
@@ -178,18 +355,25 @@ export function statusTone(status: ScriptRunStatus): RunTone {
 /** The pill's text: "Succeeded · 4.2 s", "Failed · exit 1 · 1.1 s", "Running · 0:07", "Queued · 2 ahead". */
 export function statusText(
   status: ScriptRunStatus,
-  info: { exitCode?: number; queuePosition?: number; durationMs?: number; elapsedMs?: number },
+  info: { exitCode?: number; queuePosition?: number; durationMs?: number; elapsedMs?: number; waitingFor?: RunWaitingFor; clock?: boolean; queuedReason?: QueuedReason },
   withClock = true,
 ): string {
+  // Tool builds (mockups 07/08) read as a clock: "Running · 1:12", "Failed · 0:41", no exit code.
+  if (info.clock && status !== 'running' && status !== 'queued' && info.durationMs !== undefined) {
+    const label = statusText(status, {}, withClock)
+    return ['failed', 'succeeded', 'timed_out', 'stopped'].includes(status) ? `${label} · ${clockText(info.durationMs)}` : label
+  }
   const dur = durationText(info.durationMs)
   const join = (...parts: (string | null | undefined | false)[]) => parts.filter(Boolean).join(' · ')
   switch (status) {
     case 'queued': {
+      // M2 contract fec4670 (mockups 07/14): a run waiting for its bot's tool build.
+      if (info.queuedReason === 'tool_build') return 'Queued · after tool build'
       const q = info.queuePosition
       return join('Queued', q === undefined ? null : q <= 0 ? 'next' : `${q} ahead`)
     }
     case 'waiting_permission':
-      return 'Waiting for permission'
+      return info.waitingFor === 'browser' ? 'Waiting for the browser' : 'Waiting for permission'
     case 'running':
       return withClock && info.elapsedMs !== undefined ? join('Running', clockText(info.elapsedMs)) : 'Running'
     case 'succeeded':
@@ -222,6 +406,8 @@ function nameOf(input: RunCardInput): string {
   const kind = run?.kind ?? summary?.kind ?? 'script'
   // BE be7afe4: summary.undoOfName names the reversed run, so a collapsed card needs no fetch.
   if (kind === 'undo') return `Undo of ${summary?.undoOfName?.trim() || input.undoOfName || 'a run'}`
+  // M2 contract: a live tool build is "Rebuild tools" (its packages go in the subtitle).
+  if (kind === 'tool_build' && (run?.build ?? summary?.build)) return 'Rebuild tools'
   if (run?.argv.length && (kind === 'tool_build' || run.skillId)) return scriptName(run)
   // BE 146cd18: scriptName is the card title; name stays the skill's display name.
   if (summary?.scriptName) return summary.scriptName
@@ -233,6 +419,8 @@ function nameOf(input: RunCardInput): string {
 function sourceOf(input: RunCardInput, name: string): string | null {
   const { run, summary } = input
   const kind = run?.kind ?? summary?.kind
+  const build = run?.build ?? summary?.build
+  if (kind === 'tool_build' && build) return buildSource(build)
   if (kind !== 'script') return null
   if (!run) return summary?.scriptName && summary.name && summary.name !== name ? summary.name : null
   if (run.skillId) return summary && summary.name !== name ? summary.name : run.skillId
@@ -294,12 +482,21 @@ export function runCardView(input: RunCardInput): RunCardView {
   const active = isActiveStatus(status)
   const name = nameOf(input)
   const durationMs = durationOf(run) ?? summary?.durationMs
-  const elapsedMs = run?.startedAt ? now - Date.parse(run.startedAt) : undefined
+  // M2 review: summary.startedAt lets a collapsed card tick ("Running · 1:12") before the run loads.
+  const startedAt = run?.startedAt ?? summary?.startedAt
+  const elapsedMs = startedAt ? now - Date.parse(startedAt) : undefined
+  const build = run?.build ?? summary?.build
+  const waitingFor = run?.waitingFor ?? summary?.waitingFor
+  const reason = run?.reason ?? summary?.reason
+  const isBuild = kind === 'tool_build' && !!build
   const info = {
-    exitCode: run?.exitCode ?? summary?.exitCode,
+    exitCode: isBuild ? undefined : (run?.exitCode ?? summary?.exitCode),
     queuePosition: run?.queuePosition ?? summary?.queuePosition,
     durationMs,
     elapsedMs: elapsedMs !== undefined && Number.isFinite(elapsedMs) ? elapsedMs : undefined,
+    waitingFor,
+    clock: isBuild,
+    queuedReason: summary?.queuedReason,
   }
   const tone = statusTone(status)
   const base = {
@@ -312,7 +509,7 @@ export function runCardView(input: RunCardInput): RunCardView {
     tone,
     statusText: statusText(status, info),
     statusLabel: statusText(status, info, false),
-    spinner: status === 'running',
+    spinner: status === 'running' || status === 'waiting_permission',
     bad: status === 'failed' || status === 'timed_out' || status === 'denied',
     progress: status === 'running',
     active,
@@ -320,26 +517,40 @@ export function runCardView(input: RunCardInput): RunCardView {
 
   if (!run) {
     return {
-      ...base, command: null, meta: [], files: [], moreFiles: 0, error: null, log: null, truncated: null,
+      ...base, command: null, meta: [], files: [], moreFiles: 0, hosts: null, thumb: null, wait: null, error: null, errorLast: false, log: null, truncated: null,
       actions: { stop: active, undo: false, output: false }, note: null, noteFirst: false, loading: true,
     }
   }
 
-  const command = run.argv.length ? `$ ${commandLine(run.argv)}` : run.script ? `$ ${tailLines(run.script, 1)}` : null
+  // Mockups 07/08: a live tool build shows no command line (its packages are in the subtitle).
+  const command = isBuild ? null : run.argv.length ? `$ ${commandLine(run.argv)}` : run.script ? `$ ${tailLines(run.script, 1)}` : null
+  const internetValue = INTERNET_VALUE[internetUseOf(run, summary)]
+  const m2Reason = isM2Reason(reason) ? reason : null
 
   // Meta line (mockup's succeeded card): Exit · Internet · Peak memory · Snapshot · runtime (§12 v2, GAP-R9).
   // The failed card in mockup (a) has no meta line, and an active run's isn't known yet.
   const meta: RunMetaItem[] = []
-  if (!active && !base.bad) {
+  if (status === 'waiting_permission') {
+    meta.push(...waitingMeta(run, waitingFor))
+  } else if (isBuild && build && !base.bad && status !== 'queued') {
+    // Mockup 07: "Internet on (allowed once) · Started by Primary (vm_install)".
+    meta.push({ key: 'net', label: 'Internet', value: internetValue })
+    meta.push({ key: 'by', label: 'Started by', value: build.startedBy === 'user' ? 'you' : `${input.botName || 'the bot'} (${build.via})` })
+  } else if (base.bad && (m2Reason === 'host_blocked' || m2Reason === 'network_off')) {
+    // Mockup 08: a run that started and then hit the network shows Exit · Internet.
     if (run.exitCode !== undefined) meta.push({ key: 'exit', label: 'Exit', value: String(run.exitCode) })
-    meta.push({ key: 'net', label: 'Internet', value: run.network === 'on' ? 'on' : 'off' })
+    meta.push({ key: 'net', label: 'Internet', value: internetValue })
+  } else if (!active && !base.bad) {
+    if (run.exitCode !== undefined) meta.push({ key: 'exit', label: 'Exit', value: String(run.exitCode) })
+    if (run.browser) meta.push({ key: 'br', label: 'Browser', value: 'on' })
+    meta.push({ key: 'net', label: 'Internet', value: internetValue })
     if (run.peakMemoryMb !== undefined) meta.push({ key: 'mem', label: 'Peak memory', value: memoryText(run.peakMemoryMb), suffix: `of ${memoryText(VM_LIMITS.memoryMb)}` })
     if (run.snapshot) meta.push({ key: 'snap', label: 'Snapshot', value: run.snapshot.id })
     const rt = runtimeLabel(run.runtime)
     if (rt) meta.push({ key: 'rt', label: 'Runtime', value: rt })
   }
 
-  const allFiles = active ? [] : fileRows(run.filesChanged, input.groupNames)
+  const allFiles = active || isBuild ? [] : fileRows(run.filesChanged, input.groupNames)
   const files = allFiles.slice(0, FILES_SHOWN)
   const moreFiles = allFiles.length - files.length
 
@@ -347,12 +558,24 @@ export function runCardView(input: RunCardInput): RunCardView {
   const out = input.output ?? { stdout: run.stdoutTail, stderr: run.stderrTail }
   const stdout = out.stdout.trim() ? tailLines(out.stdout) : ''
   const stderr = out.stderr.trim() ? tailLines(out.stderr) : ''
-  const errText = run.error?.trim() || null
+  const errText =
+    run.error?.trim() ||
+    summary?.error?.trim() ||
+    reasonErrorText(reason, { botName: input.botName, browser: run.browser, hosts: run.hostsContacted ?? summary?.hostsContacted, build, status }) ||
+    null
   let log: RunLog | null = null
   let error: string | null = null
-  if (active) {
+  let errorLast = false
+  if (status === 'waiting_permission' || status === 'queued') {
+    log = null
+  } else if (active) {
     const both = [out.stdout, out.stderr].filter((s) => s.trim()).join('\n')
     log = both ? { text: tailLines(both), error: false, live: status === 'running' } : null
+  } else if (base.bad && (m2Reason || isBuild)) {
+    // M2 (mockups 02/08): the error is a red line; stderr, when there is any, sits in the red box above it.
+    if (stderr) log = { text: stderr, error: true, live: false }
+    error = errText
+    errorLast = true
   } else if (base.bad) {
     if (stderr) {
       log = { text: stderr, error: true, live: false }
@@ -367,6 +590,10 @@ export function runCardView(input: RunCardInput): RunCardView {
     error = errText
   }
 
+  const undone = status === 'undone' || undo.state === 'done'
+  const hosts = hostRows(run.hostsContacted ?? summary?.hostsContacted, run.hostsContactedTotal ?? summary?.hostsContactedTotal, active)
+  const thumb = thumbOf(run, undone)
+  const wait = waitLine(status, waitingFor, summary, input.botName)
   const truncated = run.outputTruncated ? `Output passed the ${VM_LIMITS.outputMb} MB limit; the rest wasn't kept.` : null
 
   // Actions and the note.
@@ -374,15 +601,28 @@ export function runCardView(input: RunCardInput): RunCardView {
   let note: string | null
   let noteFirst = false
   const actions: RunActions = { stop: active, undo: false, output: !active }
-  if (active) {
+  if (status === 'waiting_permission' || (status === 'queued' && summary?.queuedReason === 'tool_build')) {
+    // Mockups 01/04/07: Stop only; the wait line says the rest.
+    note = null
+  } else if (isBuild && build && active && status !== 'queued') {
+    // Mockup 07: Stop · Full output · "Stopping keeps the current tools (version 2)."
+    actions.output = true
+    note = `Stopping keeps the current tools (version ${build.fromGeneration}).`
+  } else if (active) {
     note = status === 'queued' ? `Starts when the machine is free · limit ${limitText()}` : `${internetNote(run)} · limit ${limitText()}`
   } else if (status === 'undone') {
     const at = hm(undo.at)
     note = at ? `Undone at ${at}` : 'Undone'
     noteFirst = true
   } else if (kind === 'tool_build') {
-    note = "Undo doesn't cover installed tools"
+    // Mockup 08: a failed build's red line is the whole story.
+    note = isBuild && (base.bad || status === 'stopped') ? null : "Undo doesn't cover installed tools"
     noteFirst = true
+  } else if (base.bad && m2Reason && m2Reason !== 'host_blocked' && m2Reason !== 'network_off') {
+    // Mockups 02/08: a run that never started shows its red line and Full output only.
+    note = null
+  } else if (base.bad && m2Reason && changed === 0) {
+    note = null
   } else if (undo.state === 'unavailable' && undo.reason) {
     note = undoUnavailableText(undo, input)
     noteFirst = true
@@ -391,13 +631,14 @@ export function runCardView(input: RunCardInput): RunCardView {
     noteFirst = true
   } else if (undo.state === 'available') {
     actions.undo = true
-    note = `Undo restores the ${changed === 1 ? 'file' : plural(changed, 'file')} above`
+    // Mockup 06: an internet run's undo can't take back what was sent.
+    note = run.network === 'on' ? "Undo restores files only. It can't take back what was sent online." : `Undo restores the ${changed === 1 ? 'file' : plural(changed, 'file')} above`
   } else {
     note = undoUnavailableText(undo, input)
     noteFirst = true
   }
 
-  return { ...base, command, meta, files, moreFiles, error, log, truncated, actions, note, noteFirst, loading: false }
+  return { ...base, command, meta, files, moreFiles, hosts, thumb, wait, error, errorLast, log, truncated, actions, note, noteFirst, loading: false }
 }
 
 /** One-line label for the card region ("Script run clean_sales.py: Succeeded · 4.2 s"). */

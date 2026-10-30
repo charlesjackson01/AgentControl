@@ -8,7 +8,7 @@ import { api } from '../../lib/api'
 import { vmPaths } from '../../lib/vm-api'
 import type { Agent, InternetPolicy, RuntimeMode, ScriptRun, VmHostInfo, VmProbeResult, VmToolsInfo } from '../../lib/types'
 import {
-  RESET_ACTIVE_TEXT, RESET_TEXT, RESET_TITLE, envRowErrors, envWith, packageLabel, vmActionError, vmTabModel, whenText,
+  BUILD_WAIT_TEXT, RESET_ACTIVE_TEXT, RESET_TEXT, RESET_TITLE, browserConfirm, envRowErrors, envWith, isBuildActive, packageLabel, vmActionError, vmTabModel, whenText,
   vmHistory,
   type RunHistoryPage,
 } from '../../lib/vm-tab'
@@ -20,10 +20,12 @@ type Opened = { kind: 'undo' | 'output'; run: ScriptRun } | null
 
 /**
  * FE-P2-5: Settings › VM (mockups c-settings-vm-tab-v2, -lower, -windows). Replaces the Sandbox placeholder.
- * M1: Browser shown but off; no Back up / Restore (Export only); no Settings › VMs links.
+ * M1: no Back up / Restore (Export only); no Settings › VMs links.
+ * FE-P2-10 (M2): live Browser switch + confirm (mockups 11–13), "Building tools" head with a working
+ * Stop build, the build's env row and history rows (mockup 14).
  */
 export default function VmTab({ agent }: { agent: Agent }) {
-  const { state, loadVm, loadRun, putRun, putVm } = useLive()
+  const { state, loadVm, loadRun, putRun, putVm, putBrowser } = useLive()
   const { conversations } = useConversations()
   const vm = state.vms[agent.id]
   const [loadFailed, setLoadFailed] = useState(false)
@@ -43,6 +45,7 @@ export default function VmTab({ agent }: { agent: Agent }) {
   const [opened, setOpened] = useState<Opened>(null)
   // The opener, for focus on close (state, not a ref: handlers are built during render).
   const [lastFocus, setLastFocus] = useState<HTMLElement | null>(null)
+  const [browserAsk, setBrowserAsk] = useState<{ open: boolean; error: string | null }>({ open: false, error: null })
 
   useEffect(() => {
     let live = true
@@ -60,6 +63,15 @@ export default function VmTab({ agent }: { agent: Agent }) {
       live = false
     }
   }, [])
+
+  // The shared Chromium download (usedBy, size, progress); `browser.updated` keeps it current. Re-read after an SSE reset.
+  useEffect(() => {
+    let live = true
+    api.vm.getBrowser().then((b) => live && putBrowser(b), () => undefined)
+    return () => {
+      live = false
+    }
+  }, [putBrowser, state.resets])
 
   // History: vm.runs paints first; the first page of GET /script-runs?limit=50 brings the real hasMore.
   useEffect(() => {
@@ -82,8 +94,8 @@ export default function VmTab({ agent }: { agent: Agent }) {
   const history = useMemo(() => (vm ? vmHistory(vm, first, older) : null), [vm, first, older])
 
   const model = useMemo(
-    () => (vm ? vmTabModel({ vm, botName: agent.name, host, probe, groupNames, olderRuns: history?.runs }) : null),
-    [vm, agent.name, host, probe, groupNames, history],
+    () => (vm ? vmTabModel({ vm, botName: agent.name, host, probe, groupNames, olderRuns: history?.runs, browserAddon: state.browser }) : null),
+    [vm, agent.name, host, probe, groupNames, history, state.browser],
   )
 
   if (!vm || !model) {
@@ -108,6 +120,8 @@ export default function VmTab({ agent }: { agent: Agent }) {
       await fn()
     } catch (e) {
       setError(section, vmActionError(e, fallback))
+      // GAP-V22: a build started under us; the reload shows the "Building tools" head.
+      if (isBuildActive(e)) void loadVm(agent.id)
     } finally {
       setBusy(null)
     }
@@ -152,17 +166,65 @@ export default function VmTab({ agent }: { agent: Agent }) {
       (e) => setTools((t) => ({ ...t, error: vmActionError(e, `Couldn't load ${agent.name}'s tools. Try again.`) })),
     )
   }
-  const toolsAction = (fn: () => Promise<ScriptRun>, fallback: string) => {
+  /** Rollback answers the run; Rebuild (M2) answers 202 {run} with the live build. */
+  const toolsAction = (fn: () => Promise<ScriptRun | { run: ScriptRun }>, fallback: string) => {
     setTools((t) => ({ ...t, busy: true, error: null }))
     fn().then(
-      (run) => {
-        putRun(run)
+      (res) => {
+        putRun('run' in res ? res.run : res)
         setTools({ open: false, info: null, error: null, busy: false })
         void loadVm(agent.id)
       },
-      (e) => setTools((t) => ({ ...t, busy: false, error: vmActionError(e, fallback) })),
+      (e) => {
+        setTools((t) => ({ ...t, busy: false, error: vmActionError(e, fallback) }))
+        if (isBuildActive(e)) void loadVm(agent.id)
+      },
     )
   }
+
+  const build = vm.activeBuild
+  const onStopBuild = () =>
+    build &&
+    void act('stopbuild', 'head', "Couldn't stop the build. Try again.", async () => {
+      putRun(await api.vm.stopRun(build.runId))
+      await loadVm(agent.id)
+    })
+
+  const setBrowser = (on: boolean) =>
+    api.vm.updateVm(agent.id, { permissions: { browser: on } }).then((v) => {
+      putVm(v)
+      void api.vm.getBrowser().then(putBrowser, () => undefined)
+    })
+  const onBrowser = (on: boolean) => {
+    if (on) {
+      remember()
+      setBrowserAsk({ open: true, error: null })
+      return
+    }
+    void act('browser', 'perm', "Couldn't turn the browser off. Try again.", () => setBrowser(false))
+  }
+  const confirmBrowser = () => {
+    setBusy('browser')
+    setBrowserAsk((b) => ({ ...b, error: null }))
+    setBrowser(true).then(
+      () => {
+        setBusy(null)
+        setBrowserAsk({ open: false, error: null })
+      },
+      (e) => {
+        setBusy(null)
+        // GAP-V19: low_disk / internet_never keep the dialog open with the server's text.
+        setBrowserAsk((b) => ({ ...b, error: vmActionError(e, "Couldn't turn the browser on. Try again.") }))
+      },
+    )
+  }
+  const onBrowserRetry = () =>
+    void act('retry', 'perm', "Couldn't try again. Try again in a moment.", async () => {
+      putBrowser(await api.vm.retryBrowser(agent.id))
+      await loadVm(agent.id)
+    })
+  const onBrowserRemove = () =>
+    void act('remove', 'perm', "Couldn't remove the download. Try again.", async () => putBrowser(await api.vm.removeBrowser()))
 
   const openRun = (kind: 'undo' | 'output', id: string) => {
     remember()
@@ -223,7 +285,13 @@ export default function VmTab({ agent }: { agent: Agent }) {
       void act('grow', 'head', "Couldn't grow the disk. Try again.", async () => {
         setHost(await api.vm.growMachine(toGb))
       }),
+    onStopBuild,
+    onBrowser,
+    onBrowserRetry,
+    onBrowserRemove,
+    onBuildLog: () => build && openRun('output', build.runId),
   })
+  const ask = browserConfirm(agent.name, vm.internetPolicy)
 
   const ti = tools.info
   return (
@@ -247,13 +315,35 @@ export default function VmTab({ agent }: { agent: Agent }) {
             },
             (e) => {
               setBusy(null)
-              setResetError((e as { status?: number })?.status === 409 ? RESET_ACTIVE_TEXT : vmActionError(e, `Couldn't reset ${agent.name}'s VM. Try again.`))
+              if (isBuildActive(e)) void loadVm(agent.id)
+              setResetError(isBuildActive(e) ? BUILD_WAIT_TEXT : (e as { status?: number })?.status === 409 ? RESET_ACTIVE_TEXT : vmActionError(e, `Couldn't reset ${agent.name}'s VM. Try again.`))
             },
           )
         }}
       >
         <p>{RESET_TEXT}</p>
         {resetError && <p className="vm-err" role="alert">{resetError}</p>}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={browserAsk.open}
+        title={ask.title}
+        confirmLabel={ask.confirm}
+        loading={busy === 'browser'}
+        onCancel={() => busy !== 'browser' && setBrowserAsk({ open: false, error: null })}
+        returnFocus={() => lastFocus}
+        onConfirm={confirmBrowser}
+      >
+        <p>{ask.lead}</p>
+        <ul>
+          {ask.items.map((t, i) => (
+            <li key={t}>
+              {t}
+              {i === ask.items.length - 1 && <b>{ask.rule}</b>}
+              {i === ask.items.length - 1 && '.'}
+            </li>
+          ))}
+        </ul>
+        {browserAsk.error && <p className="vm-err" role="alert">{browserAsk.error}</p>}
       </ConfirmDialog>
       <Dialog
         open={tools.open}
@@ -266,12 +356,13 @@ export default function VmTab({ agent }: { agent: Agent }) {
             <button type="button" className="btn btn--ghost" onClick={() => setTools((t) => ({ ...t, open: false }))} disabled={tools.busy}>
               Close
             </button>
+            {build && <span className="vm-sub vm-inline">{BUILD_WAIT_TEXT}</span>}
             {ti?.canRollback && (
-              <button type="button" className="btn" disabled={tools.busy} onClick={() => toolsAction(() => api.vm.rollbackTools(agent.id), "Couldn't roll back. Try again.")}>
+              <button type="button" className="btn" disabled={tools.busy || !!build} onClick={() => toolsAction(() => api.vm.rollbackTools(agent.id), "Couldn't roll back. Try again.")}>
                 Roll back
               </button>
             )}
-            <button type="button" className="btn btn--primary" disabled={tools.busy || !ti} onClick={() => toolsAction(() => api.vm.rebuildTools(agent.id), "Couldn't rebuild. Try again.")}>
+            <button type="button" className="btn btn--primary" disabled={tools.busy || !ti || !!build} onClick={() => toolsAction(() => api.vm.rebuildTools(agent.id), "Couldn't rebuild. Try again.")}>
               {tools.busy ? 'Starting…' : 'Rebuild'}
             </button>
           </>
@@ -313,7 +404,7 @@ export default function VmTab({ agent }: { agent: Agent }) {
         />
       )}
       {opened?.kind === 'output' && (
-        <RunOutputDialog run={opened.run} name={model.rows.find((r) => r.id === opened.run.id)?.name ?? 'Run'} botName={agent.name} onClose={() => setOpened(null)} returnFocus={() => lastFocus} />
+        <RunOutputDialog run={opened.run} name={model.rows.find((r) => r.id === opened.run.id)?.name ?? (opened.run.kind === 'tool_build' ? 'Tool build' : 'Run')} botName={agent.name} onClose={() => setOpened(null)} returnFocus={() => lastFocus} />
       )}
     </>
   )

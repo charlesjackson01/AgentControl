@@ -7,6 +7,7 @@ import {
   MAX_DESCRIPTION_CHARS,
   MAX_NAME_CHARS,
   MAX_ROLE_CHARS,
+  browserCopy,
   canCreate,
   draftingStatus,
   folderLabel,
@@ -287,6 +288,23 @@ function DraftCard({ nbs, onCreate, onOpenFull }: { nbs: NewBotState; onCreate: 
             Its own VM is set up on its first script run. Scripts write only to its own folder; see Settings › VM.
           </div>
         </div>
+      </div>
+      {/* FE-P2-7 (mockup 15): off by default; turned on after the create (PATCH …/vm). */}
+      <div className="cf-nb-row3">
+        <div className="cf-nb-row3__t">
+          <div className="cf-nb-lbl" id="nb-browser">Browser for scripts (Playwright)</div>
+          <div className="cf-nb-sb" id="nb-browser-s">{browserCopy(card)}</div>
+        </div>
+        <button
+          type="button"
+          className={`switch cf-toggle${card.browser ? ' switch--on' : ''}`}
+          role="switch"
+          aria-checked={card.browser}
+          aria-labelledby="nb-browser"
+          aria-describedby="nb-browser-s"
+          disabled={busy}
+          onClick={() => nbs.updateCard({ browser: !card.browser })}
+        />
       </div>
       <div className="cf-nb-lbl" style={{ marginTop: 12 }}>Rules</div>
       <div className="cf-nb-rules">

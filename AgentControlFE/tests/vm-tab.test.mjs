@@ -233,12 +233,12 @@ describe('vm tab: notices (GAP-V5)', () => {
 })
 
 describe('vm tab: permissions (M1)', () => {
-  it('Internet segmented, Browser toggle disabled with the later-update note, home network blocked', () => {
+  it('Internet segmented, Browser toggle live (M2), home network blocked', () => {
     const out = html()
     assert.match(out, /aria-label="Internet for scripts"/)
     assert.match(out, /aria-checked="true" class="segmented__opt segmented__opt--on"[^>]*>Ask each time</)
-    assert.match(out, /role="switch" aria-checked="false" aria-label="Browser \(Playwright\)" disabled=""/)
-    assert.match(text(out), /Turning the browser on is available in a later update\./)
+    assert.match(out, /role="switch" aria-checked="false" aria-label="Browser \(Playwright\)"\/?>/)
+    assert.doesNotMatch(text(out), /later update/)
     assert.match(out, />Blocked in Phase 2</)
   })
 })
@@ -288,7 +288,7 @@ describe('vm tab: misc', () => {
     assert.equal(vmActionError(new TypeError('Failed to fetch'), 'fallback'), 'fallback')
   })
   it('every GAP is listed', () => {
-    assert.deepEqual(Object.keys(VM_TAB_GAPS), ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V12'])
+    assert.deepEqual(Object.keys(VM_TAB_GAPS), ['V1', 'V2', 'V3', 'V4', 'V5', 'V6', 'V7', 'V8', 'V9', 'V10', 'V11', 'V12', 'V13', 'V14', 'V15', 'V16', 'V17', 'V18', 'V19', 'V20', 'V21', 'V22'])
   })
   it('VmTab.tsx wires the real routes (loadRun before Undo/Output, putVm after writes)', () => {
     const src = readFileSync(new URL('../src/components/settings/VmTab.tsx', import.meta.url), 'utf8')

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { errorMessageFrom } from '../src/lib/api-error.ts'
 import {
-  BLANK_AVATAR_CHOICES, DRAFT_NETWORK_ERROR, LONG_WAIT_MS, MAX_DRAFT_PROMPT_CHARS,
+  BLANK_AVATAR_CHOICES, BROWSER_DOWNLOAD_SIZE, DRAFT_NETWORK_ERROR, browserCopy, LONG_WAIT_MS, MAX_DRAFT_PROMPT_CHARS,
   blankCard, canCreate, canRetry, cardFromDraft, composerLocked, createBody, createFailureText,
   draftFailureText, draftRequestBody, draftingStatus, elapsedLabel, folderLabel, isAbort, modelOptions,
   nameError, newBotApi, newBotNavState, newCommandPrompt, normalizeDefaults, normalizeDraft, phaseAfterDraft,
@@ -297,5 +297,51 @@ describe('routing and Open full settings', () => {
     assert.equal(p.avatarEmoji, '🧳')
     assert.equal('skillIds' in p, false)
     assert.deepEqual(profilePrefill({ ...card, sourcesOn: ['superpowers'] }, defaults).skillIds, ['sp/x'])
+  })
+})
+
+describe('FE-P2-7 browser for scripts (mockup 15)', () => {
+  const defaults = normalizeDefaults(DEFAULTS)
+  it('a new card has the browser off', () => {
+    assert.equal(blankCard(defaults).browser, false)
+    assert.equal(blankCard(null).browser, false)
+  })
+  it('a redraft keeps the browser choice (card and S4 fallback)', () => {
+    const card = { ...cardFromDraft(null, normalizeDraft(DRAFT), defaults), browser: true }
+    assert.equal(cardFromDraft(card, normalizeDraft({ ...DRAFT, name: 'Wanderer' }), defaults).browser, true)
+    assert.equal(cardFromDraft(card, normalizeDraft({ ...DRAFT, warning: 'No Primary.', warningCode: 'no_primary' }), defaults).browser, true)
+  })
+  it('Off copy is mockup 15 word for word (about 1.3 GB, M2 open question 8)', () => {
+    assert.equal(BROWSER_DOWNLOAD_SIZE, 'about 1.3 GB')
+    assert.equal(browserCopy({ name: 'Analyst', browser: false }),
+      'Off. Analyst asks in chat if a script needs a browser. Turning it on downloads Chromium once (about 1.3 GB, shared by all bots).')
+    assert.equal(browserCopy({ name: '  ', browser: false }).startsWith('Off. The bot asks in chat'), true)
+  })
+  it('On copy (GAP-P2-7a) names the bot and the one-time download', () => {
+    assert.equal(browserCopy({ name: ' Analyst ', browser: true }),
+      'On. Chromium downloads once when Analyst is created (about 1.3 GB, shared by all bots). Web pages still follow the Internet rule.')
+    assert.match(browserCopy({ name: '', browser: true }), /^On\. Chromium downloads once when the bot is created/)
+  })
+  it('off: the create body leaves browser out (master ignores it anyway)', () => {
+    const body = createBody({ ...blankCard(defaults), name: 'A' }, defaults)
+    assert.equal('browser' in body, false)
+  })
+  it('on: POST /api/agents carries browser:true (draft M2 contract 16160ae, create only); nothing else is sent', async () => {
+    const { calls, api } = mockApi({ 'POST /api/agents': () => json(201, { id: 'ag_2', name: 'Analyst' }) })
+    await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults))
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].body.browser, true)
+    assert.equal('vm' in calls[0].body, false)
+  })
+  it('Open full settings does not carry the browser (GAP: the full form has no browser field)', () => {
+    assert.equal('browser' in profilePrefill({ ...blankCard(defaults), name: 'A', browser: true }, defaults), false)
+  })
+  it('507 low_disk creates nothing: the server message shows inline on the card (S9)', async () => {
+    const message = 'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.'
+    const { api } = mockApi({ 'POST /api/agents': () => json(507, { statusCode: 507, error: 'Insufficient Storage', reason: 'low_disk', message }) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.equal(err.status, 507)
+    assert.equal(createFailureText('Analyst', err),
+      'Couldn\u2019t create Analyst: the download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
   })
 })

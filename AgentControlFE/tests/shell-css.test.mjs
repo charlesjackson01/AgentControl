@@ -85,3 +85,14 @@ describe('FE-8 phone layouts stay below 760 px', () => {
     assert.ok(!rules.some((r) => r.selector === '.cf-shell--narrow .cf-side'))
   })
 })
+
+describe('FE-P2-7 new-bot browser row (mockup 15)', () => {
+  it('.cf-nb-row3 is text left, switch right, top-aligned', () => {
+    const r = rule('.cf-nb-row3')
+    assert.equal(r.display, 'flex')
+    assert.equal(r['align-items'], 'flex-start')
+    assert.equal(r['margin-top'], '12px')
+    assert.equal(rule('.cf-nb-row3__t').flex, '1')
+    assert.equal(rule('.cf-nb-row3 .cf-toggle').flex, 'none')
+  })
+})

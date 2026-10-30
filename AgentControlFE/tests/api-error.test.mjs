@@ -21,6 +21,10 @@ describe('API error text', () => {
     assert.equal(errorMessageFrom('oops'), DEFAULT_ERROR_MESSAGE)
     assert.equal(errorMessageFrom({ error: 42, message: 'm' }), 'm')
   })
+  it("FE-P2-7: a 507 'Insufficient Storage' (low_disk) defers to message", () => {
+    assert.equal(errorMessageFrom({ statusCode: 507, error: 'Insufficient Storage', reason: 'low_disk', message: 'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.' }),
+      'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
+  })
   it('generic detection is case-insensitive', () => {
     assert.equal(isGenericError('request error'), true)
     assert.equal(isGenericError('Bad Request'), true)

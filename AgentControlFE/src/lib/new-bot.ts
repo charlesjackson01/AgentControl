@@ -44,6 +44,8 @@ export type CardDraft = {
   internetPolicy: InternetPolicy
   /** sourceIds whose chips are on. */
   sourcesOn: string[]
+  /** FE-P2-7: "Browser for scripts (Playwright)". Off by default (mockup 15). */
+  browser: boolean
 }
 
 export type PreviousDraft = Partial<Pick<CardDraft, 'name' | 'role' | 'description' | 'avatarEmoji' | 'avatarChoices' | 'rules'>>
@@ -165,13 +167,14 @@ export function blankCard(defaults: AgentDefaults | null): CardDraft {
     modelId: defaults?.modelId ?? '',
     internetPolicy: defaults?.internetPolicy ?? 'ask',
     sourcesOn: (defaults?.skills ?? []).map((s) => s.sourceId),
+    browser: false,
   }
 }
 
-/** A draft response onto the card: the draft's fields replace the card's; model, internet and skills stay. */
+/** A draft response onto the card: the draft's fields replace the card's; model, internet, skills and browser stay. */
 export function cardFromDraft(current: CardDraft | null, draft: DraftResponse, defaults: AgentDefaults | null): CardDraft {
   const base = current ?? blankCard(defaults)
-  if (draft.warning) return { ...blankCard(defaults), endpointId: base.endpointId, modelId: base.modelId, internetPolicy: base.internetPolicy, sourcesOn: base.sourcesOn }
+  if (draft.warning) return { ...blankCard(defaults), endpointId: base.endpointId, modelId: base.modelId, internetPolicy: base.internetPolicy, sourcesOn: base.sourcesOn, browser: base.browser }
   return {
     ...base,
     name: draft.name.slice(0, MAX_NAME_CHARS),
@@ -242,6 +245,12 @@ export type CreateBody = {
   internetPolicy: InternetPolicy
   avatar?: { kind: 'emoji'; value: string }
   skillIds?: string[]
+  /**
+   * FE-P2-7, ASSUMED (draft M2 contract 16160ae on p2/be-m2-contract, BE-P2-15, not approved):
+   * AgentInput.browser, create only. true turns the browser on for the new bot (download/rebuild start);
+   * 507 `low_disk` creates nothing. Sent only when on; master ignores the key (the bot starts with it off).
+   */
+  browser?: true
 }
 
 /**
@@ -263,6 +272,7 @@ export function createBody(card: CardDraft, defaults: AgentDefaults | null): Cre
   if (sources.some((s) => !card.sourcesOn.includes(s.sourceId))) {
     body.skillIds = [...new Set(sources.filter((s) => card.sourcesOn.includes(s.sourceId)).flatMap((s) => s.skillIds))]
   }
+  if (card.browser) body.browser = true
   return body
 }
 
@@ -276,6 +286,20 @@ export function modelOptions(endpoints: readonly Pick<Endpoint, 'id' | 'name' | 
 
 export function folderLabel(slug: string | null): string {
   return slug ? `bots/${slug}/` : ''
+}
+
+/* ---- FE-P2-7: browser for scripts ---- */
+
+/** Measured `botvm-browser` is 1343 MB (M2 plan, open question 8). */
+export const BROWSER_DOWNLOAD_SIZE = 'about 1.3 GB'
+
+/** The row's sub-line. Off is mockup 15's copy; On has no mockup (GAP-P2-7a). */
+export function browserCopy(card: Pick<CardDraft, 'name' | 'browser'>): string {
+  const name = card.name.trim()
+  if (card.browser) {
+    return `On. Chromium downloads once when ${name || 'the bot'} is created (${BROWSER_DOWNLOAD_SIZE}, shared by all bots). Web pages still follow the Internet rule.`
+  }
+  return `Off. ${name || 'The bot'} asks in chat if a script needs a browser. Turning it on downloads Chromium once (${BROWSER_DOWNLOAD_SIZE}, shared by all bots).`
 }
 
 /* ---- errors ---- */

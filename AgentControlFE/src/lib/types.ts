@@ -355,6 +355,12 @@ export type AgentInput = {
   /** BE-1: omitted keeps the stored value. */
   internetPolicy?: InternetPolicy
   memoryLearn?: boolean
+  /**
+   * M2 contract draft (p2/be-m2-contract 16160ae, BE-P2-15, NOT approved): create only. true turns the
+   * browser on for the new bot, the same as PATCH /api/agents/:id/vm {permissions:{browser:true}}
+   * (download/rebuild start); 507 `low_disk` creates nothing. Default false.
+   */
+  browser?: boolean
 }
 
 /* ==========================================================================

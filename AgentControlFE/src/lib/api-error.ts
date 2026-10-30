@@ -18,6 +18,8 @@ const GENERIC_ERRORS = new Set([
   'bad gateway',
   'service unavailable',
   'gateway timeout',
+  // FE-P2-7: 507 `low_disk` (M2 contract draft: create with browser, PATCH vm, browser retry) shows `message`.
+  'insufficient storage',
 ])
 
 export const DEFAULT_ERROR_MESSAGE = 'Request failed'

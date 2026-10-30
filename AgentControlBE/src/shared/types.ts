@@ -1134,7 +1134,10 @@ export interface HostContact {
   host: string
   /** Set when it isn't 443 (e.g. 8080 → "192.168.1.20:8080"). */
   port?: number
-  /** The resolved IP that was checked; absent for names refused before resolving (*.lan, *.ts.net, …). */
+  /**
+   * The resolved IP that was checked. Hosts refused before resolving (*.lan, *.ts.net, …) never carry this field
+   * (no empty or guessed value; the FE shows no "→ IP" arrow; Charles, 2026-10-30).
+   */
   ip?: string
   /** Requests (reached) or tries (blocked). */
   count: number
@@ -1161,7 +1164,10 @@ export interface ToolBuildInfo {
   progress?: { step: number; steps: number; label: string }
 }
 
-/** VmInfo.activeBuild / VmToolsInfo.activeBuild. */
+/**
+ * VmInfo.activeBuild / VmToolsInfo.activeBuild. The VM tab's "Stop build" (Building tools header) and the chat
+ * card's Stop both call POST /api/runs/:runId/stop with this runId (one route, same semantics).
+ */
 export interface ActiveToolBuild {
   runId: string
   status: 'queued' | 'waiting_permission' | 'running'

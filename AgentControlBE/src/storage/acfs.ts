@@ -10,7 +10,7 @@
  * /var/lib/agentcontrol, so the guard, the no-follow opens and the atomic
  * writes are the exact code Mac/Linux run in-process.
  */
-import type { StorageBackend, WriteMode } from './types.js'
+import type { RestoreSource, StorageBackend, WriteMode } from './types.js'
 
 export type AcfsRequest =
   | { op: 'ensureDir' | 'existsAt' | 'readTextAt' | 'du' | 'countFiles'; vol: string }
@@ -24,12 +24,15 @@ export type AcfsRequest =
   | { op: 'writeIfChanged'; root: string; parts: string[]; text: string }
   | { op: 'move'; root: string; from: string[]; to: string[] }
   | { op: 'moveOut'; root: string; parts: string[]; dest: string }
+  | { op: 'inspect'; root: string; parts: string[]; hash: boolean }
+  | { op: 'restore'; root: string; parts: string[]; src: RestoreSource }
 
 export type AcfsResponse = { ok: true; result: unknown } | { ok: false; error: { message: string; statusCode?: number; code?: string } }
 
 export const ACFS_OPS = [
   'ensureDir', 'existsAt', 'readTextAt', 'writeTextAt', 'renameAt', 'du', 'countFiles', 'readMarker', 'writeMarker',
   'stat', 'list', 'read', 'openRead', 'cat', 'write', 'writeIfChanged', 'mkdirs', 'move', 'moveOut', 'remove',
+  'inspect', 'restore',
 ] as const
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === 'string')
@@ -51,6 +54,16 @@ export function parseAcfsRequest(raw: unknown): AcfsRequest {
     case 'writeIfChanged': str('root'); strs('parts'); str('text'); break
     case 'move': str('root'); strs('from'); strs('to'); break
     case 'moveOut': str('root'); strs('parts'); str('dest'); break
+    case 'inspect': str('root'); strs('parts'); if (typeof r.hash !== 'boolean') throw new Error('acfs inspect: "hash" must be true or false.'); break
+    case 'restore': {
+      str('root'); strs('parts')
+      const src = (r.src ?? {}) as Record<string, unknown>
+      const ok = (src.kind === 'absent')
+        || (src.kind === 'symlink' && typeof src.target === 'string')
+        || (src.kind === 'file' && typeof src.from === 'string' && typeof src.mode === 'number' && Number.isInteger(src.mode) && src.mode >= 0)
+      if (!ok) throw new Error('acfs restore: bad "src".')
+      break
+    }
     default: str('root'); strs('parts')
   }
   return r as unknown as AcfsRequest
@@ -99,5 +112,7 @@ function dispatch(fs: StorageBackend, req: AcfsRequest): unknown {
     case 'move': return fs.move(req.root, req.from, req.to) ?? null
     case 'moveOut': return fs.moveOut(req.root, req.parts, req.dest) ?? null
     case 'remove': return fs.remove(req.root, req.parts) ?? null
+    case 'inspect': return fs.inspect(req.root, req.parts, { hash: req.hash })
+    case 'restore': return fs.restore(req.root, req.parts, req.src) ?? null
   }
 }

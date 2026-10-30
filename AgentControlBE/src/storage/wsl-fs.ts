@@ -18,7 +18,7 @@ import { PassThrough, type Readable } from 'node:stream'
 import { handleAcfs, type AcfsRequest, type AcfsResponse } from './acfs.js'
 import {
   StorageNotImplementedError,
-  type SnapshotRef, type StorageBackend, type StorageDirent, type StorageStat, type VolPath, type WriteMode,
+  type EntryInfo, type RestoreSource, type SnapshotRef, type StorageBackend, type StorageDirent, type StorageStat, type VolPath, type WriteMode,
 } from './types.js'
 
 export const WSL_VOLUME_ROOT = '/var/lib/agentcontrol'
@@ -122,6 +122,9 @@ export class WslFs implements StorageBackend {
 
   snapshot(_root: VolPath, _runId: string): SnapshotRef { throw new StorageNotImplementedError('Run snapshots', 'BE-P2-9') }
   diff(_ref: SnapshotRef): never { throw new StorageNotImplementedError('Snapshot diff', 'BE-P2-9') }
-  undo(_ref: SnapshotRef): never { throw new StorageNotImplementedError('Undo', 'BE-P2-11') }
+  inspect(root: VolPath, parts: readonly string[], opts: { hash?: boolean } = {}): EntryInfo | null {
+    return this.call({ op: 'inspect', root, parts: [...parts], hash: opts.hash === true })
+  }
+  restore(root: VolPath, parts: readonly string[], src: RestoreSource): void { this.call({ op: 'restore', root, parts: [...parts], src }) }
   exportZip(_root: VolPath): Readable { throw new StorageNotImplementedError('Export', 'BE-P2-17') }
 }

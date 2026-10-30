@@ -3,7 +3,7 @@ import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { assignAgentSlug, createStore, type WorkspaceStore } from './store.js'
 import { NOTES_RETIRED, PROJECTS_RETIRED } from './archive.js'
 import { addMemory, deleteMemory, listMemory, memoryPromptBlock, parseCategory, parseText, sameScope, updateMemory, type MemoryQuery, type MemoryScope } from './memory.js'
@@ -22,8 +22,9 @@ import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
 import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
-import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm } from './bot-env-routes.js'
-import { createSnapshotService } from './snapshot.js'
+import { botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone } from './bot-env-routes.js'
+import { createSnapshotService, newRunId } from './snapshot.js'
+import { createUndoService, type UndoService } from './undo.js'
 import { budgetLimits, createSnapshotBudget, type SnapshotBudget } from './snapshot-budget.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
 import { checkVolume, LocalFs, storageFor } from './storage/index.js'
@@ -425,6 +426,8 @@ declare module 'fastify' {
     vmRuntimeModeChanged: () => void
     /** BE-P2-10: undo snapshot budgets; enforce() after settings.vm.snapshotBudget changes (BE-P2-17). */
     vmSnapshotBudget: SnapshotBudget
+    /** BE-P2-11: undo of a script run (preview / apply); the routes are BE-P2-17's. */
+    vmUndo: UndoService
   }
 }
 
@@ -457,7 +460,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
 
   app.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number; reason?: unknown }
+    const err = error as Error & { statusCode?: number; reason?: unknown; conflicts?: unknown }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
     const message = redactUrlCredentials(err.message ?? '')
     if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
@@ -467,6 +470,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       message,
       // BE-P2-6: 409/410 carry a machine-readable reason (e.g. 'files_missing').
       ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
+      // BE-P2-11: undo's 409 'conflicts' lists the files (UndoConflict.conflicts).
+      ...(typeof err.reason === 'string' && status < 500 && Array.isArray(err.conflicts) ? { conflicts: err.conflicts } : {}),
     })
   })
 
@@ -1644,6 +1649,28 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   app.decorate('vmRunner', runner)
   // BE-P2-10: PATCH /api/vm/settings (BE-P2-17) calls enforce() after a snapshotBudget change.
   app.decorate('vmSnapshotBudget', snapshotBudget)
+  // BE-P2-11: undo (plan §7.3), in the bot's run slot, files written through the StorageBackend.
+  const undo = createUndoService({
+    snapshots,
+    storage: () => storageFor(store).backend,
+    zone: (agent, info) => undoZone(store, agent, info),
+    volOf: (hostPath) => {
+      const backend = storageFor(store).backend
+      if (!(backend instanceof LocalFs)) return null
+      const rel = relative(backend.volumeRoot, hostPath)
+      if (!rel || isAbsolute(rel) || rel.split(sep).some((p) => p === '..')) return null
+      return rel.split(sep).join('/')
+    },
+    activeRuns: (agentId) => runner?.activeRuns(agentId) ?? 0,
+    exclusive: (agentId, fn) => runner!.exclusive(agentId, fn),
+    stopBot: (agent) => botEnv.stop(agent),
+    newRunId,
+    afterUndo: (slug, runId) => snapshotBudget.afterRun(slug, runId),
+    usage: (slug) => snapshotBudget.usage(slug),
+    perBotBytes: () => budgetLimits(store.settings.vm?.snapshotBudget ?? DEFAULT_VM_SETTINGS.snapshotBudget).perBotBytes,
+    log: (msg) => app.log.info(msg),
+  })
+  app.decorate('vmUndo', undo)
   // Every 10 min, always (not tied to probeOnStart): the budgets, the free-space floor and record
   // pruning (eviction sweep), and stale tools measurements. Both stop on close.
   let stopBudget: (() => void) | null = null

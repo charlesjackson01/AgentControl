@@ -18,10 +18,11 @@ import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { BotEnvService, BotMount } from './bot-env.js'
 import type { MountAllowList } from './isolation.js'
-import type { SnapshotZone } from './snapshot.js'
+import type { SnapshotZone, ZoneInfo } from './snapshot.js'
+import type { ResolvedZone } from './undo.js'
 import { envListProblem } from './bot-env.js'
-import { botRoot, folderBytes, quotaBytes } from './files.js'
-import { groupFolderFull, groupRoot } from './group-files.js'
+import { botRoot, botVol, folderBytes, quotaBytes } from './files.js'
+import { groupFolderFull, groupRoot, groupVol } from './group-files.js'
 import { sumBreakdown, type PersonalUsage } from './personal-usage.js'
 import type { SnapshotUsage } from './snapshot-budget.js'
 import { fail, failWithReason } from './http.js'
@@ -102,6 +103,33 @@ export function snapshotZones(store: WorkspaceStore, agent: Agent): SnapshotZone
     zones.push({ key: `group-${c.slug}`, dir: shared, target: `${BOT_PATHS.groups}/${c.slug}`, root: 'group', prefix: 'shared', groupId: c.id, groupName: c.name })
   }
   return zones
+}
+
+/**
+ * BE-P2-11: where one of a run's snapshot zones is now, for undo: the bot's workspace, or the
+ * group's shared folder while the group (archived or not, member or not, full or not) and its
+ * folder exist. Null otherwise (undo leaves that zone's files alone).
+ */
+export function undoZone(store: WorkspaceStore, agent: Agent, info: ZoneInfo): ResolvedZone | null {
+  if (info.key === 'workspace') {
+    return {
+      zone: { key: 'workspace', dir: path.join(botRoot(store, agent), 'workspace'), target: BOT_PATHS.workspace, root: 'agent', prefix: 'workspace' },
+      vol: botVol(agent),
+      sub: ['workspace'],
+    }
+  }
+  const m = /^group-([a-z0-9-]{1,40})$/.exec(info.key)
+  if (!m) return null
+  const slug = m[1]!
+  const g = store.conversations.find((c): c is GroupConversation => c.kind === 'group' && c.slug === slug && (!info.groupId || c.id === info.groupId))
+  if (!g) return null
+  const shared = path.join(groupRoot(store, slug), 'shared')
+  if (!existsSync(shared)) return null
+  return {
+    zone: { key: info.key, dir: shared, target: `${BOT_PATHS.groups}/${slug}`, root: 'group', prefix: 'shared', groupId: g.id, groupName: g.name },
+    vol: groupVol(slug),
+    sub: ['shared'],
+  }
 }
 
 export interface BotEnvRouteDeps {

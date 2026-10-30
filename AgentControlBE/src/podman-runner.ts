@@ -129,6 +129,11 @@ export interface ContainerRunnerDeps {
 export interface ContainerRunner extends Runner {
   /** Runs queued or running for the bot (BotEnvService.activeRuns). */
   activeRuns(agentId: string): number
+  /**
+   * BE-P2-11: run `fn` in the bot's run slot (after the runs queued before it, and before any
+   * queued after it), counted by `activeRuns` while it waits and runs. Used by undo.
+   */
+  exclusive<T>(agentId: string, fn: () => Promise<T>): Promise<T>
   /** Stop the bot's running and queued runs (VM stop / reset). */
   stopRuns(agentId: string): void
   /** When the bot's container stops if nothing else runs (VmInfo.idleStopAt). */
@@ -420,11 +425,26 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     }
   }
 
+  function exclusive<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
+    counts.set(agentId, (counts.get(agentId) ?? 0) + 1)
+    lastActivity.set(agentId, now().getTime())
+    const prev = queues.get(agentId) ?? Promise.resolve()
+    const next = prev.catch(() => {}).then(fn)
+    queues.set(agentId, next)
+    return next.finally(() => {
+      counts.set(agentId, (counts.get(agentId) ?? 1) - 1)
+      if (!counts.get(agentId)) counts.delete(agentId)
+      if (queues.get(agentId) === next) queues.delete(agentId)
+      lastActivity.set(agentId, now().getTime())
+    })
+  }
+
   return {
     async available() {
       return (await deps.engine()) !== null
     },
     run,
+    exclusive,
     activeRuns: (agentId) => counts.get(agentId) ?? 0,
     stopRuns(agentId) {
       epochs.set(agentId, (epochs.get(agentId) ?? 0) + 1)

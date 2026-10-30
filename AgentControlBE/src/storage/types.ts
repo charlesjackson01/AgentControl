@@ -45,6 +45,25 @@ export type VolumeState = 'ok' | 'missing' | 'mismatch'
 
 export interface SnapshotRef { root: VolPath; snapshotId: string }
 
+/**
+ * BE-P2-11: what is at a path now, read without following a symlink at the last segment
+ * (undo's conflict check). `sha256` only for files, and only when asked for.
+ */
+export type EntryInfo =
+  | { kind: 'file'; size: number; mtimeMs: number; mode: number; sha256?: string }
+  | { kind: 'symlink'; target: string }
+  | { kind: 'dir' | 'other' }
+
+/**
+ * BE-P2-11: what undo puts back at one path. `file`: a copy of the retained original at the
+ * volume path `from` (a regular file, opened no-follow) with permission bits `mode`;
+ * `symlink`: a link with this text (never followed); `absent`: the file or link is removed.
+ */
+export type RestoreSource =
+  | { kind: 'file'; from: VolPath; mode: number }
+  | { kind: 'symlink'; target: string }
+  | { kind: 'absent' }
+
 export interface StorageBackend {
   readonly kind: StorageBackendKind
   /** Where the volume lives, for display (VmInfo.storage.location). Never sent for bot paths. */
@@ -93,10 +112,18 @@ export interface StorageBackend {
   /** rm -rf root/parts (trash pruning only). */
   remove(root: VolPath, parts: readonly string[]): void
 
-  // --- snapshots (BE-P2-9 / BE-P2-11 / BE-P2-18): interface only in BE-P2-6 ---
+  // --- undo (BE-P2-11): parents guarded as above; the last segment may be a symlink ---
+  /** What is at root/parts now (no-follow), or null when nothing is. Files are hashed when `hash`. */
+  inspect(root: VolPath, parts: readonly string[], opts?: { hash?: boolean }): EntryInfo | null
+  /**
+   * Put one path back atomically (temp + rename in the same folder; parents created segment by
+   * segment). A folder at the path is never replaced or removed (409).
+   */
+  restore(root: VolPath, parts: readonly string[], src: RestoreSource): void
+
+  // --- snapshots (BE-P2-9 / BE-P2-18): interface only in BE-P2-6 ---
   snapshot(root: VolPath, runId: string): SnapshotRef
   diff(ref: SnapshotRef): never
-  undo(ref: SnapshotRef): never
   exportZip(root: VolPath): Readable
 }
 

@@ -3,16 +3,17 @@
  * The guard and the no-follow I/O are the Phase 1 code from files.ts, moved
  * here unchanged; files.ts re-exports them for older callers.
  */
+import { createHash } from 'node:crypto'
 import {
-  closeSync, constants as fsc, createReadStream, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync,
-  readdirSync, readSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync, type Stats,
+  closeSync, constants as fsc, createReadStream, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync,
+  readdirSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync, type Stats,
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { Readable } from 'node:stream'
 import { fail } from '../http.js'
 import {
   MARKER_FILE, StorageNotImplementedError, volSegments,
-  type SnapshotRef, type StorageBackend, type StorageDirent, type StorageStat, type VolPath, type WriteMode,
+  type EntryInfo, type RestoreSource, type SnapshotRef, type StorageBackend, type StorageDirent, type StorageStat, type VolPath, type WriteMode,
 } from './types.js'
 
 // --- path guard (Phase 1, unchanged) ---------------------------------------------
@@ -307,8 +308,75 @@ export class LocalFs implements StorageBackend {
     throw new StorageNotImplementedError('Snapshot diff', 'BE-P2-9')
   }
 
-  undo(_ref: SnapshotRef): never {
-    throw new StorageNotImplementedError('Undo', 'BE-P2-11')
+  /** BE-P2-11: the guarded parent folder plus the last segment (which may be a symlink). */
+  private leaf(root: VolPath, parts: readonly string[]): { dir: string; full: string; name: string } {
+    const name = parts[parts.length - 1]
+    if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\') || name.includes('\0')) fail(400, 'That path is not valid.')
+    const dir = this.guarded(root, parts.slice(0, -1))
+    return { dir, full: join(dir, name), name }
+  }
+
+  inspect(root: VolPath, parts: readonly string[], opts: { hash?: boolean } = {}): EntryInfo | null {
+    const { full } = this.leaf(root, parts)
+    let info: Stats
+    try { info = lstatSync(full) } catch { return null }
+    if (info.isSymbolicLink()) return { kind: 'symlink', target: readlinkSync(full) }
+    if (info.isDirectory()) return { kind: 'dir' }
+    if (!info.isFile()) return { kind: 'other' }
+    const out: EntryInfo = { kind: 'file', size: info.size, mtimeMs: info.mtimeMs, mode: info.mode & 0o7777 }
+    if (opts.hash) {
+      const fd = openNoFollow(full)
+      try {
+        const h = createHash('sha256')
+        const buf = Buffer.allocUnsafe(1024 * 1024)
+        for (;;) {
+          const n = readSync(fd, buf, 0, buf.length, null)
+          if (n <= 0) break
+          h.update(buf.subarray(0, n))
+        }
+        out.sha256 = h.digest('hex')
+      } finally { closeSync(fd) }
+    }
+    return out
+  }
+
+  restore(root: VolPath, parts: readonly string[], src: RestoreSource): void {
+    const rel = parts.join('/')
+    if (src.kind !== 'absent' && parts.length > 1) mkdirsGuarded(this.abs(root), parts.slice(0, -1))
+    const { dir, full, name } = this.leaf(root, parts)
+    const current = (() => { try { return lstatSync(full) } catch { return null } })()
+    if (current?.isDirectory()) fail(409, `"${rel}" is a folder now, so undo can't replace it.`)
+    if (src.kind === 'absent') {
+      if (current) unlinkSync(full)
+      return
+    }
+    const temporary = join(dir, `.${name}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`)
+    try {
+      if (src.kind === 'symlink') {
+        symlinkSync(src.target, temporary)
+      } else {
+        const inFd = openNoFollow(this.abs(src.from))
+        try {
+          const outFd = openSync(temporary, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | O_NOFOLLOW, 0o600)
+          try {
+            const buf = Buffer.allocUnsafe(1024 * 1024)
+            for (;;) {
+              const n = readSync(inFd, buf, 0, buf.length, null)
+              if (n <= 0) break
+              let off = 0
+              while (off < n) off += writeSync(outFd, buf, off, n - off)
+            }
+            fchmodSync(outFd, src.mode & 0o777)
+            fsyncSync(outFd)
+          } finally { closeSync(outFd) }
+        } finally { closeSync(inFd) }
+      }
+      this.leaf(root, parts) // re-check: no parent was swapped for a symlink meanwhile
+      renameSync(temporary, full)
+    } catch (err) {
+      rmSync(temporary, { force: true })
+      throw err
+    }
   }
 
   exportZip(_root: VolPath): Readable {

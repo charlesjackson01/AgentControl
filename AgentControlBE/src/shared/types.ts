@@ -892,7 +892,8 @@ export interface UndoConflict {
   error: string
   /** Plain-language text the FE shows as is. */
   message: string
-  reason: 'run_active' | 'conflicts'
+  /** BE-P2-11 (needs OK): 'already_undone' when the run was undone already (undo its undo run instead). */
+  reason: 'run_active' | 'conflicts' | 'already_undone'
   conflicts?: UndoPreview['conflicts']
 }
 /**

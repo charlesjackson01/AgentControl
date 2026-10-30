@@ -28,6 +28,13 @@
  * record; `gcBlobs` (copy) removes blobs no longer referenced by the index, a kept snapshot or
  * the pending run. The eviction policy (budgets, §7.4) is in snapshot-budget.ts.
  *
+ * BE-P2-11: an undo is itself a snapshotted run (`begin` with the reversed run's zones and
+ * `undoOf`): with reflink/copy the pre-run clone/blobs hold what undo replaces; with overlay
+ * (where undo writes the real folders directly) `retain` copies each file into the snapshot
+ * before it is replaced. `markUndone` records `undo: {state:'done', undoRunId}` on the reversed
+ * run and drops its retained data (undoing the undo uses the undo run's own snapshot); `hold`
+ * keeps eviction off a run while its undo is applied.
+ *
  * Note (Team lead, BE-P2-9 review): the copy driver is close to the 2 s pre-run budget on a
  * 10k-file workspace — about 1.3 s standalone before the hash-while-copying fix and about 2.0 s
  * under the full parallel test suite (reflink: 0.78 s). Keep an eye on it before adding work to
@@ -114,6 +121,8 @@ export interface SnapshotHandle {
   zones: SnapshotZone[]
   startedAt: string
   pre: Record<string, ManifestEntry[]>
+  /** BE-P2-11: this run is an undo of that run. */
+  undoOf?: string
   /** overlay: what the commits touched, per zone. */
   touched: Record<string, { files: string[]; dirs: string[] }>
 }
@@ -129,6 +138,12 @@ export interface SnapshotChange {
   afterSha?: string
   afterMtimeMs?: number
   beforeTarget?: string
+  /** BE-P2-11: permission bits of the original (restored with the bytes). */
+  beforeMode?: number
+  /** BE-P2-11: kind after the run, when it differs from `kind` (e.g. a file replaced by a link). */
+  afterKind?: 'file' | 'symlink'
+  /** BE-P2-11: a symlink's text after the run (conflict check). */
+  afterTarget?: string
 }
 
 export interface SnapshotMeta {
@@ -145,6 +160,8 @@ export interface SnapshotMeta {
   retainedBytes: number
   /** BE-P2-10: absent while the snapshot is kept; set when it's evicted (or, BE-P2-11, undone). */
   undo?: ScriptRunUndo
+  /** BE-P2-11: this run is an undo ("undo of <runId>"). */
+  undoOf?: string
 }
 
 export interface SnapshotOutcome {
@@ -165,7 +182,11 @@ export interface UndoSourceEntry {
   rel: string
   change: 'added' | 'modified' | 'deleted'
   /** modified/deleted: the original (host path of the retained file, or a symlink's target). */
-  original?: { kind: 'file'; file: string; size: number; sha256?: string } | { kind: 'symlink'; target: string }
+  original?: { kind: 'file'; file: string; size: number; sha256?: string; mode?: number } | { kind: 'symlink'; target: string }
+  /** Size before the run (modified/deleted). */
+  beforeSize?: number
+  /** BE-P2-11: what the run left (added/modified), for the conflict check. */
+  after?: { kind: 'file' | 'symlink'; size?: number; mtimeMs?: number; target?: string }
   /** The hash after the run (conflict check: current hash ≠ this). */
   afterSha?: string
 }
@@ -181,10 +202,23 @@ export interface SnapshotService {
   needsStop(agent?: Agent): boolean
   /** Is a snapshot unfinished (crash) for the bot? */
   pending(agent: Agent): boolean
-  /** Pre-run: manifest, clone/blobs, pending marker. Null when snapshots are off. */
-  begin(agent: Agent, runId: string): Promise<SnapshotHandle | null>
+  /**
+   * Pre-run: manifest, clone/blobs, pending marker. Null when snapshots are off. BE-P2-11: an
+   * undo passes the reversed run's zones (`zones`, instead of the bot's writable zones now) and `undoOf`.
+   */
+  begin(agent: Agent, runId: string, opts?: { zones?: SnapshotZone[]; undoOf?: string }): Promise<SnapshotHandle | null>
   /** Post-run (every outcome): commit (overlay), post manifest, diff, retained originals. */
   finish(h: SnapshotHandle, opts?: { recovered?: boolean }): Promise<SnapshotOutcome>
+  /**
+   * BE-P2-11 (overlay): before undo replaces or removes `rel` in a zone directly, copy the file
+   * into the undo run's snapshot and mark it touched. A no-op for reflink and copy (their
+   * pre-run clone/blobs already hold it).
+   */
+  retain(h: SnapshotHandle, zone: string, rel: string): void
+  /** BE-P2-11: record that `undoRunId` reversed the run, and drop its retained data. Null when there's no such snapshot. */
+  markUndone(slug: string, runId: string, undoRunId: string): SnapshotMeta | null
+  /** BE-P2-11: keep eviction (`evict`) off a run until the returned release is called. */
+  hold(slug: string, runId: string): () => void
   /** Finish an unfinished snapshot (container must be stopped for overlay). */
   recover(agent: Agent): Promise<SnapshotOutcome | null>
   read(slug: string, runId: string): SnapshotMeta | null
@@ -539,7 +573,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     return d ? path.join(d, PENDING) : null
   }
 
-  async function begin(agent: Agent, runId: string): Promise<SnapshotHandle | null> {
+  async function begin(agent: Agent, runId: string, opts: { zones?: SnapshotZone[]; undoOf?: string } = {}): Promise<SnapshotHandle | null> {
     const driver = deps.driver()
     const d = slugDir(agent.slug)
     if (!driver || !d) return null
@@ -548,7 +582,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     await recover(agent)
     const dir = path.join(d, runId)
     if (existsSync(dir)) throw new Error(`a snapshot for run ${runId} already exists`)
-    const zones = checkZones(deps.zones(agent))
+    const zones = checkZones(opts.zones ?? deps.zones(agent))
     const index = loadIndex(d)
     const pre: Record<string, ManifestEntry[]> = {}
     // copy hashes new/changed files while storing their blobs, so the walk only reuses the index.
@@ -558,8 +592,9 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     if (driver === 'copy') for (const z of zones) storeBlobs(z.dir, pre[z.key]!, path.join(d, BLOBS))
     if (driver !== 'overlay') await commitLeftoverOverlay(d, zones, dir)
     const startedAt = now().toISOString()
-    const h: SnapshotHandle = { slug: agent.slug, runId, driver, dir, zones, startedAt, pre, touched: {} }
-    writeJson(path.join(dir, 'manifest.json'), { v: 1, runId, driver, startedAt, zones: zones.map((z) => ({ ...zoneInfo(z), dir: z.dir, target: z.target })), pre })
+    const undoOf = opts.undoOf !== undefined && RUN_ID_RE.test(opts.undoOf) ? opts.undoOf : undefined
+    const h: SnapshotHandle = { slug: agent.slug, runId, driver, dir, zones, startedAt, pre, touched: {}, ...(undoOf ? { undoOf } : {}) }
+    writeJson(path.join(dir, 'manifest.json'), { v: 1, runId, driver, startedAt, zones: zones.map((z) => ({ ...zoneInfo(z), dir: z.dir, target: z.target })), pre, ...(undoOf ? { undoOf } : {}) })
     writeJson(path.join(d, PENDING), { runId })
     if (driver === 'overlay') {
       // Writes made while no run was active (e.g. an exec at idle) are committed now, as part of this run.
@@ -616,10 +651,12 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       const keep = new Set<string>()
       for (const c of diff) {
         const kind = (c.before ?? c.after)!.kind === 'symlink' ? 'symlink' : 'file'
+        const afterKind = c.after ? (c.after.kind === 'symlink' ? 'symlink' : 'file') : undefined
         changes.push({
           zone: z.key, path: c.path, change: c.change, kind,
-          ...(c.before ? { beforeSize: c.before.size, ...(c.before.sha256 ? { beforeSha: c.before.sha256 } : {}), ...(c.before.target !== undefined ? { beforeTarget: c.before.target } : {}) } : {}),
-          ...(c.after ? { afterSize: c.after.size, afterMtimeMs: c.after.mtimeMs, ...(c.after.sha256 ? { afterSha: c.after.sha256 } : {}) } : {}),
+          ...(c.before ? { beforeSize: c.before.size, beforeMode: c.before.mode, ...(c.before.sha256 ? { beforeSha: c.before.sha256 } : {}), ...(c.before.target !== undefined ? { beforeTarget: c.before.target } : {}) } : {}),
+          ...(c.after ? { afterSize: c.after.size, afterMtimeMs: c.after.mtimeMs, ...(c.after.sha256 ? { afterSha: c.after.sha256 } : {}), ...(c.after.target !== undefined ? { afterTarget: c.after.target } : {}) } : {}),
+          ...(afterKind && afterKind !== kind ? { afterKind } : {}),
         })
         if (c.before) {
           keep.add(c.path)
@@ -638,7 +675,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     const meta: SnapshotMeta = {
       v: 1, runId: h.runId, slug: h.slug, driver: h.driver, startedAt: h.startedAt, endedAt: now().toISOString(),
       ...(opts.recovered ? { recovered: true as const } : {}),
-      zones: h.zones.map(zoneInfo), changes, retainedBytes,
+      zones: h.zones.map(zoneInfo), changes, retainedBytes, ...(h.undoOf ? { undoOf: h.undoOf } : {}),
     }
     writeJson(path.join(h.dir, 'post.json'), post)
     writeJson(path.join(h.dir, 'meta.json'), meta)
@@ -657,7 +694,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     const runId = pend.runId
     const d = path.dirname(file)
     const m = typeof runId === 'string' && RUN_ID_RE.test(runId)
-      ? readJson<{ driver: SnapshotDriver; startedAt: string; zones: (ZoneInfo & { dir: string; target: string })[]; pre: Record<string, ManifestEntry[]> }>(path.join(d, runId, 'manifest.json'))
+      ? readJson<{ driver: SnapshotDriver; startedAt: string; zones: (ZoneInfo & { dir: string; target: string })[]; pre: Record<string, ManifestEntry[]>; undoOf?: string }>(path.join(d, runId, 'manifest.json'))
       : null
     if (!m || !runId) {
       log(`snapshots: ${agent.slug}: dropping an unreadable pending marker`)
@@ -666,13 +703,39 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     }
     const touched = readJson<SnapshotHandle['touched']>(path.join(d, runId, 'touched.json')) ?? {}
     log(`snapshots: ${agent.slug}: finishing the snapshot of run ${runId} (its end wasn't recorded)`)
-    return finish({ slug: agent.slug, runId, driver: m.driver, dir: path.join(d, runId), zones: m.zones, startedAt: m.startedAt, pre: m.pre, touched }, { recovered: true })
+    const undoOf = typeof m.undoOf === 'string' && RUN_ID_RE.test(m.undoOf) ? m.undoOf : undefined
+    return finish({ slug: agent.slug, runId, driver: m.driver, dir: path.join(d, runId), zones: m.zones, startedAt: m.startedAt, pre: m.pre, touched, ...(undoOf ? { undoOf } : {}) }, { recovered: true })
   }
 
   function read(slug: string, runId: string): SnapshotMeta | null {
     const d = slugDir(slug)
     if (!d || !RUN_ID_RE.test(runId)) return null
     return readJson<SnapshotMeta>(path.join(d, runId, 'meta.json'))
+  }
+
+  /** BE-P2-11: `${slug}/${runId}` of runs whose undo is being applied (never evicted meanwhile). */
+  const held = new Map<string, number>()
+
+  function retain(h: SnapshotHandle, zone: string, rel: string): void {
+    if (h.driver !== 'overlay') return
+    const z = h.zones.find((x) => x.key === zone)
+    if (!z) throw new Error(`zone ${zone} is not part of run ${h.runId}`)
+    const parts = rel.split('/')
+    if (!rel || parts.some((p) => !p || p === '.' || p === '..')) throw new Error(`bad path ${JSON.stringify(rel.slice(0, 80))}`)
+    const src = path.join(z.dir, ...parts)
+    const st = lst(src)
+    const t = h.touched[zone] ?? { files: [], dirs: [] }
+    if (!t.files.includes(rel)) t.files.push(rel)
+    h.touched[zone] = t
+    if (st?.isFile()) {
+      if (!stillInside(z.dir, src)) throw new Error('retain: a folder on the way is a link')
+      const dst = path.join(h.dir, 'files', zone, ...parts)
+      if (!lst(dst)) {
+        mkdirSync(path.dirname(dst), { recursive: true })
+        copyNoFollow(src, dst)
+      }
+    }
+    writeJson(path.join(h.dir, 'touched.json'), h.touched)
   }
 
   const svc: SnapshotService = {
@@ -701,25 +764,66 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     finish,
     recover,
     read,
+    retain,
+    markUndone(slug, runId, undoRunId) {
+      const d = slugDir(slug)
+      if (!d || !RUN_ID_RE.test(runId) || !RUN_ID_RE.test(undoRunId)) return null
+      const dir = path.join(d, runId)
+      const meta = readJson<SnapshotMeta>(path.join(dir, 'meta.json'))
+      if (!meta || meta.runId !== runId) return null
+      const next: SnapshotMeta = { ...meta, undo: { state: 'done', at: now().toISOString(), undoRunId } }
+      writeJson(path.join(dir, 'meta.json'), next)
+      // Its originals are no longer needed: the undo run's own snapshot reverses the undo.
+      for (const f of ['files', 'manifest.json', 'post.json', 'touched.json']) rmSync(path.join(dir, f), { recursive: true, force: true })
+      log(`snapshots: ${slug}: run ${runId} undone by ${undoRunId}`)
+      return next
+    },
+    hold(slug, runId) {
+      const k = `${slug}/${runId}`
+      held.set(k, (held.get(k) ?? 0) + 1)
+      let done = false
+      return () => {
+        if (done) return
+        done = true
+        const n = (held.get(k) ?? 1) - 1
+        if (n <= 0) held.delete(k)
+        else held.set(k, n)
+      }
+    },
     undoSource(slug, runId) {
       const meta = read(slug, runId)
       const d = slugDir(slug)
-      if (!meta || !d || meta.undo?.state === 'unavailable') return null
-      const zones = new Map(meta.zones.map((z) => [z.key, z]))
+      if (!meta || !d || meta.undo?.state === 'unavailable' || meta.undo?.state === 'done') return null
+      const zones = new Map(meta.zones.filter((z) => ZONE_KEY_RE.test(z.key)).map((z) => [z.key, z]))
+      // BE-P2-11: a record naming an unknown zone or an odd path is refused as a whole (crafted).
+      const badPath = (p: string) => !p || p.split('/').some((x) => !x || x === '.' || x === '..' || x.includes('\\') || x.includes('\0'))
+      if (meta.changes.some((c) => !zones.has(c.zone) || typeof c.path !== 'string' || badPath(c.path))) {
+        log(`snapshots: ${slug}: the record of run ${runId} names a zone or path that isn't valid`)
+        throw Object.assign(new Error('This run\'s undo record has a path that isn\'t valid, so it can\'t be undone.'), { statusCode: 400 })
+      }
       return meta.changes.map((c) => {
         const z = zones.get(c.zone)!
         let original: UndoSourceEntry['original']
         if (c.change !== 'added') {
           if (c.kind === 'symlink') original = { kind: 'symlink', target: c.beforeTarget ?? '' }
           else {
-            const file = meta.driver === 'copy' ? (c.beforeSha ? path.join(d, BLOBS, c.beforeSha) : '') : path.join(d, runId, 'files', c.zone, c.path)
-            if (file && lst(file)?.isFile()) original = { kind: 'file', file, size: c.beforeSize ?? 0, ...(c.beforeSha ? { sha256: c.beforeSha } : {}) }
+            const sha = c.beforeSha && /^[0-9a-f]{64}$/.test(c.beforeSha) ? c.beforeSha : ''
+            const file = meta.driver === 'copy' ? (sha ? path.join(d, BLOBS, sha) : '') : path.join(d, runId, 'files', c.zone, c.path)
+            if (file && lst(file)?.isFile()) original = { kind: 'file', file, size: c.beforeSize ?? 0, ...(c.beforeSha ? { sha256: c.beforeSha } : {}), ...(c.beforeMode !== undefined ? { mode: c.beforeMode } : {}) }
           }
+        }
+        const afterKind = c.afterKind ?? c.kind
+        const after: UndoSourceEntry['after'] = c.change === 'deleted' ? undefined : {
+          kind: afterKind,
+          ...(c.afterSize !== undefined ? { size: c.afterSize } : {}),
+          ...(c.afterMtimeMs !== undefined ? { mtimeMs: c.afterMtimeMs } : {}),
+          ...(c.afterTarget !== undefined ? { target: c.afterTarget } : {}),
         }
         return {
           zone: c.zone, root: z.root, ...(z.groupId ? { groupId: z.groupId } : {}), ...(z.groupName ? { groupName: z.groupName } : {}),
           path: `${z.prefix}/${c.path}`, rel: c.path, change: c.change,
-          ...(original ? { original } : {}), ...(c.afterSha ? { afterSha: c.afterSha } : {}),
+          ...(original ? { original } : {}), ...(c.beforeSize !== undefined ? { beforeSize: c.beforeSize } : {}),
+          ...(after ? { after } : {}), ...(c.afterSha ? { afterSha: c.afterSha } : {}),
         }
       })
     },
@@ -752,7 +856,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     },
     sizeOf(meta) {
       const d = slugDir(meta.slug)
-      if (!d || meta.undo?.state === 'unavailable') return 0
+      if (!d || meta.undo?.state === 'unavailable' || meta.undo?.state === 'done') return 0
       const dir = path.join(d, meta.runId)
       let bytes = meta.retainedBytes
       for (const f of ['manifest.json', 'post.json', 'meta.json']) bytes += lst(path.join(dir, f))?.size ?? 0
@@ -764,7 +868,11 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       const dir = path.join(d, runId)
       const meta = readJson<SnapshotMeta>(path.join(dir, 'meta.json'))
       if (!meta) return null
-      if (meta.undo?.state === 'unavailable') return meta
+      if (meta.undo?.state === 'unavailable' || meta.undo?.state === 'done') return meta
+      if (held.has(`${slug}/${runId}`)) {
+        log(`snapshots: ${slug}: not evicting run ${runId} now (its undo is being applied)`)
+        return null
+      }
       const undo: ScriptRunUndo = {
         state: 'unavailable', reason, at: now().toISOString(),
         ...(extra.changedBytes !== undefined ? { changedBytes: extra.changedBytes } : {}),
@@ -801,7 +909,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       for (const e of loadIndex(d).entries.values()) keep.add(e.sha256)
       // … the originals kept snapshots need …
       for (const m of svc.list(slug)) {
-        if (m.undo?.state === 'unavailable') continue
+        if (m.undo?.state === 'unavailable' || m.undo?.state === 'done') continue
         for (const c of m.changes) if (c.beforeSha) keep.add(c.beforeSha)
       }
       // … and everything the pending run's pre-run manifest refers to.

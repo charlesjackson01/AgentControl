@@ -132,13 +132,67 @@ export function fileOpsSuite(name: string, make: () => SuiteFixture): void {
       expect(fs.readMarker()).toBe('vol_test-2')
     })
 
-    it('snapshot, diff, undo and export are clear stubs for now', () => {
+    it('BE-P2-11 inspect: files (hashed on request), symlinks never followed, folders, absent', () => {
+      const { fs, hostRoot } = make()
+      fs.ensureDir(bot)
+      fs.mkdirs(bot, ['workspace'])
+      fs.write(bot, ['workspace', 'a.txt'], Buffer.from('hello'), 'create')
+      symlinkSync('/etc/passwd', join(hostRoot, bot, 'workspace', 'ln'))
+      const plain = fs.inspect(bot, ['workspace', 'a.txt'])
+      expect(plain).toMatchObject({ kind: 'file', size: 5 })
+      expect(plain && 'sha256' in plain ? plain.sha256 : undefined).toBeUndefined()
+      expect(fs.inspect(bot, ['workspace', 'a.txt'], { hash: true })).toMatchObject({
+        kind: 'file', sha256: '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+      })
+      expect(fs.inspect(bot, ['workspace', 'ln'], { hash: true })).toEqual({ kind: 'symlink', target: '/etc/passwd' })
+      expect(fs.inspect(bot, ['workspace'])).toEqual({ kind: 'dir' })
+      expect(fs.inspect(bot, ['workspace', 'nope'])).toBeNull()
+      // a symlink in a parent segment is refused
+      expect(errorOf(() => fs.inspect(bot, ['workspace', 'ln', 'x'])).statusCode).toBe(400)
+      expect(() => fs.inspect(bot, ['workspace', '..', '..', 'x'])).toThrow()
+    })
+
+    it('BE-P2-11 restore: file (bytes + mode, parents made), symlink, absent; folders refused', () => {
+      const { fs, hostRoot } = make()
+      fs.ensureDir(bot)
+      fs.mkdirs(bot, ['workspace'])
+      mkdirSync(join(hostRoot, 'snapshots', 'ada', 'r1'), { recursive: true })
+      writeFileSync(join(hostRoot, 'snapshots', 'ada', 'r1', 'orig'), 'original bytes')
+      fs.restore(bot, ['workspace', 'deep', 'er', 'a.txt'], { kind: 'file', from: 'snapshots/ada/r1/orig', mode: 0o750 })
+      expect(fs.read(bot, ['workspace', 'deep', 'er', 'a.txt'], 100).toString()).toBe('original bytes')
+      expect(fs.inspect(bot, ['workspace', 'deep', 'er', 'a.txt'])).toMatchObject({ kind: 'file', mode: 0o750 })
+      // replaces an existing file atomically, no temp files left
+      fs.write(bot, ['workspace', 'b.txt'], Buffer.from('later'), 'create')
+      fs.restore(bot, ['workspace', 'b.txt'], { kind: 'file', from: 'snapshots/ada/r1/orig', mode: 0o644 })
+      expect(fs.read(bot, ['workspace', 'b.txt'], 100).toString()).toBe('original bytes')
+      expect(fs.list(bot, ['workspace']).map((d) => d.name).sort()).toEqual(['b.txt', 'deep'])
+      // a symlink is put back as a link (never followed), and replaces a file
+      fs.restore(bot, ['workspace', 'b.txt'], { kind: 'symlink', target: '../elsewhere' })
+      expect(fs.inspect(bot, ['workspace', 'b.txt'])).toEqual({ kind: 'symlink', target: '../elsewhere' })
+      // absent removes a link or a file, and is fine when nothing is there
+      fs.restore(bot, ['workspace', 'b.txt'], { kind: 'absent' })
+      expect(fs.inspect(bot, ['workspace', 'b.txt'])).toBeNull()
+      fs.restore(bot, ['workspace', 'b.txt'], { kind: 'absent' })
+      // a folder is never replaced or removed
+      expect(errorOf(() => fs.restore(bot, ['workspace', 'deep'], { kind: 'absent' })).statusCode).toBe(409)
+      expect(errorOf(() => fs.restore(bot, ['workspace', 'deep'], { kind: 'symlink', target: 'x' })).statusCode).toBe(409)
+      // the source must be a regular file (no-follow)
+      symlinkSync('/etc/passwd', join(hostRoot, 'snapshots', 'ada', 'r1', 'evil'))
+      expect(() => fs.restore(bot, ['workspace', 'c.txt'], { kind: 'file', from: 'snapshots/ada/r1/evil', mode: 0o644 })).toThrow()
+      expect(fs.inspect(bot, ['workspace', 'c.txt'])).toBeNull()
+      // no escapes through the target or the source
+      symlinkSync('/tmp', join(hostRoot, bot, 'workspace', 'out'))
+      expect(errorOf(() => fs.restore(bot, ['workspace', 'out', 'x'], { kind: 'absent' })).statusCode).toBe(400)
+      expect(() => fs.restore(bot, ['workspace', 'd.txt'], { kind: 'file', from: 'snapshots/../../etc/passwd', mode: 0o644 })).toThrow()
+      expect(() => fs.restore(bot, ['workspace', '..'], { kind: 'absent' })).toThrow()
+    })
+
+    it('snapshot, diff and export are clear stubs for now', () => {
       const { fs } = make()
       const e = errorOf(() => fs.snapshot(bot, 'run_1'))
       expect(e.statusCode).toBe(501)
       expect(e.message).toMatch(/not implemented yet/i)
       expect(() => fs.diff({ root: bot, snapshotId: 's' })).toThrow(StorageNotImplementedError)
-      expect(() => fs.undo({ root: bot, snapshotId: 's' })).toThrow(StorageNotImplementedError)
       expect(() => fs.exportZip(bot)).toThrow(StorageNotImplementedError)
     })
   })

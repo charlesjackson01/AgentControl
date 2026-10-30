@@ -141,6 +141,7 @@ function harness(o: { present?: boolean; buildResult?: CommandResult; free?: num
     setBusy: (n: number) => (busy = n),
     setPresent: (v: boolean) => (present = v),
     setBuild: (r: CommandResult) => (o.buildResult = r),
+    setFree: (n: number | null | undefined) => (o.free = n),
     cleanup: () => { addon.close(); rmSync(dir, { recursive: true, force: true }) },
   }
 }
@@ -198,11 +199,46 @@ describe('createBrowserAddon', () => {
     h.setBuild(ok('STEP 4/4: COMMIT\n'))
     const r = await h.addon.retry()
     expect(r.state).toBe('downloading')
+    expect(r).not.toHaveProperty('error')
     await h.addon.idle()
     expect(h.calls.filter((c) => c[0] === 'build')).toHaveLength(2)
     expect(h.addon.botInfo('agt_1')?.state).toBe('ready')
     expect(h.gate.ready).toEqual(['agt_1'])
     await expect(h.addon.retry()).rejects.toMatchObject({ reason: 'nothing_to_retry' })
+  })
+
+  it('retry {agentId} after a failed download: the reply is the fresh state (downloading), never the stale error', async () => {
+    h = harness({ buildResult: { code: 1, stdout: '', stderr: 'curl: (56) Recv failure: Connection reset by peer' } })
+    h.agents[0]!.vm.permissions.browser = true
+    h.addon.changed('agt_1', true)
+    await h.addon.idle()
+    expect(await h.addon.info()).toMatchObject({ state: 'error', error: { reason: 'download_failed' } })
+    h.setBuild(ok('STEP 4/4: COMMIT\n'))
+    const r = await h.addon.retry('agt_1')
+    expect(r.state).toBe('downloading')
+    expect(r).not.toHaveProperty('error')
+    expect(r).toMatchObject({ totalBytes: BROWSER_DOWNLOAD_BYTES, usedBy: ['agt_1'] })
+    expect(Object.keys(r).sort()).toEqual(expect.arrayContaining(['state', 'totalBytes', 'usedBy']))
+    expect(h.addon.botInfo('agt_1')).toMatchObject({ state: 'setting_up', setup: { download: { totalBytes: BROWSER_DOWNLOAD_BYTES } } })
+    expect(h.addon.botInfo('agt_1')).not.toHaveProperty('error')
+    await h.addon.idle()
+    // One more download (shared with the setup, not two), then the bot carries on to ready.
+    expect(h.calls.filter((c) => c[0] === 'build')).toHaveLength(2)
+    expect(h.addon.botInfo('agt_1')).toMatchObject({ state: 'ready', setup: { download: { bytes: BROWSER_DOWNLOAD_BYTES } } })
+    expect(h.addon.botInfo('agt_1')!.setup!.download.endedAt).toBeTruthy()
+    expect(await h.addon.info()).toMatchObject({ state: 'ready', usedBy: ['agt_1'] })
+  })
+
+  it('retry {agentId} that fails the disk check answers 409 low_disk and starts no download', async () => {
+    h = harness({ buildResult: { code: 1, stdout: '', stderr: 'curl: (56) Recv failure: Connection reset by peer' } })
+    h.agents[0]!.vm.permissions.browser = true
+    h.addon.changed('agt_1', true)
+    await h.addon.idle()
+    const builds = h.calls.filter((c) => c[0] === 'build').length
+    h.setFree(0.6 * GB)
+    await expect(h.addon.retry('agt_1')).rejects.toMatchObject({ statusCode: 409, reason: 'low_disk' })
+    expect(h.calls.filter((c) => c[0] === 'build')).toHaveLength(builds)
+    expect(await h.addon.info()).toMatchObject({ state: 'error' })
   })
 
   it('retry {}: 409 nothing_to_retry without a failed download; {agentId} unknown → 404', async () => {
@@ -234,7 +270,9 @@ describe('createBrowserAddon', () => {
     })
     expect(h.gate.failed).toEqual([['agt_1', 'chromium_check_failed']])
     expect(h.addon.status('agt_1')).toEqual({ state: 'failed', reason: 'chromium_check_failed' })
-    await h.addon.retry('agt_1')
+    const r = await h.addon.retry('agt_1')
+    expect(r).toMatchObject({ state: 'ready', usedBy: ['agt_1'] })
+    expect(h.addon.botInfo('agt_1')?.state).toBe('setting_up')
     await h.addon.idle()
     // The image is already on the browser base: no second build, only the check again.
     expect(h.builds).toHaveLength(1)
@@ -506,7 +544,33 @@ describe('BE-P2-15 routes', () => {
     downloadFails = false
     const retry = await inject('POST', '/api/vm/browser/retry', {})
     expect(retry.statusCode).toBe(200)
+    // The reply is the fresh state, not the failed snapshot from before the retry.
+    expect(retry.json()).toMatchObject({ state: 'downloading', totalBytes: BROWSER_DOWNLOAD_BYTES, usedBy: [a.id] })
+    expect(retry.json()).not.toHaveProperty('error')
     await app.vmBrowser.idle()
     expect((await inject('GET', `/api/agents/${a.id}/vm`)).json()).toMatchObject({ permissions: { browserState: 'ready' }, browser: { state: 'ready' } })
+  })
+
+  it('POST /api/vm/browser/retry {agentId} after a failed download: 200 with the fresh state (downloading), never the stale error', async () => {
+    downloadFails = true
+    const a = (await makeAgent({ browser: true })).json() as Agent
+    await app.vmBrowser.idle()
+    expect((await inject('GET', '/api/vm/browser')).json()).toMatchObject({ state: 'error', error: { reason: 'download_failed' } })
+    downloadFails = false
+    const retry = await inject('POST', '/api/vm/browser/retry', { agentId: a.id })
+    expect(retry.statusCode).toBe(200)
+    const body = retry.json() as BrowserAddonInfo
+    expect(body).toMatchObject({ state: 'downloading', totalBytes: BROWSER_DOWNLOAD_BYTES, usedBy: [a.id] })
+    expect(body).not.toHaveProperty('error')
+    expect(body.state).not.toBe('error')
+    // The bot ends ready (the fake download can finish before the GET, so no setting_up check here).
+    await app.vmBrowser.idle()
+    expect((await inject('GET', '/api/vm/browser')).json()).toMatchObject({ state: 'ready', usedBy: [a.id] })
+    expect((await inject('GET', `/api/agents/${a.id}/vm`)).json()).toMatchObject({ permissions: { browserState: 'ready' }, browser: { state: 'ready' } })
+    expect(engine.images.has(sharedImageRef('botvm-browser'))).toBe(true)
+    // Nothing left to retry: the error answers are unchanged.
+    const again = await inject('POST', '/api/vm/browser/retry', { agentId: a.id })
+    expect(again.statusCode).toBe(409)
+    expect(again.json()).toMatchObject({ reason: 'nothing_to_retry', message: NOTHING_TO_RETRY_TEXT })
   })
 })

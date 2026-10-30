@@ -399,7 +399,9 @@ export function createBrowserAddon(deps: BrowserAddonDeps): BrowserAddon {
 
     // 2. The shared download (skipped, reused, when it's there).
     if (!needsDownload) {
-      if (setup.download.reused === undefined && !setup.download.startedAt) setup.download.reused = true
+      // A retry {agentId} started the download for this setup and it already finished.
+      if (setup.download.startedAt && !setup.download.endedAt) setup.download = { ...setup.download, endedAt: iso(), bytes: BROWSER_DOWNLOAD_BYTES }
+      else if (setup.download.reused === undefined && !setup.download.startedAt) setup.download.reused = true
     } else {
       b.info = { ...b.info, state: 'setting_up' }
       setup.download = { startedAt: iso(), totalBytes: BROWSER_DOWNLOAD_BYTES }
@@ -604,7 +606,15 @@ export function createBrowserAddon(deps: BrowserAddonDeps): BrowserAddon {
         const low = lowDiskProblem(await deps.freeBytes().catch(() => null), reused)
         if (low) failWithReason(409, LOW_DISK_REASON, low.message)
         const prev = b.info.setup ?? newSetup()
-        startSetup(agentId, { ...prev, check: { status: 'pending' }, ...(prev.readyAt ? {} : {}) })
+        // FE review (7c6665f): a setup that needs the shared download starts it now (the disk check is
+        // above), so the reply and the next browser.updated say 'downloading', never the old 'error'.
+        // runSetup joins the same download.
+        if (!reused) void ensureDownload()
+        startSetup(agentId, {
+          ...prev,
+          ...(reused ? {} : { download: { startedAt: iso(), totalBytes: BROWSER_DOWNLOAD_BYTES } }),
+          check: { status: 'pending' },
+        })
         return snapshot()
       }
       if (!agent.vm.permissions.browser && b?.offPending && b.offFailed && !buildOf.has(agentId)) {

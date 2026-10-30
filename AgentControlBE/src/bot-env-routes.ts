@@ -22,7 +22,7 @@ import type { MountAllowList } from './isolation.js'
 import type { SnapshotZone, ZoneInfo } from './snapshot.js'
 import type { ResolvedZone } from './undo.js'
 import { envListProblem } from './bot-env.js'
-import { botRoot, botVol, folderBytes, quotaBytes } from './files.js'
+import { assertBotFilesAvailable, botFilesMissingMessage, botRoot, botVol, folderBytes, quotaBytes } from './files.js'
 import { groupFolderFull, groupRoot, groupVol } from './group-files.js'
 import { sumBreakdown, type PersonalUsage } from './personal-usage.js'
 import type { SnapshotUsage } from './snapshot-budget.js'
@@ -185,15 +185,17 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     if (!agent) fail(404, `No agent with id "${id}"`)
     return agent
   }
-  const filesMissing = (agent: Agent) => !existsSync(path.join(botRoot(store, agent), 'workspace'))
+  // BE-P2-20: the same check (and message) as the bot's file routes and runs.
+  const filesMissing = (agent: Agent) => botFilesMissingMessage(store, agent)
 
   async function vmInfo(agent: Agent): Promise<VmInfo> {
     const host = await deps.hostInfo().catch(() => null)
     let state: VmState = 'not_setup'
     let stateMessage: string | undefined
-    if (filesMissing(agent)) {
+    const missing = filesMissing(agent)
+    if (missing) {
       state = 'files_missing'
-      stateMessage = 'The bot\'s files folder is missing.'
+      stateMessage = missing
     } else if (!host?.engine) {
       stateMessage = host?.setupSteps.find((s) => !s.done)?.text ?? 'Podman isn\'t installed yet.'
     } else {
@@ -309,14 +311,14 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
 
   app.post('/api/agents/:id/vm/start', async (request) => {
     const agent = agentOf(idOf(request))
-    if (filesMissing(agent)) failWithReason(409, 'files_missing', 'The bot\'s files folder is missing, so its VM can\'t start.')
+    assertBotFilesAvailable(store, agent)
     await botEnv.start(agent)
     return vmInfo(agentOf(agent.id))
   })
 
   app.post('/api/agents/:id/vm/stop', async (request) => {
     const agent = agentOf(idOf(request))
-    if (filesMissing(agent)) failWithReason(409, 'files_missing', 'The bot\'s files folder is missing.')
+    assertBotFilesAvailable(store, agent)
     deps.runner?.stopRuns(agent.id)
     await botEnv.stop(agent)
     return vmInfo(agent)
@@ -326,7 +328,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const agent = agentOf(idOf(request))
     const body = request.body as { confirm?: unknown } | null | undefined
     if (!body || typeof body !== 'object' || body.confirm !== true) fail(400, 'Send {"confirm": true} to reset the bot\'s VM.')
-    if (filesMissing(agent)) failWithReason(409, 'files_missing', 'The bot\'s files folder is missing.')
+    assertBotFilesAvailable(store, agent)
     deps.runner?.stopRuns(agent.id)
     await botEnv.reset(agent)
     return vmInfo(agentOf(agent.id))

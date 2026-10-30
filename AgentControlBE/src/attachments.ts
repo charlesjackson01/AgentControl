@@ -5,7 +5,7 @@
  * attach files uploaded to the same conversation.
  */
 import { extname } from 'node:path'
-import { botVol, mimeFor, parseClientPath, writeContent } from './files.js'
+import { assertBotFilesAvailable, botVol, mimeFor, parseClientPath, writeContent } from './files.js'
 import { groupVol, writeGroupContent } from './group-files.js'
 import { fail } from './http.js'
 import { readShares, recordShare } from './share-records.js'
@@ -48,6 +48,8 @@ function freeSharedName(fs: StorageBackend, root: VolPath, name: string): string
 export function uploadAttachment(store: WorkspaceStore, conversation: Conversation, rawName: unknown, body: Buffer): Attachment {
   const target = targetOf(store, conversation)
   const fs = storageReady(store)
+  // BE-P2-20: the same files check as the VM tab, before anything looks at the folder
+  if (target.kind === 'agent') assertBotFilesAvailable(store, target.agent)
   const name = freeSharedName(fs, target.root, parseName(rawName))
   const path = `shared/${name}`
   const entry = target.kind === 'group'

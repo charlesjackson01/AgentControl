@@ -12,7 +12,7 @@ import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.j
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, uid } from './http.js'
-import { archiveBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
+import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
 import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
@@ -850,7 +850,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     store.agents = [agent, ...store.agents]
     store.save()
     try {
-      ensureBotFolder(store, agent)
+      createBotFolder(store, agent)
     } catch (err) {
       request.log.warn(`[files] could not create the folder for ${agent.slug}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -1740,6 +1740,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   const runs = createRunService({
     runner: vmRunnerNow as RunRunner,
     getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
+    filesMissing: (agent) => botFilesMissingMessage(store, agent),
     conversations: () => store.conversations,
     messages: () => store.chatMessages,
     save: () => {
@@ -1811,7 +1812,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
   registerLiveEventRoutes(app, liveEvents, { heartbeatMs: opts.liveTimers?.heartbeatMs, runAgent: (runId) => runs.agentOf(runId) })
   // BE-P2-17: undo preview/apply (app.vmUndo via RunService.undo, which records the undo run).
-  registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => undo.preview(agent, runId), activeRuns: activeOf })
+  registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => { assertBotFilesAvailable(store, agent); return undo.preview(agent, runId) }, activeRuns: activeOf })
 
   botEnvRoutesRef = registerBotEnvRoutes(app, store, {
     botEnv,

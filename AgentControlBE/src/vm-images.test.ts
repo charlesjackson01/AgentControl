@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
   BOTVM_PINS,
   BOT_PATHS,
@@ -418,6 +418,17 @@ describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', (
       expect(out).toMatch(new RegExp(`^${lang} ${how} \\d+\\.\\d+\\.\\d+\\.\\d+ HeadlessChrome$`, 'm'))
     }
   }, 30 * 60_000)
+
+  // Remove only the firewall helper tag this suite built, so the test store is
+  // left with the images it had before (botvm, botvm-browser, python).
+  afterAll(() => {
+    const podmanArgs = engine === 'podman' ? (process.env.PODMAN_ARGS ?? '').split(/\s+/).filter(Boolean) : []
+    try {
+      execFileSync(engine!, [...podmanArgs, 'rmi', egressdNftImageRef()], { stdio: 'pipe', timeout: 120_000 })
+    } catch {
+      // Already gone (or never built): nothing to clean up.
+    }
+  })
 
   // What a bot-written script does: plain chromium.launch(), no channel, no args, default headless.
   it('a bare chromium.launch() works from Python and Node as uid 1000 with no network', () => {

@@ -95,4 +95,12 @@ describe('FE-P2-7 new-bot browser row (mockup 15)', () => {
     assert.equal(rule('.cf-nb-row3__t').flex, '1')
     assert.equal(rule('.cf-nb-row3 .cf-toggle').flex, 'none')
   })
+  it('GAP6: at phone width the NewBot card fills the row (beats the 05b .cf-grp 80% cap)', () => {
+    const m = /@media \(max-width: 640px\) \{([\s\S]*?)\n\}/.exec(css)
+    assert.ok(m, 'the NewBot 640px block exists')
+    const r = /\.cf-grp\.cf-nb-grp\s*\{([^}]*)\}/.exec(m[1])
+    assert.ok(r, '.cf-grp.cf-nb-grp (two classes, so it outranks .cf-grp) is in the 640px block')
+    assert.match(r[1], /width:\s*100%/)
+    assert.match(r[1], /max-width:\s*none/)
+  })
 })

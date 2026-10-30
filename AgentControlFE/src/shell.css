@@ -537,7 +537,9 @@ ol.cf-md__list { list-style: decimal; }
 .cf-nb-req { color: var(--c-danger); }
 .cf-nb-fielderr { font-size: 11.5px; color: var(--c-danger); margin-top: 3px; }
 @media (max-width: 640px) {
-  .cf-nb-grp { width: calc(100% - 34px); }
+  /* GAP6: the phone thread hides the bot avatar and caps .cf-grp at 80% (05b, later in this file),
+     which beat this width and left the card ~85 px short with the Internet buttons spilling out. */
+  .cf-grp.cf-nb-grp { width: 100%; max-width: none; }
   .cf-nb-top { flex-direction: column; align-items: stretch; }
   .cf-nb-grid, .cf-nb-row2 { grid-template-columns: 1fr; }
   .cf-nb-span2 { grid-column: auto; }

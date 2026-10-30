@@ -718,7 +718,10 @@ export interface ScriptRun {
   /** True when output passed the 200 MB cap and was cut. */
   outputTruncated?: boolean
   filesChanged: FileChange[]
-  hostsContacted?: { host: string; count: number; blocked: boolean }[]
+  /** BE-P2-13: one row per host (and port, when not 443) the run's proxy saw ("Sites used"). */
+  hostsContacted?: HostContact[]
+  /** BE-P2-13 (M2 contract): how many distinct hosts the proxy saw, when hostsContacted was cut (absent otherwise). */
+  hostsContactedTotal?: number
   snapshot: { id: string; driver: SnapshotDriver; retainedBytes: number } | null
   undo: ScriptRunUndo
   /** kind 'undo': the run it reversed. */
@@ -1016,3 +1019,24 @@ export interface PermissionAnswer {
   decision: PermissionDecision
 }
 export const PERMISSION_CSRF_HEADER = 'x-agentcontrol-confirm'
+
+// ---- BE-P2-13 (M2 contract, p2/be-m2-contract fec4670): copied here, only the egress parts ----
+
+/** ScriptRun.hostsContacted cap (blocked hosts first). */
+export const SCRIPT_RUN_HOSTS_MAX = 200
+
+/** Why the egress proxy refused a host (M2 contract §"Sites used"). */
+export type HostBlockReason = 'home_network' | 'tailscale' | 'this_computer' | 'model_server' | 'metadata' | 'private_name' | 'port' | 'reserved'
+export const HOST_BLOCK_REASONS: readonly HostBlockReason[] = ['home_network', 'tailscale', 'this_computer', 'model_server', 'metadata', 'private_name', 'port', 'reserved']
+
+/** One "Sites used" row: a host (and port, when not 443) a run's proxy saw. */
+export interface HostContact {
+  host: string
+  /** Set when not 443. */
+  port?: number
+  /** The address the proxy checked (and connected to); absent for names refused before resolving. */
+  ip?: string
+  count: number
+  blocked: boolean
+  reason?: HostBlockReason
+}

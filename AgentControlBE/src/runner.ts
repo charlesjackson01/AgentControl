@@ -2,7 +2,7 @@
  * Script runner contract (BE-1 stub). Phase 2 runs skill scripts in a
  * per-bot VM; until then every run reports `unavailable`.
  */
-import type { FileChange, ScriptRunUndo, SnapshotDriver } from './shared/types.js'
+import type { FileChange, HostContact, ScriptRunUndo, SnapshotDriver } from './shared/types.js'
 
 export interface RunScriptRequest {
   agentId: string
@@ -13,6 +13,11 @@ export interface RunScriptRequest {
   cwd: string
   timeoutSec: number
   network: 'off' | 'on'
+  /**
+   * BE-P2-13 (server-only, never from a route body): the user allowed this run's internet (set by
+   * the permission gate, BE-P2-14). `network: 'on'` without it is refused before anything starts.
+   */
+  internetGranted?: boolean
   /** BE-P2-8 (optional): run id, passed to the script as AC_RUN_ID. */
   runId?: string
   /** BE-P2-8 (optional): every output chunk within the 200 MB cap, for the full log on disk (BE-P2-12). */
@@ -53,6 +58,10 @@ export interface RunScriptResult {
   runtime?: 'runsc' | 'crun' | 'runc' | null
   oomKilled?: boolean
   pidsLimited?: boolean
+  /** BE-P2-13: hosts the run reached or was blocked from through the proxy (network 'on' only), capped at 200, blocked first. */
+  hostsContacted?: HostContact[]
+  /** BE-P2-13: the number of distinct hosts, only when hostsContacted was cut. */
+  hostsContactedTotal?: number
 }
 
 export interface Runner {

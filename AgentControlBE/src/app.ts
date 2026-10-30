@@ -1,4 +1,6 @@
 import { DEFAULT_VM_SETTINGS, defaultAgentVm } from './vm-defaults.js'
+import { createEgressService, hostInterfaceAddresses, modelServersOf, testAllowFromEnv, type EgressService } from './egress-service.js'
+import { createUserOnlyCheck, USER_ONLY_MESSAGE, USER_ONLY_REASON } from './user-only.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
 import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify'
@@ -425,6 +427,8 @@ export interface BuildAppOptions {
   liveTimers?: { heartbeatMs?: number; outputFlushMs?: number }
   /** BE-P2-17: test-only engine (e.g. Podman with a throwaway --root) for the app's own botEnv and runner. */
   vmEngine?: EngineRef
+  /** BE-P2-13: test-only egress proxy service (e.g. with test names and --add-host). */
+  egress?: EgressService
 }
 
 declare module 'fastify' {
@@ -445,6 +449,11 @@ declare module 'fastify' {
     vmRuns: RunService
     /** BE-P2-12: the live event bus behind GET /api/events (PermissionGate publishes here too). */
     liveEvents: LiveEventBus
+    /**
+     * BE-P2-13: the egress proxy. PermissionGate (BE-P2-14) calls available() before it shows an
+     * internet card, and sets RunScriptRequest.internetGranted once the user allowed a run.
+     */
+    vmEgress: EgressService
   }
 }
 
@@ -490,6 +499,17 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       // BE-P2-11: undo's 409 'conflicts' lists the files (UndoConflict.conflicts).
       ...(typeof err.reason === 'string' && status < 500 && Array.isArray(err.conflicts) ? { conflicts: err.conflicts } : {}),
     })
+  })
+
+  // BE-P2-13 (M2 contract review): user-only. Nothing from a bot's side (a container address, or
+  // relayed by the bot proxy) may call the API; the proxy also refuses this computer outright.
+  const userOnly = createUserOnlyCheck()
+  app.addHook('onRequest', async (request, reply) => {
+    if (!request.url.startsWith('/api/')) return
+    const why = userOnly.check(request.socket?.remoteAddress ?? request.ip, request.headers)
+    if (!why) return
+    request.log.warn(`user_only: refused ${request.method} ${request.url.split('?')[0]} (${why})`)
+    await reply.code(403).send({ statusCode: 403, error: 'Forbidden', message: USER_ONLY_MESSAGE, reason: USER_ONLY_REASON })
   })
 
   // Optional gate: when AGENTCONTROL_AUTH_TOKEN is set, every /api/* call must
@@ -1562,6 +1582,9 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       // BE-P2-7: the Chromium check only when a bot has the browser on (part of the cache key).
       features: () => (store.agents.some((a) => a.vm.permissions.browser) ? ['chromium'] : []),
       cacheFile: join(store.dataDir, 'vm', 'runtime-probe.json'),
+      // BE-P2-13: the network check's CONNECT half, on Podman (the proxy's only engine); `egress` is
+      // created below and only read when a probe runs.
+      egressCheck: async () => ((await engineRef())?.cli === 'podman' ? egress.connectCheck() : null),
       log: (msg) => app.log.info(msg),
     })
   // BE-P2-9: undo snapshots, with the driver the probe picked, under <filesRoot>/snapshots (plan §11).
@@ -1634,6 +1657,21 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   }
   app.decorate('vmRuntimeModeChanged', () => probeLater('refresh'))
 
+  // BE-P2-13: the egress proxy (ac-egressd), started on first use. Model servers (openai-compatible
+  // endpoints) and the BE's own address are refused as model_server; every interface address of
+  // this computer as this_computer.
+  const egress = opts.egress ?? createEgressService({
+    engine: engineRef,
+    stateDir: () => join(store.dataDir, 'vm'),
+    config: () => ({
+      hostAddresses: hostInterfaceAddresses(),
+      modelServers: modelServersOf(store.endpoints),
+      testAllow: testAllowFromEnv(),
+    }),
+    log: (msg) => app.log.info(msg),
+  })
+  app.decorate('vmEgress', egress)
+
   // BE-P2-4: each bot's container, tools volumes and image layer.
   const botEnv =
     opts.botEnv ??
@@ -1656,6 +1694,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       },
       enforceLimits: () => runtimeProbe.current()?.standard?.limitsAccepted ?? true,
       activeRuns: activeOf,
+      // BE-P2-13: builds stay offline (buildNetwork 'none') until BE-P2-14 wires the build permission.
+      egress,
       log: (msg) => app.log.info(msg),
     })
 
@@ -1678,6 +1718,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     snapshots,
     personal: (agent) => personal.check(agent),
     afterSnapshot: (slug, runId) => snapshotBudget.afterRun(slug, runId),
+    egress,
     log: (msg) => app.log.info(msg),
   })
   app.decorate('vmRunner', runner)

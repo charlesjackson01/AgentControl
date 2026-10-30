@@ -269,7 +269,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const body = request.body
     if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object, e.g. {"env": []}.')
     const raw = body as Record<string, unknown>
-    if ('egress' in raw) fail(400, EGRESS_NOT_AVAILABLE)
+    // M2 plan error table: 400 egress_reserved (per-bot home-network access stays reserved).
+    if ('egress' in raw) failWithReason(400, 'egress_reserved', EGRESS_NOT_AVAILABLE)
     if ('limits' in raw) fail(400, LIMITS_FIXED)
     const extra = Object.keys(raw).find((k) => !(VM_PATCH_KEYS as readonly string[]).includes(k))
     if (extra !== undefined) fail(400, `"${extra.slice(0, 40)}" can't be changed here.`)

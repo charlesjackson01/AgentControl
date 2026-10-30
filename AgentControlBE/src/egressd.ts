@@ -167,7 +167,7 @@ export function createEgressProxy(opts: EgressProxyOptions = {}): EgressProxy {
     if (!answers.length) return { ok: false, status: 502, text: `Couldn't find ${host}`, host }
     // Every answer must pass (a name that resolves to public and private addresses is refused).
     for (const a of answers) {
-      const v = rules.checkAddress(a, port)
+      const v = rules.checkAddress(a, port, host)
       if (!v.ok) {
         record(st, host, port, v.subject, true, v.reason)
         return { ok: false, status: 403, reason: v.reason!, text: blockedText(v.subject, v.reason!, port), host, ip: v.subject }

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CommandResult, CommandRunner } from './command-runner.js'
-import { capHostContacts, CONNECT_CHECK_SCRIPT, createEgressService, EGRESS_DAEMON_NAME, EgressUnavailableError, egressNetworkName, hostInterfaceAddresses, localAddressesFromProc, modelServersOf, PROBE_SLUG, PROXY_UNAVAILABLE, proxyEnv, testAllowFromEnv } from './egress-service.js'
+import { capHostContacts, CONNECT_CHECK_SCRIPT, createEgressService, EGRESS_DAEMON_NAME, EgressUnavailableError, egressNetworkName, hostInterfaceAddresses, localAddressesFromProc, modelServersOf, PROBE_SLUG, PROXY_UNAVAILABLE, proxyEnv, testAllowFromEnv, resetTestAllowWarning, defaultGatewaysFromProc } from './egress-service.js'
 import { createEgressProxy, handleCtl, type CtlRequest, type EgressProxy } from './egressd.js'
 import type { HostContact } from './shared/types.js'
 import { createEgressRules } from './egress-rules.js'
@@ -254,13 +254,31 @@ describe('helpers', () => {
       { host: '192.168.1.50', port: 11434 },
       { host: 'llm.example.com', port: 443 },
       { host: 'fd00::5', port: 8000 },
-      { host: '127.0.0.1', port: 3001 },
+      { host: '127.0.0.1', port: 3001, always: true },
     ])
     expect(modelServersOf([], { HOST: '0.0.0.0' })).toEqual([])
   })
   it('testAllowFromEnv is empty unless set', () => {
-    expect(testAllowFromEnv({})).toEqual([])
-    expect(testAllowFromEnv({ AC_EGRESS_TEST_ALLOW: '10.89.0.0/24, 10.89.1.5/32' })).toEqual(['10.89.0.0/24', '10.89.1.5/32'])
+    expect(testAllowFromEnv({ NODE_ENV: 'test' })).toEqual([])
+    expect(testAllowFromEnv({ NODE_ENV: 'test', AC_EGRESS_TEST_ALLOW: '10.89.0.0/24, 10.89.1.5/32' })).toEqual(['10.89.0.0/24', '10.89.1.5/32'])
+    expect(testAllowFromEnv({ AC_VM_TESTS: '1', AC_EGRESS_TEST_ALLOW: '10.89.0.0/24' })).toEqual(['10.89.0.0/24'])
+  })
+  it('review B2: ignored outside test runs, with one warning', () => {
+    resetTestAllowWarning()
+    const warned: string[] = []
+    for (const env of [{ AC_EGRESS_TEST_ALLOW: '10.89.0.0/24' }, { NODE_ENV: 'production', AC_EGRESS_TEST_ALLOW: '10.89.0.0/24' }, { AC_VM_TESTS: '0', AC_EGRESS_TEST_ALLOW: '10.89.0.0/24' }]) {
+      expect(testAllowFromEnv(env, (m) => warned.push(m))).toEqual([])
+    }
+    expect(warned).toHaveLength(1)
+    expect(warned[0]).toMatch(/AC_EGRESS_TEST_ALLOW is set but ignored: it only works in test runs/)
+    resetTestAllowWarning()
+  })
+  it('review B2: entries wider than /24 or /120 are dropped, with a warning', () => {
+    resetTestAllowWarning()
+    const warned: string[] = []
+    expect(testAllowFromEnv({ NODE_ENV: 'test', AC_EGRESS_TEST_ALLOW: '10.0.0.0/8,10.89.0.0/24,fd00::/64,fd00::/120,nonsense' }, (m) => warned.push(m))).toEqual(['10.89.0.0/24', 'fd00::/120'])
+    expect(warned[0]).toMatch(/ignored 10\.0\.0\.0\/8, fd00::\/64, nonsense/)
+    resetTestAllowWarning()
   })
   it('the app dir lands under stateDir', async () => {
     await make().available()
@@ -288,8 +306,21 @@ fe80000000000000802b38fffe3dbcd0 02 40 20 80   enp0s3
     expect(localAddressesFromProc(fib, v6)).toEqual(['127.0.0.1', '172.17.0.1', '0:0:0:0:0:0:0:1', 'fe80:0:0:0:802b:38ff:fe3d:bcd0'])
     expect(localAddressesFromProc(null, null)).toEqual([])
   })
+  const route = `Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
+enp0s3\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
+enp0s3\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
+`
+  const v6route = `00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 00000000 00000003 enp0s3
+fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001 enp0s3
+`
+  it('review S5: reads the default gateways (IPv4 little-endian, IPv6)', () => {
+    expect(defaultGatewaysFromProc(route, v6route)).toEqual(['192.168.1.1', 'fe80:0:0:0:0:0:0:1'])
+    expect(defaultGatewaysFromProc(null, null)).toEqual([])
+  })
   it('hostInterfaceAddresses merges them in, and the rules treat them as this computer', () => {
-    const all = hostInterfaceAddresses((f) => (f.endsWith('fib_trie') ? fib : v6))
+    const all = hostInterfaceAddresses((f) => (f.endsWith('fib_trie') ? fib : f.endsWith('if_inet6') ? v6 : f.endsWith('ipv6_route') ? v6route : route))
+    expect(all).toContain('192.168.1.1')
+    expect(createEgressRules({ hostAddresses: all }).checkAddress('192.168.1.1', 80)).toMatchObject({ ok: false, reason: 'this_computer' })
     expect(all).toContain('172.17.0.1')
     expect(createEgressRules({ hostAddresses: all }).checkAddress('172.17.0.1', 80)).toMatchObject({ ok: false, reason: 'this_computer' })
   })

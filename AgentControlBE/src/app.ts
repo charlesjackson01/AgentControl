@@ -1676,7 +1676,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     config: () => ({
       hostAddresses: hostInterfaceAddresses(),
       modelServers: modelServersOf(store.endpoints),
-      testAllow: testAllowFromEnv(),
+      testAllow: testAllowFromEnv(process.env, (m) => app.log.warn(m)),
     }),
     log: (msg) => app.log.info(msg),
     // Builds and bots never use the engine's default network today (builds: none or egress).

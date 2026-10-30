@@ -31,11 +31,20 @@ export const PRIVATE_SUFFIXES: readonly string[] = ['.local', '.lan', '.internal
 export interface EgressRulesConfig {
   /** This computer's own addresses (hostInterfaceAddresses(): interfaces, including ones that are down). */
   hostAddresses?: string[]
-  /** The model server(s) and the BE: refused as model_server (names before resolving). */
-  modelServers?: { host: string; port: number }[]
   /**
-   * Test-only (AC_EGRESS_TEST_ALLOW): CIDRs let through although a rule would refuse them, so the
-   * @vm tests can use local test servers. Never set by the app outside tests.
+   * The user's model server(s) and the BE (Charles, M2: model_server blocks ONLY local model
+   * servers). An endpoint's host:port is refused as model_server only when it is local: a name
+   * refused before resolving, or an address that is not public (this computer, loopback, home
+   * network, Tailscale, reserved). A public API (api.openai.com) is reached like any site.
+   * `always` (the BE's own HOST:PORT): refused on its port whatever the address.
+   */
+  modelServers?: { host: string; port: number; always?: boolean }[]
+  /**
+   * Test-only (AC_EGRESS_TEST_ALLOW; the BE passes it only with NODE_ENV=test or AC_VM_TESTS=1):
+   * CIDRs let through although a rule would refuse them, so the @vm tests can use local test
+   * servers. Review B2: at most /24 (IPv4) or /120 (IPv6) each (wider ones are dropped), and only
+   * home_network, reserved and tailscale can be opened: never metadata, this_computer or
+   * model_server. The nftables layer under the proxy is never opened by it.
    */
   testAllow?: string[]
 }
@@ -219,10 +228,8 @@ export function inCidr(a: Addr, c: Cidr): boolean {
   return true
 }
 
-const table = (rows: [string, HostBlockReason][]): [Cidr, HostBlockReason][] => rows.map(([c, r]) => [parseCidr(c)!, r])
-
 /** Fixed hard-deny list (plan §5), most specific first: the first match names the reason. */
-export const DENY_TABLE: readonly [Cidr, HostBlockReason][] = table([
+export const DENY_ROWS: readonly [string, HostBlockReason][] = [
   ['169.254.169.254/32', 'metadata'],
   ['fd00:ec2::254/128', 'metadata'],
   ['127.0.0.0/8', 'this_computer'],
@@ -238,18 +245,38 @@ export const DENY_TABLE: readonly [Cidr, HostBlockReason][] = table([
   ['fec0::/10', 'home_network'],
   ['fc00::/7', 'home_network'],
   ['0.0.0.0/8', 'reserved'],
+  // Review S5: benchmarking (often routed to local test gear), IETF protocol assignments, the
+  // deprecated 6to4 relay anycast and the documentation ranges.
+  ['198.18.0.0/15', 'reserved'],
+  ['192.0.0.0/24', 'reserved'],
+  ['192.88.99.0/24', 'reserved'],
+  ['192.0.2.0/24', 'reserved'],
+  ['198.51.100.0/24', 'reserved'],
+  ['203.0.113.0/24', 'reserved'],
+  ['2001:db8::/32', 'reserved'],
   ['224.0.0.0/4', 'reserved'],
   ['240.0.0.0/4', 'reserved'],
   ['::/128', 'reserved'],
   ['ff00::/8', 'reserved'],
   ['100::/64', 'reserved'],
-])
-
-/** The deny-table rows as text (for the docs and table tests). */
-export const DENY_CIDRS: readonly string[] = [
-  '169.254.169.254/32', 'fd00:ec2::254/128', '127.0.0.0/8', '::1/128', `${GVPROXY_GATEWAY}/32`, '100.64.0.0/10', 'fd7a:115c:a1e0::/48',
-  '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', 'fe80::/10', 'fec0::/10', 'fc00::/7', '0.0.0.0/8', '224.0.0.0/4', '240.0.0.0/4', '::/128', 'ff00::/8', '100::/64',
 ]
+
+export const DENY_TABLE: readonly [Cidr, HostBlockReason][] = DENY_ROWS.map(([c, r]) => [parseCidr(c)!, r])
+
+/** The deny-table rows as text (docs, table tests, the nftables layer): one list, no copy to keep in step. */
+export const DENY_CIDRS: readonly string[] = DENY_ROWS.map(([c]) => c)
+
+/** Review B2: the reasons AC_EGRESS_TEST_ALLOW may open (never metadata, this_computer, model_server). */
+export const TEST_ALLOW_REASONS: readonly HostBlockReason[] = ['home_network', 'reserved', 'tailscale']
+/** Review B2: the widest test-allow range accepted. */
+export const TEST_ALLOW_MAX_PREFIX = { v4: 24, v6: 120 } as const
+
+/** A test-allow CIDR narrow enough to accept, or null. */
+export function testAllowCidr(text: string): Cidr | null {
+  const c = parseCidr(text.trim())
+  if (!c) return null
+  return c.bits >= (c.v === 4 ? TEST_ALLOW_MAX_PREFIX.v4 : TEST_ALLOW_MAX_PREFIX.v6) ? c : null
+}
 
 // ---------------------------------------------------------------- the rules
 
@@ -259,7 +286,7 @@ export interface EgressRules {
   /** Name rule, before resolving (names only; literals go through checkAddress). */
   checkName(host: string, port: number): Verdict
   /** Address rule, for literals and every resolver answer. */
-  checkAddress(ip: string | Addr, port: number): Verdict
+  checkAddress(ip: string | Addr, port: number, name?: string): Verdict
   /**
    * The whole pre-resolve check for a request target: port, then literal address or name.
    * `addr` is set for literals (no resolving needed; connect to it).
@@ -278,9 +305,9 @@ export function normalizeHost(host: string): string {
 const LABEL = /^(?!-)[a-z0-9_-]{1,63}(?<!-)$/
 
 export function createEgressRules(config: EgressRulesConfig = {}): EgressRules {
-  const allow = (config.testAllow ?? []).map(parseCidr).filter((c): c is Cidr => c !== null)
+  const allow = (config.testAllow ?? []).map(testAllowCidr).filter((c): c is Cidr => c !== null)
   const hostAddrs = (config.hostAddresses ?? []).map(toAddr).filter((a): a is Addr => a !== null)
-  const models = (config.modelServers ?? []).map((m) => ({ host: normalizeHost(m.host), addr: toAddr(m.host), port: m.port }))
+  const models = (config.modelServers ?? []).map((m) => ({ host: normalizeHost(m.host), addr: toAddr(m.host), port: m.port, always: m.always === true }))
   const sameAddr = (a: Addr, b: Addr) => a.v === b.v && a.bytes.every((x, i) => x === b.bytes[i])
   const allowed = (a: Addr) => allow.some((c) => inCidr(a, c))
 
@@ -295,8 +322,15 @@ export function createEgressRules(config: EgressRulesConfig = {}): EgressRules {
   }
 
   function nameReason(h: string, port: number): HostBlockReason | null {
-    // The model server and BE names: on every port (the BE answers on one, the model server on another).
-    if (models.some((m) => !m.addr && m.host === h && (m.port === port || m.port === 0))) return 'model_server'
+    const base = baseNameReason(h)
+    // A model server (or the BE) by name, on its port: model_server when the name itself is local
+    // (refused before resolving anyway) or it is the BE. A public name resolves and is checked
+    // (checkAddress with the name) like any site.
+    if (models.some((m) => !m.addr && m.host === h && (m.port === port || m.port === 0) && (base !== null || m.always))) return 'model_server'
+    return base
+  }
+
+  function baseNameReason(h: string): HostBlockReason | null {
     if (THIS_COMPUTER_NAMES.includes(h) || THIS_COMPUTER_SUFFIXES.some((s) => h.endsWith(s))) return 'this_computer'
     if (TAILSCALE_SUFFIXES.some((s) => h.endsWith(s))) return 'tailscale'
     const labels = h.split('.')
@@ -307,25 +341,40 @@ export function createEgressRules(config: EgressRulesConfig = {}): EgressRules {
     return null
   }
 
-  function classify(a: Addr, port: number): HostBlockReason | null {
-    for (const m of models) if (m.addr && sameAddr(m.addr, a) && m.port === port) return 'model_server'
+  /** The address's own reason: this computer, then the deny table. */
+  function classify(a: Addr): HostBlockReason | null {
     if (hostAddrs.some((h) => sameAddr(h, a))) return 'this_computer'
     for (const [c, r] of DENY_TABLE) if (inCidr(a, c)) return r
     return null
   }
 
-  function checkAddress(ip: string | Addr, port: number): Verdict {
+  /** The address's reason with the embedded IPv4 (mapped, NAT64, 6to4, Teredo) checked too. */
+  function addrReason(a: Addr): { reason: HostBlockReason; at: Addr } | null {
+    const r = classify(a)
+    if (r) return { reason: r, at: a }
+    const inner = embeddedIPv4(a)
+    if (inner) {
+      const v4: Addr = { v: 4, bytes: inner }
+      const r4 = classify(v4)
+      if (r4) return { reason: r4, at: v4 }
+    }
+    return null
+  }
+
+  function checkAddress(ip: string | Addr, port: number, name?: string): Verdict {
     const a = typeof ip === 'string' ? toAddr(ip) : ip
     if (!a) return { ok: false, reason: 'reserved', subject: String(ip) }
     const subject = formatAddr(a)
-    if (allowed(a)) return { ok: true, subject }
-    let reason = classify(a, port)
-    const inner = embeddedIPv4(a)
-    if (!reason && inner) {
-      const v4: Addr = { v: 4, bytes: inner }
-      if (!allowed(v4)) reason = classify(v4, port)
-    }
-    return reason ? { ok: false, reason, subject } : { ok: true, subject }
+    const found = addrReason(a)
+    // Item 3: a model server (by address, or by the name that resolved here) on its port is
+    // model_server only when the address is local (or it's the BE); metadata stays metadata.
+    const h = name !== undefined ? normalizeHost(name) : undefined
+    const model = models.find((m) => (m.addr ? sameAddr(m.addr, a) : h !== undefined && m.host === h) && (m.port === port || m.port === 0))
+    if (model && (model.always || found) && found?.reason !== 'metadata') return { ok: false, reason: 'model_server', subject }
+    if (!found) return { ok: true, subject }
+    // Review B2: the test allow list opens only home_network / reserved / tailscale.
+    if (TEST_ALLOW_REASONS.includes(found.reason) && allowed(found.at)) return { ok: true, subject }
+    return { ok: false, reason: found.reason, subject }
   }
 
   /**
@@ -333,7 +382,9 @@ export function createEgressRules(config: EgressRulesConfig = {}): EgressRules {
    * resolving, the address/name reason wins over `port` ("192.168.1.20:8080" is home_network).
    * A public name on a bad port is refused as `port` without resolving.
    */
-  function checkTarget(host: string, port: number): Verdict & { addr?: Addr } {
+  function checkTarget(rawHost: string, port: number): Verdict & { addr?: Addr } {
+    // Review S8: trailing dots off once, before the literal parse ("127.0.0.1.." is 127.0.0.1).
+    const host = rawHost.trim().replace(/\.+$/, '')
     const lit = parseAddressLiteral(host)
     if (lit === 'invalid') return { ok: false, reason: 'reserved', subject: normalizeHost(host) }
     const first = lit ? { ...checkAddress(lit, port), addr: lit } : checkName(host, port)

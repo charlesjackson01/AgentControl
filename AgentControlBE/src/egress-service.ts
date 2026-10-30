@@ -19,7 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
-import type { EgressRulesConfig } from './egress-rules.js'
+import { testAllowCidr, type EgressRulesConfig } from './egress-rules.js'
 import { EGRESS_PROXY_PORT, type EgressCredential } from './egressd.js'
 import { SCRIPT_RUN_HOSTS_MAX, type EnvVar, type HostContact } from './shared/types.js'
 import { GVPROXY_CIDR, SLIRP_CIDR } from './user-only.js'
@@ -35,7 +35,11 @@ const APP_DIR = '/opt/egressd'
 /** M2 contract: the run/route text when the proxy can't be used (409 proxy_unavailable). */
 export const PROXY_UNAVAILABLE = 'AgentControl\'s internet proxy isn\'t running, so this run couldn\'t get the internet. Try again; if it keeps failing, re-check in Settings › VM.'
 export const PROXY_UNAVAILABLE_REASON = 'proxy_unavailable'
-/** Test-only: comma-separated CIDRs the proxy lets through (local @vm test servers). Off unless set. */
+/**
+ * Test-only: comma-separated CIDRs the proxy lets through (local @vm test servers). Review B2:
+ * honoured only with NODE_ENV=test or AC_VM_TESTS=1 (otherwise ignored, with one warning), each at
+ * most /24 or /120, and only for home_network / reserved / tailscale (egress-rules.ts).
+ */
 export const EGRESS_TEST_ALLOW_ENV = 'AC_EGRESS_TEST_ALLOW'
 export function egressNetworkName(slug: string): string {
   return `ac-egress-${slug}`
@@ -162,6 +166,27 @@ export function hostInterfaceAddresses(readProc: (file: string) => string | null
   // os.networkInterfaces() skips interfaces that are down or have no carrier (docker0 with nothing
   // attached), but their addresses still answer on this computer. On Linux read the kernel's lists.
   out.push(...localAddressesFromProc(readProc('/proc/net/fib_trie'), readProc('/proc/net/if_inet6')))
+  // Review S5: the default gateways (the router, or the VM host) are this computer's side too.
+  out.push(...defaultGatewaysFromProc(readProc('/proc/net/route'), readProc('/proc/net/ipv6_route')))
+  return [...new Set(out)]
+}
+
+/** Default-route gateways from /proc/net/route (little-endian hex) and /proc/net/ipv6_route. */
+export function defaultGatewaysFromProc(route: string | null, ipv6Route: string | null): string[] {
+  const out: string[] = []
+  for (const line of (route ?? '').split('\n').slice(1)) {
+    const f = line.trim().split(/\s+/)
+    // Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+    if (f.length < 8 || f[1] !== '00000000' || f[7] !== '00000000' || !/^[0-9a-f]{8}$/i.test(f[2]!) || f[2] === '00000000') continue
+    const n = parseInt(f[2]!, 16)
+    out.push([n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255].join('.'))
+  }
+  for (const line of (ipv6Route ?? '').split('\n')) {
+    const f = line.trim().split(/\s+/)
+    // dest destPrefix src srcPrefix nextHop metric refcnt use flags iface
+    if (f.length < 10 || f[0] !== '0'.repeat(32) || f[1] !== '00' || !/^[0-9a-f]{32}$/i.test(f[4]!) || f[4] === '0'.repeat(32)) continue
+    out.push(f[4]!.match(/.{4}/g)!.map((g) => parseInt(g, 16).toString(16)).join(':'))
+  }
   return [...new Set(out)]
 }
 
@@ -197,10 +222,13 @@ export function localAddressesFromProc(fibTrie: string | null, ifInet6: string |
 
 /**
  * The user's model servers (openai-compatible endpoints) plus the BE's own HOST:PORT, for the
- * model_server rule. A name matches on its port only (another port of a public name is allowed).
+ * model_server rule. Item 3 (Charles): an endpoint is refused only when it is local (the proxy
+ * decides from the name / resolved address: egress-rules.ts); the BE (`always`) on its port
+ * whatever the address. With HOST=0.0.0.0 the BE answers on this computer's addresses, which are
+ * this_computer on every port anyway.
  */
-export function modelServersOf(endpoints: readonly { kind: string; baseUrl: string }[], env: NodeJS.ProcessEnv = process.env): { host: string; port: number }[] {
-  const out: { host: string; port: number }[] = []
+export function modelServersOf(endpoints: readonly { kind: string; baseUrl: string }[], env: NodeJS.ProcessEnv = process.env): { host: string; port: number; always?: boolean }[] {
+  const out: { host: string; port: number; always?: boolean }[] = []
   for (const e of endpoints) {
     if (e.kind !== 'openai-compatible') continue
     try {
@@ -211,13 +239,38 @@ export function modelServersOf(endpoints: readonly { kind: string; baseUrl: stri
     }
   }
   const host = env.HOST ?? '127.0.0.1'
-  if (host && host !== '0.0.0.0' && host !== '::') out.push({ host, port: Number(env.PORT ?? 3001) })
+  if (host && host !== '0.0.0.0' && host !== '::') out.push({ host, port: Number(env.PORT ?? 3001), always: true })
   return out
 }
 
-/** CIDRs from AC_EGRESS_TEST_ALLOW (test-only). */
-export function testAllowFromEnv(env: NodeJS.ProcessEnv = process.env): string[] {
-  return (env[EGRESS_TEST_ALLOW_ENV] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+let testAllowWarned = false
+/** Test runs only (review B2): NODE_ENV=test or AC_VM_TESTS=1. */
+export function testAllowHonoured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NODE_ENV === 'test' || env.AC_VM_TESTS === '1'
+}
+/**
+ * CIDRs from AC_EGRESS_TEST_ALLOW (review B2): only in test runs; outside them the variable is
+ * ignored with one warning. Entries wider than /24 (/120) or unreadable are dropped (one warning).
+ */
+export function testAllowFromEnv(env: NodeJS.ProcessEnv = process.env, warn: (msg: string) => void = (m) => process.stderr.write(`${m}\n`)): string[] {
+  const raw = (env[EGRESS_TEST_ALLOW_ENV] ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (!raw.length) return []
+  const once = (msg: string) => {
+    if (testAllowWarned) return
+    testAllowWarned = true
+    warn(msg)
+  }
+  if (!testAllowHonoured(env)) {
+    once(`egress: ${EGRESS_TEST_ALLOW_ENV} is set but ignored: it only works in test runs (NODE_ENV=test or AC_VM_TESTS=1).`)
+    return []
+  }
+  const ok = raw.filter((c) => testAllowCidr(c) !== null)
+  if (ok.length !== raw.length) once(`egress: ${EGRESS_TEST_ALLOW_ENV}: ignored ${raw.filter((c) => !ok.includes(c)).join(', ')} (at most /24 or /120 each).`)
+  return ok
+}
+/** Test hook: let the next ignored AC_EGRESS_TEST_ALLOW warn again. */
+export function resetTestAllowWarning(): void {
+  testAllowWarned = false
 }
 
 /** The daemon's code: dist .js as is, or src .ts transpiled (dev/tests). */

@@ -37,12 +37,17 @@ const host = {
   storage: { driver: 'overlay', backend: 'local', volumeState: 'ok' }, concurrency: 2, setupSteps: [],
 } as VmHostInfo
 
+/** BE-P2-22: while set, the fake engine's `build` waits for it (a build in progress). */
+let buildGate: Promise<void> | null = null
 async function build(opts: { failBuild?: boolean } = {}): Promise<void> {
   engine = fakeEngine(opts)
   runner = fakeRunner()
   const vmHost: VmHostService = { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host }
   const botEnv = createBotEnvService({
-    exec: engine.exec,
+    exec: async (cmd, args, o) => {
+      if (args[0] === 'build' && buildGate) await buildGate
+      return engine.exec(cmd, args, o)
+    },
     engine: async () => ({ cli: 'podman', globalArgs: [] }),
     mounts: (a) => botMounts(store, a),
     saveVm: storeSaveVm(store),
@@ -58,6 +63,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'agentcontrol-be17-'))
   store = createStore(join(dir, 'store.json'))
   refreshes = 0
+  buildGate = null
   await build()
 })
 afterEach(async () => {
@@ -234,13 +240,146 @@ describe('RunService.toolBuild', () => {
     const a = await makeAgent()
     let finish!: () => void
     const first = app.vmRuns.toolBuild(a.id, 'rebuild', () => new Promise((r) => { finish = () => r({ generation: 3, log: 'ok\n' }) }))
-    await expect(app.vmRuns.toolBuild(a.id, 'rollback', async () => ({ generation: 2, log: '' }))).rejects.toMatchObject({ statusCode: 409, reason: 'run_active' })
+    // BE-P2-22: build_active (was run_active in BE-P2-17).
+    await expect(app.vmRuns.toolBuild(a.id, 'rollback', async () => ({ generation: 2, log: '' }))).rejects.toMatchObject({ statusCode: 409, reason: 'build_active', message: "Wait for the bot's tools to finish building first." })
     finish()
     expect(await first).toMatchObject({ status: 'succeeded', stdoutTail: 'ok\n', outputBytes: 3, outputTruncated: false })
     const e = Object.assign(new Error('nope'), { statusCode: 409, reason: 'no_previous_generation' })
     await expect(app.vmRuns.toolBuild(a.id, 'rollback', async () => { throw e })).rejects.toBe(e)
     expect(app.vmRuns.list(a.id, {}).runs).toHaveLength(1)
     await expect(app.vmRuns.toolBuild('ag_nope', 'rebuild', async () => ({ generation: 1, log: '' }))).rejects.toMatchObject({ statusCode: 404 })
+  })
+})
+
+describe('BE-P2-22: runs wait for a tool build', () => {
+  /** Hold the fake engine's next builds until release(). */
+  function gate(): () => void {
+    let release!: () => void
+    buildGate = new Promise<void>((r) => (release = r))
+    return () => {
+      buildGate = null
+      release()
+    }
+  }
+  /** The bot's tool generation each run saw when the runner got it. */
+  function generationsAtRun(): number[] {
+    const seen: number[] = []
+    const run = runner.run.bind(runner)
+    runner.run = (req) => {
+      seen.push(stored(req.agentId).vm.image.generation)
+      return run(req)
+    }
+    return seen
+  }
+  const card = (runId: string) => store.chatMessages.find((m) => m.kind === 'run' && m.scriptRunId === runId)
+
+  it('a run started during a rebuild is queued "after tool build", then starts on the new generation', async () => {
+    const a = await makeAgent()
+    const seen = generationsAtRun()
+    const release = gate()
+    const rebuild = inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)
+    await until(() => app.vmRuns.buildActive(a.id))
+    const r = await startFor(a)
+    expect(r).toMatchObject({ status: 'queued', queuedReason: 'tool_build', queuePosition: 1 })
+    expect(app.vmRuns.get(r.id)).toMatchObject({ status: 'queued', queuedReason: 'tool_build', queuePosition: 1 })
+    expect(card(r.id)?.scriptRun).toMatchObject({ status: 'queued', queuedReason: 'tool_build', queuePosition: 1 })
+    expect(app.vmRuns.list(a.id, {}).runs[0]).toMatchObject({ id: r.id, queuedReason: 'tool_build', queuePosition: 1 })
+    // Another bot's run isn't held by it.
+    const b = await makeAgent('Other')
+    const rb = await startFor(b)
+    await until(() => runner.pending.length === 1)
+    expect(runner.pending[0]!.req.agentId).toBe(b.id)
+    expect(app.vmRuns.get(rb.id)!.queuedReason).toBeUndefined()
+    runner.pending[0]!.end()
+    await app.vmRuns.wait(rb.id)
+    await new Promise((res) => setTimeout(res, 20))
+    expect(app.vmRuns.get(r.id)!.status).toBe('queued')
+    expect(app.vmRuns.get(r.id)).toMatchObject({ queuedReason: 'tool_build', queuePosition: 1 })
+    release()
+    const res = await rebuild
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toMatchObject({ kind: 'tool_build', status: 'succeeded' })
+    await until(() => runner.pending.length === 1)
+    expect(seen).toEqual([0, 1])
+    const started = app.vmRuns.get(r.id)!
+    expect(started.status).toBe('running')
+    expect(started.queuedReason).toBeUndefined()
+    expect(started.queuePosition).toBeUndefined()
+    expect(card(r.id)?.scriptRun?.queuedReason).toBeUndefined()
+    // The build's record came first.
+    expect(Date.parse(res.json().endedAt)).toBeLessThanOrEqual(Date.parse(started.startedAt!))
+    runner.pending[0]!.end()
+    expect((await app.vmRuns.wait(r.id)).status).toBe('succeeded')
+  })
+
+  it('a failed build: the waiting run starts on the previous generation', async () => {
+    await app.close()
+    await build({ failBuild: true })
+    const a = await makeAgent()
+    const seen = generationsAtRun()
+    const release = gate()
+    const rebuild = inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)
+    await until(() => app.vmRuns.buildActive(a.id))
+    const r = await startFor(a)
+    expect(r.queuedReason).toBe('tool_build')
+    release()
+    expect((await rebuild).statusCode).toBe(502)
+    await until(() => runner.pending.length === 1)
+    expect(seen).toEqual([0])
+    expect(stored(a.id).vm.image.generation).toBe(0)
+    expect(app.vmRuns.buildActive(a.id)).toBe(false)
+    runner.pending[0]!.end()
+    expect((await app.vmRuns.wait(r.id)).status).toBe('succeeded')
+  })
+
+  it('rollback, rebuild and reset during a build → 409 build_active (nothing recorded, queued runs kept); run_active after', async () => {
+    const a = await makeAgent()
+    expect((await inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)).statusCode).toBe(200)
+    const release = gate()
+    const rebuild = inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)
+    await until(() => app.vmRuns.buildActive(a.id))
+    const r = await startFor(a)
+    for (const [url, body] of [['vm/tools/rollback', undefined], ['vm/tools/rebuild', undefined], ['vm/reset', { confirm: true }]] as const) {
+      const res = await inject('POST', `/api/agents/${a.id}/${url}`, body)
+      expect(res.statusCode).toBe(409)
+      expect(res.json()).toMatchObject({ reason: 'build_active', message: "Wait for the bot's tools to finish building first." })
+    }
+    expect(app.vmRuns.get(r.id)!.status).toBe('queued')
+    expect(app.vmRuns.list(a.id, {}).runs.filter((x) => x.kind === 'tool_build')).toHaveLength(1)
+    release()
+    expect((await rebuild).statusCode).toBe(200)
+    expect(stored(a.id).vm.image.generation).toBe(2)
+    await until(() => runner.pending.length === 1)
+    // Runs still refuse them with run_active.
+    for (const [url, body] of [['vm/tools/rollback', undefined], ['vm/tools/rebuild', undefined]] as const) {
+      const res = await inject('POST', `/api/agents/${a.id}/${url}`, body)
+      expect(res.statusCode).toBe(409)
+      expect(res.json()).toMatchObject({ reason: 'run_active' })
+    }
+    runner.pending[0]!.end()
+    await app.vmRuns.wait(r.id)
+    expect((await inject('POST', `/api/agents/${a.id}/vm/tools/rollback`)).statusCode).toBe(200)
+  })
+
+  it('stop of a run waiting for a build; VM stop ends it too', async () => {
+    const a = await makeAgent()
+    const release = gate()
+    const rebuild = inject('POST', `/api/agents/${a.id}/vm/tools/rebuild`)
+    await until(() => app.vmRuns.buildActive(a.id))
+    const r1 = await startFor(a)
+    const r2 = await startFor(a)
+    expect(app.vmRuns.get(r2.id)).toMatchObject({ queuedReason: 'tool_build', queuePosition: 2 })
+    expect((await inject('POST', `/api/runs/${r1.id}/stop`)).statusCode).toBe(200)
+    const stopped = await app.vmRuns.wait(r1.id)
+    expect(stopped.status).toBe('stopped')
+    expect(stopped.queuedReason).toBeUndefined()
+    await until(() => app.vmRuns.get(r2.id)!.queuePosition === 1)
+    release()
+    expect((await rebuild).statusCode).toBe(200)
+    await until(() => runner.pending.length === 1)
+    expect(runner.pending[0]!.req.runId).toBe(r2.id)
+    runner.pending[0]!.end()
+    await app.vmRuns.wait(r2.id)
   })
 })
 

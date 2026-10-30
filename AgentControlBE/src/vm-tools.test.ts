@@ -256,10 +256,14 @@ describe('BE-P2-16 run_script (fake LLM end to end)', () => {
 describe('BE-P2-16 vm_install', () => {
   it('M1 has no build network: the model gets the 409 text and the step fails', async () => {
     const a = await makeBot('Analyst')
+    const lock = vi.spyOn(app.vmRuns, 'withToolBuild')
     const sent = llm([toolCall('vm_install', { apt: ['ffmpeg'], why: 'audio' }), reply('cannot')])
     const run = (await runDm(a, 'install ffmpeg')).json() as AgentRun
     expect(toolResults(sent)[0]).toContain("isn't available yet")
     expect(run.activity?.steps).toEqual([{ tool: 'vm_install', summary: "Couldn't install ffmpeg", ok: false }])
+    // BE-P2-22: under the bot's build lock (released after, even on a refusal).
+    expect(lock).toHaveBeenCalledWith(a.id, expect.any(Function))
+    expect(app.vmRuns.buildActive(a.id)).toBe(false)
   })
 })
 

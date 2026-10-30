@@ -639,6 +639,8 @@ export type StorageBackendKind = 'local' | 'wsl'
 export type ScriptRunStatus = 'queued' | 'waiting_permission' | 'running' | 'succeeded' | 'failed' | 'timed_out' | 'stopped' | 'denied' | 'undone'
 export const SCRIPT_RUN_ACTIVE: readonly ScriptRunStatus[] = ['queued', 'waiting_permission', 'running']
 export type ScriptRunKind = 'script' | 'tool_build' | 'undo'
+/** BE-P2-22: why a queued run waits (ScriptRun.queuedReason). */
+export type QueuedReason = 'slot' | 'tool_build'
 export type UndoUnavailableReason = 'expired' | 'budget_bot' | 'budget_global' | 'low_disk' | 'too_large' | 'machine_restored'
 export const UNDO_UNAVAILABLE_REASONS: readonly UndoUnavailableReason[] = ['expired', 'budget_bot', 'budget_global', 'low_disk', 'too_large', 'machine_restored']
 
@@ -686,8 +688,15 @@ export interface ScriptRun {
   /**
    * status 'queued': how many runs are ahead of this one, counting the ones running now
    * (with 1 run at a time, a run queued behind a running one is 1: "Queued · 1 ahead").
+   * BE-P2-22: a tool build of the same bot in progress counts as 1 ahead.
    */
   queuePosition?: number
+  /**
+   * BE-P2-22 (additive), status 'queued' only: why it waits. 'tool_build': the bot's tools are
+   * building ("Queued · after tool build"); it starts once the build ends, on the generation the
+   * build left. 'slot': waiting for a run slot (its bot's or the machine's). Dropped once it starts.
+   */
+  queuedReason?: QueuedReason
   exitCode?: number
   /** Plain-language reason for failed / denied / timed_out / stopped. */
   error?: string
@@ -718,7 +727,7 @@ export interface ScriptRun {
 
 /** Run history row (GET /api/agents/:id/script-runs and VmInfo.runs). */
 export type ScriptRunSummary = Pick<ScriptRun,
-  'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId'
+  'id' | 'agentId' | 'conversationId' | 'kind' | 'argv' | 'why' | 'status' | 'exitCode' | 'queuedAt' | 'startedAt' | 'endedAt' | 'durationMs' | 'runtime' | 'undo' | 'undoOfRunId' | 'queuePosition' | 'queuedReason'
 > & {
   filesChangedCount: number
   groupId?: string
@@ -737,6 +746,8 @@ export interface ChatRunSummary {
   undo: ScriptRunUndo
   /** status 'queued': runs ahead of it, running ones included (ScriptRun.queuePosition). */
   queuePosition?: number
+  /** BE-P2-22: status 'queued': ScriptRun.queuedReason ('tool_build': "Queued · after tool build"). */
+  queuedReason?: QueuedReason
   exitCode?: number
   /** The script's file name (argv[1] or argv[0]) for the card title; `name` stays the skill. */
   scriptName?: string

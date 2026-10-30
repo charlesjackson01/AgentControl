@@ -26,7 +26,7 @@ import { assertBotFilesAvailable, botFilesMissingMessage, botRoot, botVol, folde
 import { groupFolderFull, groupRoot, groupVol } from './group-files.js'
 import { sumBreakdown, type PersonalUsage } from './personal-usage.js'
 import type { SnapshotUsage } from './snapshot-budget.js'
-import type { ToolBuildAction } from './run-service.js'
+import { BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT, type ToolBuildAction } from './run-service.js'
 import { fail, failWithReason } from './http.js'
 import {
   INTERNET_POLICIES,
@@ -154,6 +154,8 @@ export interface BotEnvRouteDeps {
   runs?: (agent: Agent) => { runs: VmInfo['runs']; hasMore: boolean }
   /** BE-P2-17: tool rebuild/rollback as a ScriptRun (kind tool_build); RunService.toolBuild. Absent: 503. */
   toolBuild?: (agent: Agent, action: ToolBuildAction, build: () => Promise<{ generation: number; log: string }>) => Promise<ScriptRun>
+  /** BE-P2-22: the bot's tools are building (RunService.buildActive); reset answers 409 build_active. */
+  buildActive?: (agentId: string) => boolean
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -329,6 +331,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const body = request.body as { confirm?: unknown } | null | undefined
     if (!body || typeof body !== 'object' || body.confirm !== true) fail(400, 'Send {"confirm": true} to reset the bot\'s VM.')
     assertBotFilesAvailable(store, agent)
+    // BE-P2-22: not during a tool build (its queued runs are left waiting for it).
+    if (deps.buildActive?.(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
     deps.runner?.stopRuns(agent.id)
     await botEnv.reset(agent)
     return vmInfo(agentOf(agent.id))

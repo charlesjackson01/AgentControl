@@ -499,3 +499,167 @@ describe('bot slot before machine slot', () => {
     expect(svc.get(a.id)!.queuePosition).toBeUndefined()
   })
 })
+
+describe('BE-P2-22: runs wait for a tool build', () => {
+  /** A build the test ends; `gen` is the bot's generation the fake build leaves. */
+  function pendingBuild(agentId: string, o: { fail?: boolean } = {}) {
+    let end!: () => void
+    const done = new Promise<void>((r) => (end = r))
+    const build = async () => {
+      await done
+      if (o.fail) throw Object.assign(new Error('E: Unable to locate package nope'), { statusCode: 502, reason: 'build_failed' })
+      const a = agents.find((x) => x.id === agentId)! as unknown as { vm: { image: { generation: number } } }
+      a.vm.image.generation++
+      return { generation: a.vm.image.generation, log: 'built\n' }
+    }
+    return { end, build }
+  }
+  /** The generation each run saw when the runner got it (the runner reads the bot then). */
+  function generationsAtRun(): Map<string, number> {
+    const seen = new Map<string, number>()
+    const run = runner.run.bind(runner)
+    runner.run = (req) => {
+      seen.set(req.runId!, (agents.find((a) => a.id === req.agentId) as unknown as { vm: { image: { generation: number } } }).vm.image.generation)
+      return run(req)
+    }
+    return seen
+  }
+  beforeEach(() => {
+    for (const a of agents) (a as unknown as { vm: unknown }).vm = { image: { generation: 0 } }
+  })
+
+  it('a run queued during a build starts after it, on the new generation; the record comes first', async () => {
+    const seen = generationsAtRun()
+    const b = pendingBuild('a1')
+    const built = svc.toolBuild('a1', 'rebuild', b.build)
+    expect(svc.buildActive('a1')).toBe(true)
+    const r = await start('a1')
+    // The build counts as 1 ahead.
+    expect(r).toMatchObject({ status: 'queued', queuedReason: 'tool_build', queuePosition: 1 })
+    const card = messages.find((m) => m.scriptRunId === r.id)!
+    expect(card.scriptRun).toMatchObject({ queuedReason: 'tool_build', queuePosition: 1 })
+    await new Promise((res) => setTimeout(res, 20))
+    expect(runner.requests).toHaveLength(0)
+    b.end()
+    const rec = await built
+    expect(rec).toMatchObject({ kind: 'tool_build', status: 'succeeded' })
+    await until(() => runner.pending.length === 1)
+    expect(seen.get(r.id)).toBe(1)
+    expect(svc.buildActive('a1')).toBe(false)
+    expect(svc.get(r.id)!.queuedReason).toBeUndefined()
+    // Events: the build's record before the run's start.
+    const order = events.filter((e) => e.type === 'run.updated').map((e) => (e.type === 'run.updated' ? `${e.run.id}:${e.run.status}` : ''))
+    expect(order.indexOf(`${rec.id}:succeeded`)).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf(`${rec.id}:succeeded`)).toBeLessThan(order.indexOf(`${r.id}:running`))
+    runner.pending[0]!.end()
+    await svc.wait(r.id)
+  })
+
+  it('a failed build: the run still starts, on the previous generation', async () => {
+    const seen = generationsAtRun()
+    const b = pendingBuild('a1', { fail: true })
+    const built = svc.toolBuild('a1', 'rebuild', b.build)
+    const r = await start('a1')
+    expect(r.queuedReason).toBe('tool_build')
+    b.end()
+    await expect(built).rejects.toMatchObject({ statusCode: 502 })
+    await until(() => runner.pending.length === 1)
+    expect(seen.get(r.id)).toBe(0)
+    expect(svc.list('a1').runs.find((x) => x.kind === 'tool_build')).toMatchObject({ status: 'failed' })
+    runner.pending[0]!.end()
+    await svc.wait(r.id)
+  })
+
+  it('a 4xx from the build releases the lock too', async () => {
+    const e = Object.assign(new Error('nope'), { statusCode: 409, reason: 'internet_unavailable' })
+    let fail!: () => void
+    const built = svc.toolBuild('a1', 'rebuild', () => new Promise((_, rej) => (fail = () => rej(e))))
+    const r = await start('a1')
+    fail()
+    await expect(built).rejects.toBe(e)
+    await until(() => runner.pending.length === 1)
+    expect(runner.pending[0]!.req.runId).toBe(r.id)
+  })
+
+  it('rollback or a second build during a build → 409 build_active before run_active', async () => {
+    const b = pendingBuild('a1')
+    const built = svc.toolBuild('a1', 'rebuild', b.build)
+    await start('a1')
+    const err = await rejects(svc.toolBuild('a1', 'rollback', async () => ({ generation: 0, log: '' })))
+    expect(err).toMatchObject({ statusCode: 409, reason: 'build_active', message: "Wait for the bot's tools to finish building first." })
+    b.end()
+    await built
+    await until(() => runner.pending.length === 1)
+    expect(await rejects(svc.toolBuild('a1', 'rollback', async () => ({ generation: 0, log: '' })))).toMatchObject({ statusCode: 409, reason: 'run_active' })
+  })
+
+  it("queuePosition: runs running now + queued ahead + the bot's build; queuedReason follows the build", async () => {
+    const b = pendingBuild('a1')
+    const built = svc.toolBuild('a1', 'rebuild', b.build)
+    const other = await start('a2')
+    await until(() => runner.pending.length === 1)
+    const r1 = await start('a1')
+    const r2 = await start('a1')
+    const o3 = await start('a3')
+    // r1: a2 running + its build; r2: + r1; a3 (no build): a2 running + r1 + r2.
+    expect(svc.get(r1.id)).toMatchObject({ queuePosition: 2, queuedReason: 'tool_build' })
+    expect(svc.get(r2.id)).toMatchObject({ queuePosition: 3, queuedReason: 'tool_build' })
+    expect(svc.get(o3.id)).toMatchObject({ queuePosition: 3, queuedReason: 'slot' })
+    expect(svc.list('a3').runs[0]).toMatchObject({ queuePosition: 3, queuedReason: 'slot' })
+    b.end()
+    await built
+    // Build done: r1 and r2 now wait for the machine slot (1 at a time).
+    await until(() => svc.get(r1.id)!.queuedReason === 'slot')
+    expect(svc.get(r1.id)!.queuePosition).toBe(1)
+    expect(svc.get(r2.id)).toMatchObject({ queuePosition: 2, queuedReason: 'slot' })
+    const last = events.filter((e) => e.type === 'run.updated' && e.run.id === r1.id).at(-1)
+    expect(last?.type === 'run.updated' && last.summary).toMatchObject({ queuedReason: 'slot', queuePosition: 1 })
+    expect(svc.get(other.id)!.status).toBe('running')
+  })
+
+  it('withToolBuild (vm_install) holds the lock with no run_active check; nested holds count', async () => {
+    const seen = generationsAtRun()
+    let endA!: () => void
+    let endB!: () => void
+    const r0 = await start('a1')
+    await until(() => runner.pending.length === 1)
+    const a = svc.withToolBuild('a1', () => new Promise<string>((res) => (endA = () => res('a'))))
+    const b = svc.withToolBuild('a1', () => new Promise<string>((res) => (endB = () => res('b'))))
+    const r1 = await start('a1')
+    expect(svc.get(r1.id)).toMatchObject({ queuedReason: 'tool_build', queuePosition: 2 })
+    expect(await rejects(svc.toolBuild('a1', 'rebuild', async () => ({ generation: 1, log: '' })))).toMatchObject({ reason: 'build_active' })
+    runner.pending[0]!.end()
+    await svc.wait(r0.id)
+    endA()
+    expect(await a).toBe('a')
+    await new Promise((res) => setTimeout(res, 20))
+    expect(svc.get(r1.id)!.status).toBe('queued')
+    ;(agents[0] as unknown as { vm: { image: { generation: number } } }).vm.image.generation = 4
+    endB()
+    expect(await b).toBe('b')
+    await until(() => runner.pending.length === 1)
+    expect(seen.get(r1.id)).toBe(4)
+    expect(svc.buildActive('a1')).toBe(false)
+  })
+
+  it('a run launching when a vm_install starts goes back to wait for it', async () => {
+    // start's floor check answers at once; the launch's waits until the vm_install has the lock.
+    let calls = 0
+    let release!: () => void
+    const gateFree = new Promise<void>((r) => (release = r))
+    svc = make({ freeBytes: async () => (++calls > 1 ? (await gateFree, free) : free) })
+    const run = await start('a1')
+    await until(() => calls === 2)
+    expect(svc.get(run.id)!.status).toBe('queued')
+    let end!: () => void
+    const held = svc.withToolBuild('a1', () => new Promise<void>((res) => (end = res)))
+    release()
+    await new Promise((res) => setTimeout(res, 20))
+    expect(runner.requests).toHaveLength(0)
+    expect(svc.get(run.id)).toMatchObject({ status: 'queued', queuedReason: 'tool_build', queuePosition: 1 })
+    end()
+    await held
+    await until(() => runner.pending.length === 1)
+    expect(runner.pending[0]!.req.runId).toBe(run.id)
+  })
+})

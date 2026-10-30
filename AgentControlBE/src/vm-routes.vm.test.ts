@@ -127,6 +127,40 @@ describe.skipIf(!engineReady)('@vm BE-P2-17 routes', () => {
     await py("print('back on base')")
   }, 600_000)
 
+  it('BE-P2-22: a run started during a real offline rebuild waits ("after tool build") and runs on the new generation', async () => {
+    const until = async (cond: () => boolean, ms = 60_000) => {
+      const t0 = Date.now()
+      while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 5))
+      expect(cond()).toBe(true)
+    }
+    await py("print('warm')")
+    const gen0 = store.agents.find((a) => a.id === bot.id)!.vm.image.generation
+    const rebuild = inject('POST', `/api/agents/${bot.id}/vm/tools/rebuild`)
+    await until(() => app.vmRuns.buildActive(bot.id))
+    const r = await app.vmRuns.start({ agentId: bot.id, conversationId: ensureDm(store, bot.id).id, context: { kind: 'dm' }, argv: ['python3', '-c', "print('after the build')"], timeoutSec: 120 })
+    expect(r).toMatchObject({ status: 'queued', queuedReason: 'tool_build', queuePosition: 1 })
+    // Rollback, rebuild and reset wait for the build too.
+    for (const [url, body] of [['vm/tools/rollback', undefined], ['vm/tools/rebuild', undefined], ['vm/reset', { confirm: true }]] as const) {
+      const res = await inject('POST', `/api/agents/${bot.id}/${url}`, body)
+      expect(res.statusCode, `${url}: ${res.body}`).toBe(409)
+      expect(res.json()).toMatchObject({ reason: 'build_active' })
+    }
+    const res = await rebuild
+    expect(res.statusCode, res.body).toBe(200)
+    const gen1 = store.agents.find((a) => a.id === bot.id)!.vm.image.generation
+    expect(gen1).toBe(gen0 + 1)
+    const done = await app.vmRuns.wait(r.id)
+    expect(done.status, done.error).toBe('succeeded')
+    expect(done.stdoutTail).toBe('after the build\n')
+    expect(done.queuedReason).toBeUndefined()
+    expect(Date.parse(done.startedAt!)).toBeGreaterThanOrEqual(Date.parse((res.json() as ScriptRun).endedAt!))
+    expect(pm('container', 'inspect', '--format', '{{.ImageName}}', `ac-bot-${SLUG}`)).toContain(`ac-bot-${SLUG}:${gen1}`)
+    // Back to where it was (the next tests don't depend on the generation).
+    const back = await inject('POST', `/api/agents/${bot.id}/vm/tools/rollback`)
+    expect(back.statusCode, back.body).toBe(200)
+    expect(store.agents.find((a) => a.id === bot.id)!.vm.image.generation).toBe(gen0)
+  }, 600_000)
+
   it('undo over HTTP: preview, 409 conflicts with the list, force, then already undone', async () => {
     if (!probe.snapshotDriver) {
       console.log('[be17] no snapshot driver on this host: undo routes not exercised')

@@ -1797,7 +1797,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     vmInstall: async (agentId, packages) => {
       const agent = store.agents.find((a) => a.id === agentId)
       if (!agent) fail(404, 'Bot not found.')
-      return botEnv.vmInstall(agent, packages)
+      // BE-P2-22: under the bot's build lock, so its queued runs wait and start on the new tools.
+      return runs.withToolBuild(agentId, () => botEnv.vmInstall(agent, packages))
     },
     offered: (agentId) =>
       vmRunnerNow.check({ agentId, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 60, network: 'off' }) === null,
@@ -1836,6 +1837,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     snapshotUsage: (agent) => snapshotBudget.usage(agent.slug),
     // BE-P2-17: tool rebuild/rollback, recorded as ScriptRuns (kind tool_build).
     toolBuild: (agent, action, build) => runs.toolBuild(agent.id, action, build),
+    // BE-P2-22: reset answers 409 build_active while the bot's tools are building.
+    buildActive: (agentId) => runs.buildActive(agentId),
   })
 
   // BE-P2-17: GET/PATCH /api/vm/settings.

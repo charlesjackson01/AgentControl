@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createBotEnvService } from './bot-env.js'
-import { botMountAllowList, botMounts, BROWSER_NOT_YET, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
+import { botMountAllowList, botMounts, BROWSER_NOT_YET, snapshotZones, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
 import { checkBotMounts, KEEP_ID_NOTE } from './isolation.js'
 import { botRoot } from './files.js'
@@ -194,6 +194,22 @@ describe('start / stop / reset / tools', () => {
     expect(mounts).toContainEqual(expect.objectContaining({ target: `/bot/groups/${slug}`, readonly: false }))
     const lone = await makeAgent('Lone')
     expect(botMounts(store, stored(lone.id)).some((m) => m.target.startsWith('/bot/groups/'))).toBe(false)
+  })
+
+  it('BE-P2-9 snapshotZones: the writable mounts (workspace + member groups\' shared), with FileChange prefixes and group info', async () => {
+    await inject('POST', '/api/agents', { name: 'Primary', endpointId: 'ep_local_llama', modelId: 'llama-3-8b', isPrimary: true })
+    const a = await makeAgent('Member')
+    const b = await makeAgent('Other')
+    const g = (await inject('POST', '/api/groups', { name: 'Team', memberAgentIds: [a.id, b.id] })).json() as { slug: string; id: string; name: string }
+    const zones = snapshotZones(store, stored(a.id))
+    expect(zones.map((z) => [z.key, z.target, z.root, z.prefix])).toEqual([
+      ['workspace', '/bot/workspace', 'agent', 'workspace'],
+      [`group-${g.slug}`, `/bot/groups/${g.slug}`, 'group', 'shared'],
+    ])
+    expect(zones[1]).toMatchObject({ groupId: g.id, groupName: 'Team' })
+    // Same folders as the writable mounts.
+    const rw = botMounts(store, stored(a.id)).filter((m) => !m.readonly)
+    expect(rw.map((m) => [m.target, m.source])).toEqual(zones.map((z) => [z.target, z.dir]))
   })
 })
 

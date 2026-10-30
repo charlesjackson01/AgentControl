@@ -22,7 +22,8 @@ import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host
 import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
 import { createRuntimeProbe, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
-import { botMountAllowList, botMounts, registerBotEnvRoutes, storeSaveVm } from './bot-env-routes.js'
+import { botMountAllowList, botMounts, registerBotEnvRoutes, snapshotZones, storeSaveVm } from './bot-env-routes.js'
+import { createSnapshotService } from './snapshot.js'
 import { checkVolume, LocalFs, storageFor } from './storage/index.js'
 import { KEEP_ID_NOTE, type UidMapping } from './isolation.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
@@ -53,6 +54,7 @@ import {
   type SkillSourceInfo,
   type SkillTool,
   SKILL_SOURCE_IDS,
+  type SnapshotDriver,
   type WorkspaceSettings,
 } from './shared/types.js'
 import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
@@ -1475,10 +1477,14 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
 
   registerSandboxRoutes(app, store, { defaultSkillIds: () => defaultSkillIds(store.skills) })
 
+  // BE-P2-9: set once the runtime probe exists (below).
+  let snapshotDriverNow: () => SnapshotDriver | null = () => null
   // BE-P2-2: engine and the `agentcontrol` machine.
   const vmHost =
     opts.vmHost ??
     createVmHostService({
+      // BE-P2-9: the snapshot driver the runtime probe picked (VmInfo.storage.driver).
+      storage: () => ({ driver: snapshotDriverNow(), volumeState: 'ok' as const }),
       getDiskBudgetGb: () => store.settings.vm?.machine?.diskGb,
       setDiskBudgetGb: (diskGb) => {
         if (store.settings.vm) store.settings.vm.machine = { diskGb }
@@ -1514,6 +1520,19 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       cacheFile: join(store.dataDir, 'vm', 'runtime-probe.json'),
       log: (msg) => app.log.info(msg),
     })
+  // BE-P2-9: undo snapshots, with the driver the probe picked, under <filesRoot>/snapshots (plan §11).
+  // Off (no driver) where the bots' files have no host path (WslFs) or before the first probe.
+  const snapshotsRoot = (): string | null => {
+    const backend = storageFor(store).backend
+    return backend instanceof LocalFs ? join(backend.volumeRoot, 'snapshots') : null
+  }
+  snapshotDriverNow = () => (snapshotsRoot() ? (runtimeProbe.current()?.snapshotDriver ?? null) : null)
+  const snapshots = createSnapshotService({
+    root: snapshotsRoot,
+    driver: () => snapshotDriverNow(),
+    zones: (agent) => snapshotZones(store, agent),
+    log: (msg) => app.log.info(msg),
+  })
   const runtimeOf = (agent: Agent): ResolvedRuntime =>
     resolveRuntime(store.settings.vm?.gvisor ?? 'auto', agent.vm.gvisor, runtimeProbe.current(), agent.name)
   registerProbeRoutes(app, runtimeProbe)
@@ -1564,8 +1583,12 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     opts.botEnv ??
     createBotEnvService({
       engine: engineRef,
-      mounts: (agent) => botMounts(store, agent),
-      allowedMounts: (agent) => botMountAllowList(store, agent),
+      // BE-P2-9: with the overlay driver, the writable zones are overlay mounts (upper/work per bot).
+      mounts: (agent) => snapshots.mountsFor(agent, botMounts(store, agent)),
+      allowedMounts: (agent) => {
+        const root = snapshotsRoot()
+        return { ...botMountAllowList(store, agent), ...(root ? { overlayRoot: join(root, agent.slug, '.overlay') } : {}) }
+      },
       uidMapping: (agent) => uidMappingOf(agent),
       saveVm: storeSaveVm(store),
       // Only gVisor is named explicitly; the standard runtime stays the engine default (no recreate).
@@ -1588,6 +1611,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     runtime: runtimeOf,
     // BE-P2-5: block runs unless a uid mapping passed the probe's bind_mount check (Team lead, 2026-10-28).
     mountsUsable: (agent) => bindCheckOf(agent)?.status === 'pass',
+    snapshots,
     log: (msg) => app.log.info(msg),
   })
   app.decorate('vmRunner', runner)

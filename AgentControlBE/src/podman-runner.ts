@@ -25,6 +25,10 @@ import { botContainerName } from './vm-images.js'
 import type { ResolvedRuntime } from './runtime-probe.js'
 import type { Runner, RunScriptRequest, RunScriptResult } from './runner.js'
 import { spawnStreamRunner, type StreamExit, type StreamHandle, type StreamRunner } from './stream-runner.js'
+import { newRunId, RUN_ID_RE, type SnapshotHandle, type SnapshotService } from './snapshot.js'
+
+/** BE-P2-9: the run was refused because its undo snapshot couldn't be taken. */
+export const SNAPSHOT_FAILED_REASON = 'snapshot_failed'
 
 export const OUTPUT_CAP_BYTES = VM_LIMITS.outputMb * 1024 * 1024
 export const TAIL_BYTES = 64 * 1024
@@ -105,6 +109,8 @@ export interface ContainerRunnerDeps {
   env?: NodeJS.ProcessEnv
   /** For tests: the wait between event-counter retries. */
   sleep?: (ms: number) => Promise<void>
+  /** BE-P2-9: undo snapshots around every run (absent: no snapshots, filesChanged stays []). */
+  snapshots?: SnapshotService
 }
 
 export interface ContainerRunner extends Runner {
@@ -192,6 +198,46 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     if (no) return no
     const e = await deps.engine()
     if (!e) return err(t0, 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.', { runtime: null })
+    // BE-P2-9: the undo snapshot. With the overlay driver the container is stopped first, so
+    // writes made outside a run are committed (into this run's snapshot) before it starts.
+    const snaps = deps.snapshots
+    let snap: SnapshotHandle | null = null
+    if (snaps?.driver()) {
+      try {
+        if (snaps.needsStop(agent)) await deps.botEnv.stop(agent)
+        snap = await snaps.begin(agent, req.runId && RUN_ID_RE.test(req.runId) ? req.runId : newRunId())
+      } catch (x) {
+        log(`runner: ${agent.slug}: taking the undo snapshot failed: ${(x as Error).message}`)
+        return err(t0, `The run's undo snapshot couldn't be taken, so the run didn't start: ${(x as Error).message}`, { runtime: rt.effective, reason: SNAPSHOT_FAILED_REASON, snapshot: null })
+      }
+    }
+    let result: RunScriptResult | undefined
+    let thrown: unknown
+    try {
+      result = await execOne(agent, req, cwd, timeoutSec, t0, rt, e)
+    } catch (x) {
+      thrown = x
+    }
+    if (snaps && snap) {
+      // Every outcome (succeeded, failed, timed out, stopped, crashed) commits and is undoable.
+      let snapshot: RunScriptResult['snapshot'] = null
+      let filesChanged: RunScriptResult['filesChanged'] = []
+      try {
+        if (snaps.needsStop(agent)) await deps.botEnv.stop(agent)
+        const o = await snaps.finish(snap)
+        snapshot = o.snapshot
+        filesChanged = o.filesChanged
+      } catch (x) {
+        // Left pending: the next run (or a restart) finishes it.
+        log(`runner: ${agent.slug}: finishing the undo snapshot of run ${snap.runId} failed (it's retried before the next run): ${(x as Error).message}`)
+      }
+      if (result) result = { ...result, filesChanged, snapshot }
+    } else if (result && snaps) result = { ...result, snapshot: null }
+    if (thrown !== undefined) throw thrown
+    return result!
+  }
+
+  async function execOne(agent: Agent, req: RunScriptRequest, cwd: string, timeoutSec: number, t0: number, rt: ResolvedRuntime, e: EngineRef): Promise<RunScriptResult> {
     try {
       // BE-P2-7: forRun, so a changed runtime (or image/config) recreates the container now (volumes kept).
       await deps.botEnv.ensure(agent, { start: true, forRun: true })

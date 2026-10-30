@@ -74,6 +74,18 @@ describe('BE-P2-5 uid mapping and mount guard', () => {
     expect(s).toContain('destination=/home/bot,U=true')
     expect(s).not.toMatch(/type=bind[^ ]*U=true/)
   })
+  it('BE-P2-9 overlay mounts: -v src:target:O,upperdir,workdir (idmap per mapping); unsafe or read-only refused', () => {
+    const ov = [{ source: '/d/ws', target: '/bot/workspace', readonly: false, overlay: { upper: '/s/u', work: '/s/w' } }, mounts[1]!]
+    const k = createArgvBody({ slug: 'analyst', image: 'img', mounts: ov, uidMapping: 'keep-id' })
+    expect(k).toContain('/d/ws:/bot/workspace:O,upperdir=/s/u,workdir=/s/w')
+    expect(k.join(' ')).not.toContain('destination=/bot/workspace')
+    expect(k.join(' ')).toContain('type=bind,source=/d/in,destination=/bot/shared,readonly')
+    expect(createArgvBody({ slug: 'analyst', image: 'img', mounts: ov, uidMapping: 'idmap' })).toContain('/d/ws:/bot/workspace:O,upperdir=/s/u,workdir=/s/w,idmap')
+    for (const bad of ['/s/u,x', '/s/u:x', 'rel', '/s/u=1', '/s/u\n']) {
+      expect(() => createArgvBody({ slug: 'analyst', image: 'img', mounts: [{ ...ov[0]!, overlay: { upper: bad, work: '/s/w' } }] })).toThrow(/unsafe overlay/)
+    }
+    expect(() => createArgvBody({ slug: 'analyst', image: 'img', mounts: [{ ...ov[0]!, readonly: true }] })).toThrow(/read-only mount can't be an overlay/)
+  })
   it('none (Docker): no --userns, no U', () => {
     const s = createArgvBody({ slug: 'analyst', image: 'img', mounts, uidMapping: null }).join(' ')
     expect(s).not.toMatch(/--userns|U=true|idmap/)

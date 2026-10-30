@@ -26,7 +26,7 @@ import { execCommandRunner, type CommandResult, type CommandRunner } from './com
 import { fail, failWithReason } from './http.js'
 import { MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, VM_LIMITS, type Agent, type AgentVm, type ContainerRuntime, type EnvVar, type ToolManifest } from './shared/types.js'
 import { envNameProblem } from './vm-defaults.js'
-import { bindMountOptions, checkBotMounts, usernsArgs, volumeMountOptions, type BotMount, type MountAllowList, type UidMapping } from './isolation.js'
+import { bindMountOptions, checkBotMounts, overlayMountOptions, usernsArgs, volumeMountOptions, type BotMount, type MountAllowList, type UidMapping } from './isolation.js'
 import {
   APT_PACKAGE,
   BOT_GID,
@@ -88,6 +88,13 @@ function checkMount(m: BotMount): BotMount {
     if (!p || /[,\n\r\0]/.test(p)) throw new Error(`unsafe mount path: ${JSON.stringify(p.slice(0, 120))}`)
   }
   if (!m.target.startsWith('/bot/')) throw new Error(`mount target must be under /bot: ${m.target}`)
+  if (m.overlay) {
+    // BE-P2-9: `-v src:target:O,upperdir=…,workdir=…` is ':' and ',' separated.
+    if (m.readonly) throw new Error(`a read-only mount can't be an overlay: ${m.target}`)
+    for (const p of [m.source, m.target, m.overlay.upper, m.overlay.work]) {
+      if (!p || !p.startsWith('/') || /[,:\n\r\0=]/.test(p)) throw new Error(`unsafe overlay mount path: ${JSON.stringify(p.slice(0, 120))}`)
+    }
+  }
   return m
 }
 
@@ -136,7 +143,8 @@ export function createArgvBody(o: CreateArgvOptions): string[] {
     '--mount', `type=volume,source=${botOptVolume(o.slug)},destination=${BOT_PATHS.opt}${volumeMountOptions(uid)}`,
   )
   for (const m of o.mounts.map(checkMount)) {
-    argv.push('--mount', `type=bind,source=${m.source},destination=${m.target}${m.readonly ? ',readonly' : ''}${bindMountOptions(uid)}`)
+    if (m.overlay) argv.push('-v', `${m.source}:${m.target}:O,upperdir=${m.overlay.upper},workdir=${m.overlay.work}${overlayMountOptions(uid)}`)
+    else argv.push('--mount', `type=bind,source=${m.source},destination=${m.target}${m.readonly ? ',readonly' : ''}${bindMountOptions(uid)}`)
   }
   argv.push('--workdir', BOT_PATHS.workspace, o.image)
   return argv

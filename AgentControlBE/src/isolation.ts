@@ -49,11 +49,21 @@ export function bindMountOptions(m: UidMapping | null): string {
 export function volumeMountOptions(m: UidMapping | null): string {
   return m ? ',U=true' : ''
 }
+/** BE-P2-9: extra `-v …:O,…` (overlay) options for a mapping. */
+export function overlayMountOptions(m: UidMapping | null): string {
+  return m === 'idmap' ? ',idmap' : ''
+}
 
 export interface BotMount {
   source: string
   target: string
   readonly: boolean
+  /**
+   * BE-P2-9 (overlay snapshot driver): mount `source` as the lower layer of a Podman overlay
+   * mount with these upper/work folders (the bot's writes land in `upper` until committed).
+   * Writable mounts only; both must resolve inside the bot's overlay folder (`overlayRoot`).
+   */
+  overlay?: { upper: string; work: string }
 }
 
 /** What one bot may mount (host paths). */
@@ -69,6 +79,8 @@ export interface MountAllowList {
   botRoot?: string
   /** When set, group folders must also resolve inside this folder (all groups' root). */
   groupsRoot?: string
+  /** BE-P2-9: overlay upper/work folders must resolve inside this folder (the bot's own snapshot overlay folder). */
+  overlayRoot?: string
 }
 
 const real = (p: string): string | null => {
@@ -117,6 +129,24 @@ export function checkBotMounts(mounts: readonly BotMount[], allow: MountAllowLis
       if (!root || (src !== root && !src.startsWith(root.endsWith(path.sep) ? root : root + path.sep))) refuse(allow.slug, m, 'it resolves outside the bot\'s own folders')
     }
     if (!statSync(src).isDirectory()) refuse(allow.slug, m, 'it isn\'t a folder')
+    if (m.overlay) {
+      if (m.readonly) refuse(allow.slug, m, 'a read-only folder can\'t be an overlay')
+      const root = allow.overlayRoot !== undefined ? real(allow.overlayRoot) : null
+      if (!root) refuse(allow.slug, m, 'overlay folders aren\'t allowed for this bot')
+      const seenDirs = new Set<string>()
+      for (const d of [m.overlay.upper, m.overlay.work]) {
+        const r = real(d)
+        if (!r || !r.startsWith(root.endsWith(path.sep) ? root : root + path.sep)) refuse(allow.slug, m, 'its overlay folders resolve outside the bot\'s own overlay folder')
+        if (!statSync(r).isDirectory()) refuse(allow.slug, m, 'an overlay folder isn\'t a folder')
+        if (seenDirs.has(r) || r === src) refuse(allow.slug, m, 'its overlay folders overlap')
+        seenDirs.add(r)
+      }
+      for (const other of mounts) {
+        if (other === m || !other.overlay) continue
+        const o = [real(other.overlay.upper), real(other.overlay.work)]
+        if (o.includes(real(m.overlay.upper)) || o.includes(real(m.overlay.work))) refuse(allow.slug, m, 'its overlay folders are used by another mount')
+      }
+    }
   }
   return [...mounts]
 }

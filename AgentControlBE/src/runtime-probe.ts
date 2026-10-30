@@ -20,7 +20,7 @@
  * must be owned by the server's uid/gid. The first candidate that passes is the uid mapping.
  *
  * BE-P2-7: the gVisor part of plan §4.
- * - Checks are reported in plan order: start, bind_mount, snapshot_mount (BE-P2-9, skipped),
+ * - Checks are reported in plan order: start, bind_mount, snapshot_mount (BE-P2-9, below),
  *   network (`--network none`; the egress-proxy CONNECT comes with BE-P2-13), cgroup_limits, exec,
  *   chromium. The first failing one is the reason shown for a fallback or a failed force_on.
  * - chromium: only when the feature set asks for it (a bot has the browser on). The botvm-browser
@@ -33,6 +33,16 @@
  *   age > 1 day (checked hourly by `startTimer`), a global or per-bot mode change, POST /api/vm/probe.
  * - Mac/Windows: runsc's version is read inside the machine (`podman machine ssh <name> runsc --version`).
  * - The app never installs gVisor.
+ *
+ * BE-P2-9: snapshot_mount picks the undo snapshot driver (plan §7.1) on the standard runtime and
+ * checks it on runsc. reflink when the bots' files folder can clone files; else (Podman) an
+ * overlay test: a container with a host folder mounted `:O,upperdir=…,workdir=…` (same hardening
+ * and uid mapping as the bot) modifies, creates and deletes files and replaces a folder. Back on
+ * the host the real folder must be unchanged, the upper layer must hold the changes owned by the
+ * server's uid, with the delete and the replaced folder detectable, and committing it (the
+ * SnapshotService code) must give the expected result. Pass: overlay. Fail, or Docker: copy (the
+ * check still passes; the message says why). On runsc the chosen driver's mount is checked the same
+ * way; a failure there makes gVisor incompatible. No bots' files folder: skipped, no driver.
  */
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -42,7 +52,8 @@ import type { FastifyInstance } from 'fastify'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
 import { BOT_GID, BOT_PATHS, BOT_UID, CHROMIUM_LAUNCH_OPTIONS, sharedImageRef } from './vm-images.js'
-import { bindMountOptions, UID_MAPPINGS, usernsArgs, type UidMapping } from './isolation.js'
+import { bindMountOptions, overlayMountOptions, UID_MAPPINGS, usernsArgs, type UidMapping } from './isolation.js'
+import { canReflink, commitOverlay, readOpaqueDirs } from './snapshot.js'
 import { failWithReason } from './http.js'
 import { PERMISSION_CSRF_HEADER } from './shared/types.js'
 import type {
@@ -51,6 +62,7 @@ import type {
   ProbeCheck,
   ProbeCheckId,
   RuntimeMode,
+  SnapshotDriver,
   RuntimeStatus,
   VmInfo,
   VmProbeResult,
@@ -203,6 +215,102 @@ export function bindProbeArgv(o: { name: string; image: string; runtime: Contain
   ]
 }
 
+/** BE-P2-9: the overlay (snapshot_mount) probe script, run as uid 1000 in the bot image. */
+export const SNAPSHOT_SCRIPT = `
+import json, os, shutil
+w = "/bot/workspace"
+out = {}
+def step(name, f):
+    try:
+        f()
+        out[name] = "ok"
+    except Exception as e:
+        out[name] = type(e).__name__ + ": " + str(e)[:120]
+def modify():
+    with open(w + "/host.txt", "a") as f:
+        f.write("bot\\n")
+def create():
+    with open(w + "/new.txt", "w") as f:
+        f.write("new\\n")
+def delete():
+    os.remove(w + "/gone.txt")
+def replace_dir():
+    shutil.rmtree(w + "/d")
+    os.mkdir(w + "/d")
+    with open(w + "/d/fresh.txt", "w") as f:
+        f.write("fresh\\n")
+step("modify", modify)
+step("create", create)
+step("delete", delete)
+step("replace_dir", replace_dir)
+print("AC_SNAP " + json.dumps(out))
+`
+export const SNAPSHOT_STEPS = ['modify', 'create', 'delete', 'replace_dir'] as const
+
+/** The snapshot_mount (overlay) probe container's argv (after the engine's global args and runtime flags). */
+export function snapshotProbeArgv(o: { name: string; image: string; runtime: ContainerRuntime | null; uidMapping: UidMapping | null; lower: string; upper: string; work: string }): string[] {
+  return [
+    'run', '--rm',
+    '--name', o.name,
+    '--label', `${PROBE_LABEL}=1`,
+    '--network', 'none',
+    '--user', `${BOT_UID}:${BOT_GID}`,
+    '--read-only',
+    '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges',
+    ...(o.runtime ? ['--runtime', o.runtime] : []),
+    ...usernsArgs(o.uidMapping),
+    '--tmpfs', '/tmp:rw,nosuid,nodev,size=16m,mode=1777',
+    '-v', `${o.lower}:${BOT_PATHS.workspace}:O,upperdir=${o.upper},workdir=${o.work}${overlayMountOptions(o.uidMapping)}`,
+    o.image,
+    'python3', '-c', SNAPSHOT_SCRIPT,
+  ]
+}
+
+/** Parse the AC_SNAP line. */
+export function parseSnapshotOutput(stdout: string): Record<string, string> | null {
+  const line = stdout.split('\n').find((l) => l.startsWith('AC_SNAP '))
+  if (!line) return null
+  try {
+    const v = JSON.parse(line.slice('AC_SNAP '.length)) as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, string>) : null
+  } catch {
+    return null
+  }
+}
+
+/** What the host saw after the overlay test container (and after committing its upper layer). */
+export interface SnapshotObserved {
+  /** The real folder before the commit: true when untouched (host.txt, gone.txt, d/old.txt as created; no new.txt). */
+  lowerUnchanged: boolean
+  /** Owner of upper/new.txt and the server's ids. */
+  owner: { uid: number; gid: number } | null
+  upperNew: { uid: number; gid: number } | null
+  /** The commit found the delete (gone.txt) and the replaced folder (d). */
+  deleteSeen: boolean
+  opaqueSeen: boolean
+  /** After the commit, missing/wrong items (empty: as expected). */
+  commitProblems: string[]
+  commitError?: string
+}
+
+/** Judge the overlay test. */
+export function judgeSnapshot(out: Record<string, string> | null, seen: SnapshotObserved): { ok: boolean; message: string } {
+  if (!out) return { ok: false, message: 'the test container didn\'t report' }
+  const bad = SNAPSHOT_STEPS.filter((s) => out[s] !== 'ok').map((s) => `${s}: ${out[s] ?? 'not run'}`)
+  if (bad.length) return { ok: false, message: `in the container, ${bad.join('; ')}` }
+  if (!seen.lowerUnchanged) return { ok: false, message: 'the real folder changed during the run (the writes didn\'t go to the overlay layer)' }
+  if (!seen.upperNew) return { ok: false, message: 'the new file isn\'t in the overlay layer' }
+  if (seen.owner && (seen.upperNew.uid !== seen.owner.uid || seen.upperNew.gid !== seen.owner.gid)) {
+    return { ok: false, message: `files the bot writes are owned by ${seen.upperNew.uid}:${seen.upperNew.gid} on the host, not the server's ${seen.owner.uid}:${seen.owner.gid}` }
+  }
+  if (seen.commitError) return { ok: false, message: `committing the overlay layer failed: ${seen.commitError}` }
+  if (!seen.deleteSeen) return { ok: false, message: 'a deleted file isn\'t detectable in the overlay layer' }
+  if (!seen.opaqueSeen) return { ok: false, message: 'a replaced folder isn\'t detectable in the overlay layer' }
+  if (seen.commitProblems.length) return { ok: false, message: `after committing the overlay layer: ${seen.commitProblems.join(', ')}` }
+  return { ok: true, message: 'overlay mount: writes go to the overlay layer and commit back correctly' }
+}
+
 /** Parse the AC_BIND line. */
 export function parseBindOutput(stdout: string): Record<string, string | number> | null {
   const line = stdout.split('\n').find((l) => l.startsWith('AC_BIND '))
@@ -306,6 +414,10 @@ export interface RuntimeProbeDeps {
    * Docker always uses the engine default). Tests use it to break the idmap check.
    */
   uidMappings?: (runtime: ContainerRuntime | null) => readonly UidMapping[]
+  /** BE-P2-9: whether the bots' files folder can clone files (default: a clone test in it). */
+  reflink?: (dir: string) => boolean
+  /** BE-P2-9: overlay-opaque folders among `dirs` (default: xattrs via python3). */
+  opaqueDirs?: (dirs: string[]) => Promise<Set<string>>
   /** BE-P2-7: JSON file the per-key results are kept in across restarts (none: memory only). */
   cacheFile?: string
   now?: () => Date
@@ -455,7 +567,6 @@ export function orderChecks(checks: ProbeCheck[]): ProbeCheck[] {
 }
 
 const skipped = (id: ProbeCheck['id'], message: string): ProbeCheck => ({ id, status: 'skipped', message })
-const LATER_CHECKS: ProbeCheck[] = [skipped('snapshot_mount', 'Checked with the snapshot driver (BE-P2-9).')]
 const CHROMIUM_NOT_NEEDED = skipped('chromium', 'Not needed: no bot has the browser on.')
 
 export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
@@ -541,7 +652,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
 
   /** The bind_mount check for one runtime: candidates in order, first pass wins. */
   async function bindCheck(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[]): Promise<{ check: ProbeCheck; uidMapping: UidMapping | null }> {
-    const base = deps.bindDir ? deps.bindDir() : e.globalArgs.includes('--connection') ? null : tmpdir()
+    const base = testBase(e)
     if (!base) return { check: skipped('bind_mount', 'Not checked: the bots\' files aren\'t on a folder the engine can mount from here yet.'), uidMapping: null }
     const t0 = Date.now()
     const candidates: (UidMapping | null)[] = e.cli === 'docker' ? [null] : [...(deps.uidMappings?.(runtime) ?? UID_MAPPINGS)]
@@ -571,6 +682,126 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     return { checks: orderChecks([...c.checks, b.check]), uidMapping: b.uidMapping }
   }
 
+  /** The bots' files folder, where the bind and snapshot tests make their temp folders (null: skip). */
+  const testBase = (e: EngineRef): string | null => (deps.bindDir ? deps.bindDir() : e.globalArgs.includes('--connection') ? null : tmpdir())
+
+  /** Remove a probe folder; overlay work dirs can be owned by a mapped uid (podman unshare then). */
+  async function removeProbeDir(e: EngineRef, dir: string): Promise<void> {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return
+    } catch {
+      // fall through
+    }
+    if (e.cli === 'podman' && !e.globalArgs.includes('--connection')) {
+      const r = await call(e, ['unshare', 'rm', '-rf', '--', dir]).catch(() => null)
+      if (r && r.code === 0 && !existsSync(dir)) return
+    }
+    log(`runtime-probe: couldn't remove ${dir}`)
+  }
+
+  /** One overlay test with one mapping; the host folders are always removed. */
+  async function overlayOnce(e: EngineRef, base: string, runtime: ContainerRuntime | null, flags: readonly string[], m: UidMapping | null): Promise<{ ok: boolean; message: string }> {
+    mkdirSync(base, { recursive: true })
+    const dir = mkdtempSync(path.join(base, '.ac-snap-probe-'))
+    try {
+      const lower = path.join(dir, 'lower')
+      const upper = path.join(dir, 'upper')
+      const work = path.join(dir, 'work')
+      const orig = path.join(dir, 'orig')
+      for (const d of [lower, upper, work, path.join(lower, 'd')]) mkdirSync(d)
+      writeFileSync(path.join(lower, 'host.txt'), 'server\n')
+      writeFileSync(path.join(lower, 'gone.txt'), 'gone\n')
+      writeFileSync(path.join(lower, 'd', 'old.txt'), 'old\n')
+      const name = `ac-probe-snap-${randomBytes(4).toString('hex')}`
+      const globals = e.cli === 'docker' ? [] : [...flags]
+      const r = await call(e, [...globals, ...snapshotProbeArgv({ name, image: image(), runtime, uidMapping: m, lower, upper, work })], PROBE_TIMEOUT_MS)
+      if (r.code !== 0) await call(e, ['rm', '--force', name]).catch(() => undefined)
+      const out = parseSnapshotOutput(r.stdout)
+      if (!out) return { ok: false, message: `the test container didn't start: ${lastLine(r)}` }
+      const read = (p: string) => {
+        try {
+          return readFileSync(p, 'utf8')
+        } catch {
+          return null
+        }
+      }
+      const ids = (p: string) => {
+        try {
+          const st = statSync(p)
+          return { uid: st.uid, gid: st.gid }
+        } catch {
+          return null
+        }
+      }
+      const uid = process.getuid?.()
+      const gid = process.getgid?.()
+      const seen: SnapshotObserved = {
+        lowerUnchanged: read(path.join(lower, 'host.txt')) === 'server\n' && read(path.join(lower, 'gone.txt')) === 'gone\n' && read(path.join(lower, 'd', 'old.txt')) === 'old\n' && !existsSync(path.join(lower, 'new.txt')),
+        owner: uid !== undefined && gid !== undefined ? { uid, gid } : null,
+        upperNew: ids(path.join(upper, 'new.txt')),
+        deleteSeen: false,
+        opaqueSeen: false,
+        commitProblems: [],
+      }
+      if (seen.lowerUnchanged && seen.upperNew) {
+        try {
+          const t = await commitOverlay(upper, lower, orig, deps.opaqueDirs ?? readOpaqueDirs)
+          seen.deleteSeen = t.files.has('gone.txt') && !existsSync(path.join(lower, 'gone.txt'))
+          seen.opaqueSeen = t.dirs.has('d') && !existsSync(path.join(lower, 'd', 'old.txt'))
+          const want: [string, string | null][] = [
+            [path.join(lower, 'host.txt'), 'server\nbot\n'], [path.join(lower, 'new.txt'), 'new\n'], [path.join(lower, 'd', 'fresh.txt'), 'fresh\n'],
+            [path.join(orig, 'host.txt'), 'server\n'], [path.join(orig, 'gone.txt'), 'gone\n'], [path.join(orig, 'd', 'old.txt'), 'old\n'],
+          ]
+          for (const [p, text] of want) if (read(p) !== text) seen.commitProblems.push(`${path.relative(dir, p)} ${read(p) === null ? 'is missing' : 'has the wrong content'}`)
+        } catch (err) {
+          seen.commitError = (err as Error).message
+        }
+      }
+      return judgeSnapshot(out, seen)
+    } finally {
+      await removeProbeDir(e, dir)
+    }
+  }
+
+  /**
+   * snapshot_mount. Standard runtime (`pick`): choose the driver. runsc (`driver` given): check
+   * the chosen driver's mount works there.
+   */
+  async function snapshotCheck(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], m: UidMapping | null, driver: SnapshotDriver | null | 'pick'): Promise<{ check: ProbeCheck; driver: SnapshotDriver | null }> {
+    const t0 = Date.now()
+    const base = testBase(e)
+    const done = (status: ProbeCheck['status'], message: string, d: SnapshotDriver | null) => ({ check: { id: 'snapshot_mount' as const, status, message, durationMs: Date.now() - t0 }, driver: d })
+    if (!base) return done('skipped', 'Not checked: the bots\' files aren\'t on a folder the engine can mount from here yet.', null)
+    if (driver === null) return done('skipped', 'Not checked: no snapshot driver was picked on the standard runtime.', null)
+    if (driver === 'pick') {
+      let reflink = false
+      try {
+        reflink = (deps.reflink ?? canReflink)(base)
+      } catch {
+        reflink = false
+      }
+      if (reflink) return done('pass', 'reflink: the bots\' files folder can clone files, so no special mount is needed', 'reflink')
+      if (e.cli === 'docker') return done('pass', 'copy: Docker has no overlay mounts for bot folders, so snapshots copy files (the first one copies every file)', 'copy')
+      let res: { ok: boolean; message: string }
+      try {
+        res = await overlayOnce(e, base, runtime, flags, m)
+      } catch (err) {
+        res = { ok: false, message: (err as Error).message }
+      }
+      if (res.ok) return done('pass', res.message, 'overlay')
+      return done('pass', `copy: overlay mounts don't work here (${res.message}), so snapshots copy files (the first one copies every file)`, 'copy')
+    }
+    if (driver !== 'overlay') return done('pass', `${driver}: no special mount is needed`, driver)
+    let res: { ok: boolean; message: string }
+    try {
+      res = await overlayOnce(e, base, runtime, flags, m)
+    } catch (err) {
+      res = { ok: false, message: (err as Error).message }
+    }
+    return res.ok ? done('pass', res.message, 'overlay') : done('fail', `The overlay snapshot mount doesn't work: ${res.message}`, null)
+  }
+
   /** Check 7: Chromium launch + about:blank screenshot (only with the 'chromium' feature, for a runtime that started). */
   async function chromiumCheck(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], m: UidMapping | null): Promise<ProbeCheck> {
     const t0 = Date.now()
@@ -586,14 +817,16 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     return { id: 'chromium', status: 'fail', message: `Chromium didn't launch: ${why}`, durationMs }
   }
 
-  /** bind_mount, then (with the feature) chromium, for a runtime that started. */
-  async function laterChecks(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], c: { checks: ProbeCheck[]; started: boolean }, features: readonly ProbeFeature[]): Promise<{ checks: ProbeCheck[]; uidMapping: UidMapping | null }> {
+  /** bind_mount, snapshot_mount, then (with the feature) chromium, for a runtime that started. */
+  async function laterChecks(e: EngineRef, runtime: ContainerRuntime | null, flags: readonly string[], c: { checks: ProbeCheck[]; started: boolean }, features: readonly ProbeFeature[], driver: SnapshotDriver | null | 'pick'): Promise<{ checks: ProbeCheck[]; uidMapping: UidMapping | null; snapshotDriver: SnapshotDriver | null }> {
     const b = await withBind(e, runtime, flags, c)
-    if (!c.started) return b
+    if (!c.started) return { ...b, snapshotDriver: null }
     const fallback: UidMapping | null = e.cli === 'docker' ? null : 'keep-id'
+    const snap = await snapshotCheck(e, runtime, flags, e.cli === 'docker' ? null : b.uidMapping ?? fallback, driver)
+    log(`runtime-probe: ${runtime ?? 'default runtime'}: snapshot mount ${snap.check.status}${snap.driver ? ` (${snap.driver})` : ''}${snap.check.status === 'fail' ? `: ${snap.check.message ?? ''}` : ''}`)
     const chromium = features.includes('chromium') ? await chromiumCheck(e, runtime, flags, b.uidMapping ?? fallback) : CHROMIUM_NOT_NEEDED
     if (features.includes('chromium')) log(`runtime-probe: ${runtime ?? 'default runtime'}: chromium ${chromium.status}${chromium.status === 'pass' ? '' : `: ${chromium.message ?? ''}`}`)
-    return { checks: orderChecks([...b.checks, chromium]), uidMapping: b.uidMapping }
+    return { checks: orderChecks([...b.checks, snap.check, chromium]), uidMapping: b.uidMapping, snapshotDriver: snap.driver }
   }
 
   function checksFor(r: CommandResult, facts: ProbeFacts | null, limitsAccepted: boolean, t0: number): { checks: ProbeCheck[]; started: boolean; limitsEnforced: boolean } {
@@ -613,7 +846,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     })
     const execOk = Boolean(facts.python) && Boolean(facts.node) && facts.uid === BOT_UID
     checks.push(execOk ? { id: 'exec', status: 'pass', message: `python ${facts.python}, node ${facts.node}` } : { id: 'exec', status: 'fail', message: facts.uid !== BOT_UID ? `Runs as uid ${facts.uid}, expected ${BOT_UID}.` : `python3 or node is missing (python ${facts.python ?? 'missing'}, node ${facts.node ?? 'missing'}).` })
-    return { checks: orderChecks([...checks, ...LATER_CHECKS]), started: true, limitsEnforced }
+    return { checks: orderChecks(checks), started: true, limitsEnforced }
   }
 
   async function engineFacts(e: EngineRef): Promise<{ engineVersion: string | null; std: ContainerRuntime | null; stdVersion: string | null; imageId: string | null }> {
@@ -656,7 +889,8 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     let t0 = Date.now()
     const std = await probeOne(e, null, [])
     const stdChecks = checksFor(std.r, parseProbeOutput(std.r.stdout), std.limits, t0)
-    const stdBind = await laterChecks(e, null, [], stdChecks, features)
+    const stdBind = await laterChecks(e, null, [], stdChecks, features, 'pick')
+    const snapshotDriver = stdBind.snapshotDriver
     const standard = { runtime: facts.std, version: facts.stdVersion, limitsEnforced: stdChecks.limitsEnforced, limitsAccepted: std.limits, checks: stdBind.checks, uidMapping: stdBind.uidMapping }
     log(`runtime-probe: ${facts.std ?? 'default runtime'}: limits ${stdChecks.limitsEnforced ? 'enforced' : 'NOT enforced'}`)
 
@@ -678,7 +912,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
         runscChecks = c.checks
         runscFlags = [...flags]
         if (c.started) {
-          const b = await laterChecks(e, 'runsc', flags, c, features)
+          const b = await laterChecks(e, 'runsc', flags, c, features, snapshotDriver)
           runscChecks = b.checks
           runscMapping = b.uidMapping
           break
@@ -699,7 +933,7 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
       checks: runscChecks,
       compatible,
       uidMapping: runscMapping,
-      snapshotDriver: null,
+      snapshotDriver,
       checkedAt,
       versions,
       standard,

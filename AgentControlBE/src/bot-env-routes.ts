@@ -18,6 +18,7 @@ import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import type { BotEnvService, BotMount } from './bot-env.js'
 import type { MountAllowList } from './isolation.js'
+import type { SnapshotZone } from './snapshot.js'
 import { envListProblem } from './bot-env.js'
 import { botRoot, folderBytes, quotaBytes } from './files.js'
 import { groupRoot } from './group-files.js'
@@ -77,6 +78,21 @@ export function botMountAllowList(store: WorkspaceStore, agent: Agent): MountAll
     groupsRoot ??= path.dirname(g)
   }
   return { slug: agent.slug, workspace: path.join(root, 'workspace'), inputs: path.join(root, 'shared'), groups, botRoot: root, ...(groupsRoot ? { groupsRoot } : {}) }
+}
+
+/**
+ * BE-P2-9: the bot's writable zones for undo snapshots: its workspace and the shared folder of
+ * each group it's in (the writable mounts of botMounts). FileChange paths: `workspace/<rel>`
+ * (root agent) and `shared/<rel>` (root group, with the group's id and name).
+ */
+export function snapshotZones(store: WorkspaceStore, agent: Agent): SnapshotZone[] {
+  const zones: SnapshotZone[] = [{ key: 'workspace', dir: path.join(botRoot(store, agent), 'workspace'), target: BOT_PATHS.workspace, root: 'agent', prefix: 'workspace' }]
+  for (const c of memberGroups(store, agent)) {
+    const shared = path.join(groupRoot(store, c.slug), 'shared')
+    if (!existsSync(shared)) continue
+    zones.push({ key: `group-${c.slug}`, dir: shared, target: `${BOT_PATHS.groups}/${c.slug}`, root: 'group', prefix: 'shared', groupId: c.id, groupName: c.name })
+  }
+  return zones
 }
 
 export interface BotEnvRouteDeps {

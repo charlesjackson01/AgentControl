@@ -359,3 +359,87 @@ describe('BE-P2-7: force_on never falls back to crun', () => {
     expect(s.streamed).toHaveLength(1)
   })
 })
+
+describe('BE-P2-9: undo snapshots around runs', () => {
+  const fakeSnaps = (o: { driver?: 'overlay' | 'copy' | null; beginFails?: boolean; finishFails?: boolean } = {}) => {
+    const order: string[] = []
+    const svc = {
+      driver: () => (o.driver === undefined ? 'overlay' : o.driver),
+      needsStop: () => o.driver === undefined || o.driver === 'overlay',
+      begin: vi.fn(async (_a: Agent, runId: string) => {
+        order.push(`begin ${runId}`)
+        if (o.beginFails) throw new Error('disk full')
+        return { runId } as never
+      }),
+      finish: vi.fn(async (h: { runId: string }) => {
+        order.push(`finish ${h.runId}`)
+        if (o.finishFails) throw new Error('EIO')
+        return { snapshot: { id: h.runId, driver: o.driver ?? 'overlay', retainedBytes: 12 }, filesChanged: [{ path: 'workspace/a.txt', change: 'modified' as const, root: 'agent' as const }], meta: {} as never }
+      }),
+    }
+    return { svc: svc as unknown as NonNullable<ContainerRunnerDeps['snapshots']>, order, raw: svc }
+  }
+
+  it('overlay: stop, begin, run, stop, finish; the result carries the snapshot and filesChanged', async () => {
+    const s = fakeSnaps()
+    const { runner, botEnv, streamed } = setup({ deps: { snapshots: s.svc } })
+    const order = s.order
+    botEnv.stop.mockImplementation(async () => void order.push('stop'))
+    botEnv.ensure.mockImplementation(async () => (order.push('ensure'), agent.vm))
+    const r = await runner.run(req({ runId: 'run-42' }))
+    expect(r).toMatchObject({ status: 'ok', snapshot: { id: 'run-42', driver: 'overlay', retainedBytes: 12 }, filesChanged: [{ path: 'workspace/a.txt', change: 'modified' }] })
+    expect(order).toEqual(['stop', 'begin run-42', 'ensure', 'stop', 'finish run-42'])
+    expect(streamed).toHaveLength(1)
+  })
+
+  it('timed out, failed and stopped runs are all finished (committed and undoable)', async () => {
+    for (const script of [{ hang: true }, { code: 3 }]) {
+      const s = fakeSnaps()
+      const { runner } = setup({ scripts: [script], deps: { snapshots: s.svc } })
+      const r = await runner.run(req({ timeoutSec: 1 }))
+      expect(r.status).toBe('error')
+      expect(s.raw.finish).toHaveBeenCalledTimes(1)
+      expect(r.snapshot?.retainedBytes).toBe(12)
+    }
+    const s = fakeSnaps()
+    const { runner } = setup({ scripts: [{ hang: true }], deps: { snapshots: s.svc } })
+    const p = runner.run(req({ timeoutSec: 600 }))
+    await new Promise((r) => setTimeout(r, 20))
+    await runner.stopRuns('ag1')
+    const r = await p
+    expect(r.status).toBe('error')
+    expect(s.raw.finish).toHaveBeenCalledTimes(1)
+    expect(r.filesChanged).toHaveLength(1)
+  })
+
+  it('a snapshot that can\'t be taken refuses the run (snapshot_failed), nothing started', async () => {
+    const s = fakeSnaps({ beginFails: true })
+    const { runner, streamed } = setup({ deps: { snapshots: s.svc } })
+    const r = await runner.run(req())
+    expect(r).toMatchObject({ status: 'error', reason: 'snapshot_failed', snapshot: null })
+    expect(r.error).toContain('disk full')
+    expect(streamed).toEqual([])
+    expect(s.raw.finish).not.toHaveBeenCalled()
+  })
+
+  it('finish failing: the run result stands, snapshot null and no files listed (left pending for the next run)', async () => {
+    const s = fakeSnaps({ finishFails: true })
+    const { runner } = setup({ deps: { snapshots: s.svc } })
+    const r = await runner.run(req())
+    expect(r).toMatchObject({ status: 'ok', snapshot: null, filesChanged: [] })
+  })
+
+  it('copy driver: no container stops; no driver: snapshot null, nothing called; a bad run id gets a fresh one', async () => {
+    const c = fakeSnaps({ driver: 'copy' })
+    const a = setup({ deps: { snapshots: c.svc } })
+    await a.runner.run(req({ runId: '../x' }))
+    expect(a.botEnv.stop).not.toHaveBeenCalled()
+    expect(c.order[0]).toMatch(/^begin [A-Za-z0-9][A-Za-z0-9_-]+$/)
+    expect(c.order[0]).not.toContain('..')
+    const n = fakeSnaps({ driver: null })
+    const b = setup({ deps: { snapshots: n.svc } })
+    const r = await b.runner.run(req())
+    expect(r.snapshot).toBeNull()
+    expect(n.raw.begin).not.toHaveBeenCalled()
+  })
+})

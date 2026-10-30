@@ -51,6 +51,20 @@ describe('checkBotMounts', () => {
   })
   afterEach(() => rmSync(root, { recursive: true, force: true }))
 
+  it('BE-P2-9 overlay: upper/work inside the bot\'s overlay folder pass; outside, missing, shared or read-only are refused', () => {
+    for (const d of ['snap/a/.overlay/workspace/upper', 'snap/a/.overlay/workspace/work', 'snap/a/.overlay/group-g1/upper', 'snap/a/.overlay/group-g1/work', 'snap/b/.overlay/workspace/upper']) mkdirSync(p(d), { recursive: true })
+    const ov = (z: string) => ({ upper: p(`snap/a/.overlay/${z}/upper`), work: p(`snap/a/.overlay/${z}/work`) })
+    const a2 = { ...allow, overlayRoot: p('snap/a/.overlay') }
+    const ok = [{ ...mounts[0]!, overlay: ov('workspace') }, mounts[1]!, { ...mounts[2]!, overlay: ov('group-g1') }]
+    expect(checkBotMounts(ok, a2)).toEqual(ok)
+    expect(refused([{ ...mounts[0]!, overlay: ov('workspace') }])).toContain('overlay folders aren\'t allowed')
+    expect(refused([{ ...mounts[1]!, overlay: ov('workspace') }], a2)).toContain('read-only folder can\'t be an overlay')
+    expect(refused([{ ...mounts[0]!, overlay: { upper: p('snap/b/.overlay/workspace/upper'), work: ov('workspace').work } }], a2)).toContain('outside the bot\'s own overlay folder')
+    expect(refused([{ ...mounts[0]!, overlay: { upper: p('snap/a/.overlay/nope'), work: ov('workspace').work } }], a2)).toContain('outside the bot\'s own overlay folder')
+    expect(refused([{ ...mounts[0]!, overlay: { upper: ov('workspace').upper, work: ov('workspace').upper } }], a2)).toContain('overlap')
+    expect(refused([{ ...mounts[0]!, overlay: ov('workspace') }, { ...mounts[2]!, overlay: ov('workspace') }], a2)).toContain('used by another mount')
+  })
+
   it('the bot\'s own folders, its groups and skills pass', () => {
     expect(checkBotMounts(mounts, allow)).toEqual(mounts)
     expect(checkBotMounts([], allow)).toEqual([])

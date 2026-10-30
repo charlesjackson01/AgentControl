@@ -2,6 +2,8 @@
  * Script runner contract (BE-1 stub). Phase 2 runs skill scripts in a
  * per-bot VM; until then every run reports `unavailable`.
  */
+import type { FileChange, SnapshotDriver } from './shared/types.js'
+
 export interface RunScriptRequest {
   agentId: string
   context: { kind: 'dm' } | { kind: 'group'; groupId: string }
@@ -27,7 +29,13 @@ export interface RunScriptResult {
   durationMs: number
   stdout: string
   stderr: string
-  filesChanged: { path: string; change: 'added' | 'modified' }[]
+  /** BE-P2-9: what the run changed in the bot's workspace and group folders (from its snapshot diff). */
+  filesChanged: FileChange[]
+  /**
+   * BE-P2-9 (optional): the run's undo snapshot (ScriptRun.snapshot); null when none was taken
+   * (snapshots off, or taking/finishing it failed). Absent from runners without snapshots.
+   */
+  snapshot?: { id: string; driver: SnapshotDriver; retainedBytes: number } | null
   /** BE-P2-8 (optional) fields from the VM runner. */
   outcome?: 'succeeded' | 'failed' | 'timed_out' | 'stopped'
   /** Plain-language reason when not succeeded. */

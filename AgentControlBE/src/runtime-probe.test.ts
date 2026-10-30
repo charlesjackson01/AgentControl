@@ -26,6 +26,10 @@ import {
   type ProbeFacts,
   type RuntimeProbeResult,
   runtimeBlockMessage,
+  judgeSnapshot,
+  parseSnapshotOutput,
+  snapshotProbeArgv,
+  type SnapshotObserved,
 } from './runtime-probe.js'
 
 const facts = (over: Partial<ProbeFacts> = {}): ProbeFacts => ({
@@ -67,12 +71,38 @@ function emulateBind(c: BindCall, over: { skip?: string[]; writeRo?: string } = 
 }
 const defaultBind = (c: BindCall) => (c.mapping === 'idmap' ? IDMAP_EPERM : emulateBind(c))
 
+/** BE-P2-9: the snapshot_mount (overlay) container. */
+interface SnapCall {
+  runtime: string | null
+  mapping: 'idmap' | 'keep-id' | null
+  lower: string
+  upper: string
+  work: string
+  args: string[]
+}
+/**
+ * Does what the overlay test script does to an overlay mount, on the host: the changes go to the
+ * upper folder, fuse-overlayfs style (`.wh.<name>` whiteouts, `.wh..wh..opq` opaque marker).
+ */
+function emulateOverlay(c: SnapCall, over: { touchLower?: boolean } = {}): CommandResult {
+  writeFileSync(join(c.upper, 'host.txt'), 'server\nbot\n')
+  writeFileSync(join(c.upper, 'new.txt'), 'new\n')
+  writeFileSync(join(c.upper, '.wh.gone.txt'), '')
+  mkdirSync(join(c.upper, 'd'))
+  writeFileSync(join(c.upper, 'd', '.wh..wh..opq'), '')
+  writeFileSync(join(c.upper, 'd', 'fresh.txt'), 'fresh\n')
+  if (over.touchLower) writeFileSync(join(c.lower, 'new.txt'), 'new\n')
+  return ok(`AC_SNAP ${JSON.stringify({ modify: 'ok', create: 'ok', delete: 'ok', replace_dir: 'ok' })}\n`)
+}
+
 interface FakeOpts {
   bind?: (c: BindCall) => CommandResult
   std?: () => CommandResult
   runsc?: (flags: string[]) => CommandResult
   runscVersion?: CommandResult
   imageId?: () => string
+  /** BE-P2-9: the snapshot_mount overlay container (default: emulateOverlay, a pass). */
+  snap?: (c: SnapCall) => CommandResult
   /** BE-P2-7: the Chromium check's container (default: a pass). */
   chromium?: (runtime: string | null, a: string[]) => CommandResult
 }
@@ -80,6 +110,7 @@ const CHROMIUM_OK = ok('AC_CHROMIUM {"version": "128.0.6613.18", "bytes": 3120, 
 function fakeEngine(o: FakeOpts = {}) {
   const calls: { cmd: string; args: string[] }[] = []
   const bindCalls: BindCall[] = []
+  const snapCalls: SnapCall[] = []
   const exec: CommandRunner = async (cmd, args) => {
     const a = [...args]
     calls.push({ cmd, args: a })
@@ -93,6 +124,19 @@ function fakeEngine(o: FakeOpts = {}) {
     if (runAt >= 0 && a.some((x) => x.startsWith('ac-probe-chromium-'))) {
       const rt = a.includes('--runtime') ? a[a.indexOf('--runtime') + 1]! : null
       return o.chromium ? o.chromium(rt, a) : CHROMIUM_OK
+    }
+    if (runAt >= 0 && a.some((x) => x.startsWith('ac-probe-snap-'))) {
+      const v = a[a.indexOf('-v') + 1]!
+      const [lower, , opts] = v.split(':')
+      const kv = Object.fromEntries(opts!.split(',').slice(1).map((x) => x.split('=') as [string, string]))
+      const userns = a[a.indexOf('--userns') + 1]
+      const c: SnapCall = {
+        runtime: a.includes('--runtime') ? a[a.indexOf('--runtime') + 1]! : null,
+        mapping: !a.includes('--userns') ? null : userns === 'auto' ? 'idmap' : 'keep-id',
+        lower: lower!, upper: kv.upperdir!, work: kv.workdir!, args: a,
+      }
+      snapCalls.push(c)
+      return (o.snap ?? emulateOverlay)(c)
     }
     if (runAt >= 0 && a.includes('--mount')) {
       const src = (dest: string) => a.find((x) => x.startsWith('type=bind,') && x.includes(`destination=${dest}`))!.split(',').find((x) => x.startsWith('source='))!.slice(7)
@@ -113,9 +157,9 @@ function fakeEngine(o: FakeOpts = {}) {
     }
     return bad(`unexpected ${a.join(' ')}`, 1)
   }
-  return { exec, calls, bindCalls }
+  return { exec, calls, bindCalls, snapCalls }
 }
-const isRun = (c: { args: string[] }) => c.args.includes('run') && !c.args.includes('--mount')
+const isRun = (c: { args: string[] }) => c.args.includes('run') && !c.args.includes('--mount') && !c.args.some((x) => x.startsWith('ac-probe-snap-'))
 const engine = async () => ({ cli: 'podman' as const, globalArgs: ['--root', '/tmp/r'] })
 
 describe('probe parsing and judging', () => {
@@ -162,7 +206,7 @@ describe('createRuntimeProbe', () => {
     expect(r.runscFlags).toEqual(['--runtime-flag=ignore-cgroups', '--runtime-flag=network=none'])
     expect(r.checks?.map((c) => [c.id, c.status])).toEqual([
       // BE-P2-7: plan order, so the first failing check is the reason.
-      ['start', 'pass'], ['bind_mount', 'pass'], ['snapshot_mount', 'skipped'], ['network', 'pass'],
+      ['start', 'pass'], ['bind_mount', 'pass'], ['snapshot_mount', 'pass'], ['network', 'pass'],
       ['cgroup_limits', 'fail'], ['exec', 'pass'], ['chromium', 'skipped'],
     ])
     expect(r.uidMapping).toBe('keep-id')
@@ -654,5 +698,107 @@ describe('BE-P2-7 probe: order, Chromium, cache key, cache file, timer', () => {
     expect(r.versions.runsc).toBe('0.0~20240729.0')
     expect(f.calls.some((c) => c.cmd === 'podman' && c.args.join(' ') === 'machine ssh agentcontrol runsc --version')).toBe(true)
     expect(f.calls.some((c) => c.cmd === 'runsc')).toBe(false)
+  })
+})
+
+describe('BE-P2-9 snapshot_mount check (driver pick)', () => {
+  const withDir = async <T>(fn: (dir: string) => Promise<T>): Promise<T> => {
+    const dir = mkdtempSync(join(tmpdir(), 'ac-snaptest-'))
+    try {
+      return await fn(dir)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  const snapOf = (r: RuntimeProbeResult) => r.standard?.checks.find((c) => c.id === 'snapshot_mount')
+  const seenOk: SnapshotObserved = { lowerUnchanged: true, owner: { uid: 1000, gid: 1000 }, upperNew: { uid: 1000, gid: 1000 }, deleteSeen: true, opaqueSeen: true, commitProblems: [] }
+  const outOk = { modify: 'ok', create: 'ok', delete: 'ok', replace_dir: 'ok' }
+
+  it('the overlay probe container is hardened and offline, with the O,upperdir,workdir mount and no bind --mount', () => {
+    const argv = snapshotProbeArgv({ name: 'ac-probe-snap-x', image: 'img', runtime: 'runsc', uidMapping: 'idmap', lower: '/h/l', upper: '/h/u', work: '/h/w' })
+    const j = argv.join(' ')
+    expect(j).toContain('--network none')
+    expect(j).not.toMatch(/network[ =]host|--pid[ =]host|--ipc[ =]host/)
+    for (const f of ['--read-only', '--rm', '--cap-drop']) expect(argv).toContain(f)
+    expect(argv).toContain('/h/l:/bot/workspace:O,upperdir=/h/u,workdir=/h/w,idmap')
+    expect(argv).not.toContain('--mount')
+    expect(snapshotProbeArgv({ name: 'n', image: 'i', runtime: null, uidMapping: 'keep-id', lower: '/l', upper: '/u', work: '/w' })).toContain('/l:/bot/workspace:O,upperdir=/u,workdir=/w')
+  })
+
+  it('parses AC_SNAP; judges container steps, untouched lower, ownership, whiteouts, opaque dirs and the commit', () => {
+    expect(parseSnapshotOutput('x\nAC_SNAP {"modify":"ok"}')).toEqual({ modify: 'ok' })
+    expect(parseSnapshotOutput('AC_SNAP {nope')).toBeNull()
+    expect(judgeSnapshot(outOk, seenOk).ok).toBe(true)
+    expect(judgeSnapshot(null, seenOk).message).toContain("didn't report")
+    expect(judgeSnapshot({ ...outOk, delete: 'EACCES x' }, seenOk).message).toContain('delete: EACCES x')
+    expect(judgeSnapshot(outOk, { ...seenOk, lowerUnchanged: false }).message).toContain('real folder changed')
+    expect(judgeSnapshot(outOk, { ...seenOk, upperNew: { uid: 100999, gid: 100999 } }).message).toContain('owned by 100999:100999')
+    expect(judgeSnapshot(outOk, { ...seenOk, deleteSeen: false }).message).toContain('deleted file')
+    expect(judgeSnapshot(outOk, { ...seenOk, opaqueSeen: false }).message).toContain('replaced folder')
+    expect(judgeSnapshot(outOk, { ...seenOk, commitError: 'EACCES' }).message).toContain('committing the overlay layer failed: EACCES')
+    expect(judgeSnapshot(outOk, { ...seenOk, commitProblems: ['lower/new.txt is missing'] }).message).toContain('lower/new.txt is missing')
+  })
+
+  it('Podman, no reflink, overlay works → overlay; the real commit ran; temp folders removed', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir, reflink: () => false, tryRunsc: false }).refresh()
+      expect(snapOf(r)).toMatchObject({ status: 'pass', message: expect.stringContaining('overlay mount') })
+      expect(r.snapshotDriver).toBe('overlay')
+      expect(f.snapCalls).toHaveLength(1)
+      expect(f.snapCalls[0]!.mapping).toBe('keep-id')
+      expect(readdirSync(dir).filter((n) => n.startsWith('.ac-snap-probe-'))).toEqual([])
+    })
+  })
+
+  it('overlay writes reaching the real folder → copy, still a pass, the message says why', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED), snap: (c) => emulateOverlay(c, { touchLower: true }) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir, reflink: () => false, tryRunsc: false }).refresh()
+      expect(r.snapshotDriver).toBe('copy')
+      expect(snapOf(r)?.status).toBe('pass')
+      expect(snapOf(r)?.message).toContain("copy: overlay mounts don't work here (the real folder changed")
+    })
+  })
+
+  it('a container that fails to start → copy, with its last line', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED), snap: () => bad('Error: fuse-overlayfs: cannot mount: permission denied', 126) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir, reflink: () => false, tryRunsc: false }).refresh()
+      expect(r.snapshotDriver).toBe('copy')
+      expect(snapOf(r)?.message).toContain('fuse-overlayfs: cannot mount')
+    })
+  })
+
+  it('reflink wins without a container; Docker gets copy; no files folder → skipped and no driver', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({ std: () => probeOut(ENFORCED) })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir, reflink: (d) => d === dir, tryRunsc: false }).refresh()
+      expect(r.snapshotDriver).toBe('reflink')
+      expect(f.snapCalls).toHaveLength(0)
+      const d = fakeEngine({ std: () => probeOut(ENFORCED) })
+      const rd = await createRuntimeProbe({ exec: d.exec, engine: async () => ({ cli: 'docker' as const, globalArgs: [] }), image: () => 'img', bindDir: () => dir, reflink: () => false, tryRunsc: false }).refresh()
+      expect(rd.snapshotDriver).toBe('copy')
+      expect(d.snapCalls).toHaveLength(0)
+    })
+    const n = fakeEngine({ std: () => probeOut(ENFORCED) })
+    const rn = await createRuntimeProbe({ exec: n.exec, engine, image: () => 'img', bindDir: () => null, tryRunsc: false }).refresh()
+    expect(snapOf(rn)?.status).toBe('skipped')
+    expect(rn.snapshotDriver).toBeNull()
+  })
+
+  it('runsc: overlay re-checked under gVisor; a failure there makes it incompatible, crun keeps overlay', async () => {
+    await withDir(async (dir) => {
+      const f = fakeEngine({
+        std: () => probeOut(ENFORCED),
+        runsc: () => probeOut(ENFORCED),
+        snap: (c) => (c.runtime === 'runsc' ? emulateOverlay(c, { touchLower: true }) : emulateOverlay(c)),
+      })
+      const r = await createRuntimeProbe({ exec: f.exec, engine, image: () => 'img', bindDir: () => dir, reflink: () => false }).refresh()
+      expect(r.snapshotDriver).toBe('overlay')
+      expect(r.checks?.find((c) => c.id === 'snapshot_mount')).toMatchObject({ status: 'fail', message: expect.stringContaining("overlay snapshot mount doesn't work") })
+      expect(r.compatible).toBe(false)
+      expect(f.snapCalls.map((c) => c.runtime)).toEqual([null, 'runsc'])
+    })
   })
 })

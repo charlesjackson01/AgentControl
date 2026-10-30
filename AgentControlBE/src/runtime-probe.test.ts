@@ -802,3 +802,17 @@ describe('BE-P2-9 snapshot_mount check (driver pick)', () => {
     })
   })
 })
+
+describe('BE-P2-13: egressCheck (the network check\'s CONNECT half)', () => {
+  const run = (egressCheck: RuntimeProbeDepsEgress) => createRuntimeProbe({ exec: fakeEngine({ std: () => probeOut(ENFORCED) }).exec, engine, image: () => 'img', tryRunsc: false, egressCheck }).refresh()
+  type RuntimeProbeDepsEgress = () => Promise<{ status: 'pass' | 'fail'; message?: string } | null>
+  const net = (r: Awaited<ReturnType<typeof run>>) => r.standard?.checks.find((c) => c.id === 'network')
+  it('pass keeps network passing; fail replaces it with the reason', async () => {
+    expect(net(await run(async () => ({ status: 'pass' })))).toMatchObject({ status: 'pass' })
+    expect(net(await run(async () => ({ status: 'fail', message: 'expected 407 without a credential, got 200' })))).toMatchObject({ status: 'fail', message: 'expected 407 without a credential, got 200' })
+  })
+  it('null (no proxy on this engine) keeps M1\'s check; a throw is a fail', async () => {
+    expect(net(await run(async () => null))).toMatchObject({ status: 'pass' })
+    expect(net(await run(async () => { throw new Error('boom') }))).toMatchObject({ status: 'fail', message: 'Egress proxy check failed: boom' })
+  })
+})

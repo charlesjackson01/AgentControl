@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { api, apiUrl, authHeaders } from '../lib/api'
 import { createLiveController } from '../lib/live-controller'
-import type { ScriptRun, VmInfo } from '../lib/types'
 import { vmPaths } from '../lib/vm-api'
+import { liveActions } from './live-actions'
 import { LiveContext, type LiveContextValue } from './live-context'
 
 /**
@@ -17,6 +17,8 @@ export default function LiveProvider({ children }: { children: ReactNode }) {
         getRun: (id) => api.vm.getRun(id),
         getVm: (id) => api.vm.getVm(id),
         listPendingPermissions: () => api.vm.listPendingPermissions(),
+        getPermission: (id) => api.vm.getPermission(id),
+        getBrowser: () => api.vm.getBrowser(),
       },
       connection: { url: apiUrl(vmPaths.events()), fetch: (input, init) => fetch(input, init), headers: authHeaders() },
     }),
@@ -26,16 +28,8 @@ export default function LiveProvider({ children }: { children: ReactNode }) {
     return () => controller.stop()
   }, [controller])
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState)
-  const value = useMemo<LiveContextValue>(
-    () => ({
-      state,
-      loadRun: controller.loadRun,
-      loadVm: controller.loadVm,
-      trackRuns: controller.trackRuns,
-      putRun: (run: ScriptRun) => controller.dispatch({ type: 'run', run }),
-      putVm: (vm: VmInfo) => controller.dispatch({ type: 'vm', vm }),
-    }),
-    [state, controller],
-  )
+  // Built once per controller: a put* that changed with every state made VmTab's getBrowser effect loop.
+  const actions = useMemo(() => liveActions(controller), [controller])
+  const value = useMemo<LiveContextValue>(() => ({ state, ...actions }), [state, actions])
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>
 }

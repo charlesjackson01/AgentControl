@@ -9,6 +9,7 @@
 import type { WorkspaceStore } from '../store.js'
 import { BROWSER_LAUNCH_NOTE } from '../vm-images.js'
 import type { ModelRunResult, StartRunInput } from '../run-service.js'
+import { hostsProblem, INTERNET_NEVER_REASON, PERMISSION_DENIED_REASON, PERMISSION_TIMEOUT_REASON } from '../permission-gate.js'
 import { SCRIPT_RUN_ACTIVE, type FileChange, type ScriptRun } from '../shared/types.js'
 import { argError, readBoolean, readEnum, readList, readNumber, readString } from './args.js'
 import type { ToolContext, ToolEntry } from './types.js'
@@ -20,8 +21,16 @@ export const RUN_SCRIPT_MAX_SEC = 600
 export const RUN_SCRIPT_WAIT_MS = 14 * 60_000
 /** The tool's own limit in executeToolCall (above the wait, so the handler always answers first). */
 export const RUN_SCRIPT_TOOL_TIMEOUT_MS = RUN_SCRIPT_WAIT_MS + 60_000
-/** vm_install builds an image layer (apt over the network in M2). */
-export const VM_INSTALL_TOOL_TIMEOUT_MS = 20 * 60_000
+/**
+ * vm_install builds an image layer (apt over the network in M2). M2 contract (fec4670): at least
+ * 30 min, the permission wait (up to 10 min) plus the 20 min build limit (BUILD_TIMEOUT_MS); the
+ * extra minute lets the build's own limit end first. (BE-P2-13 landed this fix for BE-P2-21.)
+ */
+export const VM_INSTALL_TOOL_TIMEOUT_MS = 31 * 60_000
+/** BE-P2-21: how long vm_install waits for its recorded build before it answers early with a note. */
+export const VM_INSTALL_WAIT_MS = 30 * 60_000
+export const VM_INSTALL_STILL_BUILDING =
+  'The build is still going (it is waiting for your current run, or still installing). Its card in the chat keeps updating; the packages are on your computer from the first run after it finishes.'
 /** Room for two 8 KB tails, JSON escaping and the other fields. */
 export const RUN_SCRIPT_RESULT_MAX_CHARS = 20_000
 export const MAX_SCRIPT_CHARS = 16_000
@@ -36,14 +45,26 @@ export interface VmToolHost {
   wait(runId: string): Promise<ScriptRun>
   stop(runId: string): Promise<unknown>
   modelResult(run: ScriptRun): ModelRunResult
-  /** BotEnvService.vmInstall (400 / 409 / 502 via fail()). */
-  vmInstall(agentId: string, packages: string[]): Promise<{ generation: number; log: string }>
+  /**
+   * BotEnvService.vmInstall (400 / 409 / 502 via fail()). BE-P2-21: an online build is recorded
+   * (a tool_build run with a card in `where.conversationId`) and returned as `{run}` to wait for.
+   */
+  vmInstall(
+    agentId: string,
+    packages: string[],
+    where?: { conversationId: string; context: { kind: 'dm' } | { kind: 'group'; groupId: string }; agentRunId?: string; why?: string },
+  ): Promise<{ generation: number; log: string } | { run: ScriptRun }>
   /** Whether the tools are offered to this bot now (its runs aren't blocked on this machine). */
   offered(agentId: string): boolean
   /** The bot's DM conversation id (created if needed), for a DM run without one. */
   dmConversation(agentId: string): string
   /** Whether the bot has the browser on (permissions.browser; always false in M1). */
   browserOn(agentId: string): boolean
+  /**
+   * BE-P2-15: the browser add-on is wired, so a browser:true run on a bot without the browser asks
+   * the user (a browser card) instead of being refused with BROWSER_NOT_ON.
+   */
+  browserCanAsk?(agentId: string): boolean
 }
 
 const hosts = new WeakMap<WorkspaceStore, VmToolHost>()
@@ -187,7 +208,7 @@ function runResult(run: ScriptRun, host: VmToolHost, ctx: ToolContext): Record<s
   return fitResult(base, Math.min(ctx.resultMaxChars ?? RUN_SCRIPT_RESULT_MAX_CHARS, RUN_SCRIPT_RESULT_MAX_CHARS) - 50)
 }
 
-async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext): Promise<ScriptRun> {
+async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext, waitMs = RUN_SCRIPT_WAIT_MS): Promise<ScriptRun> {
   const signal = ctx.signal
   let timer: ReturnType<typeof setTimeout> | undefined
   let onAbort: (() => void) | undefined
@@ -195,7 +216,7 @@ async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext): Prom
     return await Promise.race([
       host.wait(run.id),
       new Promise<ScriptRun>((resolve) => {
-        timer = setTimeout(() => resolve(run), ctx.vmWaitMs ?? RUN_SCRIPT_WAIT_MS)
+        timer = setTimeout(() => resolve(run), ctx.vmWaitMs ?? waitMs)
         timer.unref?.()
       }),
       new Promise<ScriptRun>((resolve) => {
@@ -216,6 +237,27 @@ async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext): Prom
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** BE-P2-21: what vm_install answers for its recorded build (an ended build that didn't succeed is a tool error). */
+function buildResult(run: ScriptRun, apt: string[], host: VmToolHost): Record<string, unknown> {
+  const tail = (run.stdoutTail || '').slice(-2000)
+  if (run.status === 'succeeded') {
+    return {
+      installed: apt,
+      generation: run.build?.generation,
+      note: 'Installed. The packages are on your computer from your next run.',
+      ...(tail ? { logTail: tail } : {}),
+    }
+  }
+  if (SCRIPT_RUN_ACTIVE.includes(run.status)) {
+    return { installed: [], runId: run.id, status: run.status, generation: run.build?.generation, note: VM_INSTALL_STILL_BUILDING }
+  }
+  // BE-P2-14: a build the user declined (or didn't answer) tells the model in its words.
+  if (run.reason === PERMISSION_DENIED_REASON || run.reason === PERMISSION_TIMEOUT_REASON || run.reason === INTERNET_NEVER_REASON) {
+    throw new Error(host.modelResult(run).error || run.error || `The tool build ended ${run.status}.`)
+  }
+  throw new Error(run.error || `The tool build ended ${run.status}.`)
+}
+
 export const vmTools: ToolEntry[] = [
   {
     name: 'run_script',
@@ -228,12 +270,14 @@ export const vmTools: ToolEntry[] = [
     parameters: {
       type: 'object',
       properties: {
-        argv: { type: 'array', items: { type: 'string' }, description: 'Program and arguments' },
+        argv: { type: 'array', items: { type: 'string' }, description: 'Program and args' },
         script: { type: 'string', description: 'Or a bash script' },
         cwd: { type: 'string', description: '"workspace" or "groups/<group>"' },
         timeoutSec: { type: 'integer', minimum: 1, maximum: RUN_SCRIPT_MAX_SEC },
         network: { type: 'string', enum: ['off', 'on'] },
         browser: { type: 'boolean', description: `Needs the browser. ${BROWSER_LAUNCH_NOTE}` },
+        // BE-P2-14: sites for the internet card (checked in the handler: ≤ PERMISSION_HOSTS_MAX; small-model budget).
+        hosts: { type: 'array', items: { type: 'string' } },
         why: { type: 'string', description: 'Shown to the user' },
       },
     },
@@ -249,8 +293,13 @@ export const vmTools: ToolEntry[] = [
       const network = readEnum(args, 'network', ['off', 'on'] as const, { fallback: 'off', example: { ...RUN_EXAMPLE, network: 'off' } }) ?? 'off'
       const browser = readBoolean(args, 'browser', false)
       const why = readString(args, 'why', { max: 300, example: RUN_EXAMPLE })?.trim()
-      // M1: the browser is never on (PATCH permissions.browser → 400); the M2 browser request card is BE-P2-14.
-      if (browser && !host.browserOn(ctx.agentId)) throw new Error(BROWSER_NOT_ON)
+      // BE-P2-14: hosts are a hint for the card (the proxy doesn't limit to them).
+      const hostsBad = hostsProblem(args.hosts)
+      if (hostsBad) throw argError(hostsBad, { ...RUN_EXAMPLE, network: 'on', hosts: ['api.example.com'] })
+      const hostList = Array.isArray(args.hosts) ? [...new Set((args.hosts as string[]).map((h) => h.toLowerCase()))] : []
+      // Without the add-on (M1, tests) a browser run on a bot without the browser is refused; with it
+      // (BE-P2-15) the gate raises the browser card and the run waits for the setup.
+      if (browser && !host.browserOn(ctx.agentId) && !host.browserCanAsk?.(ctx.agentId)) throw new Error(BROWSER_NOT_ON)
       // A group run always has its conversation; a DM run may be the bot's first (no DM yet).
       const conversationId = ctx.group ? ctx.group.id : (ctx.conversationId ?? host.dmConversation(ctx.agentId))
       let run: ScriptRun
@@ -265,6 +314,7 @@ export const vmTools: ToolEntry[] = [
           ...(browser ? { browser } : {}),
           ...(timeoutSec !== undefined ? { timeoutSec } : {}),
           ...(why ? { why } : {}),
+          ...(network === 'on' && hostList.length ? { hosts: hostList } : {}),
           agentRunId: ctx.runId,
         })
       } catch (err) {
@@ -305,12 +355,21 @@ export const vmTools: ToolEntry[] = [
       const example = { apt: ['ffmpeg'] }
       const apt = readList(args, 'apt', { max: 100, example })
       if (!apt || apt.length === 0) throw argError('"apt" is required: a list of Debian package names.', example)
-      let built: { generation: number; log: string }
+      const why = readString(args, 'why', { max: 300, example })?.trim()
+      let result: Awaited<ReturnType<VmToolHost['vmInstall']>>
       try {
-        built = await host.vmInstall(ctx.agentId, apt)
+        const conversationId = ctx.group ? ctx.group.id : (ctx.conversationId ?? host.dmConversation(ctx.agentId))
+        result = await host.vmInstall(ctx.agentId, apt, {
+          conversationId,
+          context: ctx.group ? { kind: 'group', groupId: ctx.group.id } : { kind: 'dm' },
+          ...(ctx.runId ? { agentRunId: ctx.runId } : {}),
+          ...(why ? { why } : {}),
+        })
       } catch (err) {
         throw new Error(errText(err))
       }
+      if ('run' in result) return buildResult(await waitFor(host, result.run, ctx, VM_INSTALL_WAIT_MS), apt, host)
+      const built = result
       const log = built.log.length > 2000 ? built.log.slice(-2000) : built.log
       return {
         installed: apt,

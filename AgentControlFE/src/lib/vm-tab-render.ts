@@ -1,9 +1,13 @@
 /** FE-P2-5: the VM tab's markup (mockups c-settings-vm-tab-v2*). Plain .ts (createElement) so tests can render it. */
 import { createElement as h, type ReactNode } from 'react'
-import { ENV_SECRET_NOTE, HOME_NETWORK_TEXT, INTERNET_OPTIONS, INTERNET_TEXT, BROWSER_LATER_TEXT, environmentHint, environmentTitle, noToolsText, permissionsHint, type EnvErrors, type HistoryRowView, type MeterView, type VmTabModel } from './vm-tab.ts'
+import {
+  BLOCKED_RANGES, BUILD_WAIT_TEXT, ENV_SECRET_NOTE, HOME_NETWORK_TEXT, INTERNET_OPTIONS, INTERNET_TEXT, environmentHint, environmentTitle, noToolsText, permissionsHint,
+  type BrowserRowView, type EnvErrors, type HistoryRowView, type MeterView, type VmTabModel,
+} from './vm-tab.ts'
 import type { InternetPolicy, RuntimeMode } from './types.ts'
 
 export type VmBusy = null | 'start' | 'stop' | 'reset' | 'internet' | 'gvisor' | 'probe' | 'env' | 'grow' | 'more'
+  /* FE-P2-10 */ | 'stopbuild' | 'browser' | 'retry' | 'remove'
 
 export type EnvEditor = { index: number; name: string; value: string; errors: EnvErrors | null }
 
@@ -38,6 +42,29 @@ export type VmTabHandlers = {
   onOutput?: (runId: string) => void
   onMore?: () => void
   onGrow?: (toGb: number) => void
+  /** FE-P2-10: POST /api/runs/:activeBuild.runId/stop. */
+  onStopBuild?: () => void
+  /** The switch: on opens the confirm (mockup 13); off turns it off. */
+  onBrowser?: (on: boolean) => void
+  /** Try again / Re-check: POST /api/vm/browser/retry {agentId}. */
+  onBrowserRetry?: () => void
+  /** DELETE /api/vm/browser. */
+  onBrowserRemove?: () => void
+  /** "Build log": the build run's output. */
+  onBuildLog?: () => void
+}
+
+function prog(p: { pct: number | null; text: string }): ReactNode {
+  return h(
+    'div',
+    { className: 'vm-prog' },
+    h(
+      'div',
+      { className: `vm-prog__bar${p.pct === null ? ' vm-prog__bar--busy' : ''}`, role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': p.pct ?? undefined },
+      h('span', { style: p.pct === null ? undefined : { width: `${p.pct}%` } }),
+    ),
+    h('div', { className: 'vm-prog__t' }, p.text),
+  )
 }
 
 const err = (text: string | undefined, key = 'err') => (text ? h('p', { key, className: 'vm-err', role: 'alert' }, text) : null)
@@ -88,6 +115,8 @@ function meter(m: MeterView): ReactNode {
 function headCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
   const hd = m.header
   const off = hd.busy || ui.busy !== null
+  const b = m.build
+  const stopping = ui.busy === 'stopbuild'
   return h(
     'section',
     { key: 'head', className: 'cf-card' },
@@ -99,6 +128,8 @@ function headCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
       h(
         'div',
         { className: 'vm-head__btns' },
+        // GAP-V13: the build's own Stop (Charles 2026-10-30).
+        b ? btn('stopbuild', stopping ? 'Stopping build…' : 'Stop build', x.onStopBuild, { disabled: ui.busy !== null }) : null,
         hd.start ? btn('start', ui.busy === 'start' ? 'Starting…' : hd.start, x.onStart, { disabled: off }) : null,
         hd.stop ? btn('stop', ui.busy === 'stop' ? 'Stopping…' : 'Stop', x.onStop, { disabled: off }) : null,
         hd.reset ? btn('reset', 'Reset VM…', x.onReset, { ghost: true, disabled: off }) : null,
@@ -106,8 +137,48 @@ function headCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
     ),
     hd.banner ? h('div', { className: 'vm-banner', role: 'status' }, hd.banner) : null,
     hd.message ? h('p', { className: `vm-sub${hd.tone === 'bad' && !hd.banner ? ' vm-sub--bad' : ''}` }, hd.message) : null,
+    b ? h('p', { className: 'vm-sub' }, b.text) : null,
+    b ? prog(b.progress) : null,
+    b ? h('p', { className: 'vm-sub vm-note--build' }, b.stopNote) : null,
     err(ui.errors.head),
     h('div', { className: 'vm-lim' }, ...m.meters.map(meter)),
+  )
+}
+
+const BROWSER_ACTION_LABEL = { retry: 'Try again', recheck: 'Re-check', turn_off: 'Turn off', remove: 'Remove download' } as const
+
+function browserRowNode(b: BrowserRowView, ui: VmTabUi, x: VmTabHandlers): ReactNode {
+  const busy = ui.busy
+  const label = (a: BrowserRowView['actions'][number]) =>
+    (a === 'retry' || a === 'recheck') && busy === 'retry' ? (a === 'retry' ? 'Trying again…' : 'Checking…')
+    : a === 'turn_off' && busy === 'browser' ? 'Turning off…'
+    : a === 'remove' && busy === 'remove' ? 'Removing…'
+    : BROWSER_ACTION_LABEL[a]
+  const click = (a: BrowserRowView['actions'][number]) => (a === 'retry' || a === 'recheck' ? x.onBrowserRetry : a === 'turn_off' ? () => x.onBrowser?.(false) : x.onBrowserRemove)
+  return h(
+    'div',
+    { className: 'vm-row' },
+    h(
+      'div',
+      { className: 'vm-row__txt' },
+      h('div', { className: 'vm-row__t' }, 'Browser (Playwright)'),
+      h('div', { className: 'vm-row__s' }, b.text),
+      b.progress ? prog(b.progress) : null,
+      b.sub ? h('div', { className: 'vm-sub' }, b.sub) : null,
+      b.actions.length
+        ? h('div', { className: 'vm-acts' }, ...b.actions.map((a, i) => btn(a, label(a), click(a), { ghost: i > 0 || a === 'remove', disabled: busy !== null })))
+        : null,
+      b.error ? h('p', { className: 'vm-err', role: 'alert' }, b.error) : null,
+    ),
+    h('button', {
+      type: 'button',
+      className: `switch cf-toggle${b.on ? ' switch--on' : ''}`,
+      role: 'switch',
+      'aria-checked': b.on,
+      'aria-label': 'Browser (Playwright)',
+      disabled: b.locked || busy !== null,
+      onClick: () => x.onBrowser?.(!b.on),
+    }),
   )
 }
 
@@ -126,25 +197,20 @@ function permsCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
         h('div', { className: 'vm-row__t' }, 'Internet'),
         h('div', { className: 'vm-row__s' }, INTERNET_TEXT),
         segmented('Internet for scripts', INTERNET_OPTIONS, m.internetPolicy, x.onInternet, ui.busy === 'internet'),
+        h('div', { className: 'vm-sub' }, m.internetSub),
       ),
     ),
+    browserRowNode(m.browser, ui, x),
     h(
       'div',
       { className: 'vm-row' },
       h(
         'div',
         { className: 'vm-row__txt' },
-        h('div', { className: 'vm-row__t' }, 'Browser (Playwright)'),
-        h('div', { className: 'vm-row__s' }, m.browserText),
-        h('div', { className: 'vm-row__s vm-later' }, BROWSER_LATER_TEXT),
+        h('div', { className: 'vm-row__t' }, 'Home network & Tailscale'),
+        h('div', { className: 'vm-row__s' }, HOME_NETWORK_TEXT),
+        h('ul', { className: 'vm-blocked', 'aria-label': 'Blocked addresses' }, ...BLOCKED_RANGES.map((r) => h('li', { key: r }, r))),
       ),
-      // M1 ruling: shown, never enabled (PATCH browser:true is a 400 in M1).
-      h('button', { type: 'button', className: `switch cf-toggle${m.browserOn ? ' switch--on' : ''}`, role: 'switch', 'aria-checked': m.browserOn, 'aria-label': 'Browser (Playwright)', disabled: true }),
-    ),
-    h(
-      'div',
-      { className: 'vm-row' },
-      h('div', { className: 'vm-row__txt' }, h('div', { className: 'vm-row__t' }, 'Home network & Tailscale'), h('div', { className: 'vm-row__s' }, HOME_NETWORK_TEXT)),
       h('span', { className: 'vm-lock' }, 'Blocked in Phase 2'),
     ),
     err(ui.errors.perm),
@@ -243,6 +309,25 @@ function envCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
   )
   if (ed && ed.index < 0) rows.push(envEditor(ed, ui, x))
   const t = m.tools
+  const bt = m.buildingTools
+  const code = (names: string[]) => names.flatMap((p, i) => [i ? ', ' : null, h('code', { key: p }, p)])
+  const toolsNodes: ReactNode = bt
+    ? [
+        `Version ${bt.from}: `,
+        t?.text ?? null,
+        t?.system.length ? `${t.text ? ' · ' : ''}system: ` : null,
+        ...(t ? code(t.system) : []),
+        !t ? 'none' : null,
+        ` · building version ${bt.generation}`,
+        bt.added.length || bt.removed.length ? ': ' : null,
+        bt.added.length ? '+ ' : null,
+        ...code(bt.added),
+        bt.removed.length ? `${bt.added.length ? ' ' : ''}− ` : null,
+        ...code(bt.removed),
+      ]
+    : t
+      ? [t.text, t.system.length ? `${t.text ? ' · ' : ''}system: ` : null, ...code(t.system), t.built ? ` (${t.built})` : null]
+      : noToolsText(m.botName)
   return h(
     'section',
     { key: 'env', className: 'cf-card' },
@@ -255,21 +340,19 @@ function envCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
         'div',
         { className: 'vm-row__txt' },
         h('div', { className: 'vm-row__t' }, 'Installed tools'),
-        h(
-          'div',
-          { className: 'vm-row__s' },
-          t
-            ? [
-                t.text,
-                t.system.length ? `${t.text ? ' · ' : ''}system: ` : null,
-                ...t.system.flatMap((p, i) => [i ? ', ' : null, h('code', { key: p }, p)]),
-                t.built ? ` (${t.built})` : null,
-              ]
-            : noToolsText(m.botName),
-        ),
+        h('div', { className: 'vm-row__s' }, toolsNodes),
       ),
-      btn('details', 'Details', x.onDetails, { ghost: true }),
+      bt ? btn('buildlog', 'Build log', x.onBuildLog, { ghost: true }) : btn('details', 'Details', x.onDetails, { ghost: true }),
     ),
+    bt
+      ? h(
+          'div',
+          { className: 'vm-btnrow' },
+          btn('rebuild', 'Rebuild tools', undefined, { disabled: true }),
+          m.previousGeneration !== null ? btn('rollback', `Go back to version ${m.previousGeneration}`, undefined, { ghost: true, disabled: true }) : null,
+          h('span', { className: 'vm-sub vm-inline' }, BUILD_WAIT_TEXT),
+        )
+      : null,
     rows.length ? h('table', { className: 'vm-env' }, h('tbody', null, ...rows)) : null,
     ed && ed.index < 0 ? null : h('div', { className: 'vm-btnrow' }, btn('add', 'Add variable', x.onEnvAdd, { disabled: !!ed })),
     err(ui.errors.env),

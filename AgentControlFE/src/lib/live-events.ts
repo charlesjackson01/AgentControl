@@ -73,7 +73,11 @@ export function createSseParser(handlers: { frame: (f: SseFrame) => void; retry?
   }
 }
 
-const LIVE_TYPES = new Set<LiveEvent['type']>(['run.updated', 'run.output', 'permission.requested', 'permission.resolved', 'vm.updated'])
+const LIVE_TYPES = new Set<LiveEvent['type']>([
+  'run.updated', 'run.output', 'permission.requested', 'permission.resolved', 'vm.updated',
+  // M2 contract fec4670 (FE-P2-3).
+  'permission.updated', 'browser.updated',
+])
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): v is string => typeof v === 'string' && v !== ''
 
@@ -104,10 +108,14 @@ export function readLiveFrame(f: SseFrame): LiveFrame | null {
       break
     case 'permission.requested':
     case 'permission.resolved':
+    case 'permission.updated':
       if (!isObj(ev.request) || !str(ev.request.id) || !str(ev.request.runId) || !str(ev.request.status)) return null
       break
     case 'vm.updated':
       if (!str(ev.agentId) || !isObj(ev.vm)) return null
+      break
+    case 'browser.updated':
+      if (!isObj(ev.browser) || !str(ev.browser.state)) return null
       break
   }
   return { kind: 'event', ...id, event: ev as unknown as LiveEvent }

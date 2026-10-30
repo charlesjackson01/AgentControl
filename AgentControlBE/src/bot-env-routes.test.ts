@@ -4,8 +4,11 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createBotEnvService } from './bot-env.js'
-import { botMountAllowList, botMounts, BROWSER_NOT_YET, snapshotZones, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
+import { botMountAllowList, botMounts, snapshotZones, EGRESS_NOT_AVAILABLE, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
+import { downEgress } from './egress-service.fake.js'
+import type { StreamRunner } from './stream-runner.js'
+import type { CommandRunner } from './command-runner.js'
 import { checkBotMounts, KEEP_ID_NOTE } from './isolation.js'
 import { botRoot } from './files.js'
 import { createStore } from './store.js'
@@ -28,6 +31,12 @@ let engine: ReturnType<typeof fakeEngine>
 let host: VmHostInfo
 let runs = 0
 let probeResult: RuntimeProbeResult | null = null
+const streamed: string[][] = []
+const fakeStream: StreamRunner = (cmd, args) => {
+  streamed.push([cmd, ...args])
+  return { done: Promise.resolve({ code: 0 }), kill: () => {} }
+}
+const fakeRunnerExec: CommandRunner = async () => ({ code: 0, stdout: '', stderr: '' })
 const probeCalls: string[] = []
 const fakeProbe: RuntimeProbe = {
   current: () => probeResult,
@@ -55,7 +64,10 @@ beforeEach(() => {
     saveVm: storeSaveVm(store),
     activeRuns: () => runs,
   })
-  app = buildApp(store, { vmHost, botEnv, runtimeProbe: fakeProbe })
+  // CI fix (PR #31): the real container runner (its mount check is under test) with fake process
+  // I/O, and a down proxy: never `podman exec`/`podman stop` on the host's real containers.
+  streamed.length = 0
+  app = buildApp(store, { vmHost, botEnv, runtimeProbe: fakeProbe, egress: downEgress(), vmRunnerIo: { stream: fakeStream, exec: fakeRunnerExec } })
 })
 afterEach(async () => {
   await app.close()
@@ -109,7 +121,14 @@ describe('GET/PATCH /api/agents/:id/vm', () => {
     expect(reloaded.internetPolicy).toBe('never')
   })
 
-  it('PATCH 400s: reserved names, browser:true (M1), egress, limits, unknown keys, bad values', async () => {
+  it('PATCH egress: 400 egress_reserved (BE-P2-13, M2 plan error table)', async () => {
+    const a = await makeAgent()
+    const res = await inject('PATCH', `/api/agents/${a.id}/vm`, { egress: { allow: [] } })
+    expect(res.statusCode).toBe(400)
+    expect(res.json()).toMatchObject({ statusCode: 400, reason: 'egress_reserved', message: EGRESS_NOT_AVAILABLE })
+  })
+
+  it('PATCH 400s: reserved names, egress, limits, unknown keys, bad values (browser:true is BE-P2-15, browser-addon.test.ts)', async () => {
     const a = await makeAgent()
     const bad = async (body: unknown, msg: RegExp | string) => {
       const res = await inject('PATCH', `/api/agents/${a.id}/vm`, body)
@@ -121,8 +140,7 @@ describe('GET/PATCH /api/agents/:id/vm', () => {
     await bad({ env: [{ name: 'HTTP_PROXY', value: 'http://x' }] }, /"HTTP_PROXY" is reserved/)
     await bad({ env: [{ name: 'PATH', value: '/x' }] }, /PATH_APPEND/)
     await bad({ env: [{ name: 'AC_FOO', value: 'x' }] }, /AC_/)
-    await bad({ permissions: { browser: true } }, BROWSER_NOT_YET)
-    await bad({ egress: { allow: [] } }, EGRESS_NOT_AVAILABLE)
+    await bad({ permissions: { browser: 'yes' } }, /"permissions.browser" must be true or false/)
     await bad({ limits: { memoryMb: 8192 } }, /Limits are fixed/)
     await bad({ packages: ['jq'] }, /can't be changed here/)
     await bad({ gvisor: 'maybe' }, /gvisor/)
@@ -288,8 +306,10 @@ describe('BE-P2-5: mount allow-list and isolation note', () => {
       probeResult = std(bind)
       expect(await go()).toMatchObject({ reason: 'mounts_unusable', error: "This computer can't give bot scripts safe access to their files, so scripts can't run here." })
     }
+    expect(streamed).toEqual([])
     probeResult = std('pass')
     expect((await go()).reason).toBeUndefined()
+    expect(streamed.at(-1)?.slice(0, 2)).toEqual(['podman', 'exec'])
     vi.stubEnv('AC_ALLOW_UNLIMITED_RUNS', '1')
     probeResult = std('fail')
     expect((await go()).reason).toBeUndefined()

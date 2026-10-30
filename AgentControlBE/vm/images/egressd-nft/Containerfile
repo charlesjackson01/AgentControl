@@ -1,0 +1,13 @@
+# BE-P2-13: the egress proxy's firewall helper (localhost/agentcontrol/egressd-nft:<BOTVM_VERSION>).
+# botvm + nftables. AgentControl runs it once per proxy start, in the proxy's network namespace
+# (--network container:ac-egressd) with only NET_ADMIN, to load the `inet ac_egressd` table
+# (src/egress-firewall.ts); it exits straight away. Nothing else runs from it.
+ARG BOTVM_IMAGE
+FROM ${BOTVM_IMAGE}
+ARG BOTVM_VERSION
+USER root
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables \
+ && rm -rf /var/lib/apt/lists/*
+LABEL io.agentcontrol.image="egressd-nft" io.agentcontrol.version="${BOTVM_VERSION}"
+USER 1000:1000

@@ -9,13 +9,17 @@
  */
 import { connectLiveEvents, type LiveConnectionOptions } from './live-events.ts'
 import { initialLiveState, liveReducer, resyncPlan, type LiveAction, type LiveState } from './live-store.ts'
-import type { PermissionListResponse, ScriptRun, VmInfo } from './types.ts'
+import type { BrowserAddonInfo, PermissionListResponse, PermissionRequest, ScriptRun, VmInfo } from './types.ts'
 
 export type LiveClient = {
   getRun: (runId: string) => Promise<ScriptRun>
   getVm: (agentId: string) => Promise<VmInfo>
   /** GET /api/permissions?status=pending (unfiltered). An M1 BE may not have it yet: a failure keeps what we hold. */
   listPendingPermissions: () => Promise<PermissionListResponse>
+  /** FE-P2-3 (fec4670): GET /api/permissions/:id, for a chat card whose request isn't held. */
+  getPermission?: (requestId: string) => Promise<PermissionRequest>
+  /** FE-P2-3 (fec4670): GET /api/vm/browser, re-fetched on every resync (contract: after `reset`). */
+  getBrowser?: () => Promise<BrowserAddonInfo>
 }
 
 export type LiveControllerOptions = {
@@ -23,6 +27,8 @@ export type LiveControllerOptions = {
   /** Passed to connectLiveEvents (url, fetch, headers, timers, retry/idle overrides). */
   connection: Omit<LiveConnectionOptions, 'onEvent' | 'onReset' | 'onOpen' | 'onStatus'>
   initialState?: LiveState
+  /** Clock for the permission countdown's skew (tests). */
+  now?: () => number
 }
 
 export type LiveController = {
@@ -37,12 +43,22 @@ export type LiveController = {
   loadVm: (agentId: string) => Promise<VmInfo | undefined>
   /** Mark run ids a view shows as active (from a message's scriptRun) so resyncs cover them before they're loaded. */
   trackRuns: (runIds: Iterable<string>) => void
+  /** FE-P2-3: fetch one permission request (any status) into the store; one fetch at a time per id. */
+  loadPermission: (requestId: string) => Promise<PermissionRequest | undefined>
   /** Resolves when the in-flight resync (if any) settles. */
   resync: () => Promise<void>
+  /**
+   * Put a VM REST reply (e.g. PATCH /api/agents/:id/vm) into the store. When a `vm.updated` for the bot
+   * arrived while the request was out, the reply can be older than that event (BE-15 check: a Chromium
+   * download that fails at once sends vm.updated `error` before the PATCH reply `setting_up`), so the bot
+   * is re-read instead; if that read fails, the reply is used. Resolves with the reply.
+   */
+  vmReply: (agentId: string, call: () => Promise<VmInfo>) => Promise<VmInfo>
 }
 
 export function createLiveController(opts: LiveControllerOptions): LiveController {
   let state = opts.initialState ?? initialLiveState
+  const clock = opts.now ?? (() => Date.now())
   const listeners = new Set<() => void>()
   const tracked = new Set<string>()
   let conn: ReturnType<typeof connectLiveEvents> | undefined
@@ -76,13 +92,52 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
     }
   }
 
+  // vm.updated frames seen per bot, so a REST reply can tell whether an event overtook it.
+  const vmEvents = new Map<string, number>()
+  const vmReply = async (agentId: string, call: () => Promise<VmInfo>): Promise<VmInfo> => {
+    const mark = vmEvents.get(agentId) ?? 0
+    const vm = await call()
+    if ((vmEvents.get(agentId) ?? 0) === mark || !(await loadVm(agentId))) dispatch({ type: 'vm', vm })
+    return vm
+  }
+
   const loadPending = async () => {
     try {
-      const { requests } = await opts.client.listPendingPermissions()
-      if (Array.isArray(requests)) dispatch({ type: 'pending', requests })
+      const sentAt = clock()
+      const { requests, now } = await opts.client.listPendingPermissions()
+      // fec4670: `now` is the server time; skew = server - (the midpoint of our request).
+      const server = typeof now === 'string' ? Date.parse(now) : NaN
+      const skewMs = Number.isFinite(server) ? Math.round(server - (sentAt + clock()) / 2) : undefined
+      if (Array.isArray(requests)) dispatch(skewMs === undefined ? { type: 'pending', requests } : { type: 'pending', requests, skewMs })
     } catch {
       // Keep the requests we hold; the next (re)connect tries again.
     }
+  }
+
+  const loadBrowser = async () => {
+    if (!opts.client.getBrowser) return
+    try {
+      dispatch({ type: 'browser', browser: await opts.client.getBrowser() })
+    } catch {
+      // An M1 BE has no /api/vm/browser; cards fall back to their own setup snapshot.
+    }
+  }
+
+  const permissionLoads = new Map<string, Promise<PermissionRequest | undefined>>()
+  const loadPermission = (requestId: string): Promise<PermissionRequest | undefined> => {
+    const get = opts.client.getPermission
+    if (!get) return Promise.resolve(undefined)
+    const inflight = permissionLoads.get(requestId)
+    if (inflight) return inflight
+    const p = get(requestId).then(
+      (request) => {
+        dispatch({ type: 'permissions', requests: [request] })
+        return request
+      },
+      () => undefined,
+    ).finally(() => permissionLoads.delete(requestId))
+    permissionLoads.set(requestId, p)
+    return p
   }
 
   // One resync at a time; a request during one runs one more pass after it.
@@ -95,7 +150,7 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
       do {
         again = false
         const plan = resyncPlan(state, tracked)
-        await Promise.all([...plan.runIds.map(loadRun), ...plan.agentIds.map(loadVm), loadPending()])
+        await Promise.all([...plan.runIds.map(loadRun), ...plan.agentIds.map(loadVm), loadPending(), loadBrowser()])
         // Once loaded, the store's own active list covers them.
         for (const id of [...tracked]) if (state.runs[id]) tracked.delete(id)
       } while (again)
@@ -121,7 +176,10 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
         // A stop/start (e.g. a provider remount) resumes where the last stream left off.
         lastEventId,
         onStatus: (status) => dispatch({ type: 'connection', status }),
-        onEvent: (event) => dispatch({ type: 'event', event }),
+        onEvent: (event) => {
+          if (event.type === 'vm.updated') vmEvents.set(event.agentId, (vmEvents.get(event.agentId) ?? 0) + 1)
+          dispatch({ type: 'event', event })
+        },
         onOpen: () => {
           void resync()
         },
@@ -138,9 +196,11 @@ export function createLiveController(opts: LiveControllerOptions): LiveControlle
     },
     loadRun,
     loadVm,
+    loadPermission,
     trackRuns(runIds) {
       for (const id of runIds) if (!state.runs[id]) tracked.add(id)
     },
     resync,
+    vmReply,
   }
 }

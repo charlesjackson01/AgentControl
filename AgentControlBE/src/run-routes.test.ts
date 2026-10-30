@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import { createBotEnvService } from './bot-env.js'
 import { botMounts, storeSaveVm } from './bot-env-routes.js'
@@ -17,6 +17,9 @@ import type { RuntimeProbe } from './runtime-probe.js'
 
 const GB = 1024 ** 3
 let dir = ''
+// Every temp dir this file made. A late run-record write can recreate one
+// after afterEach removed it, so afterAll removes them all again.
+const madeDirs = new Set<string>()
 let store: ReturnType<typeof createStore>
 let app: ReturnType<typeof buildApp>
 let runner: FakeRunner
@@ -47,6 +50,7 @@ beforeEach(async () => {
   vi.stubEnv('AGENTCONTROL_SECRET', 'be12-test-secret')
   vi.stubEnv('AGENTCONTROL_AUTH_TOKEN', '')
   dir = mkdtempSync(join(tmpdir(), 'agentcontrol-be12r-'))
+  madeDirs.add(dir)
   store = createStore(join(dir, 'store.json'))
   runner = fakeRunner()
   host = {
@@ -66,6 +70,10 @@ afterEach(async () => {
   await app.close()
   vi.unstubAllEnvs()
   rmSync(dir, { recursive: true, force: true })
+})
+afterAll(async () => {
+  await new Promise((r) => setTimeout(r, 20))
+  for (const d of madeDirs) rmSync(d, { recursive: true, force: true })
 })
 
 async function makeAgent(name: string): Promise<Agent> {

@@ -397,6 +397,14 @@ export interface RuntimeProbeDeps {
   engine: () => Promise<EngineRef | null>
   /** The image the probe container runs (default the shared botvm). */
   image?: () => string
+  /**
+   * BE-P2-13: the network check's CONNECT half (plan §5, "the network probe CONNECT check becomes
+   * real"), for the standard runtime: a container on an egress network gets 407 without a
+   * credential, 403 for this computer, and no direct route. Absent: the check stays M1's
+   * loopback-only test (also when it answers null: no proxy on this engine, e.g. Docker). runsc
+   * keeps M1's check (its probe runs with network=none).
+   */
+  egressCheck?: () => Promise<{ status: 'pass' | 'fail'; message?: string } | null>
   /** Probe runsc at all (false: report not installed without trying). Default true. */
   tryRunsc?: boolean
   /**
@@ -889,6 +897,15 @@ export function createRuntimeProbe(deps: RuntimeProbeDeps): RuntimeProbe {
     let t0 = Date.now()
     const std = await probeOne(e, null, [])
     const stdChecks = checksFor(std.r, parseProbeOutput(std.r.stdout), std.limits, t0)
+    const netIdx = stdChecks.checks.findIndex((c) => c.id === 'network')
+    if (deps.egressCheck && netIdx >= 0 && stdChecks.checks[netIdx]!.status === 'pass') {
+      const tc = Date.now()
+      const proxy = await deps.egressCheck().catch((err: Error) => ({ status: 'fail' as const, message: `Egress proxy check failed: ${err.message}` }))
+      if (proxy) {
+        stdChecks.checks[netIdx] = { id: 'network', status: proxy.status, ...(proxy.message ? { message: proxy.message } : {}), durationMs: Date.now() - tc }
+        log(`runtime-probe: ${facts.std ?? 'default runtime'}: egress CONNECT ${proxy.status}${proxy.message ? `: ${proxy.message}` : ''}`)
+      }
+    }
     const stdBind = await laterChecks(e, null, [], stdChecks, features, 'pick')
     const snapshotDriver = stdBind.snapshotDriver
     const standard = { runtime: facts.std, version: facts.stdVersion, limitsEnforced: stdChecks.limitsEnforced, limitsAccepted: std.limits, checks: stdBind.checks, uidMapping: stdBind.uidMapping }

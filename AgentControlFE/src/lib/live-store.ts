@@ -13,8 +13,8 @@
  * - resyncPlan: what to re-fetch on every (re)connect and on `event: reset` (M1: SSE only).
  */
 import {
-  SCRIPT_RUN_ACTIVE,
-  type ChatMessage, type ChatRunSummary, type FileChange, type LiveEvent, type PermissionRequest, type ScriptRun,
+  CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE,
+  type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type InternetUse, type LiveEvent, type PermissionRequest, type ScriptRun,
   type ScriptRunStatus, type ScriptRunSummary, type VmInfo,
 } from './types.ts'
 import type { LiveConnectionStatus } from './live-events.ts'
@@ -36,9 +36,19 @@ export type LiveState = {
   permissions: Record<string, PermissionRequest>
   /** Bumped on every `event: reset`, so views holding their own copies (thread pages) can re-fetch. */
   resets: number
+  /**
+   * FE-P2-3: server clock minus this browser's clock (ms), from PermissionListResponse.now (contract fec4670),
+   * so a card's countdown from expiresAt ignores clock skew. 0 until a list carried `now`.
+   */
+  clockSkewMs: number
+  /**
+   * The shared Chromium download (GET /api/vm/browser, then `browser.updated`): a setup card's live progress (FE-P2-3)
+   * and the VM tab's browser row (FE-P2-10). Absent until loaded.
+   */
+  browser?: BrowserAddonInfo
 }
 
-export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0 }
+export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0, clockSkewMs: 0 }
 
 export type LiveAction =
   | { type: 'connection'; status: LiveConnectionStatus }
@@ -46,8 +56,12 @@ export type LiveAction =
   /** A run fetched over REST (GET /api/runs/:id, a stop/undo/rebuild response). */
   | { type: 'run'; run: ScriptRun }
   | { type: 'vm'; vm: VmInfo }
-  /** GET /api/permissions?status=pending: the full pending list (unfiltered). */
-  | { type: 'pending'; requests: PermissionRequest[] }
+  /** GET /api/permissions?status=pending: the full pending list (unfiltered). `skewMs`: from the list's `now`. */
+  | { type: 'pending'; requests: PermissionRequest[]; skewMs?: number }
+  /** FE-P2-3: requests from GET /api/permissions/:id, an answer's reply or its 409 body (any status). */
+  | { type: 'permissions'; requests: PermissionRequest[] }
+  /** FE-P2-3 / FE-P2-10: GET /api/vm/browser, or a retry/remove answer. */
+  | { type: 'browser'; browser: BrowserAddonInfo }
   | { type: 'reset' }
 
 /* ---------- status helpers ---------- */
@@ -102,11 +116,48 @@ export function summaryFromRun(run: ScriptRun, prev?: ChatRunSummary): ChatRunSu
     undo: run.undo,
     ...(run.queuePosition !== undefined ? { queuePosition: run.queuePosition } : {}),
     ...(run.exitCode !== undefined ? { exitCode: run.exitCode } : {}),
+    ...m2Summary(run, prev),
   }
 }
 
-/** The VM tab's history row for a run. */
-export function runSummaryRow(run: ScriptRun): ScriptRunSummary {
+/**
+ * M2 contract (fec4670): the ChatRunSummary fields a card draws from the message alone. queuedReason/afterBuild
+ * aren't on ScriptRun (BE-P2-22's), so they stay the server's while the run is still queued; internet stays the
+ * server's (the run only carries grants).
+ */
+function m2Summary(run: ScriptRun, prev?: ChatRunSummary): Partial<ChatRunSummary> {
+  const out: Partial<ChatRunSummary> = { network: run.network, browser: run.browser }
+  if (run.startedAt !== undefined) out.startedAt = run.startedAt
+  if (run.durationMs !== undefined) out.durationMs = run.durationMs
+  if (run.status === 'waiting_permission' && run.waitingFor !== undefined) out.waitingFor = run.waitingFor
+  if (run.reason !== undefined) out.reason = run.reason
+  if (run.error !== undefined) out.error = run.error
+  if (run.build !== undefined) out.build = run.build
+  if (run.hostsContacted?.length) {
+    out.hostsContacted = run.hostsContacted.slice(0, CHAT_RUN_HOSTS_MAX)
+    const total = Math.max(run.hostsContactedTotal ?? 0, run.hostsContacted.length)
+    if (total > out.hostsContacted.length) out.hostsContactedTotal = total
+  }
+  if (prev?.internet !== undefined) out.internet = prev.internet
+  if (run.status === 'queued') {
+    if (prev?.queuedReason !== undefined) out.queuedReason = prev.queuedReason
+    if (prev?.afterBuild !== undefined) out.afterBuild = prev.afterBuild
+  }
+  return out
+}
+
+/** "internet once" / "internet always" for a run, from its network and the grant it ran under. */
+export function runInternetUse(run: Pick<ScriptRun, 'network' | 'permissions'>): InternetUse {
+  if (run.network !== 'on') return 'off'
+  const grant = (run.permissions ?? []).find((p) => p.type === 'internet')
+  return grant?.decision === 'always' ? 'always' : 'once'
+}
+
+/** Up to 3 reached host names (the history row's list). */
+export const HISTORY_HOSTS_MAX = 3
+
+/** The VM tab's history row for a run. `prev`: the row held before (keeps queuedReason, which ScriptRun lacks). */
+export function runSummaryRow(run: ScriptRun, prev?: ScriptRunSummary, summary?: ChatRunSummary): ScriptRunSummary {
   const row: ScriptRunSummary = {
     id: run.id, agentId: run.agentId, conversationId: run.conversationId, kind: run.kind, argv: run.argv, status: run.status,
     queuedAt: run.queuedAt, runtime: run.runtime, undo: run.undo, filesChangedCount: run.filesChanged.length,
@@ -118,6 +169,14 @@ export function runSummaryRow(run: ScriptRun): ScriptRunSummary {
   if (run.durationMs !== undefined) row.durationMs = run.durationMs
   if (run.undoOfRunId !== undefined) row.undoOfRunId = run.undoOfRunId
   if (run.groupId !== undefined) row.groupId = run.groupId
+  // FE-P2-10 (M2 contract): the history row's internet, hosts, build and queue reason.
+  if (run.network !== undefined) row.network = run.network
+  if (run.network === 'on') row.internet = runInternetUse(run)
+  const reached = (run.hostsContacted ?? []).filter((c) => !c.blocked).map((c) => c.host)
+  if (reached.length) row.hosts = reached.slice(0, HISTORY_HOSTS_MAX)
+  if (run.build) row.build = run.build
+  const queuedReason = summary?.queuedReason ?? prev?.queuedReason
+  if (run.status === 'queued' && queuedReason) row.queuedReason = queuedReason
   return row
 }
 
@@ -147,8 +206,9 @@ const PERMISSION_STATUS = { allow_once: 'allowed_once', always: 'always', enable
 function permissionsAfterRun(perms: Record<string, PermissionRequest>, run: ScriptRun): Record<string, PermissionRequest> {
   let next = perms
   for (const p of run.permissions ?? []) {
-    const known = perms[p.requestId]
-    if (!known || known.status !== 'pending' || p.decision === 'pending') continue
+    // fec4670: requestId is absent for grants without a card (policy Always, a Rebuild click).
+    const known = p.requestId ? perms[p.requestId] : undefined
+    if (!p.requestId || !known || known.status !== 'pending' || p.decision === 'pending') continue
     if (next === perms) next = { ...perms }
     next[p.requestId] = { ...known, status: PERMISSION_STATUS[p.decision] }
   }
@@ -169,6 +229,13 @@ function permissionsAfterList(perms: Record<string, PermissionRequest>, pending:
   return next
 }
 
+/** A request we hold that's resolved is never reopened by an older pending copy; otherwise the incoming one wins. */
+function putPermission(perms: Record<string, PermissionRequest>, req: PermissionRequest): Record<string, PermissionRequest> {
+  const prev = perms[req.id]
+  if (prev && prev.status !== 'pending' && req.status === 'pending') return perms
+  return { ...perms, [req.id]: req }
+}
+
 function applyRun(state: LiveState, incoming: ScriptRun, messageId?: string, summary?: ChatRunSummary): LiveState {
   const prev = state.runs[incoming.id]
   const run = mergeRun(prev, incoming)
@@ -180,7 +247,7 @@ function applyRun(state: LiveState, incoming: ScriptRun, messageId?: string, sum
     next.summaries = { ...state.summaries, [msgId]: summary ?? summaryFromRun(run, state.summaries[msgId]) }
   }
   const vm = state.vms[run.agentId]
-  if (vm && !stale) next.vms = { ...state.vms, [run.agentId]: { ...vm, runs: upsertRunRow(vm.runs, runSummaryRow(run)) } }
+  if (vm && !stale) next.vms = { ...state.vms, [run.agentId]: { ...vm, runs: upsertRunRow(vm.runs, runSummaryRow(run, vm.runs.find((r) => r.id === run.id), summary)) } }
   if (!stale) next.permissions = permissionsAfterRun(state.permissions, run)
   return next
 }
@@ -195,8 +262,18 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       return applyRun(state, action.run)
     case 'vm':
       return { ...state, vms: { ...state.vms, [action.vm.agentId]: action.vm } }
-    case 'pending':
-      return { ...state, permissions: permissionsAfterList(state.permissions, action.requests) }
+    case 'pending': {
+      const next: LiveState = { ...state, permissions: permissionsAfterList(state.permissions, action.requests) }
+      if (typeof action.skewMs === 'number' && Number.isFinite(action.skewMs)) next.clockSkewMs = action.skewMs
+      return next
+    }
+    case 'permissions': {
+      let perms = state.permissions
+      for (const r of action.requests) perms = putPermission(perms, r)
+      return perms === state.permissions ? state : { ...state, permissions: perms }
+    }
+    case 'browser':
+      return { ...state, browser: action.browser }
     case 'event': {
       const ev = action.event
       switch (ev.type) {
@@ -208,12 +285,15 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
           return { ...state, output: { ...state.output, [ev.runId]: { ...prev, [ev.stream]: tail(prev[ev.stream] + ev.chunk) } } }
         }
         case 'permission.requested':
-        case 'permission.resolved': {
-          const prev = state.permissions[ev.request.id]
-          // A late "requested" never reopens a resolved request.
-          if (ev.type === 'permission.requested' && prev && prev.status !== 'pending') return state
-          return { ...state, permissions: { ...state.permissions, [ev.request.id]: ev.request } }
+        case 'permission.resolved':
+        case 'permission.updated': {
+          // A late "requested" never reopens a resolved request; "updated" (fec4670) carries a resolved
+          // browser card's new setup / setupError snapshot.
+          const perms = putPermission(state.permissions, ev.request)
+          return perms === state.permissions ? state : { ...state, permissions: perms }
         }
+        case 'browser.updated':
+          return { ...state, browser: ev.browser }
         case 'vm.updated':
           return { ...state, vms: { ...state.vms, [ev.agentId]: ev.vm } }
         default:
@@ -232,6 +312,11 @@ export function runSummaryFor(state: LiveState, message: Pick<ChatMessage, 'id' 
 
 export function runOutput(state: LiveState, runId: string): RunOutput | undefined {
   return state.output[runId]
+}
+
+/** FE-P2-3: a chat card's request. */
+export function permissionFor(state: LiveState, requestId: string | undefined): PermissionRequest | undefined {
+  return requestId ? state.permissions[requestId] : undefined
 }
 
 export function pendingPermissions(state: LiveState, conversationId?: string): PermissionRequest[] {

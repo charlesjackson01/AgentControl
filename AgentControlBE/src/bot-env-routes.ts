@@ -26,12 +26,13 @@ import { assertBotFilesAvailable, botFilesMissingMessage, botRoot, botVol, folde
 import { groupFolderFull, groupRoot, groupVol } from './group-files.js'
 import { sumBreakdown, type PersonalUsage } from './personal-usage.js'
 import type { SnapshotUsage } from './snapshot-budget.js'
-import type { ToolBuildAction } from './run-service.js'
+import { BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT, type ToolBuildAction } from './run-service.js'
 import { fail, failWithReason } from './http.js'
 import {
   INTERNET_POLICIES,
   RUNTIME_MODES,
   VM_LIMITS,
+  type ActiveToolBuild,
   type Agent,
   type AgentVm,
   type EnvVar,
@@ -46,8 +47,10 @@ import {
 } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { BOT_PATHS } from './vm-images.js'
+import type { BrowserAddon } from './browser-addon.js'
 
 export const VM_PATCH_KEYS = ['internetPolicy', 'permissions', 'gvisor', 'env'] as const
+/** Without the browser add-on (M1, route tests): PATCH permissions.browser:true is refused. */
 export const BROWSER_NOT_YET = 'The browser arrives in a later update.'
 export const EGRESS_NOT_AVAILABLE = 'Home network access isn\'t available in Phase 2.'
 export const LIMITS_FIXED = `Limits are fixed: ${VM_LIMITS.memoryMb / 1024} GB memory, ${VM_LIMITS.cpus} CPUs and ${VM_LIMITS.timeoutSec / 60} minutes per run.`
@@ -146,6 +149,8 @@ export interface BotEnvRouteDeps {
   isolationNote?: (agent: Agent, engine: VmHostInfo['engine'] | null) => string | undefined
   /** BE-P2-7: after a saved PATCH changed the bot's gVisor mode ('mode') or browser permission ('features'). */
   onProbeInputChange?: (what: 'mode' | 'features') => void
+  /** BE-P2-14: after a saved PATCH changed the bot's internet policy or browser permission (values before). */
+  onPolicyChange?: (agentId: string, before: { internetPolicy: Agent['internetPolicy']; browser: boolean }) => void
   /** BE-P2-10: personal data (folder + tools volumes + layer); absent: the folder parts only. */
   personal?: PersonalUsage
   /** BE-P2-10: the bot's kept undo snapshots against its budget; absent: none. */
@@ -154,6 +159,21 @@ export interface BotEnvRouteDeps {
   runs?: (agent: Agent) => { runs: VmInfo['runs']; hasMore: boolean }
   /** BE-P2-17: tool rebuild/rollback as a ScriptRun (kind tool_build); RunService.toolBuild. Absent: 503. */
   toolBuild?: (agent: Agent, action: ToolBuildAction, build: () => Promise<{ generation: number; log: string }>) => Promise<ScriptRun>
+  /** BE-P2-22: the bot's tools are building (RunService.buildActive); reset answers 409 build_active. */
+  buildActive?: (agentId: string) => boolean
+  /**
+   * BE-P2-21: POST /vm/tools/rebuild as a live build: RunService.startToolBuild (404, build_active,
+   * run_active, internet_never, proxy_unavailable, low_disk), answered 202 {run}. Absent: M1's synchronous toolBuild.
+   */
+  startRebuild?: (agent: Agent) => Promise<ScriptRun>
+  /** BE-P2-21: VmInfo.activeBuild / VmToolsInfo.activeBuild. */
+  activeBuild?: (agentId: string) => ActiveToolBuild | null
+  /**
+   * BE-P2-15: the browser add-on. PATCH permissions.browser answers its 409s (internet_never,
+   * low_disk) and starts the turn-on / turn-off; VmInfo.permissions.browserState and VmInfo.browser
+   * come from it. Absent: M1 (browser:true → 400, browserState 'absent').
+   */
+  browser?: Pick<BrowserAddon, 'sharedState' | 'botInfo' | 'checkChange' | 'changed'>
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -190,6 +210,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
 
   async function vmInfo(agent: Agent): Promise<VmInfo> {
     const host = await deps.hostInfo().catch(() => null)
+    const shared = deps.browser?.sharedState()
+    const browserInfo = deps.browser?.botInfo(agent.id)
     let state: VmState = 'not_setup'
     let stateMessage: string | undefined
     const missing = filesMissing(agent)
@@ -228,7 +250,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
         globalMode,
       },
       internetPolicy: agent.internetPolicy,
-      permissions: { browser: vm.permissions.browser, browserState: 'absent' },
+      permissions: { browser: vm.permissions.browser, browserState: shared?.state ?? 'absent', ...(shared?.progress !== undefined ? { progress: shared.progress } : {}) },
+      ...(browserInfo ? { browser: browserInfo } : {}),
       limits: VM_LIMITS,
       usage: {
         memoryMb: 0,
@@ -245,7 +268,14 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       ...(isolationNote ? { isolationNote } : {}),
       storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root },
       ...runsOf(agent),
+      ...activeBuildOf(agent),
     }
+  }
+
+  /** BE-P2-21: the "Building tools" head (its runId is what "Stop build" stops). */
+  function activeBuildOf(agent: Agent): { activeBuild?: ActiveToolBuild } {
+    const b = deps.activeBuild?.(agent.id)
+    return b ? { activeBuild: b } : {}
   }
 
   function runsOf(agent: Agent): { runs: VmInfo['runs']; runsHasMore: boolean } {
@@ -267,7 +297,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const body = request.body
     if (body === null || typeof body !== 'object' || Array.isArray(body)) fail(400, 'Send a JSON object, e.g. {"env": []}.')
     const raw = body as Record<string, unknown>
-    if ('egress' in raw) fail(400, EGRESS_NOT_AVAILABLE)
+    // M2 plan error table: 400 egress_reserved (per-bot home-network access stays reserved).
+    if ('egress' in raw) failWithReason(400, 'egress_reserved', EGRESS_NOT_AVAILABLE)
     if ('limits' in raw) fail(400, LIMITS_FIXED)
     const extra = Object.keys(raw).find((k) => !(VM_PATCH_KEYS as readonly string[]).includes(k))
     if (extra !== undefined) fail(400, `"${extra.slice(0, 40)}" can't be changed here.`)
@@ -284,7 +315,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       if (Object.keys(rest).length) fail(400, `"permissions.${Object.keys(rest)[0]!.slice(0, 40)}" can't be changed here.`)
       if (browser !== undefined) {
         if (typeof browser !== 'boolean') fail(400, '"permissions.browser" must be true or false.')
-        if (browser) fail(400, BROWSER_NOT_YET)
+        if (browser && !deps.browser) fail(400, BROWSER_NOT_YET)
         vm = { ...vm, permissions: { browser } }
       }
     }
@@ -298,6 +329,10 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       vm = { ...vm, env: (raw.env as EnvVar[]).map((e) => ({ name: e.name, value: e.value })) }
     }
     const next: Agent = { ...agent, internetPolicy, vm }
+    // BE-P2-15: 409 internet_never / low_disk before anything is saved.
+    if (deps.browser && next.vm.permissions.browser !== agent.vm.permissions.browser) {
+      await deps.browser.checkChange(agent, next.vm.permissions.browser, next.internetPolicy)
+    }
     const previous = store.agents
     store.agents = store.agents.map((a) => (a.id === agent.id ? next : a))
     if (!store.save()) {
@@ -305,7 +340,13 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       fail(500, 'Couldn\'t save the change. Try again.')
     }
     if (next.vm.gvisor !== agent.vm.gvisor) deps.onProbeInputChange?.('mode')
-    if (next.vm.permissions.browser !== agent.vm.permissions.browser) deps.onProbeInputChange?.('features')
+    if (next.vm.permissions.browser !== agent.vm.permissions.browser) {
+      deps.browser?.changed(agent.id, next.vm.permissions.browser)
+      deps.onProbeInputChange?.('features')
+    }
+    if (next.internetPolicy !== agent.internetPolicy || next.vm.permissions.browser !== agent.vm.permissions.browser) {
+      deps.onPolicyChange?.(agent.id, { internetPolicy: agent.internetPolicy, browser: agent.vm.permissions.browser })
+    }
     return vmInfo(next)
   })
 
@@ -319,6 +360,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
   app.post('/api/agents/:id/vm/stop', async (request) => {
     const agent = agentOf(idOf(request))
     assertBotFilesAvailable(store, agent)
+    // BE-P2-21: VM Stop is disabled during a build (the build has its own Stop).
+    if (deps.buildActive?.(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
     deps.runner?.stopRuns(agent.id)
     await botEnv.stop(agent)
     return vmInfo(agent)
@@ -329,6 +372,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const body = request.body as { confirm?: unknown } | null | undefined
     if (!body || typeof body !== 'object' || body.confirm !== true) fail(400, 'Send {"confirm": true} to reset the bot\'s VM.')
     assertBotFilesAvailable(store, agent)
+    // BE-P2-22: not during a tool build (its queued runs are left waiting for it).
+    if (deps.buildActive?.(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
     deps.runner?.stopRuns(agent.id)
     await botEnv.reset(agent)
     return vmInfo(agentOf(agent.id))
@@ -343,6 +388,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       packages: vm.packages,
       image: vm.image,
       canRollback: vm.image.previous !== undefined && vm.image.previous < vm.image.generation,
+      ...activeBuildOf(agent),
     }
   })
 
@@ -360,7 +406,13 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     })
   }
 
-  app.post('/api/agents/:id/vm/tools/rebuild', async (request) => toolBuild(agentOf(idOf(request)), 'rebuild'))
+  app.post('/api/agents/:id/vm/tools/rebuild', async (request, reply) => {
+    const agent = agentOf(idOf(request))
+    if (!deps.startRebuild) return toolBuild(agent, 'rebuild')
+    // BE-P2-21: 202 with the live record (queued or running); the chat card and VM tab follow it.
+    const run = await deps.startRebuild(agent)
+    return reply.code(202).send({ run })
+  })
   app.post('/api/agents/:id/vm/tools/rollback', async (request) => toolBuild(agentOf(idOf(request)), 'rollback'))
 
   return { vmInfo }

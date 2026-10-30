@@ -17,9 +17,10 @@ import { BOTVM_VERSION, sharedImageRef } from './vm-images.js'
 const SLUG = 'be4vmtest'
 const UPGRADE = `${BOTVM_VERSION}-be4test`
 const podmanArgs = (process.env.PODMAN_ARGS ?? '').split(/\s+/).filter(Boolean)
-const engine = (() => {
+// CI fix (PR #31): only looked for in @vm runs, and bounded (a unit run never calls the host's engine).
+const engine = process.env.AC_VM_TESTS === '1' && (() => {
   try {
-    execFileSync('podman', [...podmanArgs, 'image', 'exists', sharedImageRef('botvm')], { stdio: 'ignore' })
+    execFileSync('podman', [...podmanArgs, 'image', 'exists', sharedImageRef('botvm')], { stdio: 'ignore', timeout: 60_000 })
     return true
   } catch {
     return false

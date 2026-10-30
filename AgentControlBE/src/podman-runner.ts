@@ -24,7 +24,8 @@ import path from 'node:path'
 import type { Agent, ScriptRunUndo } from './shared/types.js'
 import { VM_LIMITS } from './shared/types.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
-import { checkCwd, execArgv, type BotEnvService, type EngineRef } from './bot-env.js'
+import { checkCwd, envWith, execArgv, redactAll, type BotEnvService, type EngineRef } from './bot-env.js'
+import { capHostContacts, CREDENTIAL_GRACE_MS, EgressUnavailableError, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON, type EgressGrant, type EgressService } from './egress-service.js'
 import { botContainerName } from './vm-images.js'
 import type { ResolvedRuntime } from './runtime-probe.js'
 import type { Runner, RunScriptRequest, RunScriptResult } from './runner.js'
@@ -39,7 +40,11 @@ export const OUTPUT_CAP_BYTES = VM_LIMITS.outputMb * 1024 * 1024
 export const TAIL_BYTES = 64 * 1024
 export const IDLE_STOP_MS = 10 * 60 * 1000
 export const IDLE_SWEEP_MS = 60 * 1000
-export const NETWORK_UNAVAILABLE = 'Internet access isn\'t available yet.'
+/**
+ * BE-P2-14: a network 'on' run without the gate's answer (RunService only asks after a grant, so
+ * this is defensive). No proxy wired at all: PROXY_UNAVAILABLE (reason proxy_unavailable).
+ */
+export const INTERNET_NOT_GRANTED = "This run wasn't allowed to use the internet."
 export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
 export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
 export const MOUNTS_UNUSABLE_REASON = 'mounts_unusable'
@@ -124,6 +129,12 @@ export interface ContainerRunnerDeps {
   personal?: (agent: Agent) => Promise<{ blocked: string | null }>
   /** BE-P2-10: eviction right after the run's snapshot (too_large, then the budgets); returns the run's undo state. */
   afterSnapshot?: (slug: string, runId: string) => ScriptRunUndo | null
+  /**
+   * BE-P2-13: the egress proxy. A run with `network: 'on'` and `internetGranted` gets a credential
+   * for this run only, its container moves to the bot's internal ac-egress-<slug> network (never
+   * host/default), and the host log comes back in `hostsContacted`. Absent: network 'on' is refused.
+   */
+  egress?: Pick<EgressService, 'grant' | 'revoke'>
 }
 
 export interface ContainerRunner extends Runner {
@@ -296,17 +307,51 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
   }
 
   async function execOne(agent: Agent, req: RunScriptRequest, cwd: string, timeoutSec: number, t0: number, rt: ResolvedRuntime, e: EngineRef): Promise<RunScriptResult> {
+    if (req.network !== 'on') return execInner(agent, req, cwd, timeoutSec, t0, rt, e, null)
+    // BE-P2-13: internet through the proxy, with a credential for this run only.
+    let grant: EgressGrant
+    try {
+      if (!deps.egress) throw new EgressUnavailableError('no proxy')
+      // Review B3: the credential expires on its own a minute after the run's time limit (counted
+      // from now, when the run gets its turn: a queued run's wait doesn't eat into it).
+      grant = await deps.egress.grant(agent.slug, 'run', { ttlMs: timeoutSec * 1000 + CREDENTIAL_GRACE_MS })
+    } catch (x) {
+      log(`runner: ${agent.slug}: no proxy for the run: ${(x as EgressUnavailableError).detail ?? (x as Error).message}`)
+      return err(t0, PROXY_UNAVAILABLE, { reason: PROXY_UNAVAILABLE_REASON, runtime: rt.effective })
+    }
+    let hosts: ReturnType<typeof capHostContacts> | null = null
+    try {
+      const result = await execInner(agent, req, cwd, timeoutSec, t0, rt, e, grant)
+      hosts = capHostContacts(await deps.egress.revoke(grant.id))
+      return { ...result, hostsContacted: hosts.hosts, ...(hosts.total !== undefined ? { hostsContactedTotal: hosts.total } : {}) }
+    } finally {
+      // Revoked on every path (also a throw): the credential never outlives the run.
+      if (!hosts) await deps.egress.revoke(grant.id).catch(() => [])
+      // Review B3: and the container leaves the egress network now (recreated on none, volumes
+      // kept), so nothing it left running can reach the proxy until the next online run.
+      await deps.botEnv
+        .ensure(agent, { forRun: true, network: 'none' })
+        .catch((x: unknown) => log(`runner: ${agent.slug}: moving the VM back to no network after the run failed: ${redactAll((x as Error).message, grant.secrets)}`))
+    }
+  }
+
+  async function execInner(agent: Agent, req: RunScriptRequest, cwd: string, timeoutSec: number, t0: number, rt: ResolvedRuntime, e: EngineRef, grant: EgressGrant | null): Promise<RunScriptResult> {
+    const secrets = grant?.secrets ?? []
+    const scrub = (s: string) => (secrets.length ? redactAll(s, secrets) : s)
     try {
       // BE-P2-7: forRun, so a changed runtime (or image/config) recreates the container now (volumes kept).
-      await deps.botEnv.ensure(agent, { start: true, forRun: true })
+      // BE-P2-13: an online run moves it to the bot's egress network; the next offline run moves it back to none.
+      await deps.botEnv.ensure(agent, { start: true, forRun: true, network: grant ? 'egress' : 'none' })
     } catch (x) {
-      return err(t0, `The bot's VM couldn't start: ${(x as Error).message}`, { runtime: rt.effective })
+      return err(t0, `The bot's VM couldn't start: ${scrub((x as Error).message)}`, { runtime: rt.effective })
     }
     lastActivity.set(agent.id, now().getTime())
     const before = await readEvents(agent)
     const flags = e.cli === 'docker' ? [] : (rt.flags ?? [])
     const extraEnv = [...(req.extraEnv ?? []), ...(req.runId ? [{ name: 'AC_RUN_ID', value: req.runId }] : [])]
-    const args = [...e.globalArgs, ...flags, ...execArgv({ slug: agent.slug, argv: req.argv, env: agent.vm.env, extraEnv, cwd })]
+    // Review S2: the proxy settings (they hold the credential) go by name; values in the engine's env.
+    const passEnv = grant?.env ?? []
+    const args = [...e.globalArgs, ...flags, ...execArgv({ slug: agent.slug, argv: req.argv, env: agent.vm.env, extraEnv, passEnv: passEnv.map((v) => v.name), cwd })]
 
     const out = new Tail(TAIL_BYTES)
     const errTail = new Tail(TAIL_BYTES)
@@ -331,7 +376,9 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       bytes += part.length
       if (part.length) {
         ;(which === 'stdout' ? out : errTail).push(part)
-        req.onOutput?.(which, part)
+        // BE-P2-13: the credential never reaches the log (a value split across two chunks isn't caught: gap).
+        // Review B4: every form of it (secret, URL, Basic header value, …), not just the first.
+        req.onOutput?.(which, secrets.some((x) => x && part.includes(x)) ? Buffer.from(scrub(part.toString('utf8'))) : part)
       }
       if (chunk.length > room) {
         truncated = true
@@ -339,7 +386,7 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       }
     }
     let handle: StreamHandle | null = null
-    const h = stream(e.command ?? e.cli, args, { onStdout: (c) => take('stdout', c), onStderr: (c) => take('stderr', c) })
+    const h = stream(e.command ?? e.cli, args, { onStdout: (c) => take('stdout', c), onStderr: (c) => take('stderr', c), ...(passEnv.length ? { env: envWith(passEnv) } : {}) })
     handle = h
     if (ended) h.kill()
     active.set(agent.id, { stop: () => terminate('stopped') })
@@ -371,8 +418,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
     const base = {
       exitCode: exit.code,
       durationMs: Date.now() - t0,
-      stdout: out.toString(),
-      stderr: errTail.toString(),
+      stdout: scrub(out.toString()),
+      stderr: scrub(errTail.toString()),
       filesChanged: [],
       outputBytes: bytes,
       ...(truncated ? { outputTruncated: true } : {}),
@@ -397,7 +444,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
   function precheck(req: RunScriptRequest, t0: number): RunScriptResult | { agent: Agent; cwd: string } {
     const agent = deps.getAgent(req.agentId)
     if (!agent) return err(t0, 'Bot not found.')
-    if (req.network === 'on') return err(t0, NETWORK_UNAVAILABLE)
+    if (req.network === 'on' && !deps.egress) return err(t0, PROXY_UNAVAILABLE, { reason: PROXY_UNAVAILABLE_REASON })
+    if (req.network === 'on' && req.internetGranted !== true) return err(t0, INTERNET_NOT_GRANTED)
     if (!Array.isArray(req.argv) || !req.argv.length || req.argv.some((a) => typeof a !== 'string' || a.includes('\0'))) {
       return err(t0, 'Give the command to run as a list of arguments.')
     }

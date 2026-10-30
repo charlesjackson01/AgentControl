@@ -8,14 +8,16 @@ import { botMounts, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
 import { ensureDm } from './conversations.js'
 import { groupIdle } from './groups.js'
-import { NETWORK_UNAVAILABLE } from './podman-runner.js'
+import { PROXY_UNAVAILABLE, type EgressService } from './egress-service.js'
+import { downEgress } from './egress-service.fake.js'
 import { fakeRunner, until, type FakeRunner } from './run-service.fake.js'
 import type { RuntimeProbe } from './runtime-probe.js'
 import type { Agent, AgentRun, ConversationSummary, ScriptRun, VmHostInfo } from './shared/types.js'
 import { createStore } from './store.js'
 import { builtinTools, executeToolCall } from './tools.js'
 import type { ToolContext } from './tools/types.js'
-import { BROWSER_NOT_ON, resolveCwd, RUN_SCRIPT_RESULT_MAX_CHARS, vmToolNames, type VmToolHost } from './tools/vm.js'
+import { BROWSER_NOT_ON, resolveCwd, RUN_SCRIPT_RESULT_MAX_CHARS, VM_INSTALL_STILL_BUILDING, VM_INSTALL_TOOL_TIMEOUT_MS, vmToolNames, type VmToolHost } from './tools/vm.js'
+import { BUILD_TIMEOUT_MS } from './bot-env.js'
 import { BROWSER_LAUNCH_NOTE } from './vm-images.js'
 
 /** BE-P2-16: run_script and vm_install in the agent loop (fake LLM, fake runner, the app's RunService). */
@@ -65,8 +67,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'agentcontrol-be16-'))
   store = createStore(join(dir, 'store.json'))
   runner = fakeRunner()
-  // The real runner refuses network "on" with NETWORK_UNAVAILABLE (RunService then records the refusal).
-  runner.check = (req) => runner.refuse ?? (req.network === 'on' ? { status: 'unavailable', error: NETWORK_UNAVAILABLE, durationMs: 0, stdout: '', stderr: '' } as never : null)
+  runner.check = (req) => runner.refuse ?? null
   const engine = fakeEngine()
   const botEnv = createBotEnvService({
     exec: engine.exec,
@@ -75,12 +76,26 @@ beforeEach(async () => {
     saveVm: storeSaveVm(store),
     activeRuns: (id) => app.vmRunner.activeRuns(id),
   })
-  app = buildApp(store, {
-    vmHost: { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host },
-    botEnv, runtimeProbe: probe, vmRunner: runner, vmFreeBytes: () => null, liveTimers: { heartbeatMs: 50, outputFlushMs: 10 },
-  })
-  await app.ready()
+  boot = async (extra = {}) => {
+    app = buildApp(store, {
+      vmHost: { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host },
+      botEnv, runtimeProbe: probe, vmRunner: runner, vmFreeBytes: () => null, liveTimers: { heartbeatMs: 50, outputFlushMs: 10 },
+      // CI fix (PR #31): the proxy is down unless a test passes upEgress; never the host's real Podman.
+      egress: downEgress(),
+      ...extra,
+    })
+    await app.ready()
+  }
+  await boot()
 })
+/** Closes the app from beforeEach and builds it again with `extra` (same store, runner and botEnv). */
+let boot: (extra?: Partial<Parameters<typeof buildApp>[1]>) => Promise<void>
+async function reboot(extra: Partial<Parameters<typeof buildApp>[1]>) {
+  await app.close()
+  await boot(extra)
+}
+/** BE-P2-14: a proxy that is up (no real ac-egressd). */
+const upEgress = { userOnlyCidrs: () => [], refreshSubnets: async () => {}, available: async () => ({ ok: true }), connectCheck: async () => null } as unknown as EgressService
 afterEach(async () => {
   for (let i = 0; i < 100 && app.vmRuns.activeCount(); i++) {
     for (const p of [...runner.pending]) p.end()
@@ -197,32 +212,47 @@ describe('BE-P2-16 run_script (fake LLM end to end)', () => {
     expect(botMounts(store, other).map((m) => m.target)).toContain(`/bot/groups/${g.slug}`)
   })
 
-  it('refuses the browser (M1) and bad folders before starting anything', async () => {
+  it('refuses bad folders before starting anything', async () => {
     const a = await makeBot('Analyst')
     const sent = llm([
-      toolCall('run_script', { argv: ['python3', 'scrape.py'], browser: true }),
       toolCall('run_script', { argv: ['ls'], cwd: '../etc' }, 'c2'),
       toolCall('run_script', { argv: ['ls'], cwd: 'shared' }, 'c3'),
       reply('ok'),
     ])
     await runDm(a, 'scrape')
     const out = toolResults(sent)
-    expect(out[0]).toContain(BROWSER_NOT_ON)
-    expect(out[1]).toContain('"cwd" must be a folder inside workspace or groups/<group>')
-    expect(out[2]).toContain('"cwd" must be "workspace" or "groups/<group>"')
+    expect(out[0]).toContain('"cwd" must be a folder inside workspace or groups/<group>')
+    expect(out[1]).toContain('"cwd" must be "workspace" or "groups/<group>"')
     expect(runner.requests).toHaveLength(0)
   })
 
-  it('network "on" reaches RunService, which records the refusal on the card', async () => {
+  it('BE-P2-15: browser:true on a bot without the browser raises the browser card (not BROWSER_NOT_ON); deny ends the run', async () => {
+    const a = await makeBot('Analyst')
+    const sent = llm([toolCall('run_script', { argv: ['python3', 'scrape.py'], browser: true }), reply('ok')])
+    const done = runDm(a, 'scrape')
+    await until(() => app.vmPermissions.list().requests.some((r) => r.type === 'browser' && r.status === 'pending'))
+    const req = app.vmPermissions.list().requests.find((r) => r.type === 'browser')!
+    expect(req.agentId).toBe(a.id)
+    const res = await app.inject({ method: 'POST', url: `/api/permissions/${req.id}`, headers: { 'x-agentcontrol-confirm': '1' }, payload: { decision: 'deny' } })
+    expect(res.statusCode).toBe(200)
+    await done
+    const out = toolResults(sent)
+    expect(out[0]).not.toContain(BROWSER_NOT_ON)
+    expect(['denied', 'failed']).toContain((JSON.parse(out[0]!) as { status: string }).status)
+    expect(runner.requests).toHaveLength(0)
+  })
+
+  it('BE-P2-14: network "on" with the proxy down → a recorded run card ended failed proxy_unavailable, no permission card', async () => {
     const a = await makeBot('Analyst')
     const sent = llm([toolCall('run_script', { argv: ['curl', 'https://example.com'], network: 'on' }), reply('no internet')])
     const run = (await runDm(a, 'fetch it')).json() as AgentRun
     expect(run.status).toBe('succeeded')
     expect(runner.requests).toHaveLength(0)
-    const result = JSON.parse(toolResults(sent)[0]!) as { status: string; error?: string }
-    expect(result.status).not.toBe('succeeded')
-    expect(result.error).toBe(NETWORK_UNAVAILABLE)
+    expect(JSON.parse(toolResults(sent)[0]!)).toMatchObject({ status: 'failed', error: PROXY_UNAVAILABLE })
     expect(run.toolCalls?.[0]?.ok).toBe(false)
+    expect(scriptRuns().map((r) => [r.status, r.reason, r.network])).toEqual([['failed', 'proxy_unavailable', 'on']])
+    expect(app.vmPermissions.list().requests).toEqual([])
+    expect(store.chatMessages.filter((m) => m.kind === 'permission')).toHaveLength(0)
   })
 
   it('stopping the reply stops its script', async () => {
@@ -253,13 +283,51 @@ describe('BE-P2-16 run_script (fake LLM end to end)', () => {
   })
 })
 
+describe('vm_install timeout (M2 contract fec4670, landed in BE-P2-13)', () => {
+  it('is at least 30 min: the 10 min permission wait plus the 20 min build, with the build ending first', () => {
+    expect(BUILD_TIMEOUT_MS).toBe(20 * 60_000)
+    expect(VM_INSTALL_TOOL_TIMEOUT_MS).toBeGreaterThanOrEqual(30 * 60_000)
+    expect(VM_INSTALL_TOOL_TIMEOUT_MS).toBeGreaterThan(10 * 60_000 + BUILD_TIMEOUT_MS)
+    const tool = builtinTools.get('vm_install')
+    expect(tool?.timeoutMs).toBe(VM_INSTALL_TOOL_TIMEOUT_MS)
+  })
+})
+
 describe('BE-P2-16 vm_install', () => {
-  it('M1 has no build network: the model gets the 409 text and the step fails', async () => {
+  it('BE-P2-14: under Ask with the proxy down, the model gets 409 proxy_unavailable and the step fails (no record)', async () => {
     const a = await makeBot('Analyst')
+    const build = vi.spyOn(app.vmRuns, 'startToolBuild')
     const sent = llm([toolCall('vm_install', { apt: ['ffmpeg'], why: 'audio' }), reply('cannot')])
     const run = (await runDm(a, 'install ffmpeg')).json() as AgentRun
-    expect(toolResults(sent)[0]).toContain("isn't available yet")
+    expect(toolResults(sent)[0]).toContain(PROXY_UNAVAILABLE)
     expect(run.activity?.steps).toEqual([{ tool: 'vm_install', summary: "Couldn't install ffmpeg", ok: false }])
+    expect(build).toHaveBeenCalledWith(expect.objectContaining({ agentId: a.id, via: 'vm_install', network: 'on', permissions: [], why: 'audio' }))
+    expect(app.vmRuns.buildActive(a.id)).toBe(false)
+    expect(app.vmPermissions.list().requests).toEqual([])
+  })
+})
+
+describe('BE-P2-14 vm_install always passes where (Needs OK item 7)', () => {
+  it('under Ask with no conversation, the tool uses the bot\'s DM conversation and the permission card is raised there', async () => {
+    await reboot({ egress: upEgress })
+    const a = await makeBot('Analyst')
+    expect(store.agents.find((x) => x.id === a.id)!.internetPolicy).toBe('ask')
+    const ctx = { store, agentId: a.id, runId: 'run_t7', input: '', allowed: new Set(['vm_install']), now: () => new Date(), timeZone: 'UTC', writes: { count: 0 }, vmWaitMs: 5 } as unknown as ToolContext
+    expect(ctx.conversationId).toBeUndefined()
+    expect(ctx.group).toBeUndefined()
+    const build = vi.spyOn(app.vmRuns, 'startToolBuild')
+    const out = await executeToolCall({ id: 'c7', name: 'vm_install', arguments: JSON.stringify({ apt: ['ffmpeg'], why: 'audio' }) }, ctx)
+    expect(out.content).toContain(VM_INSTALL_STILL_BUILDING)
+    const dmId = ensureDm(store, a.id).id
+    expect(build).toHaveBeenCalledWith(expect.objectContaining({ agentId: a.id, conversationId: dmId, context: { kind: 'dm' }, via: 'vm_install', network: 'on', permissions: [] }))
+    const reqs = app.vmPermissions.list().requests
+    expect(reqs).toHaveLength(1)
+    expect(reqs[0]).toMatchObject({ agentId: a.id, conversationId: dmId, type: 'internet', status: 'pending' })
+    expect(store.chatMessages.filter((m) => m.kind === 'permission').map((m) => [m.conversationId, m.permissionRequestId])).toEqual([[dmId, reqs[0]!.id]])
+    const buildRun = app.vmRuns.get(reqs[0]!.runId)!
+    expect(buildRun).toMatchObject({ kind: 'tool_build', status: 'waiting_permission', conversationId: dmId })
+    await app.vmRuns.stop(buildRun.id)
+    expect(app.vmPermissions.get(reqs[0]!.id)).toMatchObject({ status: 'denied', closedBy: 'run_stopped' })
   })
 })
 
@@ -326,5 +394,46 @@ describe('BE-P2-16 tool module', () => {
     expect(JSON.parse(out.content)).toMatchObject({ installed: ['jq'], generation: 3, logTail: 'Setting up jq' })
     expect(seen).toEqual([['jq']])
     expect((await call(base({ vm: h }), 'vm_install', {})).content).toContain('"apt" is required')
+  })
+
+  it('BE-P2-21: vm_install with a recorded build waits for it: succeeded → the generation; failed → a tool error; still going → a note', async () => {
+    const queued = { id: 'tb_1', kind: 'tool_build', status: 'queued', queuedReason: 'slot', build: { generation: 4 } } as unknown as ScriptRun
+    const where: unknown[] = []
+    let ended: ScriptRun = { ...queued, status: 'succeeded', stdoutTail: 'Step 2 of 3: apt-get install\n' }
+    const h = fakeHost({}, {
+      vmInstall: async (_id, _p, w) => (where.push(w), { run: queued }),
+      wait: async () => ended,
+    })
+    let out = await call(base({ vm: h }), 'vm_install', { apt: ['jq'] })
+    expect(out.ok).toBe(true)
+    expect(JSON.parse(out.content)).toMatchObject({ installed: ['jq'], generation: 4, logTail: expect.stringContaining('apt-get install') })
+    // The call's chat and agent run are the card's place.
+    expect(where).toEqual([{ conversationId: 'dm_x', context: { kind: 'dm' }, agentRunId: 'run_x' }])
+    await call(base({ vm: h, group: { id: 'g1', slug: 'crew' } } as Partial<ToolContext>), 'vm_install', { apt: ['jq'] })
+    expect(where[1]).toMatchObject({ conversationId: 'g1', context: { kind: 'group', groupId: 'g1' } })
+
+    ended = { ...queued, status: 'failed', reason: 'build_failed', error: 'The build failed, so Analyst keeps its current tools (version 3). Nothing else changed.' } as ScriptRun
+    out = await call(base({ vm: h }), 'vm_install', { apt: ['jq'] })
+    expect(out.ok).toBe(false)
+    expect(out.content).toContain('keeps its current tools (version 3)')
+
+    const slow = fakeHost({}, { vmInstall: async () => ({ run: queued }) })
+    out = await call(base({ vm: slow, vmWaitMs: 5 }), 'vm_install', { apt: ['jq'] })
+    expect(out.ok).toBe(true)
+    expect(JSON.parse(out.content)).toMatchObject({ installed: [], runId: 'tb_1', status: 'queued', note: VM_INSTALL_STILL_BUILDING })
+    expect(slow.stopped).toEqual([])
+
+    // The user stops the reply: its build is stopped too (one Stop route).
+    const ac = new AbortController()
+    const stopping = fakeHost({}, { vmInstall: async () => ({ run: queued }) })
+    stopping.stop = async (id) => (stopping.stopped.push(id), { ...queued, status: 'stopped' } as ScriptRun)
+    let calls = 0
+    stopping.wait = async () => (calls++ === 0 ? new Promise<ScriptRun>(() => {}) : ({ ...queued, status: 'stopped', error: 'Stopped. Analyst keeps its current tools (version 3).' } as ScriptRun))
+    const p = call(base({ vm: stopping, signal: ac.signal } as Partial<ToolContext>), 'vm_install', { apt: ['jq'] })
+    await new Promise((r) => setTimeout(r, 5))
+    ac.abort()
+    const stopped = await p
+    expect(stopping.stopped).toEqual(['tb_1'])
+    expect(stopped.content).toContain('keeps its current tools')
   })
 })

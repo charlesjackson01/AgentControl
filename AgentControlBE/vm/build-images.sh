@@ -2,10 +2,13 @@
 # BE-P2-3: build and tag the shared bot images (plan §2.2):
 #   localhost/agentcontrol/botvm:<BOTVM_VERSION>          (~431 MB)
 #   localhost/agentcontrol/botvm-browser:<BOTVM_VERSION>  (~1.34 GB, FROM botvm; full Chromium; the headless-shell path is a link to it)
+#   localhost/agentcontrol/egressd-nft:<BOTVM_VERSION>    (FROM botvm + nftables: the egress proxy's firewall helper, BE-P2-13)
 # Versions come from vm/images/versions.env. Nothing is pushed anywhere.
 #
-# Usage: vm/build-images.sh [--engine podman|docker] [--only botvm|botvm-browser] [--connection NAME]
+# Usage: vm/build-images.sh [--engine podman|docker] [--only botvm|botvm-browser|egressd-nft] [--connection NAME]
 #                           [--podman-arg ARG]... [--dry-run]
+#   --only botvm also rebuilds egressd-nft (it is FROM botvm, so a new botvm needs a new helper;
+#                 a fresh install must never be left without it, or every granted run is proxy_unavailable).
 #   --connection: podman --connection (e.g. the agentcontrol machine on Mac/Windows).
 #   --podman-arg: extra global podman option, repeatable (e.g. --podman-arg --root=/x).
 #                 PODMAN_ARGS (whitespace-separated) is read first; both go before the subcommand.
@@ -23,18 +26,18 @@ if [[ -n "${PODMAN_ARGS:-}" ]]; then read -r -a podman_args <<<"$PODMAN_ARGS"; f
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --engine) engine="${2:?--engine needs podman or docker}"; shift 2 ;;
-    --only) only="${2:?--only needs botvm or botvm-browser}"; shift 2 ;;
+    --only) only="${2:?--only needs botvm, botvm-browser or egressd-nft}"; shift 2 ;;
     --connection) connection="${2:?--connection needs a name}"; shift 2 ;;
     --podman-arg) podman_args+=("${2:?--podman-arg needs a value}"); shift 2 ;;
     --podman-arg=*) podman_args+=("${1#--podman-arg=}"); shift ;;
     --dry-run) dry_run=1; shift ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
 
 case "$engine" in podman|docker) ;; *) echo "engine must be podman or docker" >&2; exit 2 ;; esac
-case "$only" in ""|botvm|botvm-browser) ;; *) echo "--only must be botvm or botvm-browser" >&2; exit 2 ;; esac
+case "$only" in ""|botvm|botvm-browser|egressd-nft) ;; *) echo "--only must be botvm, botvm-browser or egressd-nft" >&2; exit 2 ;; esac
 if [[ -n "$connection" && "$engine" != "podman" ]]; then echo "--connection needs --engine podman" >&2; exit 2; fi
 if [[ ${#podman_args[@]} -gt 0 && "$engine" != "podman" ]]; then echo "--podman-arg/PODMAN_ARGS need --engine podman" >&2; exit 2; fi
 if [[ "$connection" == "podman-machine-default" ]]; then echo "refusing podman-machine-default; AgentControl uses its own machine" >&2; exit 2; fi
@@ -45,6 +48,7 @@ set -a; source "$here/images/versions.env"; set +a
 registry="localhost/agentcontrol"
 base_ref="$registry/botvm:$BOTVM_VERSION"
 browser_ref="$registry/botvm-browser:$BOTVM_VERSION"
+nft_ref="$registry/egressd-nft:$BOTVM_VERSION"
 
 cmd=("$engine")
 [[ ${#podman_args[@]} -gt 0 ]] && cmd+=("${podman_args[@]}")
@@ -75,6 +79,15 @@ build_browser() {
     --build-arg "BOTVM_VERSION=$BOTVM_VERSION" \
     --build-arg "PLAYWRIGHT_VERSION=$PLAYWRIGHT_VERSION" \
     "$here/images/botvm-browser"
+}
+
+build_nft() {
+  run "${cmd[@]}" build \
+    --file "$here/images/egressd-nft/Containerfile" \
+    --tag "$nft_ref" \
+    --build-arg "BOTVM_IMAGE=$base_ref" \
+    --build-arg "BOTVM_VERSION=$BOTVM_VERSION" \
+    "$here/images/egressd-nft"
 }
 
 # Smoke check (§14 BE-P2-3 acceptance): python3, node (and chromium) run as uid 1000.
@@ -120,4 +133,10 @@ fi
 if [[ -z "$only" || "$only" == "botvm-browser" ]]; then
   build_browser
   smoke "$browser_ref" "$browser_smoke"
+fi
+# Also after --only botvm: the helper is FROM botvm, so it must follow it (never a stale or missing helper).
+if [[ -z "$only" || "$only" == "botvm" || "$only" == "egressd-nft" ]]; then
+  build_nft
+  # nft runs (no capabilities needed to print its version; AgentControl adds NET_ADMIN only to load rules).
+  run "${cmd[@]}" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint nft "$nft_ref" --version
 fi

@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
   BOTVM_PINS,
   BOT_PATHS,
@@ -23,6 +23,8 @@ import {
   botToolsVolume,
   containerfilePath,
   imageBuildArgv,
+  egressdNftBuildArgv,
+  egressdNftImageRef,
   sharedImageRef,
   sharedImagesToBuild,
   vmDir,
@@ -328,10 +330,10 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
 
   it('dry-run builds the same argv as imageBuildArgv, base before browser, with uid-1000 smoke checks', () => {
     const lines = sh('--dry-run').trim().split('\n')
-    expect(lines).toHaveLength(4)
+    expect(lines).toHaveLength(6)
     const builds = lines.filter((l) => l.startsWith('podman build '))
-    expect(builds).toEqual(SHARED_IMAGE_KINDS.map((k) => ['podman', ...imageBuildArgv(k)].join(' ')))
-    const smokes = lines.filter((l) => l.startsWith('podman run '))
+    expect(builds).toEqual([...SHARED_IMAGE_KINDS.map((k) => ['podman', ...imageBuildArgv(k)].join(' ')), ['podman', ...egressdNftBuildArgv()].join(' ')])
+    const smokes = lines.filter((l) => l.startsWith('podman run ')).slice(0, 2)
     expect(smokes).toHaveLength(2)
     for (const s of smokes) {
       expect(s).toContain('--network none')
@@ -352,6 +354,49 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
     expect(smokes[1]!.match(/HeadlessChrome\//g)).toHaveLength(2)
   })
 
+  it('BE-P2-13: --only egressd-nft builds the firewall helper FROM botvm, then checks nft runs with no capabilities', () => {
+    const lines = sh('--dry-run', '--only', 'egressd-nft').trim().split('\n')
+    expect(lines).toEqual([
+      ['podman', ...egressdNftBuildArgv()].join(' '),
+      `podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint nft ${egressdNftImageRef()} --version`,
+    ])
+    expect(egressdNftBuildArgv()).toEqual(expect.arrayContaining(['--tag', 'localhost/agentcontrol/egressd-nft:1.0.0', `BOTVM_IMAGE=${sharedImageRef('botvm')}`]))
+    const cf = readFileSync(path.join(vmDir(), 'images', 'egressd-nft', 'Containerfile'), 'utf8')
+    expect(cf).toMatch(/^FROM \$\{BOTVM_IMAGE\}$/m)
+    expect(cf).toMatch(/apt-get install -y --no-install-recommends nftables/)
+    expect(cf.trim().split('\n').at(-1)).toBe('USER 1000:1000')
+  })
+
+  it('M2: setup never leaves out the proxy\'s firewall helper: the full build and --only botvm both build egressd-nft FROM the fresh botvm, locally from the versions.env pins; the only pull is the base by digest', () => {
+    const botvmBuild = ['podman', ...imageBuildArgv('botvm')].join(' ')
+    const nftBuild = ['podman', ...egressdNftBuildArgv()].join(' ')
+    const nftSmoke = `podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint nft ${egressdNftImageRef()} --version`
+    // First install (npm run vm:images): botvm first, the helper after it, then its nft check.
+    const full = sh('--dry-run').trim().split('\n')
+    expect(full.indexOf(botvmBuild)).toBe(0)
+    expect(full.indexOf(nftBuild)).toBeGreaterThan(0)
+    expect(full.indexOf(nftSmoke)).toBe(full.indexOf(nftBuild) + 1)
+    // The botvm image build path rebuilds the helper too (it is FROM botvm, so it must follow it).
+    const only = sh('--dry-run', '--only', 'botvm').trim().split('\n')
+    expect(only).toHaveLength(4)
+    expect([only[0], only[2], only[3]]).toEqual([botvmBuild, nftBuild, nftSmoke])
+    expect(sh('--dry-run', '--only', 'botvm-browser').trim().split('\n').some((l) => l.includes('egressd-nft'))).toBe(false)
+    // Built from the pins: the helper is FROM the local botvm tag, which is FROM BASE_IMAGE by digest.
+    expect(egressdNftBuildArgv()).toEqual(expect.arrayContaining([`BOTVM_IMAGE=${sharedImageRef('botvm')}`, `BOTVM_VERSION=${BOTVM_PINS.BOTVM_VERSION}`]))
+    expect(sharedImageRef('botvm').startsWith('localhost/')).toBe(true)
+    expect(full[0]).toContain(`BASE_IMAGE=${BOTVM_PINS.BASE_IMAGE}`)
+    expect(BOTVM_PINS.BASE_IMAGE).toMatch(/@sha256:[0-9a-f]{64}$/)
+    for (const kind of ['botvm-browser', 'egressd-nft']) {
+      const froms = parse(readFileSync(path.join(vmDir(), 'images', kind, 'Containerfile'), 'utf8')).filter((i) => i.op === 'FROM')
+      expect(froms.map((i) => i.args)).toEqual(['${BOTVM_IMAGE}'])
+    }
+    // No prebuilt AgentControl image is pulled (or pushed) anywhere: no pull/push/login command, in the script or its output.
+    const src = readFileSync(script, 'utf8')
+    expect(src).not.toMatch(/\b(pull|push|login)\b/)
+    expect(src).not.toMatch(/"\$\{cmd\[@\]\}" tag\b/)
+    for (const l of full) expect(l).not.toMatch(/^podman (pull|push|login|tag) /)
+  })
+
   it('supports docker, a podman connection and --only, and never uses podman-machine-default', () => {
     expect(sh('--dry-run', '--engine', 'docker', '--only', 'botvm').trim().split('\n')[0]).toBe(['docker', ...imageBuildArgv('botvm')].join(' '))
     expect(sh('--dry-run', '--connection', 'agentcontrol', '--only', 'botvm-browser').trim().split('\n')[0]).toBe(
@@ -367,10 +412,13 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
       env: cleanEnv({ PODMAN_ARGS: ' --root /tmp/pt/root  --runroot /tmp/pt/runroot ' }),
     })
     const lines = out.trim().split('\n')
-    expect(lines).toHaveLength(2)
+    // botvm + smoke, then (M2) the firewall helper FROM it + its smoke.
+    expect(lines).toHaveLength(4)
     const pre = 'podman --root /tmp/pt/root --runroot /tmp/pt/runroot --log-level=warn --cgroup-manager=cgroupfs '
     expect(lines[0]).toBe(pre + imageBuildArgv('botvm').join(' '))
     expect(lines[1]!.startsWith(pre + 'run --rm --network none ')).toBe(true)
+    expect(lines[2]).toBe(pre + egressdNftBuildArgv().join(' '))
+    expect(lines[3]!.startsWith(pre + 'run --rm --network none ')).toBe(true)
     expect(sh('--dry-run', '--only', 'botvm', '--connection', 'agentcontrol', '--podman-arg', '--log-level=warn').split('\n')[0]).toBe(
       ['podman', '--log-level=warn', '--connection', 'agentcontrol', ...imageBuildArgv('botvm')].join(' '),
     )
@@ -381,19 +429,34 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
 })
 
 /** @vm: needs a real engine (AC_VM_TESTS=1). Honours PODMAN_ARGS (e.g. a throwaway --root/--runroot). */
-const engine = ['podman', 'docker'].find((e) => {
+// CI fix (PR #31): only looked for in @vm runs, and bounded (a unit run never calls the host's engine).
+const engine = process.env.AC_VM_TESTS !== '1' ? undefined : ['podman', 'docker'].find((e) => {
   try {
-    execFileSync(e, ['--version'], { stdio: 'ignore' })
+    execFileSync(e, ['--version'], { stdio: 'ignore', timeout: 30_000 })
     return true
   } catch {
     return false
   }
 })
+const vmPodmanArgs = () => (engine === 'podman' ? (process.env.PODMAN_ARGS ?? '').split(/\s+/).filter(Boolean) : [])
+const imageExists = (ref: string) => {
+  try {
+    execFileSync(engine!, [...vmPodmanArgs(), 'image', 'exists', ref], { stdio: 'ignore', timeout: 60_000 })
+    return true
+  } catch {
+    return false
+  }
+}
+/** Whether the egressd-nft tag was there before the build test ran (undefined: the test didn't run). */
+let nftExistedBefore: boolean | undefined
 describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', () => {
-  it('builds both images; python3, node and chromium run as uid 1000', () => {
+  it('builds the images (botvm, botvm-browser, egressd-nft); python3, node and chromium run as uid 1000', () => {
+    nftExistedBefore = imageExists(egressdNftImageRef())
     const out = execFileSync('bash', [path.join(vmDir(), 'build-images.sh'), '--engine', engine!], { encoding: 'utf8', timeout: 30 * 60_000 })
     expect(out).toMatch(/Python 3\.12\./)
     expect(out).toMatch(/v22\./)
+    // BE-P2-13: the firewall helper runs nft.
+    expect(out).toMatch(/^nftables v1\./m)
     // No headless shell in the image: its path is a link to the full Chromium binary.
     expect(out).toMatch(new RegExp(`^headless shell: link to ${PLAYWRIGHT_BROWSERS_PATH}/chromium-\\d+/chrome-linux(64|-arm64)/chrome$`, 'm'))
     // Both drivers launched Chromium headless as uid 1000, bare and with channel 'chromium'.
@@ -401,6 +464,17 @@ describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', (
       expect(out).toMatch(new RegExp(`^${lang} ${how} \\d+\\.\\d+\\.\\d+\\.\\d+ HeadlessChrome$`, 'm'))
     }
   }, 30 * 60_000)
+
+  // Remove the firewall helper tag only if this run built it. One that was
+  // already there (e.g. from build-images.sh) stays, so egress.vm keeps it.
+  afterAll(() => {
+    if (nftExistedBefore !== false) return
+    try {
+      execFileSync(engine!, [...vmPodmanArgs(), 'rmi', egressdNftImageRef()], { stdio: 'pipe', timeout: 120_000 })
+    } catch {
+      // Already gone: nothing to clean up.
+    }
+  })
 
   // What a bot-written script does: plain chromium.launch(), no channel, no args, default headless.
   it('a bare chromium.launch() works from Python and Node as uid 1000 with no network', () => {

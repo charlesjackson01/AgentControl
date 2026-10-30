@@ -13,6 +13,8 @@ export function fail(status: number, message: string): never {
 /** BE-P2-11: extra fields a reasoned error body may carry (UndoConflict's `conflicts`). */
 export interface ReasonExtra {
   conflicts?: { path: string; root: 'agent' | 'group'; groupId?: string; groupName?: string }[]
+  /** BE-P2-14: 409 already_resolved carries the final PermissionRequest. */
+  request?: unknown
 }
 
 /**
@@ -20,13 +22,19 @@ export interface ReasonExtra {
  * BE-P2-11: `extra.conflicts` is sent in the body too (undo's 409 'conflicts').
  */
 export function failWithReason(status: number, reason: string, message: string, extra: ReasonExtra = {}): never {
-  const err = new Error(message) as Error & { statusCode: number; reason: string; conflicts?: ReasonExtra['conflicts'] }
+  const err = new Error(message) as Error & { statusCode: number; reason: string; conflicts?: ReasonExtra['conflicts']; request?: unknown }
   err.statusCode = status
   err.reason = reason
   if (extra.conflicts) err.conflicts = extra.conflicts
+  if (extra.request !== undefined) err.request = extra.request
   throw err
 }
 
 export function uid(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`
+}
+
+/** The one 409 `internet_never` text (approved mockup / FE-9 run card), word for word. */
+export function internetNeverText(botName: string): string {
+  return `Internet is set to Never for ${botName}, so this run didn't start. Change it in Settings › VM.`
 }

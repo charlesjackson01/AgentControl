@@ -7,7 +7,8 @@
  */
 import {
   PERMISSION_CSRF_HEADER,
-  type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type ToolBuildAccepted,
   type ScriptRun, type ScriptRunSummary, type UndoConflict, type UndoGone, type UndoPreview, type UndoRequest, type UndoResult,
   type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
 } from './types.ts'
@@ -48,6 +49,9 @@ export const vmPaths = {
     return `/api/permissions?${qs}`
   },
   permission: (requestId: string) => `/api/permissions/${enc(requestId)}`,
+  /** FE-P2-3 (fec4670): the shared Chromium download, and its retry (no agentId) or one bot's failed step. */
+  browser: () => '/api/vm/browser',
+  browserRetry: () => '/api/vm/browser/retry',
   /** Live events (SSE). Filters are optional; the app opens one unfiltered stream. */
   events: (filters?: { conversationId?: string; agentId?: string }) => {
     const qs = new URLSearchParams()
@@ -69,8 +73,8 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     /** 409 while a run is active. */
     resetVm: (agentId: string) => request<VmInfo>(`${vmPaths.agentVm(agentId)}/reset`, post({ confirm: true })),
     getVmTools: (agentId: string) => request<VmToolsInfo>(`${vmPaths.agentVm(agentId)}/tools`),
-    /** A kind 'tool_build' run. */
-    rebuildTools: (agentId: string) => request<ScriptRun>(`${vmPaths.agentVm(agentId)}/tools/rebuild`, post()),
+    /** M2 (BE-P2-21): 202 with the live kind 'tool_build' run; 409 build_active / run_active / internet_never / proxy_unavailable / low_disk. */
+    rebuildTools: (agentId: string) => request<ToolBuildAccepted>(`${vmPaths.agentVm(agentId)}/tools/rebuild`, post()),
     rollbackTools: (agentId: string) => request<ScriptRun>(`${vmPaths.agentVm(agentId)}/tools/rollback`, post()),
     listRuns: (agentId: string, opts?: { before?: string; limit?: number }) => request<ScriptRunPage>(vmPaths.agentRuns(agentId, opts)),
 
@@ -78,7 +82,7 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     getRun: (runId: string) => request<ScriptRun>(vmPaths.run(runId)),
     /** Full log as text; 410 once evicted. */
     getRunOutput: (runId: string, stream: RunOutputStream = 'stdout') => requestText(vmPaths.runOutput(runId, stream)),
-    /** 409 when the run isn't active. */
+    /** 409 when the run isn't active. Also the build's Stop (chat card and the VM tab's "Stop build", activeBuild.runId). */
     stopRun: (runId: string) => request<ScriptRun>(`${vmPaths.run(runId)}/stop`, post()),
     /** 409 UndoConflict{reason:'run_active'}, 410 UndoGone: read them with undoErrorOf. */
     getUndoPreview: (runId: string) => request<UndoPreview>(`${vmPaths.run(runId)}/undo/preview`),
@@ -98,6 +102,20 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     /** 409 while runs are active, 400 when the host disk is low. */
     growMachine: (toGb: number) => request<VmHostInfo>('/api/vm/machine/grow', post({ toGb })),
 
+    /* ---- browser add-on (M2, BE-P2-15; FE-P2-3 / FE-P2-10, contract fec4670) ---- */
+    /** The shared Chromium download. */
+    getBrowser: () => request<BrowserAddonInfo>(vmPaths.browser()),
+    /**
+     * No agentId: the shared download; with it, that bot's failed step (download, rebuild or check).
+     * 409 nothing_to_retry / low_disk.
+     */
+    retryBrowser: (agentId?: string) => {
+      const body: BrowserRetryRequest = agentId ? { agentId } : {}
+      return request<BrowserAddonInfo>(vmPaths.browserRetry(), post(body))
+    },
+    /** "Remove download". Needs the confirm header (403 without); 409 browser_in_use / browser_busy. */
+    removeBrowser: () => request<BrowserAddonInfo>(vmPaths.browser(), { method: 'DELETE', headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
+
     /* ---- permissions (M2 routes; shapes fixed by BE-P2-1 @ 4bf9429) ---- */
     listPendingPermissions: (filters?: { agentId?: string; conversationId?: string }) =>
       request<PermissionListResponse>(vmPaths.pendingPermissions(filters)),
@@ -109,6 +127,8 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
       const body: PermissionAnswer = { decision }
       return request<PermissionRequest>(vmPaths.permission(requestId), { ...post(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } })
     },
+    /** FE-P2-3 (fec4670): one request, any status (a card whose request isn't in the store). 404 not_found. */
+    getPermission: (requestId: string) => request<PermissionRequest>(vmPaths.permission(requestId)),
   }
 }
 
@@ -154,8 +174,11 @@ export function undoErrorOf(err: unknown): UndoError {
 /* ---- permission answer errors ---- */
 
 export type PermissionError =
-  /** 409: answered already (another tab, or it timed out). Re-fetch the list; nothing to retry. */
-  | { kind: 'resolved'; message: string }
+  /**
+   * 409: answered already (another tab, or it timed out). Nothing to retry. fec4670: the body
+   * (PermissionAlreadyResolved) carries the final `request`, when the BE sent one.
+   */
+  | { kind: 'resolved'; message: string; request?: PermissionRequest }
   /** 403: the CSRF header was missing or refused. A client bug, not the user's. */
   | { kind: 'forbidden'; message: string }
   | { kind: 'not_found'; message: string }
@@ -164,7 +187,11 @@ export type PermissionError =
 export function permissionErrorOf(err: unknown): PermissionError {
   const message = err instanceof Error ? err.message : String(err)
   const status = isObj(err) && typeof err.status === 'number' ? err.status : undefined
-  if (status === 409) return { kind: 'resolved', message }
+  if (status === 409) {
+    const body = isObj(err) && isObj(err.body) ? (err.body as Partial<PermissionAlreadyResolved>) : undefined
+    const req = body?.request
+    return isObj(req) && typeof req.id === 'string' && typeof req.status === 'string' ? { kind: 'resolved', message, request: req } : { kind: 'resolved', message }
+  }
   if (status === 403) return { kind: 'forbidden', message }
   if (status === 404) return { kind: 'not_found', message }
   return status === undefined ? { kind: 'other', message } : { kind: 'other', message, status }

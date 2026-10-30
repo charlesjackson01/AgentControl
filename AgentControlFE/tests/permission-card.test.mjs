@@ -4,8 +4,8 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  AFTER_BROWSER_LINE, GROUP_FOOT, NET_FOOT, PENDING_LINE, PERMISSION_CARD_GAPS,
-  actionErrorText, mbText, permissionCardView, sendErrorText, setupSteps, sizeText, spanText, timerText,
+  AFTER_BROWSER_LINE, BUILD_PENDING_LINE, GROUP_FOOT, NET_FOOT, PENDING_LINE, PERMISSION_CARD_GAPS,
+  actionErrorText, mbText, pendingLine, permissionCardView, sendErrorText, setupSteps, setupVmAgent, sizeText, spanText, timerText,
 } from '../src/lib/permission-card.ts'
 import { renderPermissionCard } from '../src/lib/permission-card-render.ts'
 import { LOW_DISK_TEXT } from '../src/lib/low-disk.ts'
@@ -73,14 +73,14 @@ describe('internet card · pending (mockup 01, 10, 05)', () => {
     assert.equal(v.timer, '9:41 left')
     assert.equal(v.timerLow, false)
   })
-  it('the countdown is low at ≤ 60 s (0:48 in mockup 10) and uses the skew-corrected now', () => {
+  it('the countdown is low at ≤ 60 s (0:48 in mockup 09) and uses the skew-corrected now', () => {
     const v = view(netAsk(), { nowMs: ms(T(9, 49, 12)) })
     assert.equal(v.timer, '0:48 left')
     assert.equal(v.timerLow, true)
   })
-  it('group (mockup 10): "in <group>", group sentence before the footer, no link', () => {
-    const v = view(netAsk({ groupId: 'g1', groupName: 'Q3 report' }))
-    assert.equal(text(v.sub).startsWith('To run fetch_rates.py in Q3 report: “'), true)
+  it('group (mockup 10): "in <group>", no pending sentence, group sentence before the footer, no link', () => {
+    const v = view(netAsk({ groupId: 'g1', groupName: 'Q3 report', why: "Download this week's EUR/USD rates." }))
+    assert.equal(text(v.sub), "To run fetch_rates.py in Q3 report: “Download this week's EUR/USD rates.”")
     assert.equal(text(v.foot), `${GROUP_FOOT} ${NET_FOOT}`)
     assert.equal(v.foot.some((s) => typeof s === 'object'), false)
     // older rows without groupName fall back to the page's group name
@@ -104,9 +104,28 @@ describe('internet card · pending (mockup 01, 10, 05)', () => {
     const v = view(netAsk({ runKind: 'tool_build', scriptName: undefined, why: undefined }))
     assert.equal(text(v.sub), "To build Primary's tools. Nothing in this build reaches the internet until you choose.")
   })
-  it('send error shows under the buttons', () => {
-    const v = view(netAsk(), { sendError: sendErrorText(new TypeError('Failed to fetch')) })
+  it('send error (mockup 09): shows under the buttons, and the pending sentence is left out', () => {
+    const v = view(netAsk({ why: "Download this week's EUR/USD rates." }), { sendError: sendErrorText(new TypeError('Failed to fetch')) })
     assert.equal(v.error, "Couldn't send your answer: could not reach the API server. Try again.")
+    assert.equal(text(v.sub), "To run fetch_rates.py: “Download this week's EUR/USD rates.”")
+    assert.equal(text(v.foot), `${NET_FOOT} Settings › VM`)
+  })
+  it('pendingLine: DM 01, after-browser 05, tool build; none in groups (10), with a send error (09), or on browser cards', () => {
+    const p = (req, extra = {}) => pendingLine({ request: netAsk(req), botName: 'Primary', nowMs: 0, ...extra })
+    assert.equal(p(), PENDING_LINE)
+    assert.equal(p({}, { nowMs: ms(T(9, 49, 12)) }), PENDING_LINE) // low timer alone keeps it (no mockup leaves it out)
+    assert.equal(p({}, { afterBrowser: true }), AFTER_BROWSER_LINE)
+    assert.equal(p({ runKind: 'tool_build', scriptName: undefined }), BUILD_PENDING_LINE)
+    assert.equal(p({ groupId: 'g1', groupName: 'Q3 report' }), null)
+    assert.equal(p({ groupId: 'g1', groupName: 'Q3 report' }, { afterBrowser: true }), null)
+    assert.equal(p({ runKind: 'tool_build', groupId: 'g1' }), null)
+    assert.equal(p({}, { sendError: 'E' }), null)
+    assert.equal(p({}, { afterBrowser: true, sendError: 'E' }), null)
+    assert.equal(p({ type: 'browser', hosts: undefined }), null)
+  })
+  it('no why and no sentence: just the run reference', () => {
+    assert.equal(text(view(netAsk({ why: undefined, groupId: 'g1', groupName: 'Q3 report' })).sub), 'To run fetch_rates.py in Q3 report.')
+    assert.equal(text(view(netAsk({ why: undefined }), { sendError: 'E' }).sub), 'To run fetch_rates.py.')
   })
 })
 
@@ -445,6 +464,60 @@ describe('live controller (fec4670)', () => {
     assert.equal(live.getState().clockSkewMs, 2000)
     assert.equal(browserCalls, 1)
     assert.equal(live.getState().browser.state, 'absent')
+    live.stop?.()
+  })
+})
+
+describe('"after the current run": the VM fetch for a browser setup in progress', () => {
+  const setup = (o = {}) => ({
+    turnedOnAt: T(9, 51), turnedOnBy: 'user', requestId: 'pb', runId: 'run_snap',
+    download: { startedAt: T(9, 51), endedAt: T(9, 52, 42), totalBytes: 1343e6 },
+    rebuild: { startedAt: T(9, 52, 50), endedAt: T(9, 53, 42) }, check: { status: 'pending' }, ...o,
+  })
+  const enabled = (o = {}) => ({
+    ...permission('pb', { type: 'browser', agentId: 'ag_primary', hosts: undefined, scriptName: 'snap_dashboard.py' }),
+    status: 'enabled', resolvedAt: T(9, 51), resolvedBy: 'user', setup: setup(), ...o,
+  })
+  it('setupVmAgent: a setup in progress needs the bot\'s VM until it is held', () => {
+    assert.equal(setupVmAgent(enabled(), {}), 'ag_primary')
+    assert.equal(setupVmAgent(enabled({ setup: undefined }), {}), 'ag_primary') // just enabled, no setup copy yet
+    assert.equal(setupVmAgent(enabled(), { ag_primary: {} }), undefined)
+  })
+  it('setupVmAgent: nothing to fetch when ready, failed, unanswered, denied, internet, or unloaded', () => {
+    assert.equal(setupVmAgent(enabled({ setup: setup({ readyAt: T(9, 54), check: { status: 'pass', at: T(9, 54) } }) }), {}), undefined)
+    assert.equal(setupVmAgent(enabled({ setupError: { reason: 'download_failed', message: 'x', at: T(9, 53) } }), {}), undefined)
+    assert.equal(setupVmAgent(enabled({ status: 'pending' }), {}), undefined)
+    assert.equal(setupVmAgent(enabled({ status: 'denied' }), {}), undefined)
+    assert.equal(setupVmAgent(enabled({ type: 'internet' }), {}), undefined)
+    assert.equal(setupVmAgent(undefined, {}), undefined)
+  })
+  it('the card\'s fetch (loadVm) stores waiting_idle, and the check step then says "after the current run"', async () => {
+    const asked = []
+    const live = createLiveController({
+      connection: {},
+      client: {
+        getRun: async () => run('r1'), listPendingPermissions: async () => ({ requests: [] }),
+        getVm: async (id) => {
+          asked.push(id)
+          return { agentId: id, browser: { state: 'waiting_idle' } }
+        },
+      },
+    })
+    const request = enabled()
+    const stepOf = () => {
+      const st = live.getState()
+      const v = permissionCardView({ request, botName: 'Primary', nowMs: ms(T(9, 54, 30)), botBrowserState: st.vms[request.agentId]?.browser?.state })
+      return v.steps.find((s) => s.key === 'ck')
+    }
+    // before: the restart step runs with no meta
+    assert.deepEqual([stepOf().state, stepOf().meta], ['run', undefined])
+    const agent = setupVmAgent(request, live.getState().vms)
+    assert.equal(agent, 'ag_primary')
+    await live.loadVm(agent)
+    assert.deepEqual(asked, ['ag_primary'])
+    assert.equal(setupVmAgent(request, live.getState().vms), undefined) // held now: no second fetch
+    assert.equal(stepOf().label, "Restarting Primary's VM and checking Chromium")
+    assert.equal(stepOf().meta, 'after the current run')
     live.stop?.()
   })
 })

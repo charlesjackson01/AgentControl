@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../lib/api'
 import { permissionFor } from '../../lib/live-store'
-import { actionErrorText, permissionCardView, sendErrorText, type CardAction } from '../../lib/permission-card'
+import { actionErrorText, permissionCardView, sendErrorText, setupVmAgent, type CardAction } from '../../lib/permission-card'
 import { renderPermissionCard } from '../../lib/permission-card-render'
 import { permissionErrorOf } from '../../lib/vm-api'
 import type { BrowserAddonInfo, ChatMessage, PermissionDecision, PermissionRequest, VmInfo, VmPatch } from '../../lib/types'
@@ -49,14 +49,11 @@ export default function PermissionCard({ message, botName, agentId, groupName, s
     if (missing && requestId) void loadPermission(requestId)
   }, [missing, requestId, loadPermission])
 
-  // A browser setup in progress reads the bot's browser state ("after the current run" while waiting_idle);
-  // loadVm keeps it fresh through vm.updated and resyncs.
-  const setupAgent =
-    request?.type === 'browser' && request.status === 'enabled' && !request.setupError && !request.setup?.readyAt ? request.agentId : undefined
-  const needsVm = Boolean(setupAgent) && !(setupAgent && state.vms[setupAgent])
+  // A browser setup in progress reads the bot's browser state ("after the current run" while waiting_idle).
+  const vmAgent = setupVmAgent(request, state.vms)
   useEffect(() => {
-    if (needsVm && setupAgent) void loadVm(setupAgent)
-  }, [needsVm, setupAgent, loadVm])
+    if (vmAgent) void loadVm(vmAgent)
+  }, [vmAgent, loadVm])
 
   // Countdown (pending) and the running rebuild step's clock tick each second.
   const ticking = request?.status === 'pending' || Boolean(request?.setup?.rebuild.startedAt && !request.setup.rebuild.endedAt)

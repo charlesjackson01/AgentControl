@@ -137,6 +137,7 @@ export const NET_FOOT = "Public sites only, through AgentControl's proxy. Your h
 export const GROUP_FOOT = "Only you can answer; other bots in this group can't."
 export const PENDING_LINE = 'Nothing in this run reaches the internet until you choose.'
 export const AFTER_BROWSER_LINE = 'The browser can only open pages you allow.'
+export const BUILD_PENDING_LINE = 'Nothing in this build reaches the internet until you choose.'
 const SETTINGS: Seg = { link: 'settings', text: 'Settings › VM' }
 
 const isToolBuild = (r: PermissionRequest) => r.runKind === 'tool_build'
@@ -160,6 +161,27 @@ const DECISION_LABEL = (bot: string): Record<string, string> => ({
   allowed_once: 'Allowed once', always: `Always for ${bot}`, denied: 'Denied', timeout: 'Expired', enabled: 'Turned on',
 })
 
+/**
+ * The internet card's closing sentence (mockups 01, 05). Mockups 09 and 10 leave it out: none on group
+ * cards (10, where the footer carries the group sentence) and none while a send error shows (09).
+ */
+export function pendingLine(input: PermissionCardInput): string | null {
+  if (input.request.type !== 'internet' || groupOf(input) || input.sendError) return null
+  if (input.afterBrowser) return AFTER_BROWSER_LINE
+  return isToolBuild(input.request) ? BUILD_PENDING_LINE : PENDING_LINE
+}
+
+/**
+ * The bot whose VmInfo a card needs (its browser state shows "after the current run" while waiting_idle):
+ * a browser card that turned the browser on and whose setup hasn't finished or failed, while that bot's
+ * VM isn't held. The card then calls loadVm, which keeps it fresh through vm.updated and resyncs.
+ */
+export function setupVmAgent(request: PermissionRequest | undefined, heldVms: Readonly<Record<string, unknown>>): string | undefined {
+  if (!request || request.type !== 'browser' || request.status !== 'enabled') return undefined
+  if (request.setupError || request.setup?.readyAt) return undefined
+  return heldVms[request.agentId] ? undefined : request.agentId
+}
+
 function pendingView(input: PermissionCardInput): PendingView {
   const r = input.request
   const bot = input.botName
@@ -182,8 +204,8 @@ function pendingView(input: PermissionCardInput): PendingView {
     ]
   } else {
     title = `${bot} wants to use the internet`
-    const line = input.afterBrowser ? AFTER_BROWSER_LINE : isToolBuild(r) ? 'Nothing in this build reaches the internet until you choose.' : PENDING_LINE
-    sub = [...runRef(input), why ? `: “${why}” ` : '. ', line]
+    const line = pendingLine(input)
+    sub = [...runRef(input), why ? `: “${why}”` : '.', ...(line ? [` ${line}`] : [])]
     foot = [NET_FOOT]
     buttons = [
       { key: 'allow_once', decision: 'allow_once', label: 'Allow once', cls: 'primary' },

@@ -32,6 +32,20 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
 describe('daemon', () => {
+  it('shutdown disconnects the proxy from the outbound network, then removes it, then the network', async () => {
+    const svc = make()
+    await svc.available()
+    const from = fake.calls.length
+    await svc.shutdown()
+    const tail = fake.calls.slice(from).map((c) => c.join(' '))
+    expect(tail).toEqual([
+      `network disconnect --force ac-egress-out ${EGRESS_DAEMON_NAME}`,
+      `rm --force --time 2 ${EGRESS_DAEMON_NAME}`,
+      'network rm ac-egress-out',
+    ])
+    expect(fake.networks.has('ac-egress-out')).toBe(false)
+    expect(logs.filter((l) => /remove ac-egress-out/.test(l))).toEqual([])
+  })
   it('starts ac-egressd hardened, on the outbound network only, with its code mounted read-only', async () => {
     const svc = make()
     expect(await svc.available()).toEqual({ ok: true })

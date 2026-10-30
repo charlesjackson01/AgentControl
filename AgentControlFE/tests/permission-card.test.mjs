@@ -108,7 +108,20 @@ describe('internet card · pending (mockup 01, 10, 05)', () => {
     const v = view(netAsk({ why: "Download this week's EUR/USD rates." }), { sendError: sendErrorText(new TypeError('Failed to fetch')) })
     assert.equal(v.error, "Couldn't send your answer: could not reach the API server. Try again.")
     assert.equal(text(v.sub), "To run fetch_rates.py: “Download this week's EUR/USD rates.”")
-    assert.equal(text(v.foot), `${NET_FOOT} Settings › VM`)
+    assert.equal(text(v.foot), NET_FOOT)
+    assert.equal(v.foot.some((s) => typeof s === 'object'), false)
+  })
+  it('send error drops the Settings › VM link (09) on any pending card; it comes back when the error clears', () => {
+    const noLink = (v) => v.foot.every((s) => typeof s !== 'object' || s.link !== 'settings')
+    assert.equal(noLink(view(netAsk(), { sendError: 'E' })), true)
+    assert.equal(noLink(view(netAsk({ runKind: 'tool_build', scriptName: undefined, why: undefined }), { sendError: 'E' })), true)
+    assert.equal(noLink(view(netAsk({ type: 'browser', hosts: undefined }), { sendError: 'E' })), true)
+    assert.equal(noLink(view(netAsk(), { sendError: null })), false)
+    assert.equal(noLink(view(netAsk({ type: 'browser', hosts: undefined }))), false)
+    // low timer alone keeps both the sentence and the link
+    const low = view(netAsk(), { nowMs: ms(T(9, 49, 12)) })
+    assert.equal(noLink(low), false)
+    assert.equal(text(low.sub).endsWith(PENDING_LINE), true)
   })
   it('pendingLine: DM 01, after-browser 05, tool build; none in groups (10), with a send error (09), or on browser cards', () => {
     const p = (req, extra = {}) => pendingLine({ request: netAsk(req), botName: 'Primary', nowMs: 0, ...extra })

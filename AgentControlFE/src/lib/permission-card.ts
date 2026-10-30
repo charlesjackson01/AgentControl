@@ -214,8 +214,9 @@ function pendingView(input: PermissionCardInput): PendingView {
     ]
   }
   if (group) foot = [`${GROUP_FOOT} `, ...foot]
-  // Link: 01/03 show it; group cards (09/10 group, 01b) and the follow-up internet card (05) don't.
-  else if (!input.afterBrowser) foot = [...foot, ' ', SETTINGS]
+  // Link: 01/03 show it; group cards (10, 01b), the follow-up internet card (05) and a card showing a
+  // send error (09) don't.
+  else if (!input.afterBrowser && !input.sendError) foot = [...foot, ' ', SETTINGS]
   const hosts = r.type === 'internet' ? (r.hosts ?? []) : []
   return {
     mode: 'pending', kind: r.type, title, sub,

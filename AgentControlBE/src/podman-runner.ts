@@ -40,7 +40,11 @@ export const OUTPUT_CAP_BYTES = VM_LIMITS.outputMb * 1024 * 1024
 export const TAIL_BYTES = 64 * 1024
 export const IDLE_STOP_MS = 10 * 60 * 1000
 export const IDLE_SWEEP_MS = 60 * 1000
-export const NETWORK_UNAVAILABLE = 'Internet access isn\'t available yet.'
+/**
+ * BE-P2-14: a network 'on' run without the gate's answer (RunService only asks after a grant, so
+ * this is defensive). No proxy wired at all: PROXY_UNAVAILABLE (reason proxy_unavailable).
+ */
+export const INTERNET_NOT_GRANTED = "This run wasn't allowed to use the internet."
 export const LIMITS_UNENFORCED_REASON = 'limits_unenforced'
 export const LIMITS_UNENFORCED_MESSAGE = "This computer can't limit bot scripts safely, so scripts can't run here."
 export const MOUNTS_UNUSABLE_REASON = 'mounts_unusable'
@@ -440,7 +444,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
   function precheck(req: RunScriptRequest, t0: number): RunScriptResult | { agent: Agent; cwd: string } {
     const agent = deps.getAgent(req.agentId)
     if (!agent) return err(t0, 'Bot not found.')
-    if (req.network === 'on' && (req.internetGranted !== true || !deps.egress)) return err(t0, NETWORK_UNAVAILABLE)
+    if (req.network === 'on' && !deps.egress) return err(t0, PROXY_UNAVAILABLE, { reason: PROXY_UNAVAILABLE_REASON })
+    if (req.network === 'on' && req.internetGranted !== true) return err(t0, INTERNET_NOT_GRANTED)
     if (!Array.isArray(req.argv) || !req.argv.length || req.argv.some((a) => typeof a !== 'string' || a.includes('\0'))) {
       return err(t0, 'Give the command to run as a list of arguments.')
     }

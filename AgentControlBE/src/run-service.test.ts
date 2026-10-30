@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { NETWORK_UNAVAILABLE } from './podman-runner.js'
+import { PROXY_UNAVAILABLE } from './egress-service.js'
 import {
   createRunService, LOW_DISK_TEXT, MODEL_TAIL_BYTES, RESTART_QUEUED_TEXT, RESTART_RUNNING_TEXT, RUN_FREE_FLOOR_BYTES,
   STOPPED_QUEUED_TEXT, tailUtf8, type RunService, type RunServiceDeps, type ToolBuildSpec,
@@ -254,12 +254,11 @@ describe('blocks', () => {
     expect(await rejects(start())).toMatchObject({ statusCode: 409, reason: 'personal_quota', message: 'Over 10 GB.' })
   })
 
-  it('network on (M1) is a failed record the model is told about, not an error', async () => {
-    runner.refuse = { status: 'error', outcome: 'failed', error: NETWORK_UNAVAILABLE, durationMs: 0, stdout: '', stderr: NETWORK_UNAVAILABLE, filesChanged: [] }
-    const run = await start('a1', { network: 'on' })
-    expect(run).toMatchObject({ status: 'failed', error: NETWORK_UNAVAILABLE, network: 'on' })
-    expect(svc.get(run.id)!.status).toBe('failed')
-    expect(messages.find((m) => m.scriptRunId === run.id)!.scriptRun!.status).toBe('failed')
+  it('BE-P2-14: network on without a PermissionGate (no proxy wired) → 409 proxy_unavailable, no record', async () => {
+    const n = messages.length
+    expect(await rejects(start('a1', { network: 'on' }))).toMatchObject({ statusCode: 409, reason: 'proxy_unavailable', message: PROXY_UNAVAILABLE })
+    expect(messages.length).toBe(n)
+    expect(runner.requests).toHaveLength(0)
   })
 
   it('bad input: 400 for argv/cwd and a chat mismatch, 404 for an unknown bot or chat', async () => {

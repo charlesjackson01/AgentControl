@@ -16,11 +16,12 @@ import { execCommandRunner } from './command-runner.js'
 import { botRoot } from './files.js'
 import { groupRoot } from './group-files.js'
 import { groupIdle } from './groups.js'
-import { ALLOW_UNLIMITED_RUNS_ENV, createContainerRunner, NETWORK_UNAVAILABLE, type ContainerRunner } from './podman-runner.js'
+import { ALLOW_UNLIMITED_RUNS_ENV, createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { MODEL_TAIL_BYTES } from './run-service.js'
 import { createRuntimeProbe, PROBE_LABEL, resolveRuntime, type ResolvedRuntime, type RuntimeProbe, type RuntimeProbeResult } from './runtime-probe.js'
 import type { Agent, AgentRun, ConversationSummary, VmHostInfo } from './shared/types.js'
 import { createStore } from './store.js'
+import { PROXY_UNAVAILABLE, type EgressService } from './egress-service.js'
 import { sharedImageRef } from './vm-images.js'
 
 const enginePrefix = (process.env.AC_VM_ENGINE ?? 'podman').split(/\s+/).filter(Boolean)
@@ -68,6 +69,19 @@ function llm(responses: unknown[] | Record<string, unknown[]>) {
   return sent
 }
 const toolResults = (sent: Sent[]) => (sent.at(-1)?.messages ?? []).filter((m) => m.role === 'tool').map((m) => m.content)
+
+const noProxy = {
+  available: async () => ({ ok: false, message: 'no proxy in this test' }),
+  networkFor: (slug: string) => `ac-none-${slug}`,
+  grant: async () => { throw new Error('no proxy in this test') },
+  revoke: async () => [],
+  hosts: async () => [],
+  removeNetwork: async () => {},
+  shutdown: async () => {},
+  connectCheck: async () => ({ status: 'fail' as const, message: 'no proxy in this test' }),
+  userOnlyCidrs: () => [],
+  refreshSubnets: async () => {},
+} as unknown as EgressService
 
 describe.skipIf(!engineReady)('@vm BE-P2-16 run_script', () => {
   let dir = ''
@@ -128,6 +142,8 @@ describe.skipIf(!engineReady)('@vm BE-P2-16 run_script', () => {
     app = buildApp(store, {
       vmHost: { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host },
       botEnv, runtimeProbe, vmRunner: runner, vmFreeBytes: () => null,
+      // BE-P2-14: no proxy in this suite (egress.vm.test.ts / permission-gate.vm.test.ts cover it).
+      egress: noProxy,
     })
     await app.ready()
     for (const [k, name] of Object.entries(NAMES) as [keyof typeof NAMES, string][]) {
@@ -207,10 +223,9 @@ describe.skipIf(!engineReady)('@vm BE-P2-16 run_script', () => {
     expect(store.chatMessages.filter((m) => m.scriptRun).length).toBe(before + 1)
   }, 300_000)
 
-  it('network "on" is refused by the runner and recorded (the model is told)', async () => {
+  it('BE-P2-14: network "on" with no proxy for this app → the model is told 409 proxy_unavailable', async () => {
     const sent = llm([toolCall('run_script', { argv: ['true'], network: 'on' }), reply('no internet')])
     await dm(bots.worker, 'fetch it')
-    const result = JSON.parse(toolResults(sent)[0]!) as { status: string; error?: string }
-    expect(result.error ?? '').toContain(NETWORK_UNAVAILABLE)
+    expect(toolResults(sent)[0]).toContain(PROXY_UNAVAILABLE)
   }, 300_000)
 })

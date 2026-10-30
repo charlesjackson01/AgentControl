@@ -147,6 +147,8 @@ export interface BotEnvRouteDeps {
   isolationNote?: (agent: Agent, engine: VmHostInfo['engine'] | null) => string | undefined
   /** BE-P2-7: after a saved PATCH changed the bot's gVisor mode ('mode') or browser permission ('features'). */
   onProbeInputChange?: (what: 'mode' | 'features') => void
+  /** BE-P2-14: after a saved PATCH changed the bot's internet policy or browser permission (values before). */
+  onPolicyChange?: (agentId: string, before: { internetPolicy: Agent['internetPolicy']; browser: boolean }) => void
   /** BE-P2-10: personal data (folder + tools volumes + layer); absent: the folder parts only. */
   personal?: PersonalUsage
   /** BE-P2-10: the bot's kept undo snapshots against its budget; absent: none. */
@@ -324,6 +326,9 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     }
     if (next.vm.gvisor !== agent.vm.gvisor) deps.onProbeInputChange?.('mode')
     if (next.vm.permissions.browser !== agent.vm.permissions.browser) deps.onProbeInputChange?.('features')
+    if (next.internetPolicy !== agent.internetPolicy || next.vm.permissions.browser !== agent.vm.permissions.browser) {
+      deps.onPolicyChange?.(agent.id, { internetPolicy: agent.internetPolicy, browser: agent.vm.permissions.browser })
+    }
     return vmInfo(next)
   })
 

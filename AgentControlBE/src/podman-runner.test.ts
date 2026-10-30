@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
-import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, NETWORK_UNAVAILABLE, parseCgroupEvents, PERSONAL_QUOTA_REASON, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
+import { PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON } from './egress-service.js'
+import { createContainerRunner, GVISOR_UNAVAILABLE_REASON, LIMITS_UNENFORCED_MESSAGE, MOUNTS_UNUSABLE_MESSAGE, parseCgroupEvents, PERSONAL_QUOTA_REASON, TAIL_BYTES, type ContainerRunnerDeps } from './podman-runner.js'
 import { resolveRuntime, type ResolvedRuntime, type RuntimeProbeResult } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { StreamRunner } from './stream-runner.js'
@@ -73,7 +74,8 @@ describe('createContainerRunner', () => {
     const { runner, streamed, botEnv } = setup()
     expect(runner.check(req())).toBeNull()
     expect(runner.check(req({ agentId: 'nope' }))).toMatchObject({ status: 'error', outcome: 'failed' })
-    expect(runner.check(req({ network: 'on' }))).toMatchObject({ outcome: 'failed', error: NETWORK_UNAVAILABLE })
+    // BE-P2-14: no proxy wired into this runner → proxy_unavailable (INTERNET_NOT_GRANTED needs one).
+    expect(runner.check(req({ network: 'on' }))).toMatchObject({ outcome: 'failed', error: PROXY_UNAVAILABLE, reason: PROXY_UNAVAILABLE_REASON })
     expect(runner.check(req({ argv: [] }))).toMatchObject({ outcome: 'failed' })
     const unlimited: ResolvedRuntime = { ...crun, limitsEnforced: false, limitsReason: 'x' }
     expect(setup({ runtime: unlimited }).runner.check(req())).toMatchObject({ reason: 'limits_unenforced' })
@@ -184,7 +186,7 @@ describe('createContainerRunner', () => {
 
   it('network on, required_unavailable, unknown bot and empty argv fail with plain messages and no engine call', async () => {
     const s = setup({ runtime: { effective: null, status: 'required_unavailable', reason: 'gVisor is required for Analyst but isn\'t available (x). Turn off Force on or fix gVisor.', mode: 'force_on', globalMode: 'auto' } })
-    expect((await s.runner.run(req({ network: 'on' }))).error).toBe('Internet access isn\'t available yet.')
+    expect((await s.runner.run(req({ network: 'on' }))).error).toBe(PROXY_UNAVAILABLE)
     expect((await s.runner.run(req())).error).toMatch(/^gVisor is required for Analyst/)
     expect((await s.runner.run(req({ agentId: 'nope' }))).error).toBe('Bot not found.')
     expect((await s.runner.run(req({ argv: [] }))).status).toBe('error')

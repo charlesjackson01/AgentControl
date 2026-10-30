@@ -8,7 +8,7 @@ import { botMounts, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
 import { ensureDm } from './conversations.js'
 import { groupIdle } from './groups.js'
-import { NETWORK_UNAVAILABLE } from './podman-runner.js'
+import { PROXY_UNAVAILABLE } from './egress-service.js'
 import { fakeRunner, until, type FakeRunner } from './run-service.fake.js'
 import type { RuntimeProbe } from './runtime-probe.js'
 import type { Agent, AgentRun, ConversationSummary, ScriptRun, VmHostInfo } from './shared/types.js'
@@ -66,8 +66,7 @@ beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'agentcontrol-be16-'))
   store = createStore(join(dir, 'store.json'))
   runner = fakeRunner()
-  // The real runner refuses network "on" with NETWORK_UNAVAILABLE (RunService then records the refusal).
-  runner.check = (req) => runner.refuse ?? (req.network === 'on' ? { status: 'unavailable', error: NETWORK_UNAVAILABLE, durationMs: 0, stdout: '', stderr: '' } as never : null)
+  runner.check = (req) => runner.refuse ?? null
   const engine = fakeEngine()
   const botEnv = createBotEnvService({
     exec: engine.exec,
@@ -214,16 +213,15 @@ describe('BE-P2-16 run_script (fake LLM end to end)', () => {
     expect(runner.requests).toHaveLength(0)
   })
 
-  it('network "on" reaches RunService, which records the refusal on the card', async () => {
+  it('BE-P2-14: network "on" with the proxy down → the model gets 409 proxy_unavailable, no card', async () => {
     const a = await makeBot('Analyst')
     const sent = llm([toolCall('run_script', { argv: ['curl', 'https://example.com'], network: 'on' }), reply('no internet')])
     const run = (await runDm(a, 'fetch it')).json() as AgentRun
     expect(run.status).toBe('succeeded')
     expect(runner.requests).toHaveLength(0)
-    const result = JSON.parse(toolResults(sent)[0]!) as { status: string; error?: string }
-    expect(result.status).not.toBe('succeeded')
-    expect(result.error).toBe(NETWORK_UNAVAILABLE)
+    expect(toolResults(sent)[0]).toContain(PROXY_UNAVAILABLE)
     expect(run.toolCalls?.[0]?.ok).toBe(false)
+    expect(store.chatMessages.filter((m) => m.scriptRun)).toHaveLength(0)
   })
 
   it('stopping the reply stops its script', async () => {
@@ -265,16 +263,16 @@ describe('vm_install timeout (M2 contract fec4670, landed in BE-P2-13)', () => {
 })
 
 describe('BE-P2-16 vm_install', () => {
-  it('M1 has no build network: the model gets the 409 text and the step fails', async () => {
+  it('BE-P2-14: under Ask with the proxy down, the model gets 409 proxy_unavailable and the step fails (no record)', async () => {
     const a = await makeBot('Analyst')
-    const lock = vi.spyOn(app.vmRuns, 'withToolBuild')
+    const build = vi.spyOn(app.vmRuns, 'startToolBuild')
     const sent = llm([toolCall('vm_install', { apt: ['ffmpeg'], why: 'audio' }), reply('cannot')])
     const run = (await runDm(a, 'install ffmpeg')).json() as AgentRun
-    expect(toolResults(sent)[0]).toContain("isn't available yet")
+    expect(toolResults(sent)[0]).toContain(PROXY_UNAVAILABLE)
     expect(run.activity?.steps).toEqual([{ tool: 'vm_install', summary: "Couldn't install ffmpeg", ok: false }])
-    // BE-P2-22: under the bot's build lock (released after, even on a refusal).
-    expect(lock).toHaveBeenCalledWith(a.id, expect.any(Function))
+    expect(build).toHaveBeenCalledWith(expect.objectContaining({ agentId: a.id, via: 'vm_install', network: 'on', permissions: [], why: 'audio' }))
     expect(app.vmRuns.buildActive(a.id)).toBe(false)
+    expect(app.vmPermissions.list().requests).toEqual([])
   })
 })
 

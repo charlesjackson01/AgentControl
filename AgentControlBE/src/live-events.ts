@@ -65,14 +65,25 @@ export function createLiveEvents(opts: { replay?: number } = {}): LiveEventBus {
 }
 
 /** True when the event belongs to the filtered conversation / agent (unfiltered: everything). */
-export function liveEventMatches(e: LiveEvent, f: { conversationId?: string; agentId?: string; runAgent?: (runId: string) => string | undefined }): boolean {
+export function liveEventMatches(
+  e: LiveEvent,
+  f: {
+    conversationId?: string
+    agentId?: string
+    runAgent?: (runId: string) => string | undefined
+    /** BE-P2-14: whether the bot is in the conversation (`vm.updated` passes a conversation filter then). */
+    agentInConversation?: (agentId: string, conversationId: string) => boolean
+  },
+): boolean {
   if (f.conversationId) {
-    if (!('conversationId' in e) || e.conversationId !== f.conversationId) return false
+    if (e.type === 'vm.updated') {
+      if (!f.agentInConversation?.(e.agentId, f.conversationId)) return false
+    } else if (!('conversationId' in e) || e.conversationId !== f.conversationId) return false
   }
   if (f.agentId) {
     if (e.type === 'vm.updated') return e.agentId === f.agentId
     if (e.type === 'run.updated') return e.run.agentId === f.agentId
-    if (e.type === 'permission.requested' || e.type === 'permission.resolved') return e.request.agentId === f.agentId
+    if (e.type === 'permission.requested' || e.type === 'permission.resolved' || e.type === 'permission.updated') return e.request.agentId === f.agentId
     if (e.type === 'run.output') return f.runAgent?.(e.runId) === f.agentId
     return false
   }
@@ -87,6 +98,8 @@ export interface EventsRouteOptions {
   heartbeatMs?: number
   /** run.output carries no agentId; this maps a run id to its bot for `?agentId=`. */
   runAgent?: (runId: string) => string | undefined
+  /** BE-P2-14: `?conversationId=` lets the bot's `vm.updated` through when it is in that conversation. */
+  agentInConversation?: (agentId: string, conversationId: string) => boolean
 }
 
 export function registerLiveEventRoutes(app: FastifyInstance, bus: LiveEventBus, opts: EventsRouteOptions = {}): void {
@@ -100,6 +113,7 @@ export function registerLiveEventRoutes(app: FastifyInstance, bus: LiveEventBus,
       conversationId: typeof q.conversationId === 'string' && q.conversationId ? q.conversationId : undefined,
       agentId: typeof q.agentId === 'string' && q.agentId ? q.agentId : undefined,
       runAgent: opts.runAgent,
+      agentInConversation: opts.agentInConversation,
     }
     const header = req.headers['last-event-id']
     const rawLast = (Array.isArray(header) ? header[0] : header) ?? q.lastEventId

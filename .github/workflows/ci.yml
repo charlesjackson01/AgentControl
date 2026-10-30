@@ -46,8 +46,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: AgentControlFE/package-lock.json
+          cache-dependency-path: |
+            AgentControlFE/package-lock.json
+            AgentControlBE/package-lock.json
       - run: npm ci
+      # tests/skills.test.mjs imports AgentControlBE/src/db/skill-md.ts, which needs the backend's deps (yaml).
+      - name: npm ci (AgentControlBE, for the shared skill parser test)
+        run: npm ci
+        working-directory: AgentControlBE
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test

@@ -3,21 +3,23 @@
  * (data/bots/<slug>.shared.json, data/groups/<slug>.shared.json) so it is
  * never listed, never counted, and never writable by a bot. Keys are paths
  * relative to the folder root ('shared/report.pdf').
+ * BE-P2-6: `root` is a volume path ('bots/<slug>'), read and written through the StorageBackend.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
 import type { FileEntry } from './shared/types.js'
+import type { StorageBackend, VolPath } from './storage/types.js'
 
 export interface ShareRecord {
   sharedAt: string
   sharedInConversationId: string
 }
 
-const fileFor = (root: string) => `${root}.shared.json`
+const fileFor = (root: VolPath) => `${root}.shared.json`
 
-export function readShares(root: string): Record<string, ShareRecord> {
+export function readShares(fs: StorageBackend, root: VolPath): Record<string, ShareRecord> {
   try {
-    const raw: unknown = JSON.parse(readFileSync(fileFor(root), 'utf8'))
+    const text = fs.readTextAt(fileFor(root))
+    if (text === null) return {}
+    const raw: unknown = JSON.parse(text)
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
     const out: Record<string, ShareRecord> = {}
     for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
@@ -32,19 +34,18 @@ export function readShares(root: string): Record<string, ShareRecord> {
   }
 }
 
-function writeShares(root: string, map: Record<string, ShareRecord>): void {
-  mkdirSync(dirname(root), { recursive: true })
-  writeFileSync(fileFor(root), `${JSON.stringify(map, null, 2)}\n`)
+function writeShares(fs: StorageBackend, root: VolPath, map: Record<string, ShareRecord>): void {
+  fs.writeTextAt(fileFor(root), `${JSON.stringify(map, null, 2)}\n`)
 }
 
-export function recordShare(root: string, path: string, record: ShareRecord): void {
-  writeShares(root, { ...readShares(root), [path]: record })
+export function recordShare(fs: StorageBackend, root: VolPath, path: string, record: ShareRecord): void {
+  writeShares(fs, root, { ...readShares(fs, root), [path]: record })
 }
 
 /** Move (to a path) or drop (to null) the records at and under `from`. */
-export function moveShares(root: string, from: string, to: string | null): void {
-  if (!existsSync(fileFor(root))) return
-  const map = readShares(root)
+export function moveShares(fs: StorageBackend, root: VolPath, from: string, to: string | null): void {
+  if (!fs.existsAt(fileFor(root))) return
+  const map = readShares(fs, root)
   let changed = false
   for (const key of Object.keys(map)) {
     if (key !== from && !key.startsWith(`${from}/`)) continue
@@ -53,12 +54,12 @@ export function moveShares(root: string, from: string, to: string | null): void 
     if (to !== null) map[to + key.slice(from.length)] = value
     changed = true
   }
-  if (changed) writeShares(root, map)
+  if (changed) writeShares(fs, root, map)
 }
 
 /** The folder was archived to `target`: its records go with it (as target/.shared.json). */
-export function archiveShares(root: string, target: string): void {
-  if (existsSync(fileFor(root))) renameSync(fileFor(root), join(target, '.shared.json'))
+export function archiveShares(fs: StorageBackend, root: VolPath, target: VolPath): void {
+  if (fs.existsAt(fileFor(root))) fs.renameAt(fileFor(root), `${target}/.shared.json`)
 }
 
 /** Add sharedAt / sharedInConversationId to file entries the user shared into a chat. */

@@ -1,6 +1,6 @@
 import { useId, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { activityLabel, fileOpenPath, type ActivityView } from '../../lib/activity'
+import { activityLabel, canOpenFile, fileOpenPath, type ActivityView } from '../../lib/activity'
 import { groupFileCard } from '../../lib/groups'
 
 /**
@@ -92,19 +92,21 @@ export function FileCards({ files, conversationId }: { files: ActivityView['file
   return (
     <ul className="cf-fcards" aria-label="Files changed">
       {files.map((f) => (
-        <li key={f.path} className="cf-fcard">
+        <li key={`${f.root}:${f.groupId ?? ''}:${f.path}`} className="cf-fcard">
           <span className="cf-fcard__ico" aria-hidden="true">📄</span>
           <span className="cf-fcard__txt">
             <span className="cf-fcard__name" title={f.path}>{f.name}</span>
             <span className="cf-fcard__meta">
               {/* Mockup 04: "workspace/briefs · 2.4 KB · updated just now" (GAP-6, resolved once BE-3 sends bytes/modifiedAt). */}
-              {f.meta}
+              {f.root === 'group' && f.groupName ? `${f.groupName} · ${f.meta}` : f.meta}
             </span>
           </span>
-          {/* Mockup 04: Open (GAP-7 resolved). Download: not in v3, left out. */}
-          <Link className="cf-btn cf-fcard__open" to={fileOpenPath(conversationId, f.path)} aria-label={`Open ${f.name} in Files`}>
-            Open
-          </Link>
+          {/* Mockup 04: Open (GAP-7 resolved). Download: not in v3, left out. A deleted file (Phase 2) has nothing to open. */}
+          {canOpenFile(f) && (
+            <Link className="cf-btn cf-fcard__open" to={fileOpenPath(f.root === 'group' && f.groupId ? f.groupId : conversationId, f.path)} aria-label={`Open ${f.name} in Files`}>
+              Open
+            </Link>
+          )}
         </li>
       ))}
     </ul>
@@ -112,18 +114,18 @@ export function FileCards({ files, conversationId }: { files: ActivityView['file
 }
 
 /**
- * FE-6 (06a) file cards in a group: `group:shared/x` files say "Group folder · added by X" and
- * open the group's Shared files; anything else is in the author's own folder and opens in their chat.
+ * FE-6 (06a) file cards in a group: files with `root: 'group'` (BE 3a70c34) say "Group folder · added
+ * by X" and open that group's Shared files; anything else is in the author's own folder and opens in their chat.
  */
 export function GroupFileCards({ files, groupId, authorName, authorChatId }: { files: ActivityView['files']; groupId: string; authorName: string; authorChatId?: string }) {
   if (files.length === 0) return null
   return (
     <ul className="cf-fcards" aria-label="Files changed">
       {files.map((f) => {
-        const card = groupFileCard(f.path, authorName, f.size)
-        const to = card.inGroup ? fileOpenPath(groupId, card.path) : authorChatId ? fileOpenPath(authorChatId, card.path) : null
+        const card = groupFileCard(f, authorName, f.size, f.change, groupId)
+        const to = !canOpenFile(f) ? null : card.inGroup ? fileOpenPath(card.groupId ?? groupId, card.path) : authorChatId ? fileOpenPath(authorChatId, card.path) : null
         return (
-          <li key={f.path} className="cf-fcard">
+          <li key={`${f.root}:${f.groupId ?? ''}:${f.path}`} className="cf-fcard">
             <span className="cf-fcard__ico" aria-hidden="true">📄</span>
             <span className="cf-fcard__txt">
               <span className="cf-fcard__name" title={card.path}>{f.name}</span>

@@ -10,6 +10,23 @@ export function fail(status: number, message: string): never {
   throw err
 }
 
+/** BE-P2-11: extra fields a reasoned error body may carry (UndoConflict's `conflicts`). */
+export interface ReasonExtra {
+  conflicts?: { path: string; root: 'agent' | 'group'; groupId?: string; groupName?: string }[]
+}
+
+/**
+ * fail() with a machine-readable `reason` (409/410 bodies carry it, per the Phase 2 contract).
+ * BE-P2-11: `extra.conflicts` is sent in the body too (undo's 409 'conflicts').
+ */
+export function failWithReason(status: number, reason: string, message: string, extra: ReasonExtra = {}): never {
+  const err = new Error(message) as Error & { statusCode: number; reason: string; conflicts?: ReasonExtra['conflicts'] }
+  err.statusCode = status
+  err.reason = reason
+  if (extra.conflicts) err.conflicts = extra.conflicts
+  throw err
+}
+
 export function uid(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`
 }

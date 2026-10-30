@@ -14,6 +14,7 @@ import type { WorkspaceStore } from './store.js'
 import { builtinTools, executeToolCall, type ToolContext, type ToolOutcome } from './tools.js'
 import { createFileService } from './file-service.js'
 import { FILE_TOOL_NAMES, recordStep } from './tools/files.js'
+import { vmToolNames } from './tools/vm.js'
 import type { RunActivity } from './tools/types.js'
 import { chatCompletion, STOPPED_BY_YOU, type ChatMessage, type ChatResult, type ToolDeclaration } from './upstream.js'
 
@@ -117,7 +118,7 @@ async function executeRunInner(
   const hasMemory = store.memories.some((m) => sameScope(m.scope, memoryScope))
   const plan = planPrompt({
     memory,
-    memoryTools: [...(memoryLearn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
+    memoryTools: [...(memoryLearn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES, ...vmToolNames(store, agent.id)],
     instructions: agentInstructions(agent.instructions, agent.rules),
     skills: injectedSkills,
     input,
@@ -213,6 +214,7 @@ async function executeRunInner(
     ...(opts.group?.slug ? { group: { id: opts.group.id, slug: opts.group.slug } } : {}),
     files: createFileService(store, agent, opts.group?.slug ? { slug: opts.group.slug } : undefined),
     activity,
+    ...(opts.signal ? { signal: opts.signal } : {}),
   }
 
   const signal = opts.signal

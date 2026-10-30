@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { readFileSync } from 'node:fs'
-import { MAX_STEPS, activityLabel, activityView, fileOpenPath, stepVerb } from '../src/lib/activity.ts'
+import { MAX_STEPS, activityLabel, activityView, canOpenFile, fileOpenPath, stepVerb } from '../src/lib/activity.ts'
 
 const mockup04 = {
   skills: [{ id: 'obra/systematic-debugging', name: 'systematic-debugging', source: 'obra/superpowers' }],
@@ -32,7 +32,7 @@ describe('activity card: rendering from activity (mockup 04)', () => {
     assert.equal(v.failed, 0)
   })
   it('file cards: name, folder, change', () => {
-    assert.deepEqual(v.files, [{ path: 'workspace/briefs/lindmere-harbor.md', name: 'lindmere-harbor.md', dir: 'workspace/briefs', change: 'modified', changeLabel: 'modified', size: null, updated: null, meta: 'workspace/briefs · modified' }])
+    assert.deepEqual(v.files, [{ path: 'workspace/briefs/lindmere-harbor.md', name: 'lindmere-harbor.md', dir: 'workspace/briefs', change: 'modified', changeLabel: 'modified', size: null, updated: null, meta: 'workspace/briefs · modified', root: 'agent' }])
     assert.equal(activityView({ skills: [], steps: [], filesChanged: [{ path: 'notes.md', change: 'added' }] }).files[0].dir, '')
   })
   it('one step reads "1 step"; the toggle label names skill, count and failures', () => {
@@ -79,7 +79,7 @@ describe('activity card: empty or missing activity hides it', () => {
     it(`${name} → null`, () => assert.equal(activityView(a), null))
   }
   it('only malformed entries → null', () => {
-    assert.equal(activityView({ skills: [{ id: 1 }], steps: [{ tool: 'x' }], filesChanged: [{ path: 'a', change: 'deleted' }] }), null)
+    assert.equal(activityView({ skills: [{ id: 1 }], steps: [{ tool: 'x' }], filesChanged: [{ path: 'a', change: 'renamed' }] }), null) // Phase 2: 'deleted' is valid now (see below)
   })
 })
 
@@ -156,7 +156,7 @@ describe('activity card: component wiring', () => {
     assert.match(css, /\.cf-act__body\[hidden\] \{ display: none; \}/, 'display:flex must not override hidden')
   })
   it('Open links to the Files panel at the file (GAP-7 resolved); still no Download', () => {
-    assert.match(src, /<Link className="cf-btn cf-fcard__open" to=\{fileOpenPath\(conversationId, f\.path\)\}/)
+    assert.match(src, /<Link className="cf-btn cf-fcard__open" to=\{fileOpenPath\(f\.root === 'group' && f\.groupId \? f\.groupId : conversationId, f\.path\)\}/, 'a group-root file opens in its group')
     assert.doesNotMatch(src, /cf-fcard__open" disabled/)
     assert.doesNotMatch(src, />\s*Download\s*</, "no Download action")
     const chat = readFileSync(new URL('../src/pages/ConversationChat.tsx', import.meta.url), 'utf8')
@@ -173,8 +173,38 @@ describe('activity card: component wiring', () => {
     const chat = readFileSync(new URL('../src/pages/ConversationChat.tsx', import.meta.url), 'utf8')
     // FE-5 moved BotRow/UserRow into components/shell/ChatRows.tsx (shared with the /new draft card).
     const rows = readFileSync(new URL('../src/components/shell/ChatRows.tsx', import.meta.url), 'utf8')
-    assert.match(rows, /\{before\}\s*\n\s*<div className=\{`cf-bub cf-bub--a/)
+    // FE-P2-2: `bare` (a run card) drops the bubble; otherwise the bubble still follows the card.
+    assert.match(rows, /\{before\}\s*\n\s*(?:\{bare \? children : )?<div className=\{`cf-bub cf-bub--a/)
     assert.match(rows, /\{after\}\s*\n\s*\{meta &&/)
     assert.match(chat, /activityView\(m\.activity, undefined, \(m\.runId && runFiles\[m\.runId\]\) \|\| null\)/)
   })
 })
+
+describe("file cards: Phase 2 'deleted' (BE-P2-1)", () => {
+  const now = new Date('2026-10-27T12:00:00Z')
+  it('keeps a deleted file with "folder · deleted" and nothing to open', () => {
+    const v = activityView({ skills: [], steps: [], filesChanged: [
+      { path: 'workspace/old.csv', change: 'deleted', bytes: 10, modifiedAt: '2026-10-27T11:59:00Z' },
+      { path: 'workspace/new.csv', change: 'added', bytes: 2048 },
+    ] }, now)
+    assert.deepEqual(v.files[0], { path: 'workspace/old.csv', name: 'old.csv', dir: 'workspace', change: 'deleted', changeLabel: 'deleted', size: null, updated: null, meta: 'workspace · deleted', root: 'agent' })
+    assert.equal(canOpenFile(v.files[0]), false)
+    assert.equal(canOpenFile(v.files[1]), true)
+  })
+  it('carries root/groupId/groupName (BE 3a70c34); missing root is agent', () => {
+    const v = activityView({ skills: [], steps: [], filesChanged: [
+      { path: 'shared/pier.md', change: 'added', root: 'group', groupId: 'g1', groupName: 'Pier' },
+      { path: 'workspace/a.csv', change: 'modified' },
+      { path: 'shared/x.md', change: 'added', root: 'nope' },
+    ] }, now)
+    assert.deepEqual(v.files.map((f) => [f.path, f.root, f.groupId, f.groupName]), [
+      ['shared/pier.md', 'group', 'g1', 'Pier'],
+      ['workspace/a.csv', 'agent', undefined, undefined],
+      ['shared/x.md', 'agent', undefined, undefined],
+    ])
+  })
+  it('still drops unknown change kinds', () => {
+    assert.equal(activityView({ skills: [], steps: [], filesChanged: [{ path: 'x', change: 'renamed' }] }), null)
+  })
+})
+

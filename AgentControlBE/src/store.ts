@@ -1,3 +1,4 @@
+import { defaultVmSettings, normalizeAgentVm, normalizeVmSettings } from './vm-defaults.js'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -174,7 +175,8 @@ interface Persisted {
 }
 
 /** Agents from older installs may lack `role`, `isPrimary`, or have a null `endpointId`. */
-type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary' | 'role' | 'slug' | 'internetPolicy' | 'memoryLearn'> & {
+type LegacyAgent = Omit<Agent, 'endpointId' | 'isPrimary' | 'role' | 'slug' | 'internetPolicy' | 'memoryLearn' | 'vm'> & {
+  vm?: unknown
   endpointId?: string | null
   isPrimary?: boolean
   role?: string
@@ -257,7 +259,7 @@ function seed(): Persisted {
   const data = seedData()
   const state = { agents: data.agents, runs: data.runs, conversations: data.conversations, chatMessages: data.chatMessages }
   migrateRunsToConversations(state, data.meta.migrations)
-  return { ...data, conversations: state.conversations, chatMessages: state.chatMessages }
+  return { ...data, settings: { ...data.settings, vm: defaultVmSettings() }, conversations: state.conversations, chatMessages: state.chatMessages }
 }
 
 /** Core seeds plus every vendored skill (bodies loaded from skills-vendor/). */
@@ -607,7 +609,13 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
       agent.memoryLearn = true
       changed = true
     }
+    // BE-P2-1: every bot gets its VM defaults (browser off, gvisor inherit, no env or packages).
+    const vm = normalizeAgentVm((agent as { vm?: unknown }).vm)
+    ;(agent as Agent).vm = vm.vm
+    if (vm.changed) changed = true
   }
+  const vmSettings = normalizeVmSettings((raw.settings as { vm?: unknown } | undefined)?.vm)
+  if (vmSettings.changed) changed = true
 
   // Projects were retired. Until chat-first-archive-v1 has written them to
   // the archive they are held aside, exactly as stored, and never served.
@@ -639,7 +647,7 @@ function reconcile(raw: StoredShape): { data: Persisted; pending: PendingArchive
       skills: missingSkills.length > 0 ? [...savedSkills, ...missingSkills] : savedSkills,
       endpoints,
       endpointModels: raw.endpointModels ?? base.endpointModels,
-      settings: raw.settings ?? base.settings,
+      settings: { ...(raw.settings ?? base.settings), vm: vmSettings.vm },
       notes,
       memories: normalizeMemories(raw.memories),
       meta,

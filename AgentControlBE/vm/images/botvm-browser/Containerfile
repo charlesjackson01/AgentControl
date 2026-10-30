@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+# BE-P2-3: agentcontrol/botvm-browser — the shared, read-only browser layer
+# (plan §2.2, §9). FROM the botvm base plus Playwright and full Chromium.
+# Used only by bots whose Browser permission is on; never counted in a bot's 10 GB.
+# Only full Chromium is installed (`--no-shell`: no chromium-headless-shell). The
+# recommended launch is channel 'chromium' (new headless mode) with --no-sandbox (the
+# container is the sandbox): Python `chromium.launch(channel="chromium", args=["--no-sandbox"])`.
+# A bare `chromium.launch()` works too: link-headless-shell.sh points the headless-shell
+# path Playwright uses by default at the same full Chromium binary.
+# Browsers live read-only in /opt/ms-playwright; downloads into volumes are blocked.
+
+ARG BOTVM_IMAGE=localhost/agentcontrol/botvm:1.0.0
+FROM ${BOTVM_IMAGE}
+
+ARG BOTVM_VERSION=1.0.0
+ARG PLAYWRIGHT_VERSION=1.64.1
+
+LABEL org.opencontainers.image.title="agentcontrol/botvm-browser" \
+      org.opencontainers.image.description="AgentControl bot VM browser layer: botvm + Playwright + Chromium (new headless)" \
+      org.opencontainers.image.version="${BOTVM_VERSION}" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      io.agentcontrol.image="botvm-browser" \
+      io.agentcontrol.version="${BOTVM_VERSION}" \
+      io.agentcontrol.playwright="${PLAYWRIGHT_VERSION}"
+
+# No SHELL instruction (ignored in Podman's OCI format); RUNs are POSIX sh.
+
+# Installing system packages needs root; the final USER drops back to 1000.
+USER root
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+
+# Playwright for Python (system site-packages, not the bot's --user dir) and Node
+# (global under /usr/local), same version so both use the one Chromium build.
+# HOME=/root so root's npm/pip caches and logs never land in /home/bot (the seed of
+# the bot's ac-tools volume). npm goes first and skips its bin link (it refuses to
+# overwrite one): /usr/local/bin/playwright is the pip CLI (same version), and Node
+# code gets the package through NODE_PATH.
+RUN export HOME=/root PIP_USER=0 NPM_CONFIG_PREFIX=/usr/local \
+ && npm install -g --no-fund --no-audit --no-bin-links "playwright@${PLAYWRIGHT_VERSION}" \
+ && pip install --no-cache-dir --root-user-action=ignore "playwright==${PLAYWRIGHT_VERSION}" \
+ && python3 -m playwright install --with-deps --no-shell chromium \
+ && rm -rf /var/lib/apt/lists/* /root/.cache /root/.npm \
+ && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
+
+# Bare `chromium.launch()` (no channel) → full Chromium in new headless mode (see the script).
+COPY link-headless-shell.sh /usr/local/lib/agentcontrol/link-headless-shell.sh
+RUN sh /usr/local/lib/agentcontrol/link-headless-shell.sh \
+ && rm -rf /usr/local/lib/agentcontrol
+
+# Node resolves the global playwright; no further browser downloads (rootfs is
+# read-only at run time, and volumes must not hold browsers).
+ENV NODE_PATH=/home/bot/.local/lib/node_modules:/usr/local/lib/node_modules \
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    PLAYWRIGHT_CHROMIUM_ARGS=--no-sandbox \
+    AC_BOTVM_BROWSER=1
+
+USER 1000:1000
+WORKDIR /bot/workspace
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]

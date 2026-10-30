@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
-import { assertWritable, guardedPath, parseClientPath } from './files.js'
+import { assertWritable, guardedPath, parseClientPath, setPersonalExtraBytes } from './files.js'
 import type { Agent, Endpoint, FileEntry, FileListing } from './shared/types.js'
 import { createStore, type WorkspaceStore } from './store.js'
 
@@ -119,7 +119,7 @@ describe('Files API', () => {
     expect(listing.entries.map((e) => [e.path, e.kind, e.zone])).toEqual([
       ['memory', 'dir', 'memory'], ['shared', 'dir', 'shared'], ['skills', 'dir', 'skills'], ['workspace', 'dir', 'workspace'], ['BOT.md', 'file', 'meta'],
     ])
-    expect(listing.usage.quotaBytes).toBe(500 * 1024 * 1024)
+    expect(listing.usage.quotaBytes).toBe(10240 * 1024 * 1024)
     expect(listing.usage.bytes).toBeGreaterThan(0)
     expect(res.body).not.toContain(dir)
   })
@@ -248,6 +248,20 @@ describe('Files API', () => {
     // Overwriting counts only the difference.
     expect((await put(`${base()}/content?path=shared/a.bin&overwrite=1`, Buffer.alloc(1500))).statusCode).toBe(201)
     expect(((await json('GET', base())).json() as FileListing).usage.quotaBytes).toBe(4096)
+  })
+
+  it('BE-P2-10: the tools volumes and image layer count toward the bot quota', async () => {
+    vi.stubEnv('AGENTCONTROL_BOT_QUOTA_BYTES', String(4096))
+    expect((await put(`${base()}/content?path=shared/a.bin`, Buffer.alloc(1024))).statusCode).toBe(201)
+    setPersonalExtraBytes((a) => (a.id === bot.id ? 2500 : 0))
+    try {
+      // Fits without the extra; not with it.
+      expect((await put(`${base()}/content?path=shared/b.bin`, Buffer.alloc(1000))).statusCode).toBe(413)
+      setPersonalExtraBytes(null)
+      expect((await put(`${base()}/content?path=shared/b.bin`, Buffer.alloc(1000))).statusCode).toBe(201)
+    } finally {
+      setPersonalExtraBytes(null)
+    }
   })
 
   it('caps one upload at 25 MiB', async () => {

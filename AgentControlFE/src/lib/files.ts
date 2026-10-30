@@ -19,7 +19,7 @@
  *   GAP-F11 read-only folders: Upload and Folder disabled with a title.
  *   GAP-F12 search: filters the open folder by name.
  *   GAP-F13 a path refused in the UI (?path= with "..", etc.): alert line, nothing requested.
- *   GAP-F14 Sandbox tab disabled ("Coming soon"); needs BE-8.
+ *   GAP-F14 (closed by FE-P2-5) Sandbox tab was disabled; the VM tab replaces it.
  *   GAP-F15 breadcrumb segments are clickable (03d shows plain text).
  */
 import type { FileEntry, FileListing, FileZone } from './types.ts'
@@ -365,4 +365,43 @@ export function filesApi(request: Req, upload: Uploader, messageOf: (body: unkno
       return body as FileEntry
     },
   }
+}
+
+/* ---------- files_missing (BE be-6: every file route answers 409 {reason:'files_missing'}) ---------- */
+
+/** be-6's wording, used only when a files_missing body carries no message of its own. */
+export const FILES_MISSING_TEXT =
+  "AgentControl can't find the bots' files, so files and runs are paused to keep anything from being overwritten. Chats still work."
+
+/** The server's message for a 409 `reason:'files_missing'` error (ApiError: status + parsed body), else null. */
+export function filesMissingOf(err: unknown): string | null {
+  if (!err || typeof err !== 'object') return null
+  const { status, body } = err as { status?: unknown; body?: unknown }
+  if (status !== 409 || !body || typeof body !== 'object') return null
+  const b = body as { reason?: unknown; message?: unknown }
+  if (b.reason !== 'files_missing') return null
+  return typeof b.message === 'string' && b.message.trim() ? b.message : FILES_MISSING_TEXT
+}
+
+/** The hint under shared/ (03d). None in files_missing: there is nowhere to drop files. */
+export function sharedHint(o: { group: boolean; ownerName: string; filesMissing: boolean }): string | null {
+  if (o.filesMissing) return null
+  return o.group
+    ? 'Files sent in the group chat land here. Your private chats with each bot keep their own folders.'
+    : `Drop files here, or send them in chat, to share them with ${o.ownerName}.`
+}
+
+/**
+ * What the Folder contents pane does with a drag: 'accept' (highlight + upload), 'refuse'
+ * (files_missing: swallowed with no highlight and no upload, so the browser doesn't open the file
+ * instead), or 'ignore' (not a file drag).
+ */
+export function paneDrop(types: readonly string[] | undefined | null, filesMissing: boolean): 'accept' | 'refuse' | 'ignore' {
+  if (!types || !Array.from(types).includes('Files')) return 'ignore'
+  return filesMissing ? 'refuse' : 'accept'
+}
+
+/** Upload and "+ Folder" are disabled outside shared/ and workspace/, while busy, and in files_missing. */
+export function addDisabled(o: { writable: boolean; busy: boolean; filesMissing: boolean }): boolean {
+  return !o.writable || o.busy || o.filesMissing
 }

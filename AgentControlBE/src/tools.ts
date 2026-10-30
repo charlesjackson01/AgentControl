@@ -16,6 +16,7 @@ import { clipText, RESULT_MAX_CHARS } from './tools/limits.js'
 import { skillTools } from './tools/skills.js'
 import { textTools } from './tools/text.js'
 import { timeTools } from './tools/time.js'
+import { vmTools } from './tools/vm.js'
 import type { ToolCategory, ToolContext, ToolEffect, ToolEntry } from './tools/types.js'
 import { workspaceTools } from './tools/workspace.js'
 
@@ -33,7 +34,7 @@ export const MAX_TOOL_ARGUMENT_CHARS = 64_000
 
 export const builtinTools: ReadonlyMap<string, ToolEntry> = (() => {
   const map = new Map<string, ToolEntry>()
-  for (const entry of [...workspaceTools, ...memoryTools, ...timeTools, ...mathTools, ...textTools, ...dataTools, ...skillTools, ...fileTools]) {
+  for (const entry of [...workspaceTools, ...memoryTools, ...timeTools, ...mathTools, ...textTools, ...dataTools, ...skillTools, ...fileTools, ...vmTools]) {
     if (map.has(entry.name)) throw new Error(`Duplicate built-in tool "${entry.name}"`)
     map.set(entry.name, entry)
   }
@@ -142,14 +143,20 @@ export async function executeToolCall(call: ToolCall, ctx: ToolContext): Promise
     }
     let value = await withTimeout(
       Promise.resolve().then(() => entry.handler(resolved, ctx)),
-      TOOL_TIMEOUT_MS,
+      entry.timeoutMs ?? TOOL_TIMEOUT_MS,
     )
+    let ok = true
+    try {
+      ok = entry.resultOk ? entry.resultOk(value) !== false : true
+    } catch {
+      ok = true
+    }
     if (Object.keys(sources).length > 0 && value !== null && typeof value === 'object' && !Array.isArray(value)) {
       value = { ...(value as Record<string, unknown>), sources }
     }
     // JSON.stringify(undefined) is undefined; never hand the loop a non-string.
     const content = typeof value === 'string' ? value : (JSON.stringify(value) ?? 'null')
-    return { content: redactSecrets(content, ctx.store), ok: true }
+    return { content: redactSecrets(content, ctx.store), ok }
   } catch (err) {
     return fail(`Tool "${name}" failed: ${err instanceof Error ? err.message : String(err)}`)
   }

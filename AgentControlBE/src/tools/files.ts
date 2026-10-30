@@ -5,6 +5,7 @@
  */
 import { argError, readBoolean, readEnum, readNumber, readString } from './args.js'
 import type { FileService, ToolContext, ToolEntry } from './types.js'
+import type { FileChange } from '../shared/types.js'
 
 export const FILE_TOOL_NAMES = ['list_files', 'read_file', 'search_files', 'write_file', 'make_folder'] as const
 export const FILE_PAGE_CHARS = 8_000
@@ -27,7 +28,7 @@ function step(summary: string, failed: string, path?: string): { summary: string
 const shownArg = (args: Record<string, unknown>): string => (typeof args.path === 'string' ? args.path.trim().replace(/\/$/, '') : '')
 
 /** Record a write on the run's activity (deduped by path; 'added' stays 'added'). */
-function recordChange(ctx: ToolContext, entry: { path: string; change: 'added' | 'modified'; bytes: number; modifiedAt: string }): void {
+function recordChange(ctx: ToolContext, entry: FileChange & { bytes: number; modifiedAt: string }): void {
   const list = ctx.activity?.filesChanged
   if (!list) return
   const i = list.findIndex((f) => f.path === entry.path)

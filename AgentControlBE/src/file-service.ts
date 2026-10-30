@@ -6,24 +6,13 @@
  * workspace/ (own folder) or group:shared/. Paths are always relative;
  * absolute server paths never reach the model. Every open is no-follow, and
  * each segment is lstat-checked (guardedPath).
+ * BE-P2-6: all disk access goes through the workspace's StorageBackend
+ * (folders are volume paths); in files_missing every call fails plainly.
  */
-import { closeSync, existsSync, linkSync, lstatSync, readSync, readdirSync, renameSync, rmSync, statSync, type Stats } from 'node:fs'
-import { join } from 'node:path'
-import {
-  appendNoFollow,
-  ensureBotFolder,
-  ensureRoom,
-  folderBytes,
-  guardedPath,
-  mimeFor,
-  mkdirsGuarded,
-  openNoFollow,
-  parseClientPath,
-  quotaBytes,
-  tempNoFollow,
-} from './files.js'
+import { ensureBotFolder, ensureRoom, isTempName as isTemp, mimeFor, parseClientPath } from './files.js'
 import type { Agent } from './shared/types.js'
-import { ensureGroupRoom, recordAddedBy } from './group-files.js'
+import { ensureGroupRoom, groupVol, recordAddedBy } from './group-files.js'
+import { storageReady, type StorageBackend, type StorageStat, type VolPath } from './storage/index.js'
 import type { WorkspaceStore } from './store.js'
 import { argError } from './tools/args.js'
 import type { FileItem, FileService, SearchHit } from './tools/types.js'
@@ -33,12 +22,11 @@ const MAX_SEARCH_FILE_BYTES = 1024 * 1024
 const MAX_SEARCH_FILES = 2_000
 const GROUP = 'group:'
 const BOT_READ_ZONES = ['shared', 'workspace', 'memory']
-const isTemp = (n: string) => n.startsWith('.') && n.endsWith('.tmp')
 
 interface Resolved {
   space: 'bot' | 'group'
-  /** Absolute folder the parts are relative to (never shown). */
-  root: string
+  /** Volume folder the parts are relative to (never shown). */
+  root: VolPath
   parts: string[]
   /** The path as the model writes it: 'workspace/a.md' or 'group:shared/a.md'. */
   shown: string
@@ -60,24 +48,11 @@ function asText(buf: Buffer): string | null {
   try { return decoder.decode(buf) } catch { return null }
 }
 
-function readCapped(full: string, cap: number): Buffer {
-  const fd = clean(() => openNoFollow(full))
-  try {
-    const buf = Buffer.alloc(cap)
-    let n = 0
-    while (n < cap) {
-      const got = readSync(fd, buf, n, cap - n, null)
-      if (got === 0) break
-      n += got
-    }
-    return buf.subarray(0, n)
-  } finally { closeSync(fd) }
-}
-
-function itemFor(shown: string, info: Stats): FileItem {
-  return info.isDirectory()
-    ? { path: `${shown}/`, kind: 'folder', modifiedAt: info.mtime.toISOString() }
-    : { path: shown, kind: 'file', size: info.size, modifiedAt: info.mtime.toISOString() }
+function itemFor(shown: string, info: StorageStat): FileItem {
+  const modifiedAt = new Date(info.mtimeMs).toISOString()
+  return info.kind === 'dir'
+    ? { path: `${shown}/`, kind: 'folder', modifiedAt }
+    : { path: shown, kind: 'file', size: info.size, modifiedAt }
 }
 
 /**
@@ -86,12 +61,10 @@ function itemFor(shown: string, info: Stats): FileItem {
  * Membership is the caller's job: only a member's group run passes `group`.
  */
 export function createFileService(store: WorkspaceStore, agent: Agent, group?: { slug: string }): FileService {
-  const botRootDir = (): string => clean(() => ensureBotFolder(store, agent))
-  const groupRootDir = (): string => {
-    const slug = group?.slug ?? ''
-    if (!/^[a-z0-9-]{1,40}$/.test(slug)) throw new Error('This group has no valid folder name.')
-    return join(store.dataDir, 'groups', slug)
-  }
+  const fs = (): StorageBackend => clean(() => storageReady(store))
+  const botRootDir = (): VolPath => clean(() => ensureBotFolder(store, agent))
+  const groupRootDir = (): VolPath => clean(() => groupVol(group?.slug ?? ''))
+  const readCapped = (r: Resolved, cap: number): Buffer => clean(() => fs().read(r.root, r.parts, cap))
 
   function resolvePath(raw: unknown, example: Record<string, unknown>): Resolved {
     const text = typeof raw === 'string' ? raw.trim() : raw
@@ -124,17 +97,29 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
     const r = resolvePath(raw, example)
     const ok = r.space === 'group' ? r.parts.length >= 2 : r.parts[0] === 'workspace' && r.parts.length >= 2
     if (!ok) throw notWritable(r.shown)
-    if (r.space === 'group' && !existsSync(r.root)) throw new Error('This group has no folder yet.')
+    if (r.space === 'group' && !fs().existsAt(r.root)) throw new Error('This group has no folder yet.')
     return r
   }
 
-  function guarded(r: Resolved): string {
-    if (r.space === 'group' && !existsSync(r.root)) throw new Error(`Nothing at "${r.shown}" yet.`)
-    return clean(() => guardedPath(r.root, r.parts))
+  /** lstat through the guard; null when it does not exist. */
+  function guardedStat(r: Resolved): StorageStat | null {
+    if (r.space === 'group' && !fs().existsAt(r.root)) throw new Error(`Nothing at "${r.shown}" yet.`)
+    return clean(() => fs().stat(r.root, r.parts))
   }
 
-  function stat(full: string, shown: string): Stats {
-    try { return lstatSync(full) } catch { throw new Error(`Nothing at "${shown}".`) }
+  function stat(r: Resolved): StorageStat {
+    const info = guardedStat(r)
+    if (!info) throw new Error(`Nothing at "${r.shown}".`)
+    return info
+  }
+
+  /** Children of a folder, sorted by name; [] when it cannot be read. */
+  function children(r: Resolved): { name: string; info: StorageStat }[] {
+    try {
+      return fs().list(r.root, r.parts).map((d) => ({ name: d.name, info: d })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    } catch {
+      return []
+    }
   }
 
   /** Top-level places this run can see. */
@@ -143,23 +128,20 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
     const out: Resolved[] = [...BOT_READ_ZONES, 'BOT.md'].map((z) => ({ space: 'bot' as const, root, parts: [z], shown: z }))
     if (group) {
       const g = groupRootDir()
-      if (existsSync(join(g, 'shared'))) out.push({ space: 'group', root: g, parts: ['shared'], shown: `${GROUP}shared` })
+      if (fs().existsAt(`${g}/shared`)) out.push({ space: 'group', root: g, parts: ['shared'], shown: `${GROUP}shared` })
     }
     return out
   }
 
   /** Depth-first walk under r (no symlinks, no .tmp); stops when visit returns false. */
-  function walk(r: Resolved, visit: (child: Resolved, info: Stats) => boolean): boolean {
-    const full = guarded(r)
-    let names: string[]
-    try { names = readdirSync(full).sort() } catch { return true }
-    for (const n of names) {
+  function walk(r: Resolved, visit: (child: Resolved, info: StorageStat) => boolean): boolean {
+    guardedStat(r)
+    for (const { name: n, info } of children(r)) {
       if (isTemp(n)) continue
       const child: Resolved = { ...r, parts: [...r.parts, n], shown: `${r.shown}/${n}` }
-      const info = lstatSync(join(full, n))
-      if (info.isSymbolicLink()) continue
+      if (info.kind === 'symlink') continue
       if (!visit(child, info)) return false
-      if (info.isDirectory() && !walk(child, visit)) return false
+      if (info.kind === 'dir' && !walk(child, visit)) return false
     }
     return true
   }
@@ -170,34 +152,29 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
     list(raw, { recursive, max }) {
       const items: FileItem[] = []
       let truncated = false
-      const add = (shown: string, info: Stats): boolean => {
+      const add = (shown: string, info: StorageStat): boolean => {
         if (items.length >= max) { truncated = true; return false }
         items.push(itemFor(shown, info))
         return true
       }
       if (isTop(raw)) {
         for (const r of topLevel()) {
-          const full = guarded(r)
-          if (!existsSync(full)) continue
-          const info = lstatSync(full)
+          const info = guardedStat(r)
+          if (!info) continue
           if (!add(r.shown, info)) break
-          if (recursive && info.isDirectory() && !walk(r, (c, i) => add(c.shown, i))) break
+          if (recursive && info.kind === 'dir' && !walk(r, (c, i) => add(c.shown, i))) break
         }
         return { path: '', entries: items, truncated }
       }
       const r = resolvePath(raw, { path: 'shared/', recursive: false })
-      const full = guarded(r)
-      const info = stat(full, r.shown)
-      if (!info.isDirectory()) return { path: r.shown, entries: [itemFor(r.shown, info)], truncated }
+      const info = stat(r)
+      if (info.kind !== 'dir') return { path: r.shown, entries: [itemFor(r.shown, info)], truncated }
       if (recursive) {
         walk(r, (c, i) => add(c.shown, i))
       } else {
-        let names: string[] = []
-        try { names = readdirSync(full).sort() } catch { names = [] }
-        for (const n of names) {
+        for (const { name: n, info: ci } of children(r)) {
           if (isTemp(n)) continue
-          const ci = lstatSync(join(full, n))
-          if (ci.isSymbolicLink()) continue
+          if (ci.kind === 'symlink') continue
           if (!add(`${r.shown}/${n}`, ci)) break
         }
       }
@@ -206,12 +183,11 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
 
     read(raw) {
       const r = resolvePath(raw, { path: 'shared/notes.md' })
-      const full = guarded(r)
-      const info = stat(full, r.shown)
-      if (info.isDirectory()) throw argError(`"${r.shown}" is a folder; use list_files.`, { path: r.shown })
-      if (!info.isFile()) throw new Error(`"${r.shown}" is not a regular file.`)
-      const meta = { path: r.shown, size: info.size, mime: mimeFor(r.parts[r.parts.length - 1]!), modifiedAt: info.mtime.toISOString() }
-      const buf = readCapped(full, Math.min(info.size, MAX_READ_BYTES) + 1)
+      const info = stat(r)
+      if (info.kind === 'dir') throw argError(`"${r.shown}" is a folder; use list_files.`, { path: r.shown })
+      if (info.kind !== 'file') throw new Error(`"${r.shown}" is not a regular file.`)
+      const meta = { path: r.shown, size: info.size, mime: mimeFor(r.parts[r.parts.length - 1]!), modifiedAt: new Date(info.mtimeMs).toISOString() }
+      const buf = readCapped(r, Math.min(info.size, MAX_READ_BYTES) + 1)
       if (buf.length > MAX_READ_BYTES) return { ...meta, text: null, tooLarge: true }
       return { ...meta, text: asText(buf), tooLarge: false }
     },
@@ -222,13 +198,13 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
       const hits: SearchHit[] = []
       let files = 0
       let truncated = false
-      const visit = (c: Resolved, info: Stats): boolean => {
+      const visit = (c: Resolved, info: StorageStat): boolean => {
         if (hits.length >= maxHits || files >= MAX_SEARCH_FILES) { truncated = true; return false }
-        if (c.parts[c.parts.length - 1]!.toLowerCase().includes(needle)) hits.push({ path: info.isDirectory() ? `${c.shown}/` : c.shown, match: 'name' })
-        if (!info.isFile()) return true
+        if (c.parts[c.parts.length - 1]!.toLowerCase().includes(needle)) hits.push({ path: info.kind === 'dir' ? `${c.shown}/` : c.shown, match: 'name' })
+        if (info.kind !== 'file') return true
         files += 1
         if (info.size > MAX_SEARCH_FILE_BYTES) return true
-        const text = asText(readCapped(join(c.root, ...c.parts), info.size))
+        const text = asText(readCapped(c, info.size))
         if (text === null) return true
         let perFile = 0
         const lines = text.split('\n')
@@ -241,14 +217,13 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
         return true
       }
       for (const r of roots) {
-        const full = guarded(r)
-        if (!existsSync(full)) {
+        const info = guardedStat(r)
+        if (!info) {
           if (roots.length === 1) throw new Error(`Nothing at "${r.shown}".`)
           continue
         }
-        const info = lstatSync(full)
-        if (info.isSymbolicLink()) continue
-        if (info.isDirectory() ? !walk(r, visit) : !visit(r, info)) break
+        if (info.kind === 'symlink') continue
+        if (info.kind === 'dir' ? !walk(r, visit) : !visit(r, info)) break
       }
       return { hits, truncated }
     },
@@ -257,10 +232,8 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
       const example = { path: 'workspace/summary.md', content: '# Summary', mode: 'create' }
       const body = Buffer.from(content, 'utf8')
       const r = writableTarget(raw, example)
-      const full = guarded(r)
-      let existing: Stats | null = null
-      try { existing = lstatSync(full) } catch { existing = null }
-      if (existing && !existing.isFile()) throw new Error(`"${r.shown}" is a folder, not a file.`)
+      const existing = guardedStat(r)
+      if (existing && existing.kind !== 'file') throw new Error(`"${r.shown}" is a folder, not a file.`)
       if (mode === 'create' && existing) throw argError(`"${r.shown}" already exists. Use mode "overwrite" or "append", or pick another name.`, { ...example, path: r.shown, mode: 'overwrite' })
       const freeing = mode === 'overwrite' && existing ? existing.size : 0
       if (r.space === 'bot') {
@@ -268,35 +241,26 @@ export function createFileService(store: WorkspaceStore, agent: Agent, group?: {
       } else {
         clean(() => ensureGroupRoom(store, group!.slug, body.length, freeing))
       }
-      clean(() => mkdirsGuarded(r.root, r.parts.slice(0, -1)))
-      if (mode === 'append' && existing) {
-        clean(() => appendNoFollow(full, body))
-      } else {
-        const temporary = clean(() => tempNoFollow(full, body))
-        try {
-          clean(() => guardedPath(r.root, r.parts))
-          if (existing) renameSync(temporary, full)
-          else linkSync(temporary, full) // no-clobber: fails if something appeared meanwhile
-        } catch (err) {
-          if ((err as { code?: string }).code === 'EEXIST') throw new Error(`"${r.shown}" already exists.`)
-          throw err
-        } finally {
-          rmSync(temporary, { force: true })
-        }
+      clean(() => fs().mkdirs(r.root, r.parts.slice(0, -1)))
+      // append to an existing file; replace an existing one; create no-clobber (fails if something appeared meanwhile)
+      const how = existing ? (mode === 'append' ? 'append' : 'replace') : 'create'
+      let info: StorageStat
+      try {
+        info = fs().write(r.root, r.parts, body, how)
+      } catch (err) {
+        if ((err as { code?: string }).code === 'EEXIST') throw new Error(`"${r.shown}" already exists.`)
+        throw clean(() => { throw err })
       }
       if (r.space === 'group') recordAddedBy(store, group!.slug, r.parts.join('/'), agent.id)
-      const info = statSync(full)
-      return { path: r.shown, change: existing ? 'modified' : 'added', bytes: info.size, modifiedAt: info.mtime.toISOString() }
+      return { path: r.shown, change: existing ? 'modified' : 'added', bytes: info.size, modifiedAt: new Date(info.mtimeMs).toISOString() }
     },
 
     makeFolder(raw) {
       const r = writableTarget(raw, { path: 'workspace/drafts' })
-      const full = guarded(r)
-      let existing: Stats | null = null
-      try { existing = lstatSync(full) } catch { existing = null }
-      if (existing && !existing.isDirectory()) throw new Error(`"${r.shown}" is a file.`)
+      const existing = guardedStat(r)
+      if (existing && existing.kind !== 'dir') throw new Error(`"${r.shown}" is a file.`)
       if (existing) return { path: `${r.shown}/`, created: false }
-      clean(() => mkdirsGuarded(r.root, r.parts))
+      clean(() => fs().mkdirs(r.root, r.parts))
       return { path: `${r.shown}/`, created: true }
     },
   }

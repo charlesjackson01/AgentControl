@@ -3,15 +3,20 @@ import { describe, it } from 'node:test'
 import { COMMANDS, chatPanelPath, commandAction, findCommand, matchCommands, messagePath, parseSlash, slashPrefix } from '../src/lib/commands.ts'
 
 describe('slash commands: catalogue', () => {
-  it('lists the seven FE-2 commands in ticket order', () => {
-    assert.deepEqual(COMMANDS.map((c) => c.name), ['new', 'group', 'files', 'skills', 'memory', 'settings', 'sandbox'])
+  it('lists the seven commands in ticket order (FE-P2-5: /sandbox is now /vm)', () => {
+    assert.deepEqual(COMMANDS.map((c) => c.name), ['new', 'group', 'files', 'skills', 'memory', 'settings', 'vm'])
   })
-  it('FE-3/FE-4/FE-6: everything but /sandbox runs in a DM; /sandbox says which ticket brings it', () => {
+  it('FE-P2-5: every command runs in a DM', () => {
     const dm = { conversationId: 'c1', isGroup: false }
     const live = COMMANDS.filter((c) => c.unavailable(dm) === null).map((c) => c.name)
-    assert.deepEqual(live, ['new', 'group', 'files', 'skills', 'memory', 'settings'])
+    assert.deepEqual(live, ['new', 'group', 'files', 'skills', 'memory', 'settings', 'vm'])
     assert.equal(findCommand('group').unavailable({}), null)
-    assert.match(findCommand('sandbox').unavailable(dm), /coming.*BE-8/)
+  })
+  it('FE-P2-5: /sandbox is an alias of /vm; groups have no VM', () => {
+    assert.equal(findCommand('sandbox').name, 'vm')
+    assert.equal(parseSlash('/sandbox').command.name, 'vm')
+    assert.match(findCommand('vm').unavailable({}), /Open a chat/)
+    assert.equal(findCommand('vm').unavailable({ conversationId: 'g', isGroup: true }), "Groups don't have a VM. Each bot keeps its own; open its chat.")
   })
   it('panel commands need an open chat; in a group only /skills is off (FE-6)', () => {
     const g = { conversationId: 'g', isGroup: true }
@@ -31,7 +36,8 @@ describe('slash commands: typing', () => {
   })
   it('matchCommands: all for empty, name prefix first, then contains/label', () => {
     assert.equal(matchCommands('').length, 7)
-    assert.deepEqual(matchCommands('s').map((c) => c.name), ['skills', 'settings', 'sandbox', 'files'])
+    assert.deepEqual(matchCommands('s').map((c) => c.name), ['skills', 'settings', 'vm', 'files'], 'vm by its sandbox alias')
+    assert.deepEqual(matchCommands('v').map((c) => c.name), ['vm'])
     assert.deepEqual(matchCommands('/se').map((c) => c.name), ['settings'])
     assert.deepEqual(matchCommands('bot').map((c) => c.name), ['new'])
     assert.deepEqual(matchCommands('zzz'), [])
@@ -56,7 +62,7 @@ describe('slash commands: dispatch', () => {
   })
   it('tab commands know their FE-3/FE-4 settings tab for when they go live', () => {
     assert.deepEqual(Object.fromEntries(COMMANDS.filter((c) => c.tab).map((c) => [c.name, c.tab])), {
-      files: 'files', skills: 'skills', memory: 'memory', sandbox: 'sandbox',
+      files: 'files', skills: 'skills', memory: 'memory', vm: 'vm',
     })
   })
   it('/skills and /memory open their settings tab', () => {
@@ -66,8 +72,12 @@ describe('slash commands: dispatch', () => {
   it('FE-4: /files opens the bot folder at shared/ (?panel=files&path=shared)', () => {
     assert.deepEqual(commandAction('files', dm), { kind: 'navigate', to: '/c/c%201?panel=files&path=shared' })
   })
+  it('FE-P2-5: /vm and /sandbox open the VM tab', () => {
+    assert.deepEqual(commandAction('vm', dm), { kind: 'navigate', to: '/c/c%201?panel=settings&tab=vm' })
+    assert.deepEqual(commandAction('sandbox', dm), { kind: 'navigate', to: '/c/c%201?panel=settings&tab=vm' })
+  })
   it('unbacked commands return their reason instead of faking it', () => {
-    assert.equal(commandAction('sandbox', dm).kind, 'unavailable')
+    assert.equal(commandAction('vm', { conversationId: 'g', isGroup: true }).kind, 'unavailable')
     assert.equal(commandAction('skills', { conversationId: 'g', isGroup: true }).kind, 'unavailable')
   })
   it('deep links', () => {

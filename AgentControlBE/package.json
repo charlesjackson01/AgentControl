@@ -8,7 +8,8 @@
     "build": "tsc && node -e \"require('node:fs').cpSync('src/db/seed-skills', 'dist/db/seed-skills', { recursive: true })\"",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "vm:images": "bash vm/build-images.sh"
   },
   "dependencies": {
     "@fastify/cors": "^11.1.0",

@@ -5,6 +5,7 @@ import { BotRow, TypingDots, UserRow } from '../components/shell/ChatRows'
 import ChatHeader from '../components/shell/ChatHeader'
 import GroupSettingsPanel from '../components/settings/GroupSettingsPanel'
 import { ActivityCard, GroupFileCards } from '../components/shell/MessageActivity'
+import RunCard from '../components/chat/RunCard'
 import { Markdown } from '../components/Markdown'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
@@ -480,6 +481,15 @@ export default function GroupChat({ group }: { group: Group }) {
                         {systemLineText(m.content, row.day, clockTime(m.createdAt))}
                       </p>
                     )
+                  if (m.kind === 'run' && m.scriptRunId) {
+                    // FE-P2-2 (GAP-R10): a run card in a group sits under its bot's name line, like a reply.
+                    const by = authorOf(m)
+                    return (
+                      <BotRow key={row.key} author={by} authorName={DELETED_BOT} who={who(m, by)} meta={clockTime(m.createdAt)} mid={m.id} hit={m.id === jumpId} bare>
+                        <RunCard message={m} botName={by?.name ?? DELETED_BOT} agentId={by?.id ?? m.authorAgentId} groupNames={{ [group.id]: group.name }} />
+                      </BotRow>
+                    )
+                  }
                   const view = chatMessageView(m)
                   if (view.kind === 'user') {
                     const files = m.attachments ?? []

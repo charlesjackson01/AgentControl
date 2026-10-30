@@ -352,17 +352,36 @@ export function addedByName(addedBy: string | undefined, agents: readonly AgentL
 }
 
 /**
- * 06a file card in a group: "group:shared/x.md" -> the group's folder ("Group folder · added by
- * Researcher · 3 KB", Open in this group's Shared files at shared/x.md); any other path is the
- * author's own folder ("Researcher's folder · workspace · 3 KB", Open in the author's chat).
+ * 06a file card in a group. BE 3a70c34: a FileChange with `root: 'group'` is in a group's folder,
+ * `path` relative to it (no prefix) -> "Group folder · added (changed, deleted) by Researcher · 3 KB", opened in that
+ * group's Shared files. A missing root is the author's own folder ("Researcher's folder · workspace
+ * · 3 KB", opened in the author's chat). A file in a different group than this one names it
+ * ("Q3 report folder", GAP-P2-FILE2: no mockup).
  */
-export function groupFileCard(path: string, authorName: string, size: string | null): { inGroup: boolean; path: string; meta: string } {
-  if (path.startsWith('group:')) {
-    const rel = path.slice('group:'.length)
-    return { inGroup: true, path: rel, meta: ['Group folder', `added by ${authorName}`, size].filter(Boolean).join(' · ') }
+export function groupFileCard(
+  f: { path: string; root?: 'agent' | 'group'; groupId?: string; groupName?: string },
+  authorName: string,
+  size: string | null,
+  change?: 'added' | 'modified' | 'deleted',
+  currentGroupId?: string,
+): { inGroup: boolean; path: string; groupId?: string; meta: string } {
+  // Phase 2: the verb follows FileChange.change: "deleted by" (GAP-P2-FILE) and "changed by" for a
+  // modified group file (GAP-P2-FILE3, Team lead 2026-10-27); added (or unknown) stays "added by".
+  const deleted = change === 'deleted'
+  const verb = deleted ? 'deleted by' : change === 'modified' ? 'changed by' : 'added by'
+  const path = f.path
+  if (f.root === 'group') {
+    const other = f.groupId && currentGroupId && f.groupId !== currentGroupId
+    const folder = other ? `${f.groupName || 'Another group'} folder` : 'Group folder'
+    return {
+      inGroup: true,
+      path,
+      ...(f.groupId || currentGroupId ? { groupId: f.groupId || currentGroupId } : {}),
+      meta: [folder, `${verb} ${authorName}`, deleted ? null : size].filter(Boolean).join(' · '),
+    }
   }
   const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
-  return { inGroup: false, path, meta: [`${authorName}'s folder`, dir, size].filter(Boolean).join(' · ') }
+  return { inGroup: false, path, meta: [`${authorName}'s folder`, dir, deleted ? 'deleted' : size].filter(Boolean).join(' · ') }
 }
 
 /* ---------- panel tabs and URL ---------- */
@@ -380,7 +399,7 @@ type ParamsLike = { get(name: string): string | null }
 /**
  * Same URL keys as the bot panel: `?panel=settings&tab=members|memory|settings` and
  * `?panel=files&path=…` (Shared files). Bot tab names map over (profile -> members,
- * skills/sandbox -> members) so a deep link never lands nowhere.
+ * skills/vm/sandbox -> members) so a deep link never lands nowhere.
  */
 export function groupTab(params: ParamsLike): GroupTab {
   if (params.get('panel') === 'files') return 'files'

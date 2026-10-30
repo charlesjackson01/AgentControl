@@ -176,7 +176,7 @@ export default function SkillsTab({ agent, onAgentSaved }: { agent: Agent; onAge
       <section className="cf-card cf-skills__info">
         <span className="cf-skills__spark" aria-hidden="true">✦</span>
         <p>
-          <b>Loaded on demand.</b> {agent.name} reads a skill in full only when a task needs it. Skill scripts run in {agent.name}&apos;s sandbox VM; internet needs your OK.
+          <b>Loaded on demand.</b> {agent.name} reads a skill in full only when a task needs it. Skill scripts run in {agent.name}&apos;s VM; internet needs your OK.
           {catalog?.legacy ? ' (This server still sends full skills in the prompt until BE-7.)' : ''}
         </p>
         <div className={`cf-meter cf-meter--${meter?.tone ?? 'ok'}`} role="status" aria-live="polite">

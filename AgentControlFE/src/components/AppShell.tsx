@@ -10,6 +10,7 @@ import { primaryConversation } from '../lib/conversations'
 import { newBotNavState } from '../lib/new-bot'
 import SettingsDialog from '../pages/Settings'
 import ConversationsProvider from '../state/ConversationsProvider'
+import LiveProvider from '../state/LiveProvider'
 import ProfileProvider from '../state/ProfileProvider'
 import { useProfile } from '../state/profile-context'
 import { useConversations } from '../state/conversations-context'
@@ -44,7 +45,9 @@ function OnboardingGate() {
   if (profile && needsOnboarding(profile)) return <Onboarding profile={profile} onDone={setProfile} />
   return (
     <ConversationsProvider>
-      <Shell />
+      <LiveProvider>
+        <Shell />
+      </LiveProvider>
     </ConversationsProvider>
   )
 }

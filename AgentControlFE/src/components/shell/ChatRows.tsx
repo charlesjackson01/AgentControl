@@ -19,7 +19,8 @@ type RowProps = { meta?: ReactNode; mid?: string; hit?: boolean; children: React
  * `before` / `after` sit above and below the bubble (FE-7 activity card, file cards; FE-5 draft card).
  * `wide`: the FE-5 /new rows, whose group is as wide as the draft card.
  */
-export function BotRow({ author, authorName, who, meta, error, mid, hit, before, after, wide, children }: RowProps & { author?: Agent; authorName?: string; who?: ReactNode; error?: boolean; before?: ReactNode; after?: ReactNode; wide?: boolean }) {
+/** FE-P2-2: `bare` drops the bubble (a run card is the whole message). */
+export function BotRow({ author, authorName, who, meta, error, mid, hit, before, after, wide, bare, children }: RowProps & { author?: Agent; authorName?: string; who?: ReactNode; error?: boolean; before?: ReactNode; after?: ReactNode; wide?: boolean; bare?: boolean }) {
   return (
     <div className={`cf-row${hit ? ' cf-row--hit' : ''}`} data-mid={mid}>
       <span className="cf-row__av">
@@ -29,7 +30,7 @@ export function BotRow({ author, authorName, who, meta, error, mid, hit, before,
         {/* FE-6 (06a): author name (and ★ Lead) above each bubble in a group. */}
         {who && <div className="cf-who">{who}</div>}
         {before}
-        <div className={`cf-bub cf-bub--a${error ? ' cf-bub--error' : ''}${wide ? ' cf-nb-bub' : ''}`}>{children}</div>
+        {bare ? children : <div className={`cf-bub cf-bub--a${error ? ' cf-bub--error' : ''}${wide ? ' cf-nb-bub' : ''}`}>{children}</div>}
         {after}
         {meta && <div className="cf-bt">{meta}</div>}
       </div>

@@ -1,3 +1,4 @@
+import { defaultAgentVm } from '../vm-defaults.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -18,7 +19,7 @@ beforeEach(() => {
   const store = createStore(join(dir, 'store.json'))
   store.agents.push({ id: 'a1', name: 'Author', role: '', description: '', instructions: '', modelId: 'm',
     endpointId: 'ep_local_llama', skillIds: [], isPrimary: true, status: 'idle', createdAt: '', lastRunAt: null, runCount: 0,
-    slug: 'author', internetPolicy: 'ask', memoryLearn: true })
+    slug: 'author', internetPolicy: 'ask', memoryLearn: true, vm: defaultAgentVm() })
   ctx = { store, agentId: 'a1', runId: 'r1', input: 'hello', allowed: new Set(builtinTools.keys()),
     now: () => new Date('2026-10-12T06:00:00Z'), timeZone: 'UTC', writes: { count: 0 } }
 })

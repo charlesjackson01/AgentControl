@@ -19,6 +19,7 @@ import { moveActive } from '../lib/search'
 import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-reply'
 import { activityView, runFilesChanged } from '../lib/activity'
 import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
+import RunCard from '../components/chat/RunCard'
 import { Markdown } from '../components/Markdown'
 import { NewBotTurn } from '../components/shell/NewBotFlow'
 import { useNewBot } from '../hooks/useNewBot'
@@ -407,6 +408,15 @@ export default function ConversationChat() {
                   if (item.type === 'day') return <div key={item.key} className="cf-daysep">{item.label}</div>
                   const m = item.message
                   if (m.kind === 'system') return <p key={item.key} className="cf-system">{m.content}</p>
+                  if (m.kind === 'run' && m.scriptRunId) {
+                    // FE-P2-2: a script run (mockup a), above the bot's reply.
+                    const by = authorOf(m)
+                    return (
+                      <BotRow key={item.key} author={by} meta={item.meta} mid={m.id} hit={m.id === jumpId} bare>
+                        <RunCard message={m} botName={by?.name} agentId={by?.id ?? m.authorAgentId} />
+                      </BotRow>
+                    )
+                  }
                   const view = chatMessageView(m)
                   if (view.kind === 'user') {
                     const files = m.attachments ?? []

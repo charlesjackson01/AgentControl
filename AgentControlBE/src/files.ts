@@ -5,19 +5,31 @@
  *   memory/MEMORY.md, BOT.md   generated from the store, read-only
  *   skills/     virtual read-only listing of the bot's enabled skills (nothing copied)
  * Paths are always relative to the bot root; absolute server paths are never sent.
+ * BE-P2-6: every disk operation goes through the workspace's StorageBackend
+ * (src/storage/): LocalFs on Mac/Linux, WslFs on Windows. Bot folders are
+ * the volume paths bots/<slug>; trash is archive/trash/<slug>. When the files
+ * volume is missing (files_missing) every operation here is refused with 409.
  */
-import { closeSync, constants as fsc, createReadStream, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync, type Stats } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, extname, join, relative, resolve, sep } from 'node:path'
+import { extname, resolve, sep } from 'node:path'
+import { lstatSync, type Stats } from 'node:fs'
 import type { Readable } from 'node:stream'
 import { archiveStamp } from './archive.js'
-import { fail } from './http.js'
+import { fail, failWithReason } from './http.js'
 import type { Agent, FileEntry, FileListing, FileZone, Skill } from './shared/types.js'
+import { VM_LIMITS } from './shared/types.js'
 import type { WorkspaceStore } from './store.js'
 import { skillFolder } from './tools/skills.js'
 import { archiveShares, moveShares, readShares, withShares } from './share-records.js'
+import { FILES_MISSING_TEXT, filesMissingMessage, storageFor, storageReady, type StorageBackend, type StorageStat, type VolPath } from './storage/index.js'
 
-export const BOT_QUOTA_BYTES = 500 * 1024 * 1024
+// Phase 1 helpers now live with LocalFs; re-exported for older callers and tests.
+export {
+  appendNoFollow, countFiles, folderBytes, guardedPath, mkdirsGuarded, openNoFollow, tempNoFollow, writeIfChanged, writeNewNoFollow,
+} from './storage/local-fs.js'
+
+/** Phase 2 (decision 1): 10 GB of personal data per bot; each group's shared/ gets its own 10 GB. */
+export const BOT_QUOTA_BYTES = VM_LIMITS.personalDiskMb * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 export const WRITABLE_ZONES = ['shared', 'workspace'] as const
 const ZONES = ['shared', 'workspace', 'memory', 'skills'] as const
@@ -33,13 +45,11 @@ export function quotaBytes(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : BOT_QUOTA_BYTES
 }
 
-export function botsDir(store: WorkspaceStore): string {
-  return join(store.dataDir, 'bots')
-}
 
-export function botRoot(store: WorkspaceStore, agent: Agent): string {
+/** The bot's folder as a volume path: 'bots/<slug>'. */
+export function botVol(agent: Agent): VolPath {
   if (!/^[a-z0-9-]{1,40}$/.test(agent.slug)) fail(400, 'This bot has no valid folder name.')
-  return join(botsDir(store), agent.slug)
+  return `bots/${agent.slug}`
 }
 
 // --- path guard ---------------------------------------------------------------
@@ -65,31 +75,6 @@ export function parseClientPath(raw: unknown, field = 'path'): string[] {
     if (/[\u0000-\u001f\u007f]/.test(p)) fail(400, `"${field}" must not contain control characters.`)
   }
   return parts
-}
-
-/**
- * The real path for `parts` under `root`. Every existing segment is lstat'd
- * (no symlinks anywhere), and the deepest existing ancestor's realpath must
- * stay inside the root's realpath. Returns the joined path (it may not exist).
- */
-export function guardedPath(root: string, parts: readonly string[]): string {
-  const realRoot = realpathSync(root)
-  let current = root
-  for (const part of parts) {
-    current = join(current, part)
-    let info: Stats
-    try {
-      info = lstatSync(current)
-    } catch {
-      break // the rest does not exist yet
-    }
-    if (info.isSymbolicLink()) fail(400, 'Symbolic links are not allowed in bot folders.')
-    const real = realpathSync(current)
-    if (real !== realRoot && !real.startsWith(realRoot + sep)) fail(400, 'That path is outside the bot folder.')
-  }
-  const target = resolve(root, ...parts)
-  if (target !== resolve(root) && !target.startsWith(resolve(root) + sep)) fail(400, 'That path is outside the bot folder.')
-  return target
 }
 
 function zoneOf(parts: readonly string[]): FileZone | null {
@@ -129,58 +114,88 @@ function memoryMarkdown(store: WorkspaceStore, agent: Agent): string {
   return lines.join('\n')
 }
 
-export function writeIfChanged(path: string, text: string): void {
-  try {
-    if (lstatSync(path).isSymbolicLink()) fail(400, 'Symbolic links are not allowed in bot folders.')
-  } catch (err) {
-    if ((err as { statusCode?: number }).statusCode) throw err
-  }
-  let current: string | null = null
-  try { current = readFileSync(path, 'utf8') } catch { current = null }
-  if (current !== text) writeFileSync(path, text, { mode: 0o644 })
+/**
+ * BE-P2-20: the one "are this bot's files there?" check, shared by the VM tab
+ * (VmInfo.state 'files_missing', vm/start|stop|reset), the bot's file routes
+ * and its runs, so they always agree. Files are missing when the volume
+ * marker is missing or belongs to another setup (BE-P2-6), or when the bot's
+ * workspace folder is gone. Returns the plain message (BE-P2-6's wording), or
+ * null when the files are fine.
+ */
+export function botFilesMissingMessage(store: WorkspaceStore, agent: Agent): string | null {
+  const volume = filesMissingMessage(store)
+  if (volume) return volume
+  return storageFor(store).backend.existsAt(`${botVol(agent)}/workspace`) ? null : FILES_MISSING_TEXT
 }
 
-/** Create the bot's folder (idempotent) and refresh BOT.md and memory/MEMORY.md. */
-export function ensureBotFolder(store: WorkspaceStore, agent: Agent): string {
-  const root = botRoot(store, agent)
-  mkdirSync(root, { recursive: true })
-  for (const z of ['shared', 'workspace', 'memory']) {
-    const dir = guardedPath(root, [z])
-    mkdirSync(dir, { recursive: true })
-  }
-  writeIfChanged(guardedPath(root, [BOT_MD]), botMarkdown(agent))
-  writeIfChanged(guardedPath(root, MEMORY_MD.split('/')), memoryMarkdown(store, agent))
+/** 409 { reason: 'files_missing' } with botFilesMissingMessage's text unless the bot's files are there. */
+export function assertBotFilesAvailable(store: WorkspaceStore, agent: Agent): void {
+  const message = botFilesMissingMessage(store, agent)
+  if (message) failWithReason(409, 'files_missing', message)
+}
+
+/** Lay out a bot folder's zones and refresh BOT.md and memory/MEMORY.md. */
+function fillBotFolder(store: WorkspaceStore, fs: StorageBackend, agent: Agent, root: VolPath): VolPath {
+  for (const z of ['shared', 'workspace', 'memory']) fs.mkdirs(root, [z])
+  fs.writeIfChanged(root, [BOT_MD], botMarkdown(agent))
+  fs.writeIfChanged(root, MEMORY_MD.split('/'), memoryMarkdown(store, agent))
   return root
 }
 
-/** Boot: a folder for every bot. Failures are logged, never fatal. */
+/**
+ * The bot's folder for file routes, file tools, uploads and BOT.md/MEMORY.md
+ * refreshes: 409 files_missing (botFilesMissingMessage) unless its files are
+ * there, then the zones, BOT.md and memory/MEMORY.md are refreshed. A missing
+ * workspace (or bot folder) is never re-created here.
+ */
+export function ensureBotFolder(store: WorkspaceStore, agent: Agent): VolPath {
+  const fs = storageReady(store)
+  const root = botVol(agent)
+  assertBotFilesAvailable(store, agent)
+  return fillBotFolder(store, fs, agent, root)
+}
+
+/**
+ * New bots and boot: creates the bot folder when there is none at all (a new
+ * bot, or one from before folders existed), else ensureBotFolder. A folder that
+ * exists without its workspace stays files_missing.
+ */
+export function createBotFolder(store: WorkspaceStore, agent: Agent): VolPath {
+  const fs = storageReady(store)
+  const root = botVol(agent)
+  if (fs.existsAt(root)) return ensureBotFolder(store, agent)
+  fs.ensureDir(root)
+  return fillBotFolder(store, fs, agent, root)
+}
+
+/** Boot: a folder for every bot (createBotFolder). Failures (including files_missing bots) are logged, never fatal. */
 export function ensureAllBotFolders(store: WorkspaceStore, log: (msg: string) => void = console.warn): void {
   for (const agent of store.agents) {
     try {
-      ensureBotFolder(store, agent)
+      createBotFolder(store, agent)
     } catch (err) {
       log(`[files] could not prepare the folder for ${agent.slug}: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 }
 
-/** Unique destination under `dir` for `base` (adds -2, -3… on a clash). */
-export function freeName(dir: string, base: string): string {
+/** Unique destination under the volume folder `dir` for `base` (adds -2, -3… on a clash). */
+export function freeName(fs: StorageBackend, dir: VolPath, base: string): VolPath {
   let name = base
-  for (let n = 2; existsSync(join(dir, name)); n++) name = `${base}-${n}`
-  return join(dir, name)
+  for (let n = 2; fs.existsAt(`${dir}/${name}`); n++) name = `${base}-${n}`
+  return `${dir}/${name}`
 }
 
-/** Bot delete: move the folder to data/archive/bots/<slug>-<ts>/. Never removes it. Returns the archive name. */
+/** Bot delete: move the folder to archive/bots/<slug>-<ts>/. Never removes it. Returns the archive name. */
 export function archiveBotFolder(store: WorkspaceStore, agent: Agent, at = new Date()): string | null {
-  const root = botRoot(store, agent)
-  if (!existsSync(root)) return null
-  const dir = join(store.dataDir, 'archive', 'bots')
-  mkdirSync(dir, { recursive: true })
-  const target = freeName(dir, `${agent.slug}-${archiveStamp(at)}`)
-  renameSync(root, target)
-  archiveShares(root, target)
-  return relative(join(store.dataDir, 'archive'), target).split(sep).join('/')
+  const fs = storageReady(store)
+  const root = botVol(agent)
+  if (!fs.existsAt(root)) return null
+  fs.ensureDir('archive/bots')
+  const target = freeName(fs, 'archive/bots', `${agent.slug}-${archiveStamp(at)}`)
+  fs.renameAt(root, target)
+  archiveShares(fs, root, target)
+  return target.slice('archive/'.length)
 }
 
 // --- entries ------------------------------------------------------------------------
@@ -199,43 +214,34 @@ export function mimeFor(name: string): string {
   return MIME[extname(name).toLowerCase()] ?? 'application/octet-stream'
 }
 
-export function entryFor(parts: readonly string[], info: Stats, zone: FileZone): FileEntry {
+/** A FileEntry from a backend stat (or, for older callers, a node Stats). */
+export function entryFor(parts: readonly string[], info: StorageStat | Stats, zone: FileZone): FileEntry {
   const path = parts.join('/')
   const name = parts[parts.length - 1] ?? ''
-  const dir = info.isDirectory()
+  const dir = 'kind' in info ? info.kind === 'dir' : info.isDirectory()
   return {
     path,
     name,
     kind: dir ? 'dir' : 'file',
     size: dir ? 0 : info.size,
     ...(dir ? {} : { mime: mimeFor(name) }),
-    modifiedAt: info.mtime.toISOString(),
+    modifiedAt: new Date(info.mtimeMs).toISOString(),
     zone,
   }
 }
 
-/** Regular files under `dir` (symlinks and our own .tmp files are skipped). */
-export function countFiles(dir: string): number {
-  let total = 0
-  let names: string[]
-  try { names = readdirSync(dir) } catch { return 0 }
-  for (const n of names) {
-    const info = lstatSync(join(dir, n))
-    if (info.isDirectory()) total += countFiles(join(dir, n))
-    else if (info.isFile() && !(n.startsWith('.') && n.endsWith('.tmp'))) total += 1
-  }
-  return total
-}
+export const isTempName = (name: string) => name.startsWith('.') && name.endsWith('.tmp')
 
 // --- quota (BE-3: trash counts, and is pruned oldest-first to make room) ---------------
 
-export function trashDir(store: WorkspaceStore, agent: Agent): string {
-  return join(store.dataDir, 'archive', 'trash', agent.slug)
+export function trashVol(agent: Agent): VolPath {
+  return `archive/trash/${botVol(agent).slice('bots/'.length)}`
 }
 
 export function folderUsage(store: WorkspaceStore, agent: Agent): { bytes: number; quotaBytes: number; trashBytes: number } {
-  const trashBytes = folderBytes(trashDir(store, agent))
-  return { bytes: folderBytes(botRoot(store, agent)) + trashBytes, quotaBytes: quotaBytes(), trashBytes }
+  const fs = storageReady(store)
+  const trashBytes = fs.du(trashVol(agent))
+  return { bytes: fs.du(botVol(agent)) + trashBytes, quotaBytes: quotaBytes(), trashBytes }
 }
 
 /**
@@ -244,92 +250,36 @@ export function folderUsage(store: WorkspaceStore, agent: Agent): { bytes: numbe
  * (trash only, never live files); 413 if it still does not fit.
  */
 export function ensureRoom(store: WorkspaceStore, agent: Agent, adding: number, freeing = 0): void {
-  ensureRoomAt(botRoot(store, agent), trashDir(store, agent), adding, freeing, 'bot folder')
+  // BE-P2-10: the bot's tools volumes and image layer share its 10 GB personal limit (plan §5).
+  ensureRoomAt(storageReady(store), botVol(agent), trashVol(agent), adding + personalExtraBytes(agent), freeing, 'bot folder')
+}
+
+let personalExtraBytes: (agent: Agent) => number = () => 0
+/** BE-P2-10: bytes outside the folder counted in the bot's limit (its tools volumes and image layer, last measured). */
+export function setPersonalExtraBytes(fn: ((agent: Agent) => number) | null): void {
+  personalExtraBytes = fn ?? (() => 0)
 }
 
 /** ensureRoom for any folder with its own trash (BE-5 group folders use it too). */
-export function ensureRoomAt(liveRoot: string, trash: string, adding: number, freeing: number, what: string): void {
+export function ensureRoomAt(fs: StorageBackend, liveRoot: VolPath, trash: VolPath, adding: number, freeing: number, what: string): void {
   const quota = quotaBytes()
-  const live = folderBytes(liveRoot)
+  const live = fs.du(liveRoot)
   if (live - freeing + adding > quota) fail(413, `This would put the ${what} over its ${Math.round(quota / 1024 / 1024)} MiB limit.`)
-  let trashBytes = folderBytes(trash)
+  let trashBytes = fs.du(trash)
   if (live - freeing + adding + trashBytes <= quota) return
-  let batches: string[] = []
-  try { batches = readdirSync(trash).sort() } catch { batches = [] }
+  let batches: { name: string; kind: StorageStat['kind']; size: number }[] = []
+  try { batches = fs.existsAt(trash) ? fs.list(trash, []).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [] } catch { batches = [] }
   for (const b of batches) {
-    const p = join(trash, b)
-    if (lstatSync(p).isSymbolicLink()) continue
-    const size = lstatSync(p).isDirectory() ? folderBytes(p) : lstatSync(p).size
-    rmSync(p, { recursive: true, force: true })
+    if (b.kind === 'symlink') continue
+    const size = b.kind === 'dir' ? fs.du(`${trash}/${b.name}`) : b.size
+    fs.remove(trash, [b.name])
     trashBytes -= size
     if (live - freeing + adding + trashBytes <= quota) return
   }
 }
 
-// --- no-follow file I/O ----------------------------------------------------------------
-
-const O_NOFOLLOW = fsc.O_NOFOLLOW ?? 0
-
-/** Open an existing regular file for reading without following a symlink at the last segment. */
-export function openNoFollow(path: string): number {
-  let fd: number
-  try {
-    fd = openSync(path, fsc.O_RDONLY | O_NOFOLLOW)
-  } catch (err) {
-    if ((err as { code?: string }).code === 'ELOOP') fail(400, 'Symbolic links are not allowed in bot folders.')
-    throw err
-  }
-  if (!fstatSync(fd).isFile()) {
-    closeSync(fd)
-    fail(400, 'That is not a regular file.')
-  }
-  return fd
-}
-
-/** Write a new file (O_CREAT|O_EXCL|O_NOFOLLOW): never follows or replaces anything. */
-export function writeNewNoFollow(path: string, body: Buffer | string): void {
-  const fd = openSync(path, fsc.O_WRONLY | fsc.O_CREAT | fsc.O_EXCL | O_NOFOLLOW, 0o644)
-  try { writeSync(fd, typeof body === 'string' ? Buffer.from(body) : body) } finally { closeSync(fd) }
-}
-
-/** Append to an existing regular file without following a symlink. */
-export function appendNoFollow(path: string, body: Buffer | string): void {
-  let fd: number
-  try {
-    fd = openSync(path, fsc.O_WRONLY | fsc.O_APPEND | O_NOFOLLOW)
-  } catch (err) {
-    if ((err as { code?: string }).code === 'ELOOP') fail(400, 'Symbolic links are not allowed in bot folders.')
-    throw err
-  }
-  try {
-    if (!fstatSync(fd).isFile()) fail(400, 'That is not a regular file.')
-    writeSync(fd, typeof body === 'string' ? Buffer.from(body) : body)
-  } finally { closeSync(fd) }
-}
-
-/** A temp file next to `full`, written no-follow; the caller renames or links it into place. */
-export function tempNoFollow(full: string, body: Buffer | string): string {
-  const temporary = join(dirname(full), `.${full.slice(dirname(full).length + 1)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`)
-  writeNewNoFollow(temporary, body)
-  return temporary
-}
-
 export const byKindThenName = (a: FileEntry, b: FileEntry) =>
   a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'dir' ? -1 : 1
-
-/** Bytes used on disk under the bot root (symlinks are not followed). */
-export function folderBytes(dir: string): number {
-  let total = 0
-  let names: string[]
-  try { names = readdirSync(dir) } catch { return 0 }
-  for (const n of names) {
-    const p = join(dir, n)
-    const info = lstatSync(p)
-    if (info.isDirectory()) total += folderBytes(p)
-    else if (info.isFile()) total += info.size
-  }
-  return total
-}
 
 // --- virtual skills/ -----------------------------------------------------------------
 
@@ -393,19 +343,49 @@ function virtualEntry(path: string, node: VirtualNode): FileEntry {
 
 // --- operations ---------------------------------------------------------------------
 
+/** Entries of a folder (symlinks, special files and our .tmp files are never listed, never served). */
+export function listEntries(fs: StorageBackend, root: VolPath, parts: readonly string[], zone: FileZone): FileEntry[] {
+  const entries: FileEntry[] = []
+  for (const d of fs.list(root, parts)) {
+    if (d.kind !== 'file' && d.kind !== 'dir') continue
+    if (isTempName(d.name)) continue
+    entries.push(entryFor([...parts, d.name], d, zone))
+  }
+  return entries
+}
+
+/** Every regular file under root/parts, flat (symlinks and .tmp skipped). */
+export function walkFiles(fs: StorageBackend, root: VolPath, parts: readonly string[], zone: FileZone): FileEntry[] {
+  const out: FileEntry[] = []
+  const walk = (at: readonly string[]) => {
+    for (const d of fs.list(root, at)) {
+      if (d.kind === 'symlink') continue
+      if (d.kind === 'dir') walk([...at, d.name])
+      else if (d.kind === 'file' && !isTempName(d.name)) out.push(entryFor([...at, d.name], d, zone))
+    }
+  }
+  walk(parts)
+  return out
+}
+
+export const newestFirst = (a: FileEntry, b: FileEntry) =>
+  (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : a.modifiedAt < b.modifiedAt ? 1 : -1)
+
 export function listFolder(store: WorkspaceStore, agent: Agent, rawPath: unknown): FileListing {
   const root = ensureBotFolder(store, agent)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   const path = parts.join('/')
   const usage = folderUsage(store, agent)
-  const totalFiles = countFiles(root)
+  const totalFiles = fs.countFiles(root)
   const listing = (entries: FileEntry[]): FileListing => ({ root: `bots/${agent.slug}/`, path, entries: entries.sort(byKindThenName), usage, totalFiles })
+  const statOr404 = (p: readonly string[]): StorageStat => fs.stat(root, p) ?? fail(404, `Nothing at "${p.join('/')}" in this bot's files.`)
   if (parts.length === 0) {
     const entries: FileEntry[] = []
-    for (const z of ['shared', 'workspace', 'memory'] as const) entries.push(entryFor([z], statSync(guardedPath(root, [z])), z))
+    for (const z of ['shared', 'workspace', 'memory'] as const) entries.push(entryFor([z], statOr404([z]), z))
     const tree = skillsTree(store, agent)
     entries.push(virtualEntry('skills', tree.get('skills')!))
-    entries.push(entryFor([BOT_MD], statSync(guardedPath(root, [BOT_MD])), 'meta'))
+    entries.push(entryFor([BOT_MD], statOr404([BOT_MD]), 'meta'))
     return listing(entries)
   }
   const zone = zoneOf(parts)
@@ -421,36 +401,18 @@ export function listFolder(store: WorkspaceStore, agent: Agent, rawPath: unknown
       .map(([p, n]) => virtualEntry(p, n))
     return listing(entries)
   }
-  const dir = guardedPath(root, parts)
-  let info: Stats
-  try { info = lstatSync(dir) } catch { fail(404, `Nothing at "${path}" in this bot's files.`) }
-  if (!info.isDirectory()) fail(400, `"${path}" is a file; read it with /files/content.`)
-  const entries: FileEntry[] = []
-  for (const name of readdirSync(dir)) {
-    const st = lstatSync(join(dir, name))
-    if (st.isSymbolicLink() || (!st.isFile() && !st.isDirectory())) continue // never listed, never served
-    if (name.endsWith('.tmp') && name.startsWith('.')) continue
-    entries.push(entryFor([...parts, name], st, zone))
-  }
-  return listing(withShares(entries, readShares(root)))
+  const info = fs.stat(root, parts)
+  if (!info) fail(404, `Nothing at "${path}" in this bot's files.`)
+  if (info.kind !== 'dir') fail(400, `"${path}" is a file; read it with /files/content.`)
+  return listing(withShares(listEntries(fs, root, parts, zone), readShares(fs, root)))
 }
 
 /** Every file under shared/, flat, newest first. */
 export function listShared(store: WorkspaceStore, agent: Agent): { entries: FileEntry[] } {
   const root = ensureBotFolder(store, agent)
-  const out: FileEntry[] = []
-  const walk = (parts: string[]) => {
-    const dir = guardedPath(root, parts)
-    for (const name of readdirSync(dir)) {
-      const st = lstatSync(join(dir, name))
-      if (st.isSymbolicLink()) continue
-      if (st.isDirectory()) walk([...parts, name])
-      else if (st.isFile() && !(name.startsWith('.') && name.endsWith('.tmp'))) out.push(entryFor([...parts, name], st, 'shared'))
-    }
-  }
-  walk(['shared'])
-  out.sort((a, b) => (a.modifiedAt === b.modifiedAt ? a.path.localeCompare(b.path) : a.modifiedAt < b.modifiedAt ? 1 : -1))
-  return { entries: withShares(out, readShares(root)) }
+  const fs = storageReady(store)
+  const out = walkFiles(fs, root, ['shared'], 'shared').sort(newestFirst)
+  return { entries: withShares(out, readShares(fs, root)) }
 }
 
 export interface FileContent {
@@ -462,6 +424,7 @@ export interface FileContent {
 
 export async function readContent(store: WorkspaceStore, agent: Agent, rawPath: unknown): Promise<FileContent> {
   const root = ensureBotFolder(store, agent)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   const path = parts.join('/')
   if (parts.length === 0) fail(400, '"path" is required.')
@@ -475,93 +438,86 @@ export async function readContent(store: WorkspaceStore, agent: Agent, rawPath: 
     const body = node.text !== undefined ? Buffer.from(node.text) : await readFile(node.disk!)
     return { name, mime: mimeFor(name), size: body.length, body }
   }
-  const full = guardedPath(root, parts)
-  let info: Stats
-  try { info = lstatSync(full) } catch { fail(404, `No file "${path}" in this bot's files.`) }
-  if (info.isDirectory()) fail(400, `"${path}" is a folder; list it with /files.`)
-  if (!info.isFile()) fail(404, `No file "${path}" in this bot's files.`)
-  const fd = openNoFollow(full)
-  return { name, mime: mimeFor(name), size: fstatSync(fd).size, body: createReadStream('', { fd }) }
-}
-
-/** Make parent folders segment by segment, re-checking each against symlinks. */
-export function mkdirsGuarded(root: string, parts: readonly string[]): void {
-  for (let i = 1; i <= parts.length; i++) {
-    const p = guardedPath(root, parts.slice(0, i))
-    try {
-      const st = lstatSync(p)
-      if (!st.isDirectory()) fail(409, `"${parts.slice(0, i).join('/')}" is a file, not a folder.`)
-    } catch (err) {
-      if ((err as { statusCode?: number }).statusCode) throw err
-      mkdirSync(p)
-    }
-  }
+  const info = fs.stat(root, parts)
+  if (!info) fail(404, `No file "${path}" in this bot's files.`)
+  if (info.kind === 'dir') fail(400, `"${path}" is a folder; list it with /files.`)
+  if (info.kind !== 'file') fail(404, `No file "${path}" in this bot's files.`)
+  const opened = fs.openRead(root, parts)
+  return { name, mime: mimeFor(name), size: opened.size, body: opened.stream }
 }
 
 export function writeContent(store: WorkspaceStore, agent: Agent, rawPath: unknown, body: Buffer, overwrite: boolean): FileEntry {
   const root = ensureBotFolder(store, agent)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   assertWritable(parts)
-  const full = guardedPath(root, parts)
-  let existing: Stats | null = null
-  try { existing = lstatSync(full) } catch { existing = null }
-  if (existing?.isDirectory()) fail(409, `"${parts.join('/')}" is a folder.`)
+  const existing = fs.stat(root, parts)
+  if (existing?.kind === 'dir') fail(409, `"${parts.join('/')}" is a folder.`)
   if (existing && !overwrite) fail(409, `"${parts.join('/')}" already exists. Pass overwrite=1 to replace it.`)
-  ensureRoom(store, agent, body.length, existing?.isFile() ? existing.size : 0)
-  mkdirsGuarded(root, parts.slice(0, -1))
-  const temporary = tempNoFollow(full, body)
-  try {
-    guardedPath(root, parts) // re-check: nothing was swapped for a symlink meanwhile
-    renameSync(temporary, full)
-  } catch (err) {
-    rmSync(temporary, { force: true })
-    throw err
-  }
-  return entryFor(parts, statSync(full), parts[0] as FileZone)
+  ensureRoom(store, agent, body.length, existing?.kind === 'file' ? existing.size : 0)
+  fs.mkdirs(root, parts.slice(0, -1))
+  const info = fs.write(root, parts, body, 'replace')
+  return entryFor(parts, info, parts[0] as FileZone)
 }
 
 export function makeFolder(store: WorkspaceStore, agent: Agent, rawPath: unknown): FileEntry {
   const root = ensureBotFolder(store, agent)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   assertWritable(parts)
-  const full = guardedPath(root, parts)
-  if (existsSync(full)) fail(409, `"${parts.join('/')}" already exists.`)
-  mkdirsGuarded(root, parts)
-  return entryFor(parts, statSync(full), parts[0] as FileZone)
+  if (fs.stat(root, parts)) fail(409, `"${parts.join('/')}" already exists.`)
+  fs.mkdirs(root, parts)
+  return entryFor(parts, fs.stat(root, parts)!, parts[0] as FileZone)
 }
+
+/** True when `inner` is `outer` or inside it. */
+export const isWithin = (outer: readonly string[], inner: readonly string[]) =>
+  inner.length >= outer.length && outer.every((p, i) => inner[i] === p)
 
 export function movePath(store: WorkspaceStore, agent: Agent, rawFrom: unknown, rawTo: unknown): FileEntry {
   const root = ensureBotFolder(store, agent)
+  const fs = storageReady(store)
   if (typeof rawFrom !== 'string' || rawFrom.trim() === '') fail(400, '"from" is required.')
   if (typeof rawTo !== 'string' || rawTo.trim() === '') fail(400, '"to" is required.')
   const from = parseClientPath(rawFrom, 'from')
   const to = parseClientPath(rawTo, 'to')
   assertWritable(from, 'from')
   assertWritable(to, 'to')
-  const src = guardedPath(root, from)
-  const dst = guardedPath(root, to)
-  let info: Stats
-  try { info = lstatSync(src) } catch { fail(404, `Nothing at "${from.join('/')}" in this bot's files.`) }
-  if (existsSync(dst)) fail(409, `"${to.join('/')}" already exists.`)
-  if (info.isDirectory() && (dst + sep).startsWith(src + sep)) fail(400, 'A folder cannot be moved inside itself.')
-  mkdirsGuarded(root, to.slice(0, -1))
-  renameSync(src, dst)
-  moveShares(root, from.join('/'), to.join('/'))
-  return withShares([entryFor(to, statSync(dst), to[0] as FileZone)], readShares(root))[0]!
+  const info = fs.stat(root, from)
+  const taken = fs.stat(root, to) !== null
+  if (!info) fail(404, `Nothing at "${from.join('/')}" in this bot's files.`)
+  if (taken) fail(409, `"${to.join('/')}" already exists.`)
+  if (info.kind === 'dir' && isWithin(from, to)) fail(400, 'A folder cannot be moved inside itself.')
+  fs.mkdirs(root, to.slice(0, -1))
+  fs.move(root, from, to)
+  moveShares(fs, root, from.join('/'), to.join('/'))
+  return withShares([entryFor(to, fs.stat(root, to)!, to[0] as FileZone)], readShares(fs, root))[0]!
 }
 
-/** Move a file or folder to data/archive/trash/<slug>/<ts>/<path>. Never removed. */
+/** Move a file or folder to archive/trash/<slug>/<ts>/<path>. Never removed. */
 export function trashPath(store: WorkspaceStore, agent: Agent, rawPath: unknown, at = new Date()): void {
   const root = ensureBotFolder(store, agent)
+  const fs = storageReady(store)
   const parts = parseClientPath(rawPath)
   assertWritable(parts)
-  const src = guardedPath(root, parts)
-  try { lstatSync(src) } catch { fail(404, `Nothing at "${parts.join('/')}" in this bot's files.`) }
-  const trash = trashDir(store, agent)
-  mkdirSync(trash, { recursive: true })
-  const dest = join(freeName(trash, archiveStamp(at)), ...parts)
-  mkdirSync(dirname(dest), { recursive: true })
-  renameSync(src, dest)
-  moveShares(root, parts.join('/'), null)
+  if (!fs.stat(root, parts)) fail(404, `Nothing at "${parts.join('/')}" in this bot's files.`)
+  const trash = trashVol(agent)
+  fs.ensureDir(trash)
+  fs.moveOut(root, parts, `${freeName(fs, trash, archiveStamp(at))}/${parts.join('/')}`)
+  moveShares(fs, root, parts.join('/'), null)
 }
 
+/**
+ * Host path of a bot folder. Only for code that still reads the disk directly
+ * (search index, sandbox stub); LocalFs only. Prefer botVol + the backend.
+ */
+export function botRoot(store: WorkspaceStore, agent: Agent): string {
+  const vol = botVol(agent)
+  return storageHostPath(store, vol)
+}
+
+function storageHostPath(store: WorkspaceStore, vol: VolPath): string {
+  const host = storageFor(store).backend.hostPath(vol)
+  if (host === null) fail(500, 'This storage has no host path.')
+  return host
+}

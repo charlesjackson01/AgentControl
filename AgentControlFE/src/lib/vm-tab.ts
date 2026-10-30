@@ -5,7 +5,7 @@
  */
 import {
   ENV_NAME, MAX_ENV_VALUE_CHARS, MAX_ENV_VARS, RESERVED_ENV_NAMES, RESERVED_ENV_PREFIX, UNDO_RETENTION,
-  type ActiveToolBuild, type BotBrowserInfo, type BrowserAddonInfo, type BrowserError, type InternetUse, type ToolBuildInfo,
+  type ActiveToolBuild, type BotBrowserInfo, type BrowserAddonInfo, type InternetUse, type ToolBuildInfo,
   type EnvVar, type GlobalRuntimeMode, type InternetPolicy, type RuntimeMode, type ScriptRunSummary, type ToolManifest,
   type VmHostInfo, type VmInfo, type VmProbeResult,
 } from './types.ts'
@@ -14,6 +14,7 @@ import { scriptName } from './live-store.ts'
 import { undoGoneText, undoReasonText } from './undo.ts'
 import { humanSize } from './file-format.ts'
 import { FILES_MISSING_TEXT } from './files.ts'
+import { BROWSER_DOWNLOAD_BYTES, browserLowDiskText } from './low-disk.ts'
 
 /**
  * States and notices with no mockup, built from the tab's own patterns (shots in shots/p2-fe-5/).
@@ -271,38 +272,9 @@ export function permissionsHint(botName: string): string {
   return `Scripts run without asking. ${botName} asks only for what is off here.`
 }
 
-/* ---- low disk (contract fec4670, turn-on flow step 1; Charles 2026-10-30) ---- */
+/* ---- low disk: lib/low-disk.ts (shared with FE-P2-3 / FE-P2-7) ---- */
 
-/** The browser download (SHARED_IMAGE_APPROX_BYTES.browser, 1343 MB). */
-export const BROWSER_DOWNLOAD_BYTES = 1343 * 1000 ** 2
-/** The run floor (RUN_FREE_FLOOR_BYTES, 3 × 1024³). */
-export const RUN_FREE_FLOOR_BYTES = 3 * 1024 ** 3
-/** M1's run-floor text (BE run-service LOW_DISK_TEXT). */
-export const LOW_DISK_TEXT = "This computer is almost out of disk space (less than 3 GB free), so scripts can't run until some space is freed."
-
-/** Free space in 1024³ units, one decimal, rounded down ("2.5"). */
-export function freeGbText(freeBytes: number): string {
-  return (Math.floor((Math.max(0, freeBytes) / GB) * 10) / 10).toFixed(1)
-}
-
-/**
- * The low-disk sentence for turning the browser on, or null when there's room. Compared in bytes:
- * under the download → the mockup sentence; under download + floor → the floor sentence (no ending);
- * a reused download checks only the floor (M1's text).
- */
-export function lowDiskText(freeBytes: number, reused = false): string | null {
-  if (reused) return freeBytes < RUN_FREE_FLOOR_BYTES ? LOW_DISK_TEXT : null
-  const free = freeGbText(freeBytes)
-  if (freeBytes < BROWSER_DOWNLOAD_BYTES) return `The download needs about 1.3 GB and this computer has ${free} GB free. Free some space, then try again.`
-  if (freeBytes < BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES) return `The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has ${free} GB free.`
-  return null
-}
-
-/** A BrowserError low_disk line: the server's message, else built from its bytes, else M1's floor text. */
-export function browserLowDiskText(e: Pick<BrowserError, 'message' | 'freeBytes'> | undefined, reused = false): string {
-  if (e?.message?.trim()) return e.message.trim()
-  return (typeof e?.freeBytes === 'number' ? lowDiskText(e.freeBytes, reused) : null) ?? LOW_DISK_TEXT
-}
+export { BROWSER_DOWNLOAD_BYTES, LOW_DISK_TEXT, RUN_FREE_FLOOR_BYTES, browserLowDiskText } from './low-disk.ts'
 
 /* ---- browser row (mockups 11, 12, 13) ---- */
 

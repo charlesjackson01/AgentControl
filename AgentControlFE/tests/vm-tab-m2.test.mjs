@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import {
-  BLOCKED_RANGES, BROWSER_DOWNLOAD_BYTES, BUILD_WAIT_TEXT, LOW_DISK_TEXT, RUN_FREE_FLOOR_BYTES,
-  andList, browserConfirm, browserLowDiskText, browserRow, buildHead, buildingTools, buildingToolsText, elapsedText, etaText, filesSplitText,
-  freeGbText, historyRow, internetRowText, internetSub, isBuildActive, lowDiskText, vmActionError, vmHeader, vmTabModel,
+  BLOCKED_RANGES, BUILD_WAIT_TEXT,
+  andList, browserConfirm, browserRow, buildHead, buildingTools, buildingToolsText, elapsedText, etaText, filesSplitText,
+  historyRow, internetRowText, internetSub, isBuildActive, vmActionError, vmHeader, vmTabModel,
 } from '../src/lib/vm-tab.ts'
 import { renderVmTab } from '../src/lib/vm-tab-render.ts'
 import { createVmApi } from '../src/lib/vm-api.ts'
@@ -14,7 +14,6 @@ import { initialLiveState, liveReducer, runSummaryRow, runInternetUse } from '..
 import { macHost, probeResult, runRow, vmInfo } from './vm-fixtures.mjs'
 import { NOW, addon, browserStates, buildRuns, buildingVm } from './vm-m2-fixtures.mjs'
 
-const GB = 1024 ** 3
 const ui = (extra = {}) => ({ busy: null, errors: {}, editor: null, hasMore: false, ...extra })
 const model = (vm, extra = {}) => vmTabModel({ vm, botName: 'Primary', host: macHost(), probe: probeResult(), groupNames: {}, now: NOW, ...extra })
 const html = (m, u = ui()) => renderToStaticMarkup(renderVmTab(m, u))
@@ -24,43 +23,7 @@ const row = (key) => {
   return browserRow({ vm, botName: 'Primary', addon: a, now: NOW })
 }
 
-describe('low disk (contract fec4670; Charles 2026-10-30)', () => {
-  it('constants: download 1343·1000², floor 3·1024³', () => {
-    assert.equal(BROWSER_DOWNLOAD_BYTES, 1_343_000_000)
-    assert.equal(RUN_FREE_FLOOR_BYTES, 3 * GB)
-  })
-  it('free figure in 1024³ units, rounded down to one decimal', () => {
-    assert.equal(freeGbText(2.59 * GB), '2.5')
-    assert.equal(freeGbText(2.99999 * GB), '2.9')
-    assert.equal(freeGbText(1.0 * GB), '1.0')
-    assert.equal(freeGbText(0), '0.0')
-    assert.equal(freeGbText(-5), '0.0')
-    assert.equal(freeGbText(4.3e9), '4.0') // 4.3e9 bytes = 4.004… GiB
-  })
-  it('under the download: the mockup sentence, with its ending', () => {
-    assert.equal(lowDiskText(BROWSER_DOWNLOAD_BYTES - 1), 'The download needs about 1.3 GB and this computer has 1.2 GB free. Free some space, then try again.')
-  })
-  it('download fits but not the floor: the floor sentence exactly, no ending', () => {
-    assert.equal(lowDiskText(BROWSER_DOWNLOAD_BYTES), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 1.2 GB free.')
-    assert.equal(lowDiskText(BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES - 1), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 4.2 GB free.')
-    assert.doesNotMatch(lowDiskText(4 * GB), /Free some space/)
-  })
-  it('compared in bytes: exactly download + floor is enough', () => {
-    assert.equal(lowDiskText(BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES), null)
-    assert.equal(lowDiskText(100 * GB), null)
-  })
-  it('a reused download checks the floor only, with M1 text', () => {
-    assert.equal(lowDiskText(RUN_FREE_FLOOR_BYTES - 1, true), LOW_DISK_TEXT)
-    assert.equal(lowDiskText(RUN_FREE_FLOOR_BYTES, true), null)
-    assert.equal(lowDiskText(1 * GB, true), "This computer is almost out of disk space (less than 3 GB free), so scripts can't run until some space is freed.")
-  })
-  it('BrowserError low_disk: server message first, else from freeBytes, else M1', () => {
-    assert.equal(browserLowDiskText({ message: ' Server says. ', freeBytes: 1 }), 'Server says.')
-    assert.match(browserLowDiskText({ message: '', freeBytes: 2 * GB }), /plus 3 GB kept free for runs, and this computer has 2\.0 GB free\.$/)
-    assert.equal(browserLowDiskText({ message: '', freeBytes: 2 * GB }, true), LOW_DISK_TEXT)
-    assert.equal(browserLowDiskText(undefined), LOW_DISK_TEXT)
-  })
-})
+// The low-disk cases (constants, sentences, browserLowDiskText) moved to tests/low-disk.test.mjs with the code.
 
 describe('permissions card (mockup 11)', () => {
   it('internet line per policy', () => {

@@ -1484,6 +1484,21 @@ describe('AGENTCONTROL_AUTH_TOKEN', () => {
       delete process.env.AGENTCONTROL_AUTH_TOKEN
     }
   })
+  it('an encoded /api path is gated too (the router decodes it; BE-P2-13 review B1)', async () => {
+    process.env.AGENTCONTROL_AUTH_TOKEN = 'tok-123'
+    const gated = buildApp(createStore(join(dir, 'store.json')))
+    try {
+      // Without the fix, /%61pi/agents skipped the check and was routed to /api/agents (200).
+      for (const url of ['/%61pi/agents', '/%41PI/agents', '/%2561pi/agents', '/%2561pi', '/api', '//api/agents', '/./api/agents', '/x/../api/agents', '/api/agents?x=1']) {
+        expect([url, (await gated.inject({ method: 'GET', url })).statusCode]).toEqual([url, 401])
+      }
+      expect((await gated.inject({ method: 'GET', url: '/%61pi/agents', headers: { authorization: 'Bearer tok-123' } })).statusCode).toBe(200)
+      expect((await gated.inject({ method: 'GET', url: '/health' })).statusCode).toBe(200)
+    } finally {
+      await gated.close()
+      delete process.env.AGENTCONTROL_AUTH_TOKEN
+    }
+  })
 })
 
 describe('tool plumbing', () => {

@@ -1,5 +1,6 @@
 import { DEFAULT_VM_SETTINGS, defaultAgentVm } from './vm-defaults.js'
 import { createEgressService, hostInterfaceAddresses, modelServersOf, testAllowFromEnv, type EgressService } from './egress-service.js'
+import { isApiRequest } from './api-path.js'
 import { createUserOnlyCheck, USER_ONLY_EXTRA_ENV, USER_ONLY_MESSAGE, USER_ONLY_REASON, userOnlyExtraCidrs } from './user-only.js'
 import { parseSearchQuery, search } from './search.js'
 import cors from '@fastify/cors'
@@ -524,7 +525,9 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   const authToken = process.env.AGENTCONTROL_AUTH_TOKEN
   if (authToken) {
     app.addHook('onRequest', async (request, reply) => {
-      if (!request.url.startsWith('/api/')) return
+      // The router decodes the path (`/%61pi/agents` is /api/agents): test the routed and decoded
+      // path, not a raw prefix (BE-P2-13 review B1, M1 bug).
+      if (!isApiRequest(request)) return
       if (request.headers.authorization === `Bearer ${authToken}`) return
       await reply
         .code(401)

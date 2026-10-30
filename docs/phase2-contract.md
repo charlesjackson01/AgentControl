@@ -104,7 +104,7 @@ Routes below land in BE-P2-17 (and earlier tasks); shapes are fixed now so the F
 
 ## Live events: `GET /api/events` (SSE, M1)
 - Frame: `id: <n>` · `event: <type>` · `data: <LiveEvent JSON>`. Types: `run.updated` (full run + `summary` + `messageId`), `run.output` (chunk), `vm.updated`. `permission.*` are M2.
-- Catch-up: `Last-Event-ID` header (or `?lastEventId=`); replay from a ring of the last 1000. Too old → first frame `event: reset`, then re-fetch active runs and VM info.
+- Catch-up: `Last-Event-ID` header (or `?lastEventId=`); replay from a ring of the last 1000. Too old (or newer than the server knows) → first frame `event: reset` (`data: {}`), then re-fetch active runs and VM info. The reset frame carries `id: <latest event id>` (same sequence as the other frames), so a client that reconnects with that `Last-Event-ID` right after a reset gets no second reset, only the events after it.
 - Heartbeat: `: ping` every 15 s; `retry: 3000` on connect.
 - Auth: with `AGENTCONTROL_AUTH_TOKEN` set the route needs `Authorization: Bearer <token>` like every `/api/*` route, so read it with fetch streaming; `EventSource` isn't supported with auth (no token in the URL).
 - Filters: `?conversationId=` and/or `?agentId=`.

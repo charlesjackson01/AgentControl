@@ -205,8 +205,17 @@ describe('GET /api/events', () => {
     await replay.until(new RegExp(rb.id))
     replay.close()
     const reset = await connect(`${base}/api/events?lastEventId=999999`)
-    await reset.until(/event: reset\ndata: \{\}/)
+    const resetText = await reset.until(/id: \d+\nevent: reset\ndata: \{\}/)
     reset.close()
+    // The reset's id is the latest event id; reconnecting with it gets no second reset, then new events.
+    const resetId = Number(/id: (\d+)\nevent: reset/.exec(resetText)![1])
+    expect(resetId).toBe(app.liveEvents.lastId())
+    const again = await connect(`${base}/api/events`, { 'Last-Event-ID': String(resetId) })
+    await again.until(/retry: 3000/)
+    app.liveEvents.publish({ type: 'vm.updated', agentId: a.id, vm: {} as never })
+    await again.until(new RegExp(`id: ${resetId + 1}\nevent: vm\\.updated`))
+    expect(again.text()).not.toContain('event: reset')
+    again.close()
   })
 
   it('with AGENTCONTROL_AUTH_TOKEN: 401 without the Authorization header, 200 streaming with it', async () => {

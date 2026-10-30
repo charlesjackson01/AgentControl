@@ -5,7 +5,7 @@
  * `id: <n>` / `event: <type>` / `data: <LiveEvent JSON>`. `retry: 3000` is sent once on connect,
  * a `: ping` comment every LIVE_EVENT_HEARTBEAT_MS. Reconnects send `Last-Event-ID` (or
  * `?lastEventId=`): newer events are replayed; when the id is older than the ring the first frame
- * is `event: reset` with `data: {}`. Optional filters: `?conversationId=` and `?agentId=`.
+ * is `event: reset` with `data: {}` and `id:` the latest event id (so reconnecting with it doesn't reset again). Optional filters: `?conversationId=` and `?agentId=`.
  */
 import type { FastifyInstance } from 'fastify'
 import { LIVE_EVENT_HEARTBEAT_MS, LIVE_EVENT_REPLAY, type LiveEvent } from './shared/types.js'
@@ -130,8 +130,9 @@ export function registerLiveEventRoutes(app: FastifyInstance, bus: LiveEventBus,
     if (lastId !== null) {
       const r = bus.since(lastId)
       if (r.reset) {
-        write('event: reset\ndata: {}\n\n')
+        // The reset carries the latest id: reconnecting with it (Last-Event-ID) doesn't reset again.
         sent = bus.lastId()
+        write(`id: ${sent}\nevent: reset\ndata: {}\n\n`)
       } else for (const e of r.events) send(e)
     }
     replaying = false

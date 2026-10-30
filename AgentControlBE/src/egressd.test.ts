@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { BLOCK_HEADER, createCtlServer, createEgressProxy, ctlClient, EGRESS_VIA, handleCtl, parseAuthority, plainAddress, type EgressCredential, type EgressProxy } from './egressd.js'
+import { BLOCK_HEADER, configHash, createCtlServer, createEgressProxy, ctlClient, EGRESS_VIA, handleCtl, NOT_READY_TEXT, parseAuthority, plainAddress, type EgressCredential, type EgressProxy } from './egressd.js'
 
 /** BE-P2-13: ac-egressd in process (CONNECT and plain HTTP, credential, pinned connect, host log). */
 
@@ -14,7 +14,7 @@ const basic = (id: string, secret: string) => `Basic ${Buffer.from(`${id}:${secr
 
 let upstream: http.Server
 let upstreamPort = 0
-let seen: { via?: string; auth?: string; path?: string }[] = []
+let seen: { via?: string; auth?: string; path?: string; host?: string }[] = []
 let proxy: EgressProxy
 let proxyPort = 0
 let resolved: string[] = []
@@ -27,7 +27,7 @@ beforeEach(async () => {
   dialed = []
   answers = { 'site.example.com': [[PUBLIC]], 'v6.example.com': [['2606:4700::1111']] }
   upstream = http.createServer((req, res) => {
-    seen.push({ via: req.headers.via as string | undefined, auth: req.headers['proxy-authorization'] as string | undefined, path: req.url })
+    seen.push({ host: req.headers.host, via: req.headers.via as string | undefined, auth: req.headers['proxy-authorization'] as string | undefined, path: req.url })
     res.end('hello from upstream')
   })
   // A raw TCP echo of the first line for CONNECT tunnels goes through the same server (HTTP over the tunnel).
@@ -209,7 +209,7 @@ describe('plain HTTP', () => {
     expect(r.body).toBe('hello from upstream')
     expect(r.status).toBe(200)
     expect(r.body).toBe('hello from upstream')
-    expect(seen[0]).toEqual({ via: EGRESS_VIA, auth: undefined, path: '/p?q=1' })
+    expect(seen[0]).toEqual({ host: 'site.example.com', via: EGRESS_VIA, auth: undefined, path: '/p?q=1' })
     expect(dialed).toEqual([`${PUBLIC}:80`])
     expect(proxy.hosts('acA')).toEqual([{ host: 'site.example.com', port: 80, ip: PUBLIC, count: 1, blocked: false }])
   })
@@ -276,5 +276,172 @@ describe('helpers', () => {
     expect(parseAuthority('a:70000')).toBeNull()
     expect(plainAddress('::ffff:10.89.0.1')).toBe('10.89.0.1')
     expect(plainAddress('10.89.0.1')).toBe('10.89.0.1')
+  })
+})
+
+describe('review B3: credential lifetime and the connection cap', () => {
+  let clock = 1_000_000
+  let p: EgressProxy
+  let port = 0
+  const logs: string[] = []
+  const conn = (target: string, auth: string | null) =>
+    new Promise<{ status: number; sock: net.Socket }>((resolve, reject) => {
+      const s = net.connect({ host: '127.0.0.1', port })
+      let buf = ''
+      s.on('error', reject)
+      s.on('connect', () => s.write(`CONNECT ${target} HTTP/1.1\r\nHost: ${target}\r\n${auth ? `Proxy-Authorization: ${auth}\r\n` : ''}\r\n`))
+      s.on('data', (c) => {
+        buf += c.toString('latin1')
+        if (buf.includes('\r\n\r\n')) resolve({ status: Number(/^HTTP\/1\.1 (\d{3})/.exec(buf)?.[1]), sock: s })
+      })
+    })
+  beforeEach(async () => {
+    clock = 1_000_000
+    logs.length = 0
+    p = createEgressProxy({
+      config: {},
+      now: () => clock,
+      sweepMs: 0,
+      maxConnectionsPerCredential: 3,
+      resolve: async () => [PUBLIC],
+      connect: () => net.connect({ host: '127.0.0.1', port: upstreamPort }),
+      log: (m) => logs.push(m),
+    })
+    p.grant(cred({ ttlMs: 60_000 }))
+    await new Promise<void>((r) => p.server.listen(0, '127.0.0.1', r))
+    port = (p.server.address() as net.AddressInfo).port
+  })
+  afterEach(async () => {
+    await p.close()
+  })
+  it('an expired credential gets 407 even before the sweep', async () => {
+    const ok = await conn('site.example.com:443', A)
+    expect(ok.status).toBe(200)
+    ok.sock.destroy()
+    clock += 60_000
+    expect((await conn('site.example.com:443', A)).status).toBe(407)
+  })
+  it('the sweep revokes expired credentials and closes their sockets; the host log stays for the BE', async () => {
+    const t = await conn('site.example.com:443', A)
+    expect(t.status).toBe(200)
+    const closed = new Promise<void>((r) => t.sock.on('close', () => r()))
+    clock += 59_999
+    expect(p.sweep()).toBe(0)
+    clock += 1
+    expect(p.sweep()).toBe(1)
+    await closed
+    expect(logs.join('\n')).toMatch(/acA \(a, run\) expired; revoked and its connections closed/)
+    expect(p.health().credentials).toBe(0)
+    expect(p.revoke('acA')).toEqual([{ host: 'site.example.com', ip: PUBLIC, count: 1, blocked: false }])
+  })
+  it('a missing ttl means 90 s (never forever)', async () => {
+    p.grant(cred({ id: 'acN', secret: 'n0ttl', ttlMs: undefined }))
+    clock += 89_999
+    const t = await conn('site.example.com:443', basic('acN', 'n0ttl'))
+    expect(t.status).toBe(200)
+    t.sock.destroy()
+    clock += 1
+    expect((await conn('site.example.com:443', basic('acN', 'n0ttl'))).status).toBe(407)
+  })
+  it('at most N open connections per credential: 429 and a log line; a closed one frees a slot', async () => {
+    const open = [await conn('site.example.com:443', A), await conn('site.example.com:443', A), await conn('site.example.com:443', A)]
+    expect(open.map((o) => o.status)).toEqual([200, 200, 200])
+    expect((await conn('site.example.com:443', A)).status).toBe(429)
+    expect(logs.join('\n')).toMatch(/acA \(a, run\) hit the 3-connection cap; refused with 429/)
+    const gone = new Promise<void>((r) => open[0]!.sock.on('close', () => r()))
+    open[0]!.sock.destroy()
+    await gone
+    await new Promise((r) => setTimeout(r, 50))
+    const again = await conn('site.example.com:443', A)
+    expect(again.status).toBe(200)
+    for (const o of [...open, again]) o.sock.destroy()
+  })
+  it('refused attempts (blocked hosts) do not use up slots', async () => {
+    for (let i = 0; i < 6; i++) expect((await conn('127.0.0.1:443', A)).status).toBe(403)
+    const t = await conn('site.example.com:443', A)
+    expect(t.status).toBe(200)
+    t.sock.destroy()
+  })
+  it('revokeAll (ctl) drops every credential and closes its sockets', async () => {
+    const t = await conn('site.example.com:443', A)
+    const closed = new Promise<void>((r) => t.sock.on('close', () => r()))
+    expect(handleCtl(p, { op: 'revokeAll' })).toEqual({ ok: true, revoked: 1 })
+    await closed
+    expect((await conn('site.example.com:443', A)).status).toBe(407)
+  })
+})
+
+describe('review S1: no settings, no traffic; health reports the settings hash', () => {
+  it('503 "isn\'t ready" until configured; then the hash matches configHash()', async () => {
+    const p = createEgressProxy({ resolve: async () => [PUBLIC], connect: () => net.connect({ host: '127.0.0.1', port: upstreamPort }), sweepMs: 0 })
+    p.grant(cred())
+    await new Promise<void>((r) => p.server.listen(0, '127.0.0.1', r))
+    const port = (p.server.address() as net.AddressInfo).port
+    try {
+      expect(p.health()).toMatchObject({ configured: false, configHash: null })
+      const r = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = http.request({ host: '127.0.0.1', port, path: 'http://site.example.com/', headers: { 'proxy-authorization': A }, agent: false }, (res) => {
+          let body = ''
+          res.on('data', (c) => (body += c))
+          res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+        })
+        req.on('error', reject)
+        req.end()
+      })
+      expect(r).toEqual({ status: 503, body: `${NOT_READY_TEXT}\n` })
+      const cfg = { hostAddresses: ['192.0.2.10'] }
+      handleCtl(p, { op: 'config', config: cfg })
+      expect(p.health()).toMatchObject({ configured: true, configHash: configHash(cfg) })
+      expect(Array.isArray(p.health().dns)).toBe(true)
+    } finally {
+      await p.close()
+    }
+  })
+})
+
+describe('review S6: plain HTTP Host is the checked target', () => {
+  it('a client Host for another site is replaced by the URL\'s host', async () => {
+    const r = await getVia('http://site.example.com:80/x', A, { host: 'evil.example.net' })
+    expect(r.status).toBe(200)
+    expect(seen.at(-1)).toMatchObject({ host: 'site.example.com', path: '/x' })
+  })
+})
+
+describe('item 3: model servers through the proxy', () => {
+  it('a public model API is reached; the same name resolving locally is model_server', async () => {
+    const p = createEgressProxy({
+      config: { modelServers: [{ host: 'api.openai.com', port: 443 }] },
+      resolve: async (h) => (h === 'api.openai.com' ? [answers.model![0]![0]!] : [PUBLIC]),
+      connect: () => net.connect({ host: '127.0.0.1', port: upstreamPort }),
+      sweepMs: 0,
+    })
+    p.grant(cred())
+    await new Promise<void>((r) => p.server.listen(0, '127.0.0.1', r))
+    const port = (p.server.address() as net.AddressInfo).port
+    const conn = () =>
+      new Promise<{ status: number; head: string; sock: net.Socket }>((resolve, reject) => {
+        const s = net.connect({ host: '127.0.0.1', port })
+        let buf = ''
+        s.on('error', reject)
+        s.on('connect', () => s.write(`CONNECT api.openai.com:443 HTTP/1.1\r\nProxy-Authorization: ${A}\r\n\r\n`))
+        s.on('data', (c) => {
+          buf += c.toString('latin1')
+          if (buf.includes('\r\n\r\n')) resolve({ status: Number(/^HTTP\/1\.1 (\d{3})/.exec(buf)?.[1]), head: buf, sock: s })
+        })
+      })
+    try {
+      answers.model = [['104.18.33.45']]
+      const pub = await conn()
+      expect(pub.status).toBe(200)
+      pub.sock.destroy()
+      answers.model = [['192.168.1.9']]
+      const local = await conn()
+      expect(local.status).toBe(403)
+      expect(local.head).toContain(`${BLOCK_HEADER}: model_server`)
+      expect(local.head).toContain('Blocked: 192.168.1.9 is your model server')
+      local.sock.destroy()
+    } finally {
+      await p.close()
+    }
   })
 })

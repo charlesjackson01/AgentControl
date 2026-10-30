@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { PROXY_UNAVAILABLE } from './egress-service.js'
 import {
   createRunService, LOW_DISK_TEXT, MODEL_TAIL_BYTES, RESTART_QUEUED_TEXT, RESTART_RUNNING_TEXT, RUN_FREE_FLOOR_BYTES,
@@ -14,6 +14,9 @@ import type { Agent, ChatMessage, Conversation, HostContact, LiveEvent, ScriptRu
 
 const GB = 1024 ** 3
 let dir = ''
+// Every temp dir this file made. A late run-record write can recreate one
+// after afterEach removed it, so afterAll removes them all again.
+const madeDirs = new Set<string>()
 let runner: FakeRunner
 let agents: Agent[]
 let conversations: Conversation[]
@@ -59,6 +62,7 @@ async function rejects(p: Promise<unknown>): Promise<{ statusCode: number; reaso
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'agentcontrol-be12-'))
+  madeDirs.add(dir)
   runner = fakeRunner()
   agents = [agent('a1'), agent('a2'), agent('a3')]
   conversations = agents.map((a) => dm(a.id))
@@ -77,6 +81,10 @@ afterEach(async () => {
   }
   await svc.idle()
   rmSync(dir, { recursive: true, force: true })
+})
+afterAll(async () => {
+  await new Promise((r) => setTimeout(r, 20))
+  for (const d of madeDirs) rmSync(d, { recursive: true, force: true })
 })
 
 describe('lifecycle', () => {

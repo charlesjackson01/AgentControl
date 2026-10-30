@@ -59,7 +59,7 @@ export const CHROMIUM_LAUNCH_OPTIONS = { channel: 'chromium', headless: true, ar
 /**
  * Bot-facing note on launching the browser, for the model-facing text that will mention it:
  * the `run_script` tool's `browser` parameter description (BE-P2-16) and the bundled
- * `browser-basics` skill (BE-P2-15, plan §9). Neither exists yet; they should use this text.
+ * `browser-basics` seed skill (BE-P2-15, plan §9, src/db/seed-skills/browser-basics.md). Both use this text.
  */
 export const BROWSER_LAUNCH_NOTE =
   "Chromium is preinstalled for Playwright (Python and Node). Launch it with channel 'chromium' " +

@@ -259,7 +259,7 @@ export type CreateBody = {
   avatar?: { kind: 'emoji'; value: string }
   skillIds?: string[]
   /**
-   * FE-P2-7 (M2 contract 16160ae as ruled in CONTRACT_REVIEW_16160ae, BE-P2-15): AgentInput.browser, create only.
+   * FE-P2-7 (M2 contract fec4670, BE-P2-15): AgentInput.browser, create only.
    * true turns the browser on for the new bot (download/rebuild start); 409 reason `low_disk` creates nothing and
    * its `message` shows inline (S9). Sent only when the user switched it on: the model's /new draft never sets it
    * (normalizeDraft drops any browser field). Master ignores the key (the bot starts with it off).

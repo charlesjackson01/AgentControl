@@ -356,9 +356,10 @@ export type AgentInput = {
   internetPolicy?: InternetPolicy
   memoryLearn?: boolean
   /**
-   * M2 contract (p2/be-m2-contract 16160ae + CONTRACT_REVIEW_16160ae rulings, BE-P2-15): create only. true turns
-   * the browser on for the new bot, the same as PATCH /api/agents/:id/vm {permissions:{browser:true}}
-   * (download/rebuild start); 409 `low_disk` creates nothing. Default false. The /new draft never sets it.
+   * M2 contract (BE-P2-15, approved 2026-10-30): create only. true turns the browser on for the new bot, the
+   * same as PATCH /api/agents/:id/vm {permissions:{browser:true}} (download/rebuild start). Default false.
+   * Only the user's toggle and Create click send it: the model's /new draft never pre-sets it.
+   * FE note (contract fec4670): 409 `low_disk` creates nothing; its text is lib/low-disk.ts or the body's `message`.
    */
   browser?: boolean
 }

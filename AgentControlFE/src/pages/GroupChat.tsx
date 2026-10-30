@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import Avatar from '../components/Avatar'
 import { BotRow, TypingDots, UserRow } from '../components/shell/ChatRows'
 import ChatHeader from '../components/shell/ChatHeader'
 import GroupSettingsPanel from '../components/settings/GroupSettingsPanel'
 import { ActivityCard, GroupFileCards } from '../components/shell/MessageActivity'
 import RunCard from '../components/chat/RunCard'
+import PermissionCard from '../components/chat/PermissionCard'
 import { Markdown } from '../components/Markdown'
 import { ErrorState, Skeleton } from '../components/States'
 import { api } from '../lib/api'
 import { friendlyError as friendly } from '../lib/chat-format'
 import { mergeMessages, olderCursor, pageSummary } from '../lib/conversations'
-import { settingsOpen, withoutPanel } from '../lib/settings-tabs'
+import { settingsOpen, withSettingsTab, withoutPanel } from '../lib/settings-tabs'
+import { agentDmPath } from '../lib/shell'
 import { filesPanelOpen, filesPathParam, withFilesPath } from '../lib/files'
 import { clockTime, dayLabel } from '../lib/thread'
 import { matchCommands, parseSlash, slashPrefix, type CommandDef } from '../lib/commands'
@@ -65,6 +67,7 @@ export default function GroupChat({ group }: { group: Group }) {
   const { conversations, agents, markRead, upsert, reload: reloadSidebar } = useConversations()
   const shell = useShell()
   const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
   const jumpId = params.get('m')
 
   const [messages, setMessages] = useState<ChatMessage[] | undefined>(undefined)
@@ -487,6 +490,24 @@ export default function GroupChat({ group }: { group: Group }) {
                     return (
                       <BotRow key={row.key} author={by} authorName={DELETED_BOT} who={who(m, by)} meta={clockTime(m.createdAt)} mid={m.id} hit={m.id === jumpId} bare>
                         <RunCard message={m} botName={by?.name ?? DELETED_BOT} agentId={by?.id ?? m.authorAgentId} groupNames={{ [group.id]: group.name }} />
+                      </BotRow>
+                    )
+                  }
+                  if (m.kind === 'permission' && m.permissionRequestId) {
+                    // FE-P2-3 (mockup 10): the card sits under its bot's name line; Settings › VM is the bot's own panel.
+                    const by = authorOf(m)
+                    const dm = by ? agentDmPath(by.id, conversations ?? []) : null
+                    const href = dm ? `${dm}?${withSettingsTab(new URLSearchParams(), 'vm')}` : undefined
+                    return (
+                      <BotRow key={row.key} author={by} authorName={DELETED_BOT} who={who(m, by)} meta={clockTime(m.createdAt)} mid={m.id} hit={m.id === jumpId} bare>
+                        <PermissionCard
+                          message={m}
+                          botName={by?.name ?? DELETED_BOT}
+                          agentId={by?.id ?? m.authorAgentId}
+                          groupName={group.name}
+                          settingsHref={href}
+                          onSettings={href ? () => navigate(href) : undefined}
+                        />
                       </BotRow>
                     )
                   }

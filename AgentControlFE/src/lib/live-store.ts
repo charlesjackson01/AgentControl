@@ -14,7 +14,7 @@
  */
 import {
   SCRIPT_RUN_ACTIVE,
-  type ChatMessage, type ChatRunSummary, type FileChange, type LiveEvent, type PermissionRequest, type ScriptRun,
+  type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type LiveEvent, type PermissionRequest, type ScriptRun,
   type ScriptRunStatus, type ScriptRunSummary, type VmInfo,
 } from './types.ts'
 import type { LiveConnectionStatus } from './live-events.ts'
@@ -36,9 +36,16 @@ export type LiveState = {
   permissions: Record<string, PermissionRequest>
   /** Bumped on every `event: reset`, so views holding their own copies (thread pages) can re-fetch. */
   resets: number
+  /**
+   * FE-P2-3: server clock minus this browser's clock (ms), from PermissionListResponse.now (contract fec4670),
+   * so a card's countdown from expiresAt ignores clock skew. 0 until a list carried `now`.
+   */
+  clockSkewMs: number
+  /** FE-P2-3: the shared Chromium download (browser.updated, GET /api/vm/browser), for a setup card's live progress. */
+  browser?: BrowserAddonInfo
 }
 
-export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0 }
+export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0, clockSkewMs: 0 }
 
 export type LiveAction =
   | { type: 'connection'; status: LiveConnectionStatus }
@@ -46,8 +53,12 @@ export type LiveAction =
   /** A run fetched over REST (GET /api/runs/:id, a stop/undo/rebuild response). */
   | { type: 'run'; run: ScriptRun }
   | { type: 'vm'; vm: VmInfo }
-  /** GET /api/permissions?status=pending: the full pending list (unfiltered). */
-  | { type: 'pending'; requests: PermissionRequest[] }
+  /** GET /api/permissions?status=pending: the full pending list (unfiltered). `skewMs`: from the list's `now`. */
+  | { type: 'pending'; requests: PermissionRequest[]; skewMs?: number }
+  /** FE-P2-3: requests from GET /api/permissions/:id, an answer's reply or its 409 body (any status). */
+  | { type: 'permissions'; requests: PermissionRequest[] }
+  /** FE-P2-3: GET /api/vm/browser or a retry's reply. */
+  | { type: 'browser'; browser: BrowserAddonInfo }
   | { type: 'reset' }
 
 /* ---------- status helpers ---------- */
@@ -147,8 +158,9 @@ const PERMISSION_STATUS = { allow_once: 'allowed_once', always: 'always', enable
 function permissionsAfterRun(perms: Record<string, PermissionRequest>, run: ScriptRun): Record<string, PermissionRequest> {
   let next = perms
   for (const p of run.permissions ?? []) {
-    const known = perms[p.requestId]
-    if (!known || known.status !== 'pending' || p.decision === 'pending') continue
+    // fec4670: requestId is absent for grants without a card (policy Always, a Rebuild click).
+    const known = p.requestId ? perms[p.requestId] : undefined
+    if (!p.requestId || !known || known.status !== 'pending' || p.decision === 'pending') continue
     if (next === perms) next = { ...perms }
     next[p.requestId] = { ...known, status: PERMISSION_STATUS[p.decision] }
   }
@@ -167,6 +179,13 @@ function permissionsAfterList(perms: Record<string, PermissionRequest>, pending:
   for (const [id, p] of Object.entries(perms)) if (p.status !== 'pending' || listed.has(id)) next[id] = p
   for (const p of pending) if (!next[p.id] || next[p.id].status === 'pending') next[p.id] = p
   return next
+}
+
+/** A request we hold that's resolved is never reopened by an older pending copy; otherwise the incoming one wins. */
+function putPermission(perms: Record<string, PermissionRequest>, req: PermissionRequest): Record<string, PermissionRequest> {
+  const prev = perms[req.id]
+  if (prev && prev.status !== 'pending' && req.status === 'pending') return perms
+  return { ...perms, [req.id]: req }
 }
 
 function applyRun(state: LiveState, incoming: ScriptRun, messageId?: string, summary?: ChatRunSummary): LiveState {
@@ -195,8 +214,18 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       return applyRun(state, action.run)
     case 'vm':
       return { ...state, vms: { ...state.vms, [action.vm.agentId]: action.vm } }
-    case 'pending':
-      return { ...state, permissions: permissionsAfterList(state.permissions, action.requests) }
+    case 'pending': {
+      const next: LiveState = { ...state, permissions: permissionsAfterList(state.permissions, action.requests) }
+      if (typeof action.skewMs === 'number' && Number.isFinite(action.skewMs)) next.clockSkewMs = action.skewMs
+      return next
+    }
+    case 'permissions': {
+      let perms = state.permissions
+      for (const r of action.requests) perms = putPermission(perms, r)
+      return perms === state.permissions ? state : { ...state, permissions: perms }
+    }
+    case 'browser':
+      return { ...state, browser: action.browser }
     case 'event': {
       const ev = action.event
       switch (ev.type) {
@@ -208,12 +237,15 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
           return { ...state, output: { ...state.output, [ev.runId]: { ...prev, [ev.stream]: tail(prev[ev.stream] + ev.chunk) } } }
         }
         case 'permission.requested':
-        case 'permission.resolved': {
-          const prev = state.permissions[ev.request.id]
-          // A late "requested" never reopens a resolved request.
-          if (ev.type === 'permission.requested' && prev && prev.status !== 'pending') return state
-          return { ...state, permissions: { ...state.permissions, [ev.request.id]: ev.request } }
+        case 'permission.resolved':
+        case 'permission.updated': {
+          // A late "requested" never reopens a resolved request; "updated" (fec4670) carries a resolved
+          // browser card's new setup / setupError snapshot.
+          const perms = putPermission(state.permissions, ev.request)
+          return perms === state.permissions ? state : { ...state, permissions: perms }
         }
+        case 'browser.updated':
+          return { ...state, browser: ev.browser }
         case 'vm.updated':
           return { ...state, vms: { ...state.vms, [ev.agentId]: ev.vm } }
         default:
@@ -232,6 +264,11 @@ export function runSummaryFor(state: LiveState, message: Pick<ChatMessage, 'id' 
 
 export function runOutput(state: LiveState, runId: string): RunOutput | undefined {
   return state.output[runId]
+}
+
+/** FE-P2-3: a chat card's request. */
+export function permissionFor(state: LiveState, requestId: string | undefined): PermissionRequest | undefined {
+  return requestId ? state.permissions[requestId] : undefined
 }
 
 export function pendingPermissions(state: LiveState, conversationId?: string): PermissionRequest[] {

@@ -954,3 +954,45 @@ button.rc-head:focus-visible { outline: 2px solid var(--c-accent-ring); outline-
   .vm-env__form { grid-template-columns: 1fr; }
   .vm-notice { flex-wrap: wrap; }
 }
+
+/* FE-P2-3: permission card (mockups 01–05, 09, 10; classes and values from the mockup's .pc*). Gaps: lib/permission-card.ts PERMISSION_CARD_GAPS. */
+.pc { width: 560px; max-width: 100%; border: 1px solid var(--c-accent-ring); background: var(--c-surface); border-radius: var(--r-lg); box-shadow: var(--sh-md); padding: 12px 14px; font-size: 13px; display: flex; flex-direction: column; gap: 9px; margin-bottom: 4px; }
+.pc--done { box-shadow: none; border-color: var(--c-border); background: var(--c-surface-2); padding: 10px 12px; gap: 6px; }
+.pc--bad { border-color: var(--c-danger-border); }
+.pc-top { display: flex; gap: 10px; align-items: flex-start; }
+.pc-ico { flex: none; width: 30px; height: 30px; border-radius: 9px; background: var(--c-accent-soft); color: var(--c-accent); display: grid; place-items: center; font-size: 15px; }
+.pc--done .pc-ico { width: 24px; height: 24px; border-radius: 7px; font-size: 12px; background: var(--c-bg-sunk); }
+.pc-txt { flex: 1; min-width: 0; }
+.pc-t { font-weight: 600; font-size: 13.5px; margin: 0; }
+.pc--done .pc-t { font-size: 12.5px; font-weight: 500; }
+.pc-s { margin: 2px 0 0; color: var(--c-text-2); font-size: 12.5px; line-height: 1.45; }
+.pc--done .pc-s { font-size: 11.5px; color: var(--c-text-3); }
+.pc-s code, .pc-t code { font-family: var(--font-mono); font-size: 11.5px; background: var(--c-bg-sunk); padding: 0 4px; border-radius: 4px; }
+.pc-st { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.pc-st--ok { background: var(--c-success-soft); color: var(--c-success); }
+.pc-st--bad { background: var(--c-danger-soft); color: var(--c-danger); }
+.pc-st--off { background: var(--c-bg-sunk); color: var(--c-text-2); }
+.pc-st--run { background: var(--c-accent-soft); color: var(--c-accent); }
+.pc-hosts { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.pc-hlbl { font-size: 11.5px; color: var(--c-text-3); margin-right: 2px; }
+.pc-host { font-family: var(--font-mono); font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--c-bg-sunk); color: var(--c-text-2); overflow-wrap: anywhere; }
+.pc-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.pc-btns .btn { height: 30px; font-size: 12.5px; }
+.pc-foot { display: flex; gap: 10px; align-items: baseline; color: var(--c-text-3); font-size: 11.5px; line-height: 1.45; }
+.pc-foot > span:first-child { flex: 1; }
+.pc-foot a, .pc-s a { color: var(--c-accent); text-decoration: none; }
+.pc-timer { flex: none; font-variant-numeric: tabular-nums; color: var(--c-text-2); font-weight: 500; }
+.pc-timer--low { color: var(--c-danger); }
+.pc-err { margin: 0; color: var(--c-danger); font-size: 12px; }
+.pc-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.pc-steps li { display: grid; grid-template-columns: 16px 1fr auto; gap: 8px; align-items: center; }
+.pc-steps .i { color: var(--c-text-3); text-align: center; }
+.pc-steps .i--ok { color: var(--c-success); }
+.pc-steps .i--run { color: var(--c-accent); }
+.pc-steps .i--bad { color: var(--c-danger); }
+.pc-steps .m { color: var(--c-text-3); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.pc-steps li.dim { color: var(--c-text-3); }
+.pc-prog { grid-column: 2/4; height: 5px; border-radius: 99px; background: var(--c-bg-sunk); overflow: hidden; }
+.pc-prog span { display: block; height: 100%; background: var(--c-accent); border-radius: 99px; }
+.pc-next { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--c-text-3); border-top: 1px dashed var(--c-border); padding-top: 8px; }
+@media (max-width: 500px) { .pc-btns .btn { flex: 1 1 100%; } }

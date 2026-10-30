@@ -546,7 +546,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 9180e17 (BE-P2-16), section "Phase 2",
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ fec4670 (M2 contract, final), section "Phase 2" to the end,
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -657,7 +657,8 @@ export interface ScriptRun {
   browser: boolean
   /** null until resolved (queued runs, or a run that failed before start). */
   runtime: ContainerRuntime | null
-  permissions: { requestId: string; type: PermissionType; decision: PermissionDecision | 'timeout' | 'pending' }[]
+  /** M2 contract (approved 2026-10-30): see ScriptRunPermission (requestId is absent for grants without a card). */
+  permissions: ScriptRunPermission[]
   status: ScriptRunStatus
   /**
    * status 'queued': how many runs are ahead of this one, counting the ones running now
@@ -685,11 +686,23 @@ export interface ScriptRun {
   /** True when output passed the 200 MB cap and was cut. */
   outputTruncated?: boolean
   filesChanged: FileChange[]
-  hostsContacted?: { host: string; count: number; blocked: boolean }[]
+  /**
+   * M2 contract (BE-P2-13/14, approved with changes 2026-10-30): the hosts the run's proxy saw ("Sites used"),
+   * at most SCRIPT_RUN_HOSTS_MAX (200) entries, blocked ones first and always kept.
+   */
+  hostsContacted?: HostContact[]
+  /** M2 contract (approved 2026-10-30): how many distinct hosts the proxy saw, when hostsContacted was cut. */
+  hostsContactedTotal?: number
   snapshot: { id: string; driver: SnapshotDriver; retainedBytes: number } | null
   undo: ScriptRunUndo
   /** kind 'undo': the run it reversed. */
   undoOfRunId?: string
+  /** M2 contract (BE-P2-14, approved 2026-10-30): status 'waiting_permission' only: what it waits for. */
+  waitingFor?: RunWaitingFor
+  /** M2 contract (BE-P2-14, approved 2026-10-30): waitingFor 'permission': the pending request (its own, or another run's of the same bot while that one is pending). */
+  waitingOnRequestId?: string
+  /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
+  build?: ToolBuildInfo
 }
 
 /** Run history row (GET /api/agents/:id/script-runs and VmInfo.runs). */
@@ -701,6 +714,14 @@ export type ScriptRunSummary = Pick<ScriptRun,
   /** Optional split of filesChangedCount for history rows. */
   files?: { added: number; modified: number; deleted: number }
   network?: ScriptRun['network']
+  /** M2 contract (approved 2026-10-30): history row "internet once" / "internet always". */
+  internet?: InternetUse
+  /** M2 contract (approved 2026-10-30): up to 3 reached host names, for the history row. */
+  hosts?: string[]
+  /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
+  build?: ToolBuildInfo
+  /** M2 contract (BE-P2-22's field, approved 2026-10-30): status 'queued': "Queued · after tool build" for 'tool_build'. */
+  queuedReason?: QueuedReason
 }
 
 /** The small run summary a kind 'run' ChatMessage carries. */
@@ -720,6 +741,28 @@ export interface ChatRunSummary {
   undoOfName?: string
   durationMs?: number
   runtime?: ContainerRuntime | null
+  /** M2 contract (BE-P2-14, approved 2026-10-30): status 'waiting_permission': "Waiting for permission" / "Waiting for the browser". */
+  waitingFor?: RunWaitingFor
+  /** M2 contract (approved 2026-10-30): card meta "Internet" and "Browser" rows. */
+  network?: ScriptRun['network']
+  browser?: boolean
+  internet?: InternetUse
+  /** M2 contract (approved 2026-10-30): "Sites used" (blocked hosts first, at most 20 entries). */
+  hostsContacted?: HostContact[]
+  /** M2 contract (approved 2026-10-30): failed / denied runs: ScriptRun.reason, so the card can pick its error row. */
+  reason?: string
+  /** M2 contract (approved 2026-10-30): failed / denied / stopped runs: ScriptRun.error (shown as is). */
+  error?: string
+  /** M2 contract (BE-P2-21, approved 2026-10-30): kind 'tool_build' only. */
+  build?: ToolBuildInfo
+  /** M2 contract (approved 2026-10-30): status 'running' (and after): ScriptRun.startedAt, for the live "Running · 1:12". */
+  startedAt?: string
+  /** M2 contract (BE-P2-22's field, approved 2026-10-30): status 'queued' only. */
+  queuedReason?: QueuedReason
+  /** M2 contract (BE-P2-22, approved 2026-10-30): queuedReason 'tool_build': the build it waits for ("runs on the new tools (version 3)"). */
+  afterBuild?: { runId: string; generation: number }
+  /** M2 contract (approved 2026-10-30): ScriptRun.hostsContactedTotal (or the full count), for "+N more" beyond the 20. */
+  hostsContactedTotal?: number
 }
 
 export interface PermissionRequest {
@@ -737,6 +780,28 @@ export interface PermissionRequest {
   /** createdAt + 10 min; after that it resolves as 'timeout' (= deny). */
   expiresAt: string
   resolvedAt?: string
+  /** M2 contract (BE-P2-14, approved 2026-10-30): 'user' when the user answered; absent for 'timeout' and when the run ended first. */
+  resolvedBy?: 'user'
+  /** M2 contract (approved 2026-10-30): status 'denied' without an answer: the run was stopped (or ended) while the card was pending. */
+  /** 'policy_changed' (approved 2026-10-30): the internet policy went to Never/Always, or the browser was turned off, while it was pending. */
+  closedBy?: 'run_stopped' | 'run_ended' | 'policy_changed'
+  /** M2 contract (approved 2026-10-30): what the card names: "To run fetch_rates.py" / "the tool build". */
+  runKind?: ScriptRunKind
+  scriptName?: string
+  /** M2 contract (approved 2026-10-30): group chats: the group (the card says "in <group>"). */
+  groupId?: string
+  /** M2 contract (approved 2026-10-30): the group's name at the time, beside groupId (M1 undo convention). */
+  groupName?: string
+  /** M2 contract (approved): type 'browser': the run also needs the internet and the policy is ask ("Next: internet"). */
+  internetNext?: boolean
+  /**
+   * M2 contract (BE-P2-15, approved 2026-10-30): type 'browser', after 'enable': a copy of the setup this card
+   * started, refreshed on every setup change (permission.updated), so the card keeps its own steps after a
+   * later re-setup overwrites VmInfo.browser.setup.
+   */
+  setup?: BrowserSetup
+  /** M2 contract (BE-P2-15, approved 2026-10-30): type 'browser': that setup's failure, copied the same way. */
+  setupError?: BrowserError
 }
 export const PERMISSION_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -763,6 +828,10 @@ export interface VmInfo {
   }
   internetPolicy: InternetPolicy
   permissions: { browser: boolean; browserState: BrowserState; /** 0–1 while downloading */ progress?: number }
+  /** M2 contract (BE-P2-15, approved 2026-10-30): this bot's browser setup (absent = off with no history). */
+  browser?: BotBrowserInfo
+  /** M2 contract (BE-P2-21, approved 2026-10-30): the bot's tool build in progress ("Building tools" head). */
+  activeBuild?: ActiveToolBuild
   limits: VmLimits
   usage: {
     memoryMb: number
@@ -916,7 +985,11 @@ export type LiveEvent =
   | { type: 'run.output'; conversationId: string; runId: string; stream: 'stdout' | 'stderr'; chunk: string }
   | { type: 'permission.requested'; conversationId: string; request: PermissionRequest }
   | { type: 'permission.resolved'; conversationId: string; request: PermissionRequest }
+  /** M2 contract (BE-P2-15, approved 2026-10-30): the request changed after it resolved (setup / setupError snapshot). */
+  | { type: 'permission.updated'; conversationId: string; request: PermissionRequest }
   | { type: 'vm.updated'; agentId: string; vm: VmInfo }
+  /** M2 contract (BE-P2-15, approved 2026-10-30): the shared Chromium download; sent to every subscriber (no filter applies). */
+  | { type: 'browser.updated'; browser: BrowserAddonInfo }
 
 /** GET /api/agents/:id/vm/tools. tools is absent until the first manifest refresh. */
 export interface VmToolsInfo {
@@ -926,6 +999,8 @@ export interface VmToolsInfo {
   image: AgentVm['image']
   /** True when POST /vm/tools/rollback has a previous generation to go back to. */
   canRollback: boolean
+  /** M2 contract (BE-P2-21, approved 2026-10-30): the build in progress (Rebuild / rollback answer 409 build_active meanwhile). */
+  activeBuild?: ActiveToolBuild
 }
 
 export type ProbeCheckId = 'start' | 'bind_mount' | 'snapshot_mount' | 'network' | 'cgroup_limits' | 'exec' | 'chromium'
@@ -975,9 +1050,203 @@ export interface VmProbeResult {
 /** GET /api/permissions?status=pending[&agentId=][&conversationId=]: newest first. */
 export interface PermissionListResponse {
   requests: PermissionRequest[]
+  /** M2 contract (approved 2026-10-30): server time, so the FE countdown from expiresAt ignores clock skew. */
+  now?: string
 }
 /** POST /api/permissions/:requestId body. Requires header PERMISSION_CSRF_HEADER: '1' (403 without; 409 when already resolved). */
 export interface PermissionAnswer {
   decision: PermissionDecision
 }
 export const PERMISSION_CSRF_HEADER = 'x-agentcontrol-confirm'
+
+/* ───────────────────────── Phase 2 M2 contract (BE-P2-14/15/21): shapes only, approved with changes by Team lead 2026-10-30 ───────────────────────── */
+
+/**
+ * Why a queued run waits. Owned by BE-P2-22 (p2/be-22-build-queue, not merged here): the same definition as there,
+ * so the two agree; keep one copy when merging (BE-P2-22 also adds ScriptRun.queuedReason).
+ */
+export type QueuedReason = 'slot' | 'tool_build'
+
+/** ScriptRun.hostsContacted cap (blocked hosts first); ChatRunSummary keeps 20. */
+export const SCRIPT_RUN_HOSTS_MAX = 200
+export const CHAT_RUN_HOSTS_MAX = 20
+/** "Expects to reach" on a vm_install card: display only, never enforced (plan default 2). */
+export const VM_INSTALL_EXPECTED_HOSTS: readonly string[] = ['pypi.org', 'files.pythonhosted.org', 'registry.npmjs.org', 'deb.debian.org']
+/** run_script hosts? / PermissionRequest.hosts: at most 10 names, each ≤ 253 chars, hostname or IP syntax. */
+export const PERMISSION_HOSTS_MAX = 10
+
+/** How a ScriptRun got (or didn't get) a permission. */
+export interface ScriptRunPermission {
+  type: PermissionType
+  decision: PermissionDecision | 'timeout' | 'pending'
+  /** The card's PermissionRequest; absent when no card was shown (policy Always, a user Rebuild click). */
+  requestId?: string
+  /**
+   * 'card': answered on a card; 'policy': the bot's rule (Always, or browser already on); 'rebuild': a user click that
+   * grants one build's internet: Rebuild, or turning the browser on/off (card enable, VM tab, create).
+   */
+  source?: 'card' | 'policy' | 'rebuild'
+}
+
+/** What a waiting_permission run waits for. */
+export type RunWaitingFor = 'permission' | 'browser'
+
+/** Card / history wording: "on (allowed once)", "on (always allowed)", "off". */
+export type InternetUse = 'off' | 'once' | 'always'
+
+/** Why the proxy refused a host (plan §5). 'port': not 80/443; 'reserved': multicast/240/4/broadcast/0/8. */
+export type HostBlockReason = 'home_network' | 'tailscale' | 'this_computer' | 'model_server' | 'metadata' | 'private_name' | 'port' | 'reserved'
+export const HOST_BLOCK_REASONS: readonly HostBlockReason[] = ['home_network', 'tailscale', 'this_computer', 'model_server', 'metadata', 'private_name', 'port', 'reserved']
+
+/** One "Sites used" row. */
+export interface HostContact {
+  /** The name (or IP literal) the script asked for, without the port. */
+  host: string
+  /** Set when it isn't 443 (e.g. 8080 → "192.168.1.20:8080"). */
+  port?: number
+  /**
+   * The resolved IP that was checked. Hosts refused before resolving (*.lan, *.ts.net, …) never carry this field
+   * (no empty or guessed value; the FE shows no "→ IP" arrow; Charles, 2026-10-30).
+   */
+  ip?: string
+  /** Requests (reached) or tries (blocked). */
+  count: number
+  blocked: boolean
+  reason?: HostBlockReason
+}
+
+/** ScriptRun.build for kind 'tool_build'. */
+export interface ToolBuildInfo {
+  /** The generation this build makes ("version 3"). */
+  generation: number
+  /** The generation in use when it started; kept if the build fails or is stopped ("version 2"). */
+  fromGeneration: number
+  /** The full package list the new generation has. */
+  packages: string[]
+  /** Packages new in this build ("adds matplotlib, pandas"); removed only for a rebuild that drops some. */
+  added: string[]
+  removed?: string[]
+  startedBy: 'user' | 'bot'
+  /** 'rebuild': VM tab Rebuild; 'vm_install': the bot's tool ("Primary (vm_install)"); 'browser': rebuild onto the browser base. */
+  via: 'rebuild' | 'vm_install' | 'browser'
+  base: 'base' | 'browser'
+  /** While running: "Step 4 of 6 · pip install". */
+  progress?: { step: number; steps: number; label: string }
+}
+
+/**
+ * VmInfo.activeBuild / VmToolsInfo.activeBuild. The VM tab's "Stop build" (Building tools header) and the chat
+ * card's Stop both call POST /api/runs/:runId/stop with this runId (one route, same semantics).
+ */
+export interface ActiveToolBuild {
+  runId: string
+  status: 'queued' | 'waiting_permission' | 'running'
+  startedAt?: string
+  build: ToolBuildInfo
+  internet: InternetUse
+  /** Reached host names so far. */
+  hosts: string[]
+}
+
+/** POST /api/agents/:id/vm/tools/rebuild → 202. */
+export interface ToolBuildAccepted {
+  run: ScriptRun
+}
+/** Build time limit (plan §8 risks): past it the build ends timed_out and the current generation is kept. */
+export const TOOL_BUILD_TIMEOUT_MS = 20 * 60 * 1000
+
+/** Per-bot browser state (plan: vm.browser). 'setting_up' = waiting for the shared download. */
+export type BotBrowserState = 'off' | 'setting_up' | 'rebuilding' | 'waiting_idle' | 'ready' | 'error'
+
+/** Why browser setup stopped. */
+export type BrowserErrorReason = 'download_failed' | 'low_disk' | 'build_failed' | 'chromium_check_failed'
+export interface BrowserError {
+  reason: BrowserErrorReason
+  /** Plain language, shown as is (e.g. "The Chromium download stopped at 840 MB (connection reset)."). */
+  message: string
+  at: string
+  /** low_disk: what the download needs and what is free. */
+  neededBytes?: number
+  freeBytes?: number
+  /** download_failed: how far it got. */
+  bytes?: number
+  /** Short plain cause for the card: "connection reset", "missing shared library". */
+  cause?: string
+  /** Longer detail for the VM tab: "the connection dropped at 840 MB", "libnss3.so missing". */
+  detail?: string
+}
+
+/** VmInfo.browser. */
+export interface BotBrowserInfo {
+  state: BotBrowserState
+  /** The latest setup (kept after ready for the "ready at …" line). */
+  setup?: BrowserSetup
+  error?: BrowserError
+  /** state 'ready': from the chromium check ("Chromium 131 · checked today 9:54 AM"). */
+  chromium?: { version: string; checkedAt: string }
+}
+
+/** One turn-on of the browser for a bot (the setup card's steps, mockups 04/05). */
+export interface BrowserSetup {
+  turnedOnAt: string
+  turnedOnBy: 'user'
+  /** The browser card that turned it on (absent when turned on in the VM tab or at create). */
+  requestId?: string
+  /** The run waiting for it ("snap_dashboard.py waits until it's ready"). */
+  runId?: string
+  /** Step 1 (shared download). Skipped (no times) when the download was already there. */
+  download: { startedAt?: string; endedAt?: string; bytes?: number; totalBytes?: number; reused?: boolean }
+  /** Step 2: the tool_build run onto the browser base. */
+  rebuild: { runId?: string; startedAt?: string; endedAt?: string }
+  /** Step 3: recreate the container when idle, then the chromium check. */
+  check: { status: 'pending' | 'pass' | 'fail'; at?: string; message?: string }
+  readyAt?: string
+}
+
+/** GET /api/vm/browser (plan: BrowserState object; renamed so the M1 BrowserState union keeps its name). */
+export interface BrowserAddonInfo {
+  /** Same values as VmInfo.permissions.browserState. */
+  state: BrowserState
+  /** 0–1 while downloading. */
+  progress?: number
+  bytes?: number
+  /** About 1.3 GB (SHARED_IMAGE_APPROX_BYTES.browser until known). */
+  totalBytes: number
+  /** While downloading: seconds left, when it can be estimated ("about 1 min left"). */
+  etaSec?: number
+  /** state 'error' (download_failed / low_disk). */
+  error?: BrowserError
+  /** Bots with the browser on (also the "shared by 2 bots" count). Empty with state 'ready' → "Remove download". */
+  usedBy: string[]
+  readyAt?: string
+}
+
+/**
+ * M2 error reasons (400/403/404/409; low_disk and proxy_unavailable are 409s; 5xx bodies carry no reason, as in M1).
+ * Includes the M1 reasons these routes still return (run_active, no_previous_generation, files_missing).
+ */
+export type M2ErrorReason =
+  | 'bad_decision' | 'egress_reserved' | 'confirm_required' | 'user_only' | 'not_found'
+  | 'already_resolved' | 'browser_in_use' | 'browser_busy' | 'build_active' | 'run_active' | 'internet_never'
+  | 'proxy_unavailable' | 'low_disk' | 'nothing_to_retry' | 'no_previous_generation' | 'files_missing'
+/** M2 run end reasons (ScriptRun.reason / ChatRunSummary.reason). M1's internet_unavailable is retired. */
+export type M2RunReason =
+  | 'internet_never' | 'network_off' | 'permission_denied' | 'permission_timeout' | 'proxy_unavailable'
+  | 'browser_unavailable' | 'chromium_check_failed' | 'host_blocked' | 'build_failed' | 'build_stopped'
+/** 409 already_resolved body: Fastify's error shape plus the final request. */
+export interface PermissionAlreadyResolved {
+  statusCode: 409
+  error: string
+  message: string
+  reason: 'already_resolved'
+  request: PermissionRequest
+}
+/** Which decisions each request type takes (anything else → 400 bad_decision). */
+export const PERMISSION_DECISIONS: Readonly<Record<PermissionType, readonly PermissionDecision[]>> = {
+  internet: ['allow_once', 'always', 'deny'],
+  browser: ['enable', 'deny'],
+}
+/** POST /api/vm/browser/retry body: no agentId retries the shared download; with agentId, that bot's failed step. */
+export interface BrowserRetryRequest {
+  agentId?: string
+}

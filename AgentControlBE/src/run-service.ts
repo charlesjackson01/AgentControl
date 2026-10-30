@@ -17,8 +17,19 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import { join, posix } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { fail, failWithReason } from './http.js'
-import { capHostContacts } from './egress-service.js'
-import { NETWORK_UNAVAILABLE } from './podman-runner.js'
+import { capHostContacts, PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON } from './egress-service.js'
+import {
+  INTERNET_NEVER_REASON,
+  MODEL_BROWSER_DENIED,
+  MODEL_INTERNET_DENIED,
+  MODEL_PERMISSION_TIMEOUT,
+  modelInternetNever,
+  PERMISSION_DENIED_REASON,
+  PERMISSION_TIMEOUT_REASON,
+  type GateAdmit,
+  type GateRelease,
+  type PermissionGate,
+} from './permission-gate.js'
 import type { RunScriptRequest, RunScriptResult } from './runner.js'
 import { runMessageContent, TOOL_BUILD_CARD_NAME } from './run-messages.js'
 import type { RunLogs } from './snapshot-budget.js'
@@ -41,7 +52,7 @@ import type {
   ScriptRunSummary,
   ScriptRunUndo,
 } from './shared/types.js'
-import { CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE, TOOL_BUILD_TIMEOUT_MS, type ToolBuildInfo } from './shared/types.js'
+import { CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE, TOOL_BUILD_TIMEOUT_MS, type HostBlockReason, type ToolBuildInfo } from './shared/types.js'
 
 /** Plan §5: new runs are blocked below 3 GB free on the machine (GiB, like the snapshot budget's 5 GB floor). */
 export const RUN_FREE_FLOOR_BYTES = 3 * 1024 ** 3
@@ -60,6 +71,23 @@ export const RESTART_QUEUED_TEXT = 'AgentControl restarted before this run start
 export const BUILD_ACTIVE_REASON = 'build_active'
 export const BUILD_ACTIVE_TEXT = "Wait for the bot's tools to finish building first."
 export const STOPPED_QUEUED_TEXT = 'The run was stopped before it started.'
+/** BE-P2-14 (contract "network_off"): a run started offline that failed connecting. */
+export const NETWORK_OFF_REASON = 'network_off'
+export const networkOffText = (bot: string) => `This run was started with the internet off, so connecting failed. ${bot} can run it again with the internet on.`
+const NETWORK_OFF_HINTS = ['network is off', 'Network is unreachable', 'ENETUNREACH', 'Temporary failure in name resolution', 'EAI_AGAIN', 'Errno -3']
+/** BE-P2-14 (contract "host_blocked"): a failed run whose proxy refused a host; the first blocked one names it. */
+export const HOST_BLOCKED_REASON = 'host_blocked'
+const HOME_BLOCKED = 'The script tried to reach your home network. Home network and Tailscale are always blocked in Phase 2.'
+export const HOST_BLOCKED_TEXT: Record<HostBlockReason, string> = {
+  tailscale: 'The script tried to reach your Tailscale network. Home network and Tailscale are always blocked in Phase 2.',
+  home_network: HOME_BLOCKED,
+  private_name: HOME_BLOCKED,
+  this_computer: 'The script tried to reach this computer, which is always blocked.',
+  model_server: 'The script tried to reach your model server, which is always blocked.',
+  metadata: 'The script tried to reach a cloud metadata address, which is always blocked.',
+  reserved: 'The script tried to reach a reserved address, which is always blocked.',
+  port: 'The script tried a port other than 80 or 443, which is blocked.',
+}
 /** BE-P2-21: a live tool build's end texts (contract "BE-P2-21 Live tool builds with Stop"). */
 export const BUILD_STOPPED_REASON = 'build_stopped'
 export const BUILD_FAILED_REASON = 'build_failed'
@@ -91,6 +119,8 @@ export interface StartRunInput {
   browser?: boolean
   timeoutSec?: number
   kind?: Exclude<ScriptRunKind, 'undo'>
+  /** BE-P2-14: run_script `hosts` (shown on the internet card; never enforced). */
+  hosts?: string[]
 }
 
 export interface RunRunner {
@@ -136,6 +166,11 @@ export interface RunServiceDeps {
   flushMs?: number
   /** BE-P2-21: tests only (default TOOL_BUILD_TIMEOUT_MS). */
   toolBuildTimeoutMs?: number
+  /**
+   * BE-P2-14: the PermissionGate (internet / browser). Absent: a run with network 'on' ends failed
+   * proxy_unavailable (no proxy wired), and builds start as before.
+   */
+  gate?: PermissionGate
 }
 
 /** BE-P2-21: what a live build's `build` callback gets (BotEnvService BuildOptions). */
@@ -162,6 +197,8 @@ export interface ToolBuildSpec {
   removed?: string[]
   network: 'off' | 'on'
   permissions: ScriptRunPermission[]
+  /** BE-P2-14: vm_install's `why` (shown on its internet card); default "Rebuild the bot's tools". */
+  why?: string
   /**
    * false (user Rebuild): 409 run_active while the bot has a run. true (vm_install): recorded `queued`
    * (`queuedReason:'slot'`) and started once the bot's current runs end; runs queued after it wait for it.
@@ -196,7 +233,7 @@ export interface RunService extends RunLogs {
   stop(runId: string): Promise<ScriptRunWithReason>
   /** Stop every queued and running run of the bot (VM stop/reset); returns how many. */
   stopAgent(agentId: string): Promise<number>
-  /** Runs RunService still holds for the bot that the runner doesn't know yet (queued). */
+  /** Runs RunService still holds for the bot that the runner doesn't know yet (queued, or BE-P2-14 waiting_permission). */
   waiting(agentId: string): number
   /** All queued or running runs RunService holds (any bot). */
   activeCount(): number
@@ -344,6 +381,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     tick?: ReturnType<typeof setTimeout>
     vmDirty: boolean
     limit?: ReturnType<typeof setTimeout>
+    /** BE-P2-14: waiting for its internet card (holds the build lock, never started meanwhile). */
+    waiting?: boolean
   }
   const builds = new Map<string, BuildEntry>()
   /** Every known run (tails dropped once ended; the full record is on disk). */
@@ -450,6 +489,19 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (run.reason) s.reason = run.reason
       if (run.error && !isActive(run.status)) s.error = run.error
     }
+    // BE-P2-14: M2 card rows for scripts (waiting, internet, sites used, end reason).
+    if (run.kind !== 'tool_build' && run.kind !== 'undo') {
+      if (run.status === 'waiting_permission' && run.waitingFor) s.waitingFor = run.waitingFor
+      if (run.network === 'on') {
+        s.network = 'on'
+        s.internet = internetOf(run)
+      }
+      if (run.browser) s.browser = true
+      if (run.hostsContacted?.length) s.hostsContacted = run.hostsContacted.slice(0, CHAT_RUN_HOSTS_MAX)
+      if (run.reason) s.reason = run.reason
+      if (run.error && (run.status === 'failed' || run.status === 'denied' || run.status === 'stopped')) s.error = run.error
+    }
+    if (run.kind === 'tool_build' && run.status === 'waiting_permission' && run.waitingFor) s.waitingFor = run.waitingFor
     // BE-P2-22: a run queued behind a live build names it ("runs on the new tools (version 3)").
     if (run.status === 'queued' && run.queuedReason === 'tool_build') {
       const b = builds.get(run.agentId)
@@ -638,9 +690,12 @@ export function createRunService(deps: RunServiceDeps): RunService {
     flush(l)
     closeLogs(l)
     const run = l.run
+    const wasWaiting = run.status === 'waiting_permission'
     Object.assign(run, patch)
     delete run.queuePosition
     delete run.queuedReason
+    delete run.waitingFor
+    delete run.waitingOnRequestId
     run.endedAt = run.endedAt ?? now().toISOString()
     if (run.durationMs === undefined && run.startedAt) run.durationMs = Math.max(0, Date.parse(run.endedAt) - Date.parse(run.startedAt))
     const b = builds.get(run.agentId)
@@ -657,6 +712,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     const qi = queue.indexOf(run.id)
     if (qi >= 0) queue.splice(qi, 1)
     l.resolve(run)
+    // BE-P2-14: its pending card closes (a no-op when the gate ended the run itself).
+    if (wasWaiting) deps.gate?.runEnded(run, l.controller.signal.aborted ? 'run_stopped' : 'run_ended')
     prune(run.agentId, l.slug)
     deps.onRunsChanged?.(run.agentId)
     refreshUndo(run.agentId, run.id)
@@ -793,10 +850,22 @@ export function createRunService(deps: RunServiceDeps): RunService {
       cwd: run.cwd,
       timeoutSec: timeouts.get(run.id) ?? 600,
       network: run.network,
+      // BE-P2-14: the gate's answer (allow once / always) for this run; the runner mints its credential then.
+      ...(run.network === 'on' && granted(run) ? { internetGranted: true } : {}),
       runId: run.id,
       onOutput: (stream, chunk) => onOutput(l, stream, chunk),
       signal: l.controller.signal,
     }
+  }
+
+  function granted(run: Pick<ScriptRun, 'permissions'>): boolean {
+    return run.permissions.some((p) => p.type === 'internet' && (p.decision === 'allow_once' || p.decision === 'always'))
+  }
+
+  function setPermission(run: ScriptRun, p: ScriptRunPermission): void {
+    const i = run.permissions.findIndex((x) => x.type === p.type)
+    if (i >= 0) run.permissions[i] = { ...p }
+    else run.permissions.push({ ...p })
   }
 
   function resultPatch(run: ScriptRun, res: RunScriptResult): Partial<ScriptRunWithReason> {
@@ -823,6 +892,18 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (res.hostsContacted) {
       patch.hostsContacted = res.hostsContacted
       if (res.hostsContactedTotal !== undefined) patch.hostsContactedTotal = res.hostsContactedTotal
+    }
+    // BE-P2-14: why a failed script failed, when the network explains it (no other reason first).
+    if (status === 'failed' && !patch.reason && run.kind !== 'tool_build') {
+      const blocked = (patch.hostsContacted ?? []).find((h) => h.blocked && h.reason)
+      const stderr = `${patch.stderrTail ?? ''}\n${res.stderr ?? ''}`
+      if (blocked?.reason && run.network === 'on') {
+        patch.reason = HOST_BLOCKED_REASON
+        patch.error = HOST_BLOCKED_TEXT[blocked.reason]
+      } else if (run.network === 'off' && (patch.exitCode ?? 0) !== 0 && NETWORK_OFF_HINTS.some((h) => stderr.includes(h))) {
+        patch.reason = NETWORK_OFF_REASON
+        patch.error = networkOffText(botName(run.agentId))
+      }
     }
     timeouts.delete(run.id)
     return patch
@@ -924,7 +1005,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
   /** BE-P2-21: start each waiting build whose bot is free; update the others' positions. */
   function startBuilds(): void {
     for (const b of builds.values()) {
-      if (b.started) continue
+      if (b.started || b.waiting) continue
       const ahead = buildAhead(b)
       if (ahead === 0) {
         b.started = true
@@ -1043,12 +1124,76 @@ export function createRunService(deps: RunServiceDeps): RunService {
   /** BE-P2-21: Stop on a build: a waiting one ends at once; a running one is killed (BotEnv removes the half-built image). */
   function stopBuild(b: BuildEntry): boolean {
     if (!b.started) {
+      // Aborted first, so a pending internet card closes as 'run_stopped'.
+      b.l.controller.abort()
       finish(b.l, { status: 'stopped', reason: BUILD_STOPPED_REASON, error: buildStoppedText(botName(b.l.run.agentId), b.l.run.build!.fromGeneration) })
       return true
     }
     b.l.controller.abort()
     return false
   }
+
+  /** BE-P2-14: raise (or join) the bot's permission card for a recorded waiting run. */
+  function askGate(l: Live, type: 'internet' | 'browser'): void {
+    const run = l.run
+    const { requestId, own } = deps.gate!.raise(run, type)
+    setPermission(run, { type, decision: 'pending', ...(own ? { requestId, source: 'card' as const } : {}) })
+    run.waitingOnRequestId = requestId
+    changed({ run, slug: l.slug })
+  }
+
+  function waitingRuns(agentId?: string): ScriptRun[] {
+    const out: ScriptRun[] = []
+    for (const l of live.values()) if (l.run.status === 'waiting_permission' && (!agentId || l.run.agentId === agentId)) out.push(l.run)
+    return out
+  }
+
+  /** BE-P2-14: the gate moves a waiting run on (queue it, keep it waiting, or end it). */
+  function release(runId: string, r: GateRelease): void {
+    const l = live.get(runId)
+    if (!l || l.run.status !== 'waiting_permission') return
+    const run = l.run
+    if (r.permission) setPermission(run, r.permission)
+    if (r.kind === 'end') return finish(l, { status: r.status, reason: r.reason, error: r.error })
+    if (r.kind === 'wait') {
+      run.waitingFor = r.waitingFor
+      if (r.requestId) run.waitingOnRequestId = r.requestId
+      else delete run.waitingOnRequestId
+      changed({ run, slug: l.slug })
+      return
+    }
+    delete run.waitingFor
+    delete run.waitingOnRequestId
+    run.status = 'queued'
+    const b = builds.get(run.agentId)
+    if (b && b.l === l) {
+      b.waiting = false
+      const ahead = buildAhead(b)
+      if (ahead > 0) {
+        run.queuePosition = ahead
+        run.queuedReason = 'slot'
+      }
+      changed({ run, slug: l.slug })
+      deps.onRunsChanged?.(run.agentId)
+      void pump()
+      return
+    }
+    // In queuedAt order among the queued runs (it was asked for before later ones).
+    let i = queue.findIndex((id) => {
+      const o = live.get(id)?.run
+      return !!o && (o.queuedAt > run.queuedAt || (o.queuedAt === run.queuedAt && o.id > run.id))
+    })
+    if (i < 0) i = queue.length
+    queue.splice(i, 0, run.id)
+    const spot = queueSpot(run.agentId, running.size + i)
+    run.queuePosition = spot.pos
+    run.queuedReason = spot.reason
+    changed({ run, slug: l.slug })
+    log(`runs: ${l.slug}: ${run.id} allowed, queued`)
+    void pump()
+  }
+
+  deps.gate?.bind({ waitingRuns, release })
 
   // A bot's slot freed (or taken) outside RunService: start what can start, refresh positions.
   deps.runner.onSlotChange?.(() => {
@@ -1074,34 +1219,49 @@ export function createRunService(deps: RunServiceDeps): RunService {
         argv: input.argv,
         cwd: input.cwd || 'workspace',
         timeoutSec: input.timeoutSec ?? 600,
-        network: input.network === 'on' ? 'on' : 'off',
+        // BE-P2-14: the internet is the gate's call (asked below); the runner checks the rest offline.
+        network: 'off',
         runId: id,
       }
       const refused = deps.runner.check(probe)
       if (refused) {
         const block = blockedFromResult(refused)
         if (block) failWithReason(409, block.reason, block.message)
-        if (refused.error !== NETWORK_UNAVAILABLE) fail(refused.error === 'Bot not found.' ? 404 : 400, refused.error ?? 'This run is not valid.')
+        fail(refused.error === 'Bot not found.' ? 404 : 400, refused.error ?? 'This run is not valid.')
       }
-      if (!refused && deps.personal) {
+      if (deps.personal) {
         const q = await deps.personal(agent).catch(() => ({ blocked: null }))
         if (q.blocked) failWithReason(409, 'personal_quota', q.blocked)
       }
-      if (!refused) {
-        const floor = await freeFloorBlock()
-        if (floor) failWithReason(409, floor.reason, floor.message)
-      }
+      const floor = await freeFloorBlock()
+      if (floor) failWithReason(409, floor.reason, floor.message)
       const run = baseRun(input, agent, id)
+      // BE-P2-14: the gate decides before the run is queued. A proxy that is down (or none wired) is a
+      // recorded run ended failed, reason proxy_unavailable (FE-9's run card, mockup 08), with no
+      // permission card: the gate checks the proxy before it would raise one.
+      const gate = deps.gate
+      const d: GateAdmit | null =
+        run.network === 'on' && !gate
+          ? { kind: 'end', status: 'failed', reason: PROXY_UNAVAILABLE_REASON, error: PROXY_UNAVAILABLE }
+          : gate && (run.network === 'on' || run.browser) ? await gate.admit(run, input.hosts?.length ? { hosts: input.hosts } : {}) : null
       timeouts.set(id, input.timeoutSec)
       const l = newLive(run, agent.slug)
       createLogs(agent.slug, id)
-      if (refused) {
-        // network 'on' (M1): a failed record with the plain message; the model is told.
-        live.set(id, l)
-        finish(l, { status: 'failed', error: refused.error })
+      live.set(id, l)
+      if (d && d.kind !== 'ask' && d.permission) setPermission(run, d.permission)
+      if (d?.kind === 'end') {
+        finish(l, { status: d.status, reason: d.reason, error: d.error })
         return run
       }
-      live.set(id, l)
+      if (d?.kind === 'ask') {
+        // The run (and its card) first, then the permission card.
+        run.status = 'waiting_permission'
+        run.waitingFor = 'permission'
+        changed({ run, slug: agent.slug })
+        askGate(l, d.type)
+        log(`runs: ${agent.slug}: ${id} waits for permission (${d.type})`)
+        return run
+      }
       queue.push(id)
       const spot = queueSpot(agent.id, running.size + queue.length - 1)
       run.queuePosition = spot.pos
@@ -1158,7 +1318,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const b = builds.get(l.run.agentId)
       if (b && b.l === l) {
         if (stopBuild(b)) return l.run
-      } else if (queue.includes(runId)) {
+      } else if (queue.includes(runId) || l.run.status === 'waiting_permission') {
+        // BE-P2-14: a waiting run's card closes 'run_stopped' (aborted first).
+        if (l.run.status === 'waiting_permission') l.controller.abort()
         finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
         return l.run
       } else l.controller.abort()
@@ -1172,8 +1334,10 @@ export function createRunService(deps: RunServiceDeps): RunService {
         n++
         const b = builds.get(agentId)
         if (b && b.l === l) stopBuild(b)
-        else if (queue.includes(l.run.id)) finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
-        else l.controller.abort()
+        else if (queue.includes(l.run.id) || l.run.status === 'waiting_permission') {
+          if (l.run.status === 'waiting_permission') l.controller.abort()
+          finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
+        } else l.controller.abort()
       }
       await Promise.resolve(deps.runner.stopRuns(agentId))
       return n
@@ -1183,6 +1347,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
       for (const id of queue) if (live.get(id)?.run.agentId === agentId) n++
       // A launched run between our queue and the runner's (floor check) counts too.
       for (const id of running) if (live.get(id)?.run.agentId === agentId && live.get(id)?.run.status === 'queued') n++
+      // BE-P2-14: waiting for a permission card (contract: run_active covers "queued, waiting or running").
+      for (const l of live.values()) if (l.run.agentId === agentId && l.run.status === 'waiting_permission' && !(builds.get(agentId)?.l === l)) n++
       return n
     },
     activeCount: () => live.size,
@@ -1324,7 +1490,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       const conversationId = typeof spec.conversationId === 'function' ? spec.conversationId() : spec.conversationId
       const id = deps.newRunId()
       const run = baseRun(
-        { agentId: agent.id, conversationId, context: spec.context ?? { kind: 'dm' }, argv: spec.argv, cwd: 'workspace', why: TOOL_BUILD_WHY.rebuild, kind: 'tool_build', network: spec.network, ...(spec.agentRunId ? { agentRunId: spec.agentRunId } : {}) },
+        { agentId: agent.id, conversationId, context: spec.context ?? { kind: 'dm' }, argv: spec.argv, cwd: 'workspace', why: spec.why?.trim() || TOOL_BUILD_WHY.rebuild, kind: 'tool_build', network: spec.network, ...(spec.agentRunId ? { agentRunId: spec.agentRunId } : {}) },
         agent,
         id,
       )
@@ -1344,13 +1510,20 @@ export function createRunService(deps: RunServiceDeps): RunService {
       createLogs(agent.slug, id)
       live.set(id, l)
       builds.set(agent.id, b)
+      // BE-P2-14: an online build without an internet answer yet (vm_install under Ask) waits for its card.
+      const ask = !!deps.gate && run.network === 'on' && !granted(run)
       const ahead = buildAhead(b)
-      if (ahead > 0) {
+      if (ask) {
+        b.waiting = true
+        run.status = 'waiting_permission'
+        run.waitingFor = 'permission'
+      } else if (ahead > 0) {
         run.queuePosition = ahead
         run.queuedReason = 'slot'
       }
       changed({ run, slug: agent.slug })
-      log(`runs: ${agent.slug}: tool build ${id} recorded (${spec.via}, ${ahead ? `waits for ${ahead} run(s)` : 'starting'})`)
+      if (ask) askGate(l, 'internet')
+      log(`runs: ${agent.slug}: tool build ${id} recorded (${spec.via}, ${ask ? 'waits for permission' : ahead ? `waits for ${ahead} run(s)` : 'starting'})`)
       // Queued runs of the bot now wait for it ("Queued · after tool build").
       updatePositions()
       deps.onRunsChanged?.(agent.id)
@@ -1372,10 +1545,17 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
     },
     modelResult(run) {
+      // BE-P2-14: a run that never started tells the model why in its own words (contract "Denied runs").
+      const browserDenied = run.permissions.some((p) => p.type === 'browser' && p.decision === 'deny')
+      const told =
+        run.reason === PERMISSION_DENIED_REASON ? (browserDenied ? MODEL_BROWSER_DENIED : MODEL_INTERNET_DENIED)
+        : run.reason === PERMISSION_TIMEOUT_REASON ? MODEL_PERMISSION_TIMEOUT
+        : run.reason === INTERNET_NEVER_REASON && run.status === 'denied' ? modelInternetNever(botName(run.agentId))
+        : run.error
       return {
         status: run.status,
         ...(run.exitCode !== undefined ? { exitCode: run.exitCode } : {}),
-        ...(run.error ? { error: run.error } : {}),
+        ...(told ? { error: told } : {}),
         ...(run.reason ? { reason: run.reason } : {}),
         stdout: tailUtf8(run.stdoutTail, MODEL_TAIL_BYTES),
         stderr: tailUtf8(run.stderrTail, MODEL_TAIL_BYTES),
@@ -1404,11 +1584,14 @@ export function createRunService(deps: RunServiceDeps): RunService {
       }
       for (const e of stale) {
         const full = readRecord(e.slug, e.run.id) ?? e.run
-        const wasRunning = full.status !== 'queued'
+        // BE-P2-14: queued and waiting_permission runs never started.
+        const wasRunning = full.status === 'running'
         full.status = 'failed'
         full.error = wasRunning ? RESTART_RUNNING_TEXT : RESTART_QUEUED_TEXT
         delete full.queuePosition
         delete full.queuedReason
+        delete full.waitingFor
+        delete full.waitingOnRequestId
         // BE-P2-21: a build left by a restart keeps its generation (BotEnv saves only on success).
         if (full.build) delete full.build.progress
         full.endedAt = now().toISOString()

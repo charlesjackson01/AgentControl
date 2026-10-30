@@ -7,7 +7,8 @@ import type { BotEnvService } from './bot-env.js'
 import type { CommandRunner } from './command-runner.js'
 import { credentialForms, EgressUnavailableError, type EgressGrant, type EgressService } from './egress-service.js'
 import { EGRESS_VIA } from './egressd.js'
-import { createContainerRunner, NETWORK_UNAVAILABLE } from './podman-runner.js'
+import { createContainerRunner, INTERNET_NOT_GRANTED } from './podman-runner.js'
+import { PROXY_UNAVAILABLE, PROXY_UNAVAILABLE_REASON } from './egress-service.js'
 import type { ResolvedRuntime } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
 import type { HostContact } from './shared/types.js'
@@ -65,9 +66,9 @@ const req = (over: Partial<RunScriptRequest> = {}): RunScriptRequest => ({ agent
 describe('runner: network on', () => {
   it('without the user\'s grant (or without a proxy) it is refused before anything starts', async () => {
     const s = setup()
-    expect((await s.runner.run(req({ network: 'on' }))).error).toBe(NETWORK_UNAVAILABLE)
+    expect((await s.runner.run(req({ network: 'on' }))).error).toBe(INTERNET_NOT_GRANTED)
     const s2 = setup({ egress: null })
-    expect((await s2.runner.run(req({ network: 'on', internetGranted: true }))).error).toBe(NETWORK_UNAVAILABLE)
+    expect(await s2.runner.run(req({ network: 'on', internetGranted: true }))).toMatchObject({ error: PROXY_UNAVAILABLE, reason: PROXY_UNAVAILABLE_REASON })
     expect(s.egress.grant).not.toHaveBeenCalled()
     expect(s.streamed).toEqual([])
   })

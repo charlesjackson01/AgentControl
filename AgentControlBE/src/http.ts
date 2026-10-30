@@ -13,6 +13,8 @@ export function fail(status: number, message: string): never {
 /** BE-P2-11: extra fields a reasoned error body may carry (UndoConflict's `conflicts`). */
 export interface ReasonExtra {
   conflicts?: { path: string; root: 'agent' | 'group'; groupId?: string; groupName?: string }[]
+  /** BE-P2-14: 409 already_resolved carries the final PermissionRequest. */
+  request?: unknown
 }
 
 /**
@@ -20,10 +22,11 @@ export interface ReasonExtra {
  * BE-P2-11: `extra.conflicts` is sent in the body too (undo's 409 'conflicts').
  */
 export function failWithReason(status: number, reason: string, message: string, extra: ReasonExtra = {}): never {
-  const err = new Error(message) as Error & { statusCode: number; reason: string; conflicts?: ReasonExtra['conflicts'] }
+  const err = new Error(message) as Error & { statusCode: number; reason: string; conflicts?: ReasonExtra['conflicts']; request?: unknown }
   err.statusCode = status
   err.reason = reason
   if (extra.conflicts) err.conflicts = extra.conflicts
+  if (extra.request !== undefined) err.request = extra.request
   throw err
 }
 

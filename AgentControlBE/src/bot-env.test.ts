@@ -467,7 +467,7 @@ describe('BotEnvService (fake engine)', () => {
     buildNet = 'none'
     await svc.rebuild(agent()) // no packages: builds fine offline
     expect(e.calls.filter((x) => x[0] === 'build').pop()).toEqual(expect.arrayContaining(['--network', 'none']))
-    await expect(svc.vmInstall(a, ['curl'])).rejects.toMatchObject({ statusCode: 409, reason: 'internet_unavailable', message: expect.stringMatching(/isn't available yet/) })
+    await expect(svc.vmInstall(a, ['curl'])).rejects.toMatchObject({ statusCode: 409, reason: 'proxy_unavailable', message: expect.stringMatching(/internet proxy isn't running/) })
     buildNet = 'default'
     await expect(svc.vmInstall({ ...a, internetPolicy: 'never' } as Agent, ['curl'])).rejects.toMatchObject({ reason: 'internet_never', message: `Internet is set to Never for ${a.name}, so this run didn't start. Change it in Settings › VM.` })
   })

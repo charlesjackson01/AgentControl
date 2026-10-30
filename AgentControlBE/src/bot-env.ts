@@ -839,13 +839,13 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
         const plan = planInstall(agent.vm, raw)
         if (!plan) return { vm: agent.vm, generation: agent.vm.image.generation, log: 'Already installed.' }
         if (agent.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverText(agent.name))
-        if ((opts.network ?? buildNetwork()) === 'none') failWithReason(409, 'internet_unavailable', 'Installing system packages needs internet access, which isn\'t available yet.')
+        if ((opts.network ?? buildNetwork()) === 'none') failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
         return buildNext(agent, plan.packages, opts)
       }),
 
     rebuild: (agent, opts = {}) =>
       serial(agent.slug, async () => {
-        if (agent.vm.packages.length && (opts.network ?? buildNetwork()) === 'none') failWithReason(409, 'internet_unavailable', 'Rebuilding system packages needs internet access, which isn\'t available yet.')
+        if (agent.vm.packages.length && (opts.network ?? buildNetwork()) === 'none') failWithReason(409, PROXY_UNAVAILABLE_REASON, PROXY_UNAVAILABLE)
         return buildNext(agent, agent.vm.packages, opts)
       }),
 

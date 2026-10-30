@@ -32,6 +32,8 @@ import { createSnapshotService, newRunId } from './snapshot.js'
 import { createUndoService, type UndoService } from './undo.js'
 import { budgetLimits, createSnapshotBudget, freeBytesAt, type RunLogs, type SnapshotBudget } from './snapshot-budget.js'
 import { createRunService, type RunRunner, type RunService } from './run-service.js'
+import { createPermissionGate, type PermissionGate } from './permission-gate.js'
+import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
 import { checkVolume, LocalFs, storageFor } from './storage/index.js'
@@ -430,6 +432,8 @@ export interface BuildAppOptions {
   vmEngine?: EngineRef
   /** BE-P2-13: test-only egress proxy service (e.g. with test names and --add-host). */
   egress?: EgressService
+  /** BE-P2-14: test-only permission request lifetime (default PERMISSION_TIMEOUT_MS, 10 min). */
+  permissionTimeoutMs?: number
 }
 
 declare module 'fastify' {
@@ -455,6 +459,8 @@ declare module 'fastify' {
      * internet card, and sets RunScriptRequest.internetGranted once the user allowed a run.
      */
     vmEgress: EgressService
+    /** BE-P2-14: permission requests (internet / browser cards) and their answers. */
+    vmPermissions: PermissionGate
   }
 }
 
@@ -487,7 +493,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
 
   app.setErrorHandler((error, _request, reply) => {
-    const err = error as Error & { statusCode?: number; reason?: unknown; conflicts?: unknown }
+    const err = error as Error & { statusCode?: number; reason?: unknown; conflicts?: unknown; request?: unknown }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500
     const message = redactUrlCredentials(err.message ?? '')
     if (status >= 500) app.log.error({ err: { message, stack: redactUrlCredentials(err.stack ?? '') } }, message)
@@ -499,6 +505,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
       // BE-P2-11: undo's 409 'conflicts' lists the files (UndoConflict.conflicts).
       ...(typeof err.reason === 'string' && status < 500 && Array.isArray(err.conflicts) ? { conflicts: err.conflicts } : {}),
+      // BE-P2-14: 409 already_resolved carries the request as it is now.
+      ...(typeof err.reason === 'string' && status < 500 && err.request && typeof err.request === 'object' ? { request: err.request } : {}),
     })
   })
 
@@ -904,6 +912,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
 
   const applyAgentUpdate = (index: number, input: AgentInput): Agent => {
     const current = store.agents[index] as Agent
+    const policyBefore = { internetPolicy: current.internetPolicy, browser: current.vm.permissions.browser }
     const transferPrimary = input.isPrimary === true
     // The primary flag never flips off here; transfer by promoting another agent.
     const next: Agent = { ...mergeAgent(current, input), isPrimary: transferPrimary || current.isPrimary }
@@ -916,6 +925,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     }
     store.save()
     try { ensureBotFolder(store, next) } catch { /* BOT.md catches up on the next change or boot */ }
+    // BE-P2-14: a policy change decides the bot's pending internet card.
+    if (next.internetPolicy !== policyBefore.internetPolicy) void permissionGate?.settingsChanged(next.id, policyBefore).catch(() => {})
     return next
   }
 
@@ -1073,6 +1084,9 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     if (agent.isPrimary) {
       fail(409, 'Move the Team Lead role to another agent before deleting it.')
     }
+    // BE-P2-14: its pending cards close (denied, run_ended) and its waiting/queued runs stop.
+    permissionGate?.agentDeleted(id)
+    await runService?.stopAgent(id).catch(() => {})
     // BE-2: the folder is archived (never removed) before the bot goes away.
     archiveBotFolder(store, agent)
     store.agents = store.agents.filter((a) => a.id !== id)
@@ -1537,6 +1551,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
 
   // BE-P2-12: script runs (RunService), bound below; runs it still queues count as active.
   let runService: RunService | null = null
+  let permissionGate: PermissionGate | null = null
   let runner: ContainerRunner | null = null
   const activeOf = (agentId: string) => (runner?.activeRuns(agentId) ?? 0) + (runService?.waiting(agentId) ?? 0)
   const runLogs: RunLogs = {
@@ -1793,7 +1808,48 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   let botEnvRoutesRef: BotEnvRoutes | null = null
   // BE-P2-12: RunService — one machine-wide queue, records under data/runs, cards and live events.
   const vmRunnerNow = runner
+  // BE-P2-14: the PermissionGate (internet / browser cards), data/permissions/requests.json.
+  const gate = createPermissionGate({
+    dataDir: () => store.dataDir,
+    getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
+    conversations: () => store.conversations,
+    messages: () => store.chatMessages,
+    save: () => {
+      store.save()
+    },
+    setAlways: (agentId) => {
+      const agent = store.agents.find((a) => a.id === agentId)
+      if (!agent || agent.internetPolicy === 'always') return
+      const previous = store.agents
+      store.agents = store.agents.map((a) => (a.id === agentId ? { ...a, internetPolicy: 'always' } : a))
+      if (!store.save()) {
+        store.agents = previous
+        throw new Error("couldn't save")
+      }
+      const next = store.agents.find((a) => a.id === agentId)!
+      void botEnvRoutesRef
+        ?.vmInfo(next)
+        .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId, vm }))
+        .catch(() => {})
+    },
+    proxyAvailable: async () => {
+      if ((await engineRef().catch(() => null))?.cli !== 'podman') return false
+      const a = await egress.available().catch(() => ({ ok: false as const }))
+      return a.ok
+    },
+    publish: (event) => {
+      liveEvents.publish(event)
+    },
+    log: (msg) => app.log.info(msg),
+    ...(opts.permissionTimeoutMs ? { timeoutMs: opts.permissionTimeoutMs } : {}),
+  })
+  permissionGate = gate
+  app.decorate('vmPermissions', gate)
+  app.addHook('onClose', async () => {
+    gate.close()
+  })
   const runs = createRunService({
+    gate,
     runner: vmRunnerNow as RunRunner,
     getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
     filesMissing: (agent) => botFilesMissingMessage(store, agent),
@@ -1875,6 +1931,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
           conversationId: where.conversationId,
           context: where.context,
           ...(where.agentRunId ? { agentRunId: where.agentRunId } : {}),
+          ...(where.why ? { why: where.why } : {}),
           via: 'vm_install',
           startedBy: 'bot',
           argv: ['vm_install', ...new Set(packages)],
@@ -1888,7 +1945,32 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
         })
         return { run }
       }
-      // Never: 409 internet_never; Ask: 409 internet_unavailable until BE-P2-14's card (no record).
+      // Never: 409 internet_never (no record).
+      if (agent.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverText(agent.name))
+      // BE-P2-14: Ask: the same recorded build, waiting for its internet card (allow once / always / deny).
+      if (where) {
+        const plan = planInstall(agent.vm, packages)
+        if (!plan) return { generation: agent.vm.image.generation, log: 'Already installed.' }
+        const run = await runs.startToolBuild({
+          agentId,
+          conversationId: where.conversationId,
+          context: where.context,
+          ...(where.agentRunId ? { agentRunId: where.agentRunId } : {}),
+          ...(where.why ? { why: where.why } : {}),
+          via: 'vm_install',
+          startedBy: 'bot',
+          argv: ['vm_install', ...new Set(packages)],
+          packages: plan.packages,
+          added: plan.added,
+          network: 'on',
+          permissions: [],
+          waitForRuns: true,
+          precheck: () => buildProxyCheck(),
+          build: async (ctl, a) => builtOf(await botEnv.vmInstall(a, packages, { network: 'egress', ...ctl })),
+        })
+        return { run }
+      }
+      // No chat to ask in (not reached from the tool): BotEnvService answers (offline).
       // BE-P2-22: under the bot's build lock, so its queued runs wait and start on the new tools.
       return runs.withToolBuild(agentId, () => botEnv.vmInstall(agent, packages))
     },
@@ -1902,8 +1984,22 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
   app.addHook('onReady', async () => {
     await runs.recover().catch((err: Error) => app.log.warn(`run recovery failed: ${err.message}`))
+    // BE-P2-14: after the runs (they ended failed): their pending cards close too.
+    try {
+      gate.recover()
+    } catch (err) {
+      app.log.warn(`permission recovery failed: ${(err as Error).message}`)
+    }
   })
-  registerLiveEventRoutes(app, liveEvents, { heartbeatMs: opts.liveTimers?.heartbeatMs, runAgent: (runId) => runs.agentOf(runId) })
+  registerPermissionRoutes(app, gate)
+  registerLiveEventRoutes(app, liveEvents, {
+    heartbeatMs: opts.liveTimers?.heartbeatMs,
+    runAgent: (runId) => runs.agentOf(runId),
+    agentInConversation: (agentId, conversationId) => {
+      const c = store.conversations.find((x) => x.id === conversationId)
+      return !!c && (c.kind === 'dm' ? c.agentId === agentId : c.memberAgentIds.includes(agentId))
+    },
+  })
   // BE-P2-17: undo preview/apply (app.vmUndo via RunService.undo, which records the undo run).
   registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => { assertBotFilesAvailable(store, agent); return undo.preview(agent, runId) }, activeRuns: activeOf })
 
@@ -1925,6 +2021,10 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     isolationNote: isolationNoteOf,
     // BE-P2-7: a per-bot mode change re-probes; a browser permission change may change the feature set.
     onProbeInputChange: (what) => probeLater(what === 'mode' ? 'refresh' : 'ensureFresh'),
+    // BE-P2-14: an internet policy / browser change decides the bot's pending card.
+    onPolicyChange: (agentId, before) => {
+      void gate.settingsChanged(agentId, before).catch(() => {})
+    },
     personal,
     snapshotUsage: (agent) => snapshotBudget.usage(agent.slug),
     // BE-P2-17: tool rebuild/rollback, recorded as ScriptRuns (kind tool_build).

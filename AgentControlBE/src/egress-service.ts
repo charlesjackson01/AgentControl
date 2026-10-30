@@ -686,6 +686,10 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
 
     shutdown: () =>
       serial(async () => {
+        // Detach the proxy from the outbound network first, so removing the
+        // network doesn't race the container's teardown ("network is being used").
+        // Errors here are ignored: rm --force below still removes the container.
+        await cli(['network', 'disconnect', '--force', outNet, daemon])
         await cli(['rm', '--force', '--time', '2', daemon])
         const r = await cli(['network', 'rm', outNet])
         if (r.code !== 0 && !noSuch(r)) log(`egress: remove ${outNet}: ${lastLine(r)}`)

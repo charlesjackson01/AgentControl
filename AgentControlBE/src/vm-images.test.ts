@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import {
   BOTVM_PINS,
   BOT_PATHS,
@@ -437,8 +437,20 @@ const engine = ['podman', 'docker'].find((e) => {
     return false
   }
 })
+const vmPodmanArgs = () => (engine === 'podman' ? (process.env.PODMAN_ARGS ?? '').split(/\s+/).filter(Boolean) : [])
+const imageExists = (ref: string) => {
+  try {
+    execFileSync(engine!, [...vmPodmanArgs(), 'image', 'exists', ref], { stdio: 'ignore', timeout: 60_000 })
+    return true
+  } catch {
+    return false
+  }
+}
+/** Whether the egressd-nft tag was there before the build test ran (undefined: the test didn't run). */
+let nftExistedBefore: boolean | undefined
 describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', () => {
   it('builds the images (botvm, botvm-browser, egressd-nft); python3, node and chromium run as uid 1000', () => {
+    nftExistedBefore = imageExists(egressdNftImageRef())
     const out = execFileSync('bash', [path.join(vmDir(), 'build-images.sh'), '--engine', engine!], { encoding: 'utf8', timeout: 30 * 60_000 })
     expect(out).toMatch(/Python 3\.12\./)
     expect(out).toMatch(/v22\./)
@@ -451,6 +463,17 @@ describe.skipIf(process.env.AC_VM_TESTS !== '1' || !engine)('@vm image build', (
       expect(out).toMatch(new RegExp(`^${lang} ${how} \\d+\\.\\d+\\.\\d+\\.\\d+ HeadlessChrome$`, 'm'))
     }
   }, 30 * 60_000)
+
+  // Remove the firewall helper tag only if this run built it. One that was
+  // already there (e.g. from build-images.sh) stays, so egress.vm keeps it.
+  afterAll(() => {
+    if (nftExistedBefore !== false) return
+    try {
+      execFileSync(engine!, [...vmPodmanArgs(), 'rmi', egressdNftImageRef()], { stdio: 'pipe', timeout: 120_000 })
+    } catch {
+      // Already gone: nothing to clean up.
+    }
+  })
 
   // What a bot-written script does: plain chromium.launch(), no channel, no args, default headless.
   it('a bare chromium.launch() works from Python and Node as uid 1000 with no network', () => {

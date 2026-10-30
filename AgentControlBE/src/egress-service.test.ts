@@ -23,7 +23,11 @@ function fakePodman() {
   let starts = 0
   const stamp = () => `2026-10-30 12:00:${String(starts++).padStart(2, '0')} -0500 CDT`
   let nextIp = 2
-  const state = { ctlDown: false, runFails: false, lsFails: false, rootlessNet: 'pasta', probeOut: '{"noAuth":"407","blocked":"403","direct":"error:ENETUNREACH"}' }
+  const state = {
+    ctlDown: false, runFails: false, lsFails: false, rootlessNet: 'pasta', probeOut: '{"noAuth":"407","blocked":"403","direct":"error:ENETUNREACH"}',
+    // The nftables helper: its image is there, loads work; `tables` = startedAt → loaded ruleset.
+    fwImage: true, fwFails: false, tables: new Map<string, string>(),
+  }
   const exec: CommandRunner = async (cmd, args, opts) => {
     const a = [...args]
     calls.push(a)
@@ -32,7 +36,8 @@ function fakePodman() {
     const [verb, sub] = a
     if (verb === 'container' && sub === 'inspect') {
       if (!daemon) return fail('Error: no such container ac-egressd')
-      return ok(`${daemon.running}|${daemon.hash}|${daemon.startedAt}|${JSON.stringify(Object.fromEntries(Object.entries(daemon.nets).map(([k, v]) => [k, { IPAddress: v }])))}\n`)
+      const nets = Object.fromEntries(Object.entries(daemon.nets).map(([k, v]) => [k, { IPAddress: v, ...(k === 'ac-egress-out' ? { Gateway: '10.89.0.1' } : {}) }]))
+      return ok(`${daemon.running}|${daemon.hash}|${daemon.startedAt}|${JSON.stringify(nets)}\n`)
     }
     if (verb === 'network' && sub === 'exists') return networks.has(a[2]!) ? ok() : fail('', 1)
     if (verb === 'network' && sub === 'create') {
@@ -72,6 +77,18 @@ function fakePodman() {
       const hash = a.find((x) => x.startsWith('io.agentcontrol.egressd.hash='))!.split('=')[1]!
       daemon = { running: true, hash, startedAt: stamp(), nets: { [flag('--network')!]: '10.89.0.2' }, args: a }
       return ok('id\n')
+    }
+    if (verb === 'image' && sub === 'exists') return state.fwImage ? ok() : fail('', 1)
+    if (verb === 'run' && flag('--entrypoint') === 'nft') {
+      if (!state.fwImage) return fail('Error: localhost/agentcontrol/egressd-nft:1.0.0: image not known')
+      if (!daemon?.running) return fail('Error: cannot join network namespace of a stopped container')
+      if (a.includes('-f')) {
+        if (state.fwFails) return fail('Error: Could not process rule: Operation not permitted', 1)
+        state.tables.set(daemon.startedAt, opts!.input!)
+        return ok()
+      }
+      const t = state.tables.get(daemon.startedAt)
+      return t ? ok(t) : fail('Error: No such file or directory\nlist table inet ac_egressd', 1)
     }
     if (verb === 'run' && a.includes('--rm')) return ok(`${state.probeOut}\n`)
     if (verb === 'exec') {
@@ -130,7 +147,7 @@ describe('daemon', () => {
   it('reuses a running daemon, starts a stopped one, and recreates one with other code', async () => {
     const svc = make()
     await svc.available()
-    const runs = () => fake.calls.filter((c) => c[0] === 'run').length
+    const runs = () => fake.calls.filter((c) => c[0] === 'run' && c.includes('--detach')).length
     await svc.available()
     expect(runs()).toBe(1)
     fake.stop()
@@ -273,7 +290,7 @@ describe('connectCheck (the probe\'s CONNECT half)', () => {
     const svc = make()
     const r = await svc.connectCheck()
     expect(r.status).toBe('pass')
-    const run = fake.calls.find((c) => c[0] === 'run' && c.includes('--rm'))!
+    const run = fake.calls.find((c) => c[0] === 'run' && c.includes('--rm') && !c.includes('nft'))!
     expect(run[run.indexOf('--network') + 1]).toBe(egressNetworkName(PROBE_SLUG))
     expect(run).toEqual(expect.arrayContaining(['--read-only', '--cap-drop', 'ALL']))
     expect(fake.inputs.some((i) => i.includes('"op":"revoke"'))).toBe(true)
@@ -297,7 +314,90 @@ describe('connectCheck (the probe\'s CONNECT half)', () => {
   })
   it('passes runtime flags before run (gVisor)', async () => {
     await make().connectCheck({ runtimeFlags: ['--runtime', 'runsc'] })
-    expect(fake.calls.find((c) => c.includes('--rm'))!.slice(0, 3)).toEqual(['--runtime', 'runsc', 'run'])
+    expect(fake.calls.find((c) => c.includes('--rm') && !c.includes('nft'))!.slice(0, 3)).toEqual(['--runtime', 'runsc', 'run'])
+  })
+})
+
+describe('firewall (nftables layer under the proxy)', () => {
+  const fwRuns = () => fake.calls.filter((c) => c[0] === 'run' && c.includes('nft') && c.includes('-f'))
+  it('loads the table into the proxy\'s namespace with a NET_ADMIN-only helper, before the settings go out', async () => {
+    const order: string[] = []
+    const svc = make({ exec: async (c, a, o) => {
+      if (a.includes('nft')) order.push('firewall')
+      if (o?.input?.includes('"op":"config"')) order.push('config')
+      return fake.exec(c, a, o)
+    } })
+    await svc.available()
+    expect(order).toEqual(['firewall', 'config'])
+    expect(fwRuns()).toHaveLength(1)
+    const r = fwRuns()[0]!
+    expect(r[r.indexOf('--network') + 1]).toBe(`container:${EGRESS_DAEMON_NAME}`)
+    expect(r.join(' ')).toContain('--cap-drop ALL --cap-add NET_ADMIN')
+    expect(r).toEqual(expect.arrayContaining(['--rm', '-i', '--pull=never', '--read-only', 'no-new-privileges', '--entrypoint', 'nft', 'localhost/agentcontrol/egressd-nft:1.0.0', '-f', '-']))
+    expect(r.join(' ')).not.toMatch(/--privileged|--network[= ]host|NET_RAW|SYS_ADMIN/)
+    // The proxy itself keeps no capabilities.
+    const d = fake.daemon!.args
+    expect(d[d.indexOf('--cap-drop') + 1]).toBe('ALL')
+    expect(d).not.toContain('--cap-add')
+    const ruleset = [...fake.state.tables.values()][0]!
+    // This computer's address, local model server, DNS through the outbound gateway only.
+    expect(ruleset).toContain('192.0.2.10')
+    expect(ruleset).toMatch(/set dns4 \{[^}]*elements = \{ [^}]*10\.89\.0\.1/)
+    expect(logs).toContain('egress: loaded the proxy\'s firewall rules')
+  })
+  it('loads it again after a restart (new StartedAt) or when the ranges change, not otherwise', async () => {
+    let hostAddresses = ['192.0.2.10']
+    const svc = make({ config: () => ({ hostAddresses }) })
+    await svc.available()
+    await svc.available()
+    expect(fwRuns()).toHaveLength(1)
+    fake.stop()
+    await svc.available()
+    expect(fwRuns()).toHaveLength(2)
+    expect(fake.state.tables.get(fake.daemon!.startedAt)).toBeDefined()
+    hostAddresses = ['192.0.2.11']
+    await svc.available()
+    expect(fwRuns()).toHaveLength(3)
+    expect(fake.state.tables.get(fake.daemon!.startedAt)).toContain('192.0.2.11')
+    expect(logs).toContain('egress: updated the proxy\'s firewall rules')
+  })
+  it('the test allow list never reaches the firewall table', async () => {
+    await make({ config: () => ({ hostAddresses: [], testAllow: ['10.89.251.10/32'] }) }).available()
+    expect([...fake.state.tables.values()][0]).not.toContain('10.89.251.10')
+    expect([...fake.state.tables.values()][0]).toContain('10.0.0.0/8')
+  })
+  it('no table, no internet: a load failure is 409 proxy_unavailable and the settings are not sent', async () => {
+    fake.state.fwFails = true
+    const svc = make()
+    const e = await svc.grant('bob', 'run').catch((x: unknown) => x)
+    expect(e).toBeInstanceOf(EgressUnavailableError)
+    expect(e).toMatchObject({ reason: 'proxy_unavailable', statusCode: 409 })
+    expect((e as EgressUnavailableError).detail).toBe('couldn\'t load the proxy\'s firewall rules: Error: Could not process rule: Operation not permitted')
+    expect(fake.inputs.some((i) => i.includes('"op":"config"'))).toBe(false)
+    expect(fake.proxy.health().configured).toBe(false)
+    // Fixed: the next try loads it.
+    fake.state.fwFails = false
+    expect((await svc.grant('bob', 'run')).id).toMatch(/^ac/)
+  })
+  it('a missing helper image says how to build it', async () => {
+    fake.state.fwImage = false
+    const r = await make().available()
+    expect(r).toEqual({ ok: false, message: 'the proxy\'s firewall helper image localhost/agentcontrol/egressd-nft:1.0.0 isn\'t built yet (vm/build-images.sh --only egressd-nft)' })
+  })
+  it('the probe checks the table is there and says so; it fails when it is gone', async () => {
+    const svc = make()
+    const r = await svc.connectCheck()
+    expect(r).toEqual({ status: 'pass', message: 'Internet goes only through the proxy (407 without a credential, 403 for this computer, no direct route), and the proxy\'s firewall rules are loaded.' })
+    expect(fake.calls.some((c) => c.includes('nft') && c.slice(-4).join(' ') === 'list table inet ac_egressd')).toBe(true)
+    fake.state.tables.clear()
+    const gone = await svc.connectCheck()
+    expect(gone.status).toBe('fail')
+    expect(gone.message).toMatch(/the firewall rules aren't loaded \(Error: No such file or directory/)
+  })
+  it('review B2: the probe says when the test allow list is active', async () => {
+    const r = await make({ config: () => ({ hostAddresses: [], testAllow: ['10.89.251.10/32'] }) }).connectCheck()
+    expect(r.status).toBe('pass')
+    expect(r.message).toMatch(/ Test allow list active \(AC_EGRESS_TEST_ALLOW: 10\.89\.251\.10\/32\)\.$/)
   })
 })
 

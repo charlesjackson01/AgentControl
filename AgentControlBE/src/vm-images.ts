@@ -156,6 +156,26 @@ export function imageBuildArgv(kind: SharedImageKind): string[] {
   ]
 }
 
+/**
+ * BE-P2-13: the egress proxy's firewall helper (botvm + nftables), run once per proxy start with
+ * only NET_ADMIN in the proxy's network namespace (egress-firewall.ts). Not a bot image.
+ */
+export const EGRESSD_NFT_IMAGE = 'egressd-nft'
+export function egressdNftImageRef(version: string = BOTVM_VERSION): string {
+  return `${BOTVM_REPO}/${EGRESSD_NFT_IMAGE}:${version}`
+}
+export function egressdNftBuildArgv(): string[] {
+  const dir = path.join(vmDir(), 'images', EGRESSD_NFT_IMAGE)
+  return [
+    'build',
+    '--file', path.join(dir, 'Containerfile'),
+    '--tag', egressdNftImageRef(),
+    '--build-arg', `BOTVM_IMAGE=${sharedImageRef('botvm')}`,
+    '--build-arg', `BOTVM_VERSION=${BOTVM_PINS.BOTVM_VERSION}`,
+    dir,
+  ]
+}
+
 /** Shared images in build order (browser needs botvm first). */
 export function sharedImagesToBuild(opts: { browser: boolean }): SharedImageKind[] {
   return opts.browser ? ['botvm', 'botvm-browser'] : ['botvm']

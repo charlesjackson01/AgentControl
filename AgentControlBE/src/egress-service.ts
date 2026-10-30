@@ -9,7 +9,10 @@
  * - `ac-egress-<slug>`: `--internal --disable-dns --ipv6=false`. Only the bot's container (and its
  *   tool builds) and ac-egressd are on it. No gateway, no DNS: the proxy is the only peer.
  * - `ac-egress-out`: a normal bridge only ac-egressd is on; its traffic leaves through the engine
- *   (pasta/netavark). The proxy's hard-deny list keeps it off this computer and the home network.
+ *   (pasta/netavark). The proxy's hard-deny list keeps it off this computer and the home network,
+ *   and under it an nftables table in the proxy's namespace (egress-firewall.ts) drops new
+ *   connections to those ranges whatever the proxy does. Loaded by a one-shot NET_ADMIN helper
+ *   when the proxy is created or restarts; no table, no internet (409 proxy_unavailable).
  * - The bot container is never on `host` or the default network.
  */
 import { createHash, randomBytes } from 'node:crypto'
@@ -20,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import type { EngineRef } from './bot-env.js'
 import { testAllowCidr, type EgressRulesConfig } from './egress-rules.js'
+import { FIREWALL_TABLE, firewallImageRef, firewallRuleset } from './egress-firewall.js'
 import { configHash, EGRESS_PROXY_PORT, type EgressCredential, type EgressHealth } from './egressd.js'
 import { SCRIPT_RUN_HOSTS_MAX, type EnvVar, type HostContact } from './shared/types.js'
 import { GVPROXY_CIDR, SLIRP_CIDR } from './user-only.js'
@@ -90,6 +94,8 @@ export interface EgressServiceDeps {
   log?: (msg: string) => void
   /** Review item 7: true when a bot or build uses the engine's default (pasta/slirp) network. */
   defaultNetworkInUse?: () => boolean
+  /** The nftables helper image (default firewallImageRef(): vm/build-images.sh --only egressd-nft). */
+  firewallImage?: () => string
 }
 
 export interface EgressService {
@@ -321,6 +327,8 @@ async function daemonFiles(): Promise<Record<string, string>> {
 }
 
 const lastLine = (r: CommandResult) => (r.stderr || r.stdout).trim().split('\n').filter(Boolean).pop()?.slice(0, 300) ?? `exit code ${r.code}`
+/** nft prints `Error: …` then the offending line and a ^^^ marker: report the Error line. */
+const errorLine = (r: CommandResult) => (r.stderr + '\n' + r.stdout).split('\n').find((l) => /^Error:/.test(l.trim()))?.trim().slice(0, 300) ?? lastLine(r)
 const noSuch = (r: CommandResult) => /no such|not found|not known|does not exist|no container with|unable to find network/i.test(r.stderr + r.stdout)
 
 export function createEgressService(deps: EgressServiceDeps): EgressService {
@@ -331,6 +339,9 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
   const prefix = deps.names?.networkPrefix ?? 'ac-egress-'
   const networkFor = (slug: string) => `${prefix}${slug}`
   const image = () => deps.image?.() ?? sharedImageRef('botvm')
+  const firewallImage = () => deps.firewallImage?.() ?? firewallImageRef()
+  /** The firewall table last loaded, and into which proxy start (a restart starts a new namespace). */
+  let firewall: { startedAt: string; ruleset: string } | null = null
   let lock: Promise<unknown> = Promise.resolve()
   /** Review B3: the first daemon contact of this BE process revokes every older credential. */
   let revokedAll = false
@@ -403,20 +414,24 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     return { dir, hash }
   }
 
-  async function daemonState(): Promise<{ state: 'missing' | 'running' | 'stopped'; hash?: string; startedAt?: string; networks: Record<string, string> }> {
+  async function daemonState(): Promise<{ state: 'missing' | 'running' | 'stopped'; hash?: string; startedAt?: string; networks: Record<string, string>; gateways: Record<string, string> }> {
     const r = await cli(['container', 'inspect', '--format', `{{.State.Running}}|{{index .Config.Labels "${HASH_LABEL}"}}|{{.State.StartedAt}}|{{json .NetworkSettings.Networks}}`, daemon])
     if (r.code !== 0) {
-      if (noSuch(r)) return { state: 'missing', networks: {} }
+      if (noSuch(r)) return { state: 'missing', networks: {}, gateways: {} }
       throw new EgressUnavailableError(`couldn't inspect the proxy: ${lastLine(r)}`)
     }
     const [running, hash, startedAt, nets] = r.stdout.trim().split('|')
     const networks: Record<string, string> = {}
+    const gateways: Record<string, string> = {}
     try {
-      for (const [k, v] of Object.entries(JSON.parse(nets ?? '{}') as Record<string, { IPAddress?: string }>)) networks[k] = v?.IPAddress ?? ''
+      for (const [k, v] of Object.entries(JSON.parse(nets ?? '{}') as Record<string, { IPAddress?: string; Gateway?: string }>)) {
+        networks[k] = v?.IPAddress ?? ''
+        if (v?.Gateway) gateways[k] = v.Gateway
+      }
     } catch {
       // older engines: no networks map
     }
-    return { state: running === 'true' ? 'running' : 'stopped', hash, startedAt, networks }
+    return { state: running === 'true' ? 'running' : 'stopped', hash, startedAt, networks, gateways }
   }
 
   async function networkExists(name: string): Promise<boolean> {
@@ -437,6 +452,39 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     throw new EgressUnavailableError(`the proxy didn't come up: ${last}`)
   }
 
+  /** The helper's engine argv: in the proxy's namespace, NET_ADMIN only, nft as the entrypoint. */
+  function firewallArgs(nft: string[], stdin: boolean): string[] {
+    return [
+      'run', '--rm', ...(stdin ? ['-i'] : []), '--pull=never',
+      '--network', `container:${daemon}`,
+      '--cap-drop', 'ALL', '--cap-add', 'NET_ADMIN', '--security-opt', 'no-new-privileges',
+      '--read-only', '--user', '0:0', '--label', `${EGRESS_LABEL}=firewall`,
+      '--entrypoint', 'nft', firewallImage(), ...nft,
+    ]
+  }
+  async function firewallFailure(r: CommandResult, what: string): Promise<string> {
+    const ex = await cli(['image', 'exists', firewallImage()]).catch(() => null)
+    if (ex && ex.code !== 0) return `the proxy's firewall helper image ${firewallImage()} isn't built yet (vm/build-images.sh --only egressd-nft)`
+    return `couldn't ${what} the proxy's firewall rules: ${errorLine(r)}`
+  }
+  /**
+   * Charles (M2): load the nftables table into the proxy's namespace on create and after a restart
+   * (StartedAt changed: a new namespace without it), and again when the ranges change.
+   */
+  async function ensureFirewall(st: { startedAt?: string; gateways: Record<string, string> }, health: EgressHealth): Promise<void> {
+    const gw = st.gateways[outNet]
+    const ruleset = firewallRuleset({ config: currentConfig(), dns: [...(health.dns ?? []), ...(gw ? [gw] : [])] })
+    const startedAt = st.startedAt ?? ''
+    if (firewall && firewall.startedAt === startedAt && firewall.ruleset === ruleset) return
+    const r = await cli(firewallArgs(['-f', '-'], true), { input: ruleset, timeoutMs: 60_000 })
+    if (r.code !== 0) {
+      firewall = null
+      throw new EgressUnavailableError(await firewallFailure(r, 'load'))
+    }
+    log(firewall?.startedAt === startedAt ? 'egress: updated the proxy\'s firewall rules' : 'egress: loaded the proxy\'s firewall rules')
+    firewall = { startedAt, ruleset }
+  }
+
   /** Daemon up with the current code; returns its networks. */
   async function ensureDaemon(): Promise<Record<string, string>> {
     const app = await writeApp()
@@ -444,7 +492,7 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
     if (st.state !== 'missing' && st.hash !== app.hash) {
       log(`egress: recreating ${daemon} (new version)`)
       await must(['rm', '--force', '--time', '2', daemon], 'remove the old proxy')
-      st = { state: 'missing', networks: {} }
+      st = { state: 'missing', networks: {}, gateways: {} }
     }
     if (st.state === 'missing') {
       if (!(await networkExists(outNet))) {
@@ -478,6 +526,9 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
       if (r.revoked) log(`egress: revoked ${r.revoked} credential(s) left from before this start`)
       revokedAll = true
     }
+    // The proxy refuses everything (503) until it has its settings, and they are sent only once
+    // the firewall table is in place.
+    await ensureFirewall(st, health)
     await pushConfig(health)
     return st.networks
   }
@@ -616,7 +667,16 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
         if (res.noAuth !== '407') bad.push(`no credential gave ${res.noAuth}, expected 407`)
         if (res.blocked !== '403') bad.push(`this computer gave ${res.blocked}, expected 403`)
         if (res.direct === 'connected') bad.push('a direct connection got out without the proxy')
-        return bad.length ? { status: 'fail', message: `Egress proxy check: ${bad.join('; ')}.` } : { status: 'pass', message: 'Internet goes only through the proxy (407 without a credential, 403 for this computer, no direct route).' }
+        // Charles (M2): the firewall table under the proxy must be there.
+        const fw = await cli(firewallArgs(['list', 'table', 'inet', FIREWALL_TABLE], false), { timeoutMs: 60_000 })
+        if (fw.code !== 0) bad.push(`the firewall rules aren't loaded (${(await firewallFailure(fw, 'read')).replace(/^couldn't read the proxy's firewall rules: /, '')})`)
+        else if (!/set drop4/.test(fw.stdout) || !/@drop4[^\n]*drop/.test(fw.stdout)) bad.push('the firewall table is there but has no drop rules')
+        // Review B2: say so whenever the test allow list is in effect.
+        const allow = currentConfig().testAllow ?? []
+        const note = allow.length ? ` Test allow list active (${EGRESS_TEST_ALLOW_ENV}: ${allow.join(', ')}).` : ''
+        return bad.length
+          ? { status: 'fail', message: `Egress proxy check: ${bad.join('; ')}.${note}` }
+          : { status: 'pass', message: `Internet goes only through the proxy (407 without a credential, 403 for this computer, no direct route), and the proxy's firewall rules are loaded.${note}` }
       } catch (err) {
         return { status: 'fail', message: `The egress proxy isn't available: ${(err as EgressUnavailableError).detail ?? (err as Error).message}` }
       } finally {

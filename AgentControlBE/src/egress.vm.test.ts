@@ -20,9 +20,9 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createServer, type AddressInfo } from 'node:net'
 import { buildApp } from './app.js'
-import { createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
+import { BUILD_TIMEOUT_MS, createBotEnvService, type BotEnvService, type EngineRef } from './bot-env.js'
 import { execCommandRunner } from './command-runner.js'
-import { createEgressService, egressNetworkName, hostInterfaceAddresses, PROBE_SLUG, type EgressGrant, type EgressService } from './egress-service.js'
+import { CREDENTIAL_GRACE_MS, createEgressService, egressNetworkName, hostInterfaceAddresses, PROBE_SLUG, type EgressGrant, type EgressService } from './egress-service.js'
 import { ALLOW_UNLIMITED_RUNS_ENV, createContainerRunner, type ContainerRunner } from './podman-runner.js'
 import { PROBE_LABEL, type ResolvedRuntime } from './runtime-probe.js'
 import type { RunScriptRequest } from './runner.js'
@@ -57,6 +57,9 @@ const engineReady = process.env.AC_VM_TESTS === '1' && cli === 'podman' && pm('i
 const T = 'be13t'
 const DAEMON = `ac-egressd-${T}`
 const OUT = `ac-egress-${T}-out`
+// 11.89.251.0/24 looks like a public range, but it exists only inside this test's own Podman
+// network (the outbound network the proxy uses here): deliberate, approved by the Team lead, so the
+// proxy's public-address rules apply to the test web server. Nothing leaves this computer for it.
 const SUBNET = '11.89.251.0/24'
 const WEB_IP = '11.89.251.10'
 const WEB = `${T}-web`
@@ -137,6 +140,8 @@ describe.skipIf(!engineReady)('@vm BE-P2-13 egress proxy', () => {
   let bePort = 0
   const BE_HOST = '172.17.0.1'
   const minted: EgressGrant[] = []
+  /** The ttlMs each grant was asked for (undefined: the service default for its kind). */
+  const ttls: (number | undefined)[] = []
   const savedOverride = process.env[ALLOW_UNLIMITED_RUNS_ENV]
   const rt: ResolvedRuntime = { effective: 'crun', status: 'incompatible_fallback', mode: 'inherit', globalMode: 'auto', limitsEnforced: false, limitsReason: 'test' }
   const agentOf = (slug: string, policy: string) => ({ id: `ag_${slug}`, slug, name: slug, internetPolicy: policy, vm: defaultAgentVm() }) as unknown as Agent
@@ -213,7 +218,7 @@ Promise.all(Object.entries(t).map(([k, a]) => new Promise((done) => {
       log: (m) => console.log(`[be13 egress] ${m}`),
     })
     // Record every credential minted, to prove none is left in images, records or logs.
-    egress = { ...svc, grant: async (slug, kind) => { const g = await svc.grant(slug, kind); minted.push(g); return g } }
+    egress = { ...svc, grant: async (slug, kind, opts) => { const g = await svc.grant(slug, kind, opts); minted.push(g); ttls.push(opts?.ttlMs); return g } }
     process.env[ALLOW_UNLIMITED_RUNS_ENV] = '1'
     // The app's user-only wall reads the subnets from this (test-named) egress service.
     be = buildApp(createStore(join(dir, 'state', 'store.json')), { egress })
@@ -459,6 +464,23 @@ Promise.all(Object.entries(t).map(([k, a]) => new Promise((done) => {
     expect(client(SLUG_A, 'curl -s -m 10 -o /dev/null -w %{http_code} http://web.be13.test/', { http_proxy: g.env.find((e) => e.name === 'HTTP_PROXY')!.value }).out).toBe('407')
     expect(pm('ps', '-a', '--filter', 'label=io.agentcontrol.egress=build', '--format', '{{.ID}}')).toBe('')
   }, 1_200_000)
+
+  it('M2: a failed build\'s credential dies with it (407) and was granted for BUILD_TIMEOUT_MS + 60 s; the image is unchanged', async () => {
+    const before = A.vm.image.generation
+    const packages = [...A.vm.packages]
+    const n = minted.length
+    const err = (await botEnv.vmInstall(A, ['be13-no-such-package']).then(() => null, (e: unknown) => e)) as { reason?: string; buildLog?: string } | null
+    // It failed in the build itself (apt, through the proxy), not before it.
+    expect(err?.reason).toBe('build_failed')
+    expect(err?.buildLog).toMatch(/be13-no-such-package/)
+    expect(A.vm.image.generation).toBe(before)
+    expect(A.vm.packages).toEqual(packages)
+    expect(minted).toHaveLength(n + 1)
+    const g = minted[n]!
+    expect(ttls[n]).toBe(BUILD_TIMEOUT_MS + CREDENTIAL_GRACE_MS)
+    expect(client(SLUG_A, 'curl -s -m 10 -o /dev/null -w %{http_code} http://web.be13.test/', { http_proxy: g.env.find((e) => e.name === 'HTTP_PROXY')!.value }).out).toBe('407')
+    expect(pm('ps', '-a', '--filter', 'label=io.agentcontrol.egress=build', '--format', '{{.ID}}')).toBe('')
+  }, 600_000)
 
   it('shutdown removes the daemon, then the bot networks can go', async () => {
     for (const s of [SLUG_A, SLUG_B]) {

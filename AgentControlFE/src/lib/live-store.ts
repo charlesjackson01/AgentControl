@@ -13,7 +13,7 @@
  * - resyncPlan: what to re-fetch on every (re)connect and on `event: reset` (M1: SSE only).
  */
 import {
-  SCRIPT_RUN_ACTIVE,
+  CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE,
   type ChatMessage, type ChatRunSummary, type FileChange, type LiveEvent, type PermissionRequest, type ScriptRun,
   type ScriptRunStatus, type ScriptRunSummary, type VmInfo,
 } from './types.ts'
@@ -102,7 +102,34 @@ export function summaryFromRun(run: ScriptRun, prev?: ChatRunSummary): ChatRunSu
     undo: run.undo,
     ...(run.queuePosition !== undefined ? { queuePosition: run.queuePosition } : {}),
     ...(run.exitCode !== undefined ? { exitCode: run.exitCode } : {}),
+    ...m2Summary(run, prev),
   }
+}
+
+/**
+ * M2 contract (fec4670): the ChatRunSummary fields a card draws from the message alone. queuedReason/afterBuild
+ * aren't on ScriptRun (BE-P2-22's), so they stay the server's while the run is still queued; internet stays the
+ * server's (the run only carries grants).
+ */
+function m2Summary(run: ScriptRun, prev?: ChatRunSummary): Partial<ChatRunSummary> {
+  const out: Partial<ChatRunSummary> = { network: run.network, browser: run.browser }
+  if (run.startedAt !== undefined) out.startedAt = run.startedAt
+  if (run.durationMs !== undefined) out.durationMs = run.durationMs
+  if (run.status === 'waiting_permission' && run.waitingFor !== undefined) out.waitingFor = run.waitingFor
+  if (run.reason !== undefined) out.reason = run.reason
+  if (run.error !== undefined) out.error = run.error
+  if (run.build !== undefined) out.build = run.build
+  if (run.hostsContacted?.length) {
+    out.hostsContacted = run.hostsContacted.slice(0, CHAT_RUN_HOSTS_MAX)
+    const total = Math.max(run.hostsContactedTotal ?? 0, run.hostsContacted.length)
+    if (total > out.hostsContacted.length) out.hostsContactedTotal = total
+  }
+  if (prev?.internet !== undefined) out.internet = prev.internet
+  if (run.status === 'queued') {
+    if (prev?.queuedReason !== undefined) out.queuedReason = prev.queuedReason
+    if (prev?.afterBuild !== undefined) out.afterBuild = prev.afterBuild
+  }
+  return out
 }
 
 /** The VM tab's history row for a run. */
@@ -147,6 +174,8 @@ const PERMISSION_STATUS = { allow_once: 'allowed_once', always: 'always', enable
 function permissionsAfterRun(perms: Record<string, PermissionRequest>, run: ScriptRun): Record<string, PermissionRequest> {
   let next = perms
   for (const p of run.permissions ?? []) {
+    // M2: grants without a card (policy Always, a Rebuild click) carry no requestId.
+    if (!p.requestId) continue
     const known = perms[p.requestId]
     if (!known || known.status !== 'pending' || p.decision === 'pending') continue
     if (next === perms) next = { ...perms }

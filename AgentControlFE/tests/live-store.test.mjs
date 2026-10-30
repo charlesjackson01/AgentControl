@@ -29,7 +29,7 @@ describe('status helpers', () => {
     assert.equal(scriptName({ argv: [] }), 'script')
     assert.deepEqual(fileCounts([{ path: 'a', change: 'added' }, { path: 'b', change: 'deleted' }, { path: 'c', change: 'deleted' }]), { added: 1, modified: 0, deleted: 2 })
     const r = run('r1', { status: 'queued', queuePosition: 2 })
-    assert.deepEqual(summaryFromRun(r, summary({ name: 'CSV cleaner' })), { status: 'queued', kind: 'script', name: 'CSV cleaner', files: { added: 0, modified: 0, deleted: 0 }, undo: { state: 'available' }, queuePosition: 2 })
+    assert.deepEqual(summaryFromRun(r, summary({ name: 'CSV cleaner' })), { status: 'queued', kind: 'script', name: 'CSV cleaner', files: { added: 0, modified: 0, deleted: 0 }, undo: { state: 'available' }, queuePosition: 2, network: 'off', browser: false })
     assert.equal(summaryFromRun(r).name, 'clean.py')
   })
 })

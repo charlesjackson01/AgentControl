@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { api } from '../../lib/api'
+import { api, apiUrl } from '../../lib/api'
+import { fileContentPath } from '../../lib/files'
 import { runOutput, runSummaryFor, scriptName } from '../../lib/live-store'
 import { runCardView, stopErrorText } from '../../lib/run-card'
 import { renderRunCard, type RunCardHandlers } from '../../lib/run-card-render'
@@ -148,6 +149,8 @@ export default function RunCard({ message, botName, agentId, groupNames, client 
           open,
           onToggle: () => setOpen((o) => !o),
           bodyId,
+          // M2: a browser run's screenshot, through the files route of the folder it's in.
+          thumbUrl: view.thumb && agentId ? apiUrl(fileContentPath(view.thumb.root === 'group' && view.thumb.groupId ? { groupId: view.thumb.groupId } : agentId, view.thumb.path)) : null,
           onStop: stop,
           stopping: busy,
           stopError,

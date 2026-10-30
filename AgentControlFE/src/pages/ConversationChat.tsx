@@ -20,6 +20,7 @@ import { chatMessageView, liveRunOutcome, retryTextBefore } from '../lib/run-rep
 import { activityView, runFilesChanged } from '../lib/activity'
 import { ActivityCard, FileCards } from '../components/shell/MessageActivity'
 import RunCard from '../components/chat/RunCard'
+import PermissionCard from '../components/chat/PermissionCard'
 import { Markdown } from '../components/Markdown'
 import { NewBotTurn } from '../components/shell/NewBotFlow'
 import { useNewBot } from '../hooks/useNewBot'
@@ -414,6 +415,21 @@ export default function ConversationChat() {
                     return (
                       <BotRow key={item.key} author={by} meta={item.meta} mid={m.id} hit={m.id === jumpId} bare>
                         <RunCard message={m} botName={by?.name} agentId={by?.id ?? m.authorAgentId} />
+                      </BotRow>
+                    )
+                  }
+                  if (m.kind === 'permission' && m.permissionRequestId) {
+                    // FE-P2-3: an internet or browser permission card (mockups 01–05, 09).
+                    const by = authorOf(m)
+                    return (
+                      <BotRow key={item.key} author={by} meta={item.meta} mid={m.id} hit={m.id === jumpId} bare>
+                        <PermissionCard
+                          message={m}
+                          botName={by?.name ?? 'This bot'}
+                          agentId={by?.id ?? m.authorAgentId}
+                          settingsHref={`?${withSettingsTab(params, 'vm')}`}
+                          onSettings={() => setParams((p) => withSettingsTab(p, 'vm'))}
+                        />
                       </BotRow>
                     )
                   }

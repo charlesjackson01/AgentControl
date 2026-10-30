@@ -7,7 +7,7 @@
  */
 import {
   PERMISSION_CSRF_HEADER,
-  type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
   type ScriptRun, type ScriptRunSummary, type UndoConflict, type UndoGone, type UndoPreview, type UndoRequest, type UndoResult,
   type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
 } from './types.ts'
@@ -48,6 +48,9 @@ export const vmPaths = {
     return `/api/permissions?${qs}`
   },
   permission: (requestId: string) => `/api/permissions/${enc(requestId)}`,
+  /** FE-P2-3 (fec4670): the shared Chromium download, and its retry (no agentId) or one bot's failed step. */
+  browser: () => '/api/vm/browser',
+  browserRetry: () => '/api/vm/browser/retry',
   /** Live events (SSE). Filters are optional; the app opens one unfiltered stream. */
   events: (filters?: { conversationId?: string; agentId?: string }) => {
     const qs = new URLSearchParams()
@@ -109,6 +112,16 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
       const body: PermissionAnswer = { decision }
       return request<PermissionRequest>(vmPaths.permission(requestId), { ...post(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } })
     },
+    /** FE-P2-3 (fec4670): one request, any status (a card whose request isn't in the store). 404 not_found. */
+    getPermission: (requestId: string) => request<PermissionRequest>(vmPaths.permission(requestId)),
+
+    /* ---- browser add-on (FE-P2-3; contract fec4670) ---- */
+    getBrowser: () => request<BrowserAddonInfo>(vmPaths.browser()),
+    /** With agentId: that bot's failed step (download, rebuild or check). 409 nothing_to_retry / low_disk. */
+    retryBrowser: (agentId?: string) => {
+      const body: BrowserRetryRequest = agentId ? { agentId } : {}
+      return request<BrowserAddonInfo>(vmPaths.browserRetry(), post(body))
+    },
   }
 }
 
@@ -154,8 +167,11 @@ export function undoErrorOf(err: unknown): UndoError {
 /* ---- permission answer errors ---- */
 
 export type PermissionError =
-  /** 409: answered already (another tab, or it timed out). Re-fetch the list; nothing to retry. */
-  | { kind: 'resolved'; message: string }
+  /**
+   * 409: answered already (another tab, or it timed out). Nothing to retry. fec4670: the body
+   * (PermissionAlreadyResolved) carries the final `request`, when the BE sent one.
+   */
+  | { kind: 'resolved'; message: string; request?: PermissionRequest }
   /** 403: the CSRF header was missing or refused. A client bug, not the user's. */
   | { kind: 'forbidden'; message: string }
   | { kind: 'not_found'; message: string }
@@ -164,7 +180,11 @@ export type PermissionError =
 export function permissionErrorOf(err: unknown): PermissionError {
   const message = err instanceof Error ? err.message : String(err)
   const status = isObj(err) && typeof err.status === 'number' ? err.status : undefined
-  if (status === 409) return { kind: 'resolved', message }
+  if (status === 409) {
+    const body = isObj(err) && isObj(err.body) ? (err.body as Partial<PermissionAlreadyResolved>) : undefined
+    const req = body?.request
+    return isObj(req) && typeof req.id === 'string' && typeof req.status === 'string' ? { kind: 'resolved', message, request: req } : { kind: 'resolved', message }
+  }
   if (status === 403) return { kind: 'forbidden', message }
   if (status === 404) return { kind: 'not_found', message }
   return status === undefined ? { kind: 'other', message } : { kind: 'other', message, status }

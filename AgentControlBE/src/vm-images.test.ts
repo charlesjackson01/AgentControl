@@ -367,6 +367,36 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
     expect(cf.trim().split('\n').at(-1)).toBe('USER 1000:1000')
   })
 
+  it('M2: setup never leaves out the proxy\'s firewall helper: the full build and --only botvm both build egressd-nft FROM the fresh botvm, locally from the versions.env pins; the only pull is the base by digest', () => {
+    const botvmBuild = ['podman', ...imageBuildArgv('botvm')].join(' ')
+    const nftBuild = ['podman', ...egressdNftBuildArgv()].join(' ')
+    const nftSmoke = `podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint nft ${egressdNftImageRef()} --version`
+    // First install (npm run vm:images): botvm first, the helper after it, then its nft check.
+    const full = sh('--dry-run').trim().split('\n')
+    expect(full.indexOf(botvmBuild)).toBe(0)
+    expect(full.indexOf(nftBuild)).toBeGreaterThan(0)
+    expect(full.indexOf(nftSmoke)).toBe(full.indexOf(nftBuild) + 1)
+    // The botvm image build path rebuilds the helper too (it is FROM botvm, so it must follow it).
+    const only = sh('--dry-run', '--only', 'botvm').trim().split('\n')
+    expect(only).toHaveLength(4)
+    expect([only[0], only[2], only[3]]).toEqual([botvmBuild, nftBuild, nftSmoke])
+    expect(sh('--dry-run', '--only', 'botvm-browser').trim().split('\n').some((l) => l.includes('egressd-nft'))).toBe(false)
+    // Built from the pins: the helper is FROM the local botvm tag, which is FROM BASE_IMAGE by digest.
+    expect(egressdNftBuildArgv()).toEqual(expect.arrayContaining([`BOTVM_IMAGE=${sharedImageRef('botvm')}`, `BOTVM_VERSION=${BOTVM_PINS.BOTVM_VERSION}`]))
+    expect(sharedImageRef('botvm').startsWith('localhost/')).toBe(true)
+    expect(full[0]).toContain(`BASE_IMAGE=${BOTVM_PINS.BASE_IMAGE}`)
+    expect(BOTVM_PINS.BASE_IMAGE).toMatch(/@sha256:[0-9a-f]{64}$/)
+    for (const kind of ['botvm-browser', 'egressd-nft']) {
+      const froms = parse(readFileSync(path.join(vmDir(), 'images', kind, 'Containerfile'), 'utf8')).filter((i) => i.op === 'FROM')
+      expect(froms.map((i) => i.args)).toEqual(['${BOTVM_IMAGE}'])
+    }
+    // No prebuilt AgentControl image is pulled (or pushed) anywhere: no pull/push/login command, in the script or its output.
+    const src = readFileSync(script, 'utf8')
+    expect(src).not.toMatch(/\b(pull|push|login)\b/)
+    expect(src).not.toMatch(/"\$\{cmd\[@\]\}" tag\b/)
+    for (const l of full) expect(l).not.toMatch(/^podman (pull|push|login|tag) /)
+  })
+
   it('supports docker, a podman connection and --only, and never uses podman-machine-default', () => {
     expect(sh('--dry-run', '--engine', 'docker', '--only', 'botvm').trim().split('\n')[0]).toBe(['docker', ...imageBuildArgv('botvm')].join(' '))
     expect(sh('--dry-run', '--connection', 'agentcontrol', '--only', 'botvm-browser').trim().split('\n')[0]).toBe(
@@ -382,10 +412,13 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
       env: cleanEnv({ PODMAN_ARGS: ' --root /tmp/pt/root  --runroot /tmp/pt/runroot ' }),
     })
     const lines = out.trim().split('\n')
-    expect(lines).toHaveLength(2)
+    // botvm + smoke, then (M2) the firewall helper FROM it + its smoke.
+    expect(lines).toHaveLength(4)
     const pre = 'podman --root /tmp/pt/root --runroot /tmp/pt/runroot --log-level=warn --cgroup-manager=cgroupfs '
     expect(lines[0]).toBe(pre + imageBuildArgv('botvm').join(' '))
     expect(lines[1]!.startsWith(pre + 'run --rm --network none ')).toBe(true)
+    expect(lines[2]).toBe(pre + egressdNftBuildArgv().join(' '))
+    expect(lines[3]!.startsWith(pre + 'run --rm --network none ')).toBe(true)
     expect(sh('--dry-run', '--only', 'botvm', '--connection', 'agentcontrol', '--podman-arg', '--log-level=warn').split('\n')[0]).toBe(
       ['podman', '--log-level=warn', '--connection', 'agentcontrol', ...imageBuildArgv('botvm')].join(' '),
     )

@@ -7,6 +7,8 @@
 #
 # Usage: vm/build-images.sh [--engine podman|docker] [--only botvm|botvm-browser|egressd-nft] [--connection NAME]
 #                           [--podman-arg ARG]... [--dry-run]
+#   --only botvm also rebuilds egressd-nft (it is FROM botvm, so a new botvm needs a new helper;
+#                 a fresh install must never be left without it, or every granted run is proxy_unavailable).
 #   --connection: podman --connection (e.g. the agentcontrol machine on Mac/Windows).
 #   --podman-arg: extra global podman option, repeatable (e.g. --podman-arg --root=/x).
 #                 PODMAN_ARGS (whitespace-separated) is read first; both go before the subcommand.
@@ -29,7 +31,7 @@ while [[ $# -gt 0 ]]; do
     --podman-arg) podman_args+=("${2:?--podman-arg needs a value}"); shift 2 ;;
     --podman-arg=*) podman_args+=("${1#--podman-arg=}"); shift ;;
     --dry-run) dry_run=1; shift ;;
-    -h|--help) sed -n '2,13p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -132,7 +134,8 @@ if [[ -z "$only" || "$only" == "botvm-browser" ]]; then
   build_browser
   smoke "$browser_ref" "$browser_smoke"
 fi
-if [[ -z "$only" || "$only" == "egressd-nft" ]]; then
+# Also after --only botvm: the helper is FROM botvm, so it must follow it (never a stale or missing helper).
+if [[ -z "$only" || "$only" == "botvm" || "$only" == "egressd-nft" ]]; then
   build_nft
   # nft runs (no capabilities needed to print its version; AgentControl adds NET_ADMIN only to load rules).
   run "${cmd[@]}" run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint nft "$nft_ref" --version

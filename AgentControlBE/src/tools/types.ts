@@ -5,8 +5,9 @@
  */
 import type { FileChange, MemoryItem } from '../shared/types.js'
 import type { WorkspaceStore } from '../store.js'
+import type { VmToolHost } from './vm.js'
 
-export type ToolCategory = 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data' | 'files'
+export type ToolCategory = 'workspace' | 'memory' | 'time' | 'math' | 'text' | 'data' | 'files' | 'vm'
 export type ToolEffect = 'read' | 'write'
 
 export interface ToolContext {
@@ -63,6 +64,12 @@ export interface ToolContext {
   files?: FileService
   /** BE-3: what this run did with files (shown on the reply's activity). */
   activity?: RunActivity
+  /** BE-P2-16: the run's abort signal (Stop); run_script stops its script run with it. */
+  signal?: AbortSignal
+  /** BE-P2-16: the VM tools' host (default: the one bound to the store with bindVmTools). */
+  vm?: VmToolHost
+  /** BE-P2-16: how long run_script waits for its run before answering "still running" (tests). */
+  vmWaitMs?: number
 }
 
 export interface FileItem { path: string; kind: 'file' | 'folder'; size?: number; modifiedAt: string }
@@ -112,6 +119,10 @@ export interface ToolEntry {
   contentParams?: ContentParams
   /** Largest result the run loop keeps for this tool (default: its TOOL_RESULT_MAX_CHARS). */
   maxResultChars?: number
+  /** Own limit in executeToolCall (default TOOL_TIMEOUT_MS); BE-P2-16's VM tools wait for runs. */
+  timeoutMs?: number
+  /** BE-P2-16: whether a returned value counts as ok (default true), e.g. a script run that failed. */
+  resultOk?(value: unknown): boolean
   /** Return a JSON-serializable value or a string; throw Error('…') for bad input. */
   handler(args: Record<string, unknown>, ctx: ToolContext): unknown
   /** BE-3: a step line for the reply's activity (e.g. "Read shared/x.pdf"); tools without it add no step. */

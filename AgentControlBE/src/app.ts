@@ -33,6 +33,7 @@ import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
 import { checkVolume, LocalFs, storageFor } from './storage/index.js'
 import { KEEP_ID_NOTE, type UidMapping } from './isolation.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
+import { bindVmTools, vmToolNames } from './tools/vm.js'
 import { clearAgentConversations, dmOf, ensureDm, messagesOf, summarize, syncGroupLeads } from './conversations.js'
 import {
   CONVERSATION_PAGE_SIZE,
@@ -659,7 +660,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       skills: attachedSkills(store.skills, skillIds),
       // BE-4: remember like a run's (memoryLearn defaults on); a saved bot adds its memories and recall.
       memory: memoryScope ? memoryPromptBlock(store, memoryScope) : '',
-      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES],
+      memoryTools: [...(learn ? ['remember'] : []), ...(hasMemory ? ['recall'] : []), ...FILE_TOOL_NAMES, ...(saved ? vmToolNames(store, saved.id) : [])],
       input: '',
       contextWindow: endpoint.contextWindow,
       responseReserve: replyReserve(endpoint),
@@ -1778,6 +1779,26 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   })
   runService = runs
   app.decorate('vmRuns', runs)
+  // BE-P2-16: run_script and vm_install in the agent loop, offered while the bot's runs would pass
+  // the runner's checks on this machine (no bot computer, a failed mount check, a blocked runtime: not offered).
+  bindVmTools(store, {
+    start: (input) => runs.start(input),
+    wait: (runId) => runs.wait(runId),
+    stop: (runId) => runs.stop(runId),
+    modelResult: (run) => runs.modelResult(run),
+    vmInstall: async (agentId, packages) => {
+      const agent = store.agents.find((a) => a.id === agentId)
+      if (!agent) fail(404, 'Bot not found.')
+      return botEnv.vmInstall(agent, packages)
+    },
+    offered: (agentId) =>
+      vmRunnerNow.check({ agentId, context: { kind: 'dm' }, argv: ['true'], cwd: 'workspace', timeoutSec: 60, network: 'off' }) === null,
+    dmConversation: (agentId) => ensureDm(store, agentId).id,
+    browserOn: (agentId) => store.agents.find((a) => a.id === agentId)?.vm.permissions.browser === true,
+  })
+  app.addHook('onClose', async () => {
+    bindVmTools(store, null)
+  })
   app.addHook('onReady', async () => {
     await runs.recover().catch((err: Error) => app.log.warn(`run recovery failed: ${err.message}`))
   })

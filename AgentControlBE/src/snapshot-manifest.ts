@@ -8,6 +8,12 @@
  * Hashes come from the bot's hash index when a file's size and mtime match it, else the file is
  * hashed (so only files changed since the last run are read). The diff compares a pre- and a
  * post-run manifest: added / modified / deleted (a rename is a delete plus an add).
+ *
+ * BE-P2-11 follow-up (mtime window): a same-size rewrite inside one filesystem timestamp tick
+ * keeps the mtime, so size + mtime alone can miss it. A file whose mtime falls inside the run's
+ * window (from snapshot start, minus a margin for timestamp resolution, onward) is "possibly
+ * changed" and its content is compared by hash; older files keep the fast size/mtime check. The
+ * index only vouches for a hash when the file's mtime is older than the index (minus the margin).
  */
 import { createHash } from 'node:crypto'
 import { closeSync, constants, fstatSync, lstatSync, openSync, readdirSync, readlinkSync, readSync, realpathSync, type Stats } from 'node:fs'
@@ -30,6 +36,12 @@ export interface ManifestEntry {
   target?: string
 }
 
+/**
+ * Default margin for filesystem timestamp resolution (ms): covers 1 s (HFS+, some network/9p
+ * mounts) and 2 s (FAT) mtimes, plus the floor to whole ms in manifests.
+ */
+export const MTIME_MARGIN_MS = 2000
+
 /** zone key → path → index entry. */
 export interface HashIndex {
   get(zone: string, p: string): { size: number; mtimeMs: number; sha256: string } | undefined
@@ -41,12 +53,20 @@ export interface MapHashIndex extends HashIndex {
 
 const key = (zone: string, p: string) => `${zone}\0${p}`
 
-export function createHashIndex(raw?: unknown): MapHashIndex {
+/**
+ * The bot's hash index. An entry is only used for a file whose mtime is older than the index's
+ * `at` (when its hashes were taken) minus `marginMs`: a file rewritten in the same timestamp tick
+ * after it was hashed would otherwise keep a stale hash. An index without `at` vouches for nothing
+ * (every file is hashed once).
+ */
+export function createHashIndex(raw?: unknown, marginMs = MTIME_MARGIN_MS): MapHashIndex {
   const entries = new Map<string, { size: number; mtimeMs: number; sha256: string }>()
-  const obj = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as { entries?: unknown }).entries : undefined
+  const rec = raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as { entries?: unknown; at?: unknown }) : undefined
+  const at = typeof rec?.at === 'number' && Number.isFinite(rec.at) ? rec.at : -Infinity
+  const obj = rec?.entries
   if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
     for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-      if (Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number' && typeof v[2] === 'string' && /^[0-9a-f]{64}$/.test(v[2])) {
+      if (Array.isArray(v) && typeof v[0] === 'number' && typeof v[1] === 'number' && typeof v[2] === 'string' && /^[0-9a-f]{64}$/.test(v[2]) && v[1] < at - marginMs) {
         entries.set(k, { size: v[0], mtimeMs: v[1], sha256: v[2] })
       }
     }
@@ -57,13 +77,16 @@ export function createHashIndex(raw?: unknown): MapHashIndex {
   }
 }
 
-/** The index after a run: every file of the post-run manifests that has a hash. */
-export function indexFrom(manifests: Record<string, readonly ManifestEntry[]>): { v: 1; entries: Record<string, [number, number, string]> } {
+/**
+ * The index after a run: every file of the post-run manifests that has a hash. `at`: a time (ms)
+ * no later than when those hashes were taken (the start of the post-run walk).
+ */
+export function indexFrom(manifests: Record<string, readonly ManifestEntry[]>, at: number): { v: 1; at: number; entries: Record<string, [number, number, string]> } {
   const entries: Record<string, [number, number, string]> = {}
   for (const [zone, list] of Object.entries(manifests)) {
     for (const e of list) if (e.kind === 'file' && e.sha256) entries[key(zone, e.path)] = [e.size, e.mtimeMs, e.sha256]
   }
-  return { v: 1, entries }
+  return { v: 1, at, entries }
 }
 
 const CHUNK = 1024 * 1024
@@ -188,13 +211,22 @@ export interface ManifestChange {
   after?: ManifestEntry
 }
 
-/** Whether a file/symlink entry differs (folders aren't compared). */
-export function entryChanged(a: ManifestEntry, b: ManifestEntry): boolean {
+/** Whether a file is "possibly changed" (its mtime is in the run's window): content is compared. */
+export type SuspectFn = (e: ManifestEntry) => boolean
+
+/** Files with an mtime at or after `since` (window start minus the margin). */
+export const mtimeSince = (since: number): SuspectFn => (e) => e.mtimeMs >= since
+
+/**
+ * Whether a file/symlink entry differs (folders aren't compared). Same size, mode and mtime is
+ * unchanged only when the file isn't `suspect` (mtime outside the run's window); otherwise, as for
+ * a new mtime, unchanged only when both hashes are known and equal.
+ */
+export function entryChanged(a: ManifestEntry, b: ManifestEntry, suspect = false): boolean {
   if (a.kind !== b.kind) return true
   if (a.kind === 'symlink') return a.target !== b.target
   if (a.size !== b.size || a.mode !== b.mode) return true
-  if (a.mtimeMs === b.mtimeMs) return false
-  // Same size and mode, new mtime: unchanged only when both hashes are known and equal.
+  if (a.mtimeMs === b.mtimeMs && !suspect) return false
   return !(a.sha256 && b.sha256 && a.sha256 === b.sha256)
 }
 
@@ -203,7 +235,7 @@ export function entryChanged(a: ManifestEntry, b: ManifestEntry): boolean {
  * a folder replaced by a file shows the folder's files deleted and the file added).
  * `only`: restrict to these paths (and, for `dirs`, everything under them).
  */
-export function diffManifests(pre: readonly ManifestEntry[], post: readonly ManifestEntry[], only?: { files: ReadonlySet<string>; dirs: ReadonlySet<string> }): ManifestChange[] {
+export function diffManifests(pre: readonly ManifestEntry[], post: readonly ManifestEntry[], only?: { files: ReadonlySet<string>; dirs: ReadonlySet<string> }, suspect: SuspectFn = () => false): ManifestChange[] {
   const inScope = (p: string): boolean => {
     if (!only) return true
     if (only.files.has(p)) return true
@@ -217,22 +249,23 @@ export function diffManifests(pre: readonly ManifestEntry[], post: readonly Mani
     if (!inScope(p)) continue
     const after = b.get(p)
     if (!after) out.push({ path: p, change: 'deleted', before })
-    else if (entryChanged(before, after)) out.push({ path: p, change: 'modified', before, after })
+    else if (entryChanged(before, after, after.kind === 'file' && suspect(after))) out.push({ path: p, change: 'modified', before, after })
   }
   for (const [p, after] of b) if (!a.has(p) && inScope(p)) out.push({ path: p, change: 'added', after })
   return out.sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0))
 }
 
 /**
- * Fill in hashes in a post-run manifest: unchanged files (same size/mtime/mode as before) take
- * the pre-run hash; others are hashed (needed for conflict checks at undo time).
+ * Fill in hashes in a post-run manifest: unchanged files (same size/mtime/mode as before, mtime
+ * outside the run's window) take the pre-run hash; others, including `suspect` files, are hashed
+ * (the diff compares them, and undo's conflict check needs them).
  */
-export function hashChanged(dir: string, pre: readonly ManifestEntry[], post: ManifestEntry[]): void {
+export function hashChanged(dir: string, pre: readonly ManifestEntry[], post: ManifestEntry[], suspect: SuspectFn = () => false): void {
   const before = new Map(pre.map((e) => [e.path, e]))
   for (const e of post) {
     if (e.kind !== 'file' || e.sha256) continue
     const b = before.get(e.path)
-    if (b?.kind === 'file' && b.sha256 && b.size === e.size && b.mtimeMs === e.mtimeMs) {
+    if (b?.kind === 'file' && b.sha256 && b.size === e.size && b.mtimeMs === e.mtimeMs && !suspect(e)) {
       e.sha256 = b.sha256
       continue
     }

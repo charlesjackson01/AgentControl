@@ -4,7 +4,7 @@
  * in-process). The real-container version is undo.vm.test.ts (@vm).
  */
 import {
-  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync,
+  chmodSync, copyFileSync, utimesSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -42,7 +42,7 @@ interface Env {
   /** A run as the bot would make it (overlay: writes go to the upper layer). */
   run(fn: (b: Bot) => void): Promise<string>
 }
-interface Bot { write(rel: string, text: string, zone?: 'group'): void; rm(rel: string, zone?: 'group'): void; chmod(rel: string, mode: number): void; link(rel: string, target: string): void }
+interface Bot { write(rel: string, text: string, zone?: 'group'): void; setMtime(rel: string, sec: number): void; rm(rel: string, zone?: 'group'): void; chmod(rel: string, mode: number): void; link(rel: string, target: string): void }
 
 function makeEnv(driver: SnapshotDriver, opts: { backend?: 'local' | 'wsl'; groupGone?: () => boolean } = {}): Env {
   const vol = mkdtempSync(path.join(tmpdir(), 'ac-undo-'))
@@ -96,6 +96,7 @@ function makeEnv(driver: SnapshotDriver, opts: { backend?: 'local' | 'wsl'; grou
       const upper = (z?: 'group') => svc.overlayDirs('analyst', z ? 'group-research' : 'workspace')!.upper
       const b: Bot = {
         write: (rel, text, z) => put(path.join(ov ? upper(z) : lower(z), rel), text),
+        setMtime: (rel, sec) => utimesSync(path.join(ov ? upper() : lower(), rel), sec, sec),
         rm: (rel, z) => {
           if (!ov) return rmSync(path.join(lower(z), rel))
           put(path.join(upper(z), path.dirname(rel), `.wh.${path.basename(rel)}`), '')
@@ -203,12 +204,12 @@ describe.each(['reflink', 'copy', 'overlay'] as const)('undo (%s)', (driver) => 
     const e = makeEnv(driver)
     seed(e)
     const r = await e.run((b) => {
-      b.write('a.txt', 'run 1 edits a\n')
+      b.write('a.txt', 'run 1\n')
       b.write('added.txt', 'added by run 1\n')
       b.rm('b.txt')
     })
     await e.run((b) => {
-      b.write('a.txt', 'run 2 edits a, longer\n')
+      b.write('a.txt', 'run 2\n')
       b.write('b.txt', 'run 2 recreates b\n')
       b.write('keep.txt', 'run 2 edits keep\n')
     })
@@ -221,7 +222,7 @@ describe.each(['reflink', 'copy', 'overlay'] as const)('undo (%s)', (driver) => 
     expect(err).toMatchObject({ statusCode: 409, reason: 'conflicts' })
     expect(err.message).toMatch(/2 files changed after this run/)
     expect(err.conflicts).toEqual(prev.conflicts)
-    expect(read(path.join(e.zone, 'a.txt'))).toBe('run 2 edits a, longer\n')
+    expect(read(path.join(e.zone, 'a.txt'))).toBe('run 2\n')
     expect(e.svc.read('analyst', r)!.undo).toBeUndefined()
 
     const res = await e.undo.apply(agent, r, { force: true })
@@ -231,8 +232,37 @@ describe.each(['reflink', 'copy', 'overlay'] as const)('undo (%s)', (driver) => 
     expect(read(path.join(e.zone, 'keep.txt'))).toBe('run 2 edits keep\n')
     // The overwritten later edits are in the undo run's snapshot: undoing the undo brings them back.
     await e.undo.apply(agent, res.undoRunId)
-    expect(read(path.join(e.zone, 'a.txt'))).toBe('run 2 edits a, longer\n')
+    expect(read(path.join(e.zone, 'a.txt'))).toBe('run 2\n')
     expect(read(path.join(e.zone, 'b.txt'))).toBe('run 2 recreates b\n')
+  })
+
+  it('mtime window: a later same-size rewrite that keeps R\'s mtime is a conflict (content compared); the same bytes are not', async () => {
+    const e = makeEnv(driver)
+    seed(e)
+    // Whole seconds, so the restored mtime is exactly the one R left (as a rewrite inside one
+    // timestamp tick would leave it); it's within R's window.
+    const sec = Math.floor(Date.now() / 1000)
+    const r = await e.run((b) => {
+      b.write('a.txt', 'run 1\n')
+      b.setMtime('a.txt', sec)
+      b.write('sub/c.txt', 'by run1\n')
+      b.setMtime('sub/c.txt', sec)
+    })
+    const left = e.svc.read('analyst', r)!.changes.find((c) => c.path === 'a.txt')!.afterMtimeMs
+    expect(left).toBe(sec * 1000)
+    await e.run((b) => {
+      b.write('a.txt', 'run X\n') // same size as R's 'run 1\n'
+      b.setMtime('a.txt', sec) // and the same mtime
+      b.write('sub/c.txt', 'by run1\n') // same bytes, same mtime: not a conflict
+      b.setMtime('sub/c.txt', sec)
+    })
+    expect(statSync(path.join(e.zone, 'a.txt')).size).toBe('run 1\n'.length)
+    expect(Math.floor(statSync(path.join(e.zone, 'a.txt')).mtimeMs)).toBe(left)
+    expect(e.undo.preview(agent, r).conflicts).toEqual([{ path: 'workspace/a.txt', root: 'agent' }])
+    expect(await errOf(e.undo.apply(agent, r))).toMatchObject({ statusCode: 409, reason: 'conflicts', conflicts: [{ path: 'workspace/a.txt', root: 'agent' }] })
+    await e.undo.apply(agent, r, { force: true })
+    expect(read(path.join(e.zone, 'a.txt'))).toBe('alpha\n')
+    expect(read(path.join(e.zone, 'sub', 'c.txt'))).toBe('charlie\n')
   })
 })
 
@@ -303,7 +333,7 @@ describe('undo: states and safety', () => {
     seed(e)
     const outside = mkdtempSync(path.join(tmpdir(), 'ac-undo-out-'))
     dirs.push(outside)
-    const r = await e.run((b) => b.write('sub/c.txt', 'changed by the run\n'))
+    const r = await e.run((b) => b.write('sub/c.txt', 'changed\n'))
     rmSync(path.join(e.zone, 'sub'), { recursive: true })
     symlinkSync(outside, path.join(e.zone, 'sub'))
     const err = await errOf(e.undo.apply(agent, r, { force: true }))
@@ -319,7 +349,7 @@ describe('undo: states and safety', () => {
     seed(e)
     const r = await e.run((b) => {
       b.write('a.txt', 'x\n')
-      b.write('notes.md', 'changed by the run\n', 'group')
+      b.write('notes.md', 'changed\n', 'group')
     })
     gone = true
     expect(e.undo.preview(agent, r).conflicts).toEqual([{ path: 'shared/notes.md', root: 'group', groupId: 'g1', groupName: 'Research' }])

@@ -35,6 +35,13 @@
  * run and drops its retained data (undoing the undo uses the undo run's own snapshot); `hold`
  * keeps eviction off a run while its undo is applied.
  *
+ * BE-P2-11 follow-up (mtime window): `begin` records the wall-clock start of the pre-run walk.
+ * At `finish`, a file whose mtime is at or after that start minus `mtimeMarginMs` (2 s by
+ * default, for timestamp resolution) is hashed and compared by content even when its size and
+ * mtime match the pre-run manifest (overlay: every file the run touched). The hash index only
+ * vouches for files older than the index minus the margin. `meta.window` keeps the window for
+ * undo's conflict check.
+ *
  * Note (Team lead, BE-P2-9 review): the copy driver is close to the 2 s pre-run budget on a
  * 10k-file workspace — about 1.3 s standalone before the hash-while-copying fix and about 2.0 s
  * under the full parallel test suite (reflink: 0.78 s). Keep an eye on it before adding work to
@@ -49,7 +56,7 @@ import path from 'node:path'
 import type { Agent, FileChange, ScriptRunUndo, SnapshotDriver, UndoUnavailableReason } from './shared/types.js'
 import type { BotMount } from './isolation.js'
 import {
-  createHashIndex, diffManifests, hashChanged, indexFrom, openNoFollow, stillInside, takeManifest, type ManifestChange, type ManifestEntry,
+  createHashIndex, diffManifests, hashChanged, indexFrom, MTIME_MARGIN_MS, mtimeSince, openNoFollow, stillInside, takeManifest, type ManifestChange, type ManifestEntry,
 } from './snapshot-manifest.js'
 
 /**
@@ -110,7 +117,21 @@ export interface SnapshotDeps {
   /** Folders (absolute) among `dirs` that are overlay-opaque (default: reads the xattrs with python3). */
   opaqueDirs?: (dirs: string[]) => Promise<Set<string>>
   now?: () => Date
+  /** Wall clock (ms) for the mtime window; file mtimes use it (default Date.now). */
+  clockMs?: () => number
+  /** Margin for filesystem timestamp resolution (default MTIME_MARGIN_MS). */
+  mtimeMarginMs?: number
   log?: (msg: string) => void
+}
+
+/**
+ * The run's mtime window (wall-clock ms): `startMs` before the pre-run walk, `endMs` before the
+ * post-run walk. Files with an mtime ≥ startMs − marginMs are compared by content.
+ */
+export interface MtimeWindow {
+  startMs: number
+  endMs?: number
+  marginMs: number
 }
 
 export interface SnapshotHandle {
@@ -123,6 +144,8 @@ export interface SnapshotHandle {
   pre: Record<string, ManifestEntry[]>
   /** BE-P2-11: this run is an undo of that run. */
   undoOf?: string
+  /** The mtime window's start (absent in snapshots begun before the window: every file is compared by content). */
+  windowStartMs?: number
   /** overlay: what the commits touched, per zone. */
   touched: Record<string, { files: string[]; dirs: string[] }>
 }
@@ -162,6 +185,8 @@ export interface SnapshotMeta {
   undo?: ScriptRunUndo
   /** BE-P2-11: this run is an undo ("undo of <runId>"). */
   undoOf?: string
+  /** BE-P2-11 follow-up: the run's mtime window (undo's conflict check compares files in it by content). */
+  window?: MtimeWindow
 }
 
 export interface SnapshotOutcome {
@@ -462,8 +487,17 @@ export async function commitOverlay(upper: string, lower: string, orig: string, 
   return touched
 }
 
+/** Whether `p` is one of the overlay-touched files, or under a touched (replaced) folder. */
+function inTouched(only: { files: ReadonlySet<string>; dirs: ReadonlySet<string> }, p: string): boolean {
+  if (only.files.has(p) || only.dirs.has(p)) return true
+  for (let i = p.lastIndexOf('/'); i > 0; i = p.lastIndexOf('/', i - 1)) if (only.dirs.has(p.slice(0, i))) return true
+  return false
+}
+
 export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
   const now = deps.now ?? (() => new Date())
+  const clockMs = deps.clockMs ?? (() => Date.now())
+  const margin = deps.mtimeMarginMs ?? MTIME_MARGIN_MS
   const log = deps.log ?? (() => {})
   const clone = deps.clone ?? reflinkClone
   const opaqueDirs = deps.opaqueDirs ?? readOpaqueDirs
@@ -497,7 +531,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
   }
 
   function loadIndex(d: string) {
-    return createHashIndex(readJson(path.join(d, INDEX)))
+    return createHashIndex(readJson(path.join(d, INDEX)), margin)
   }
 
   /** reflink: clone a zone's files and symlinks (folders recreated). */
@@ -583,6 +617,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     const dir = path.join(d, runId)
     if (existsSync(dir)) throw new Error(`a snapshot for run ${runId} already exists`)
     const zones = checkZones(opts.zones ?? deps.zones(agent))
+    const windowStartMs = clockMs()
     const index = loadIndex(d)
     const pre: Record<string, ManifestEntry[]> = {}
     // copy hashes new/changed files while storing their blobs, so the walk only reuses the index.
@@ -593,8 +628,8 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     if (driver !== 'overlay') await commitLeftoverOverlay(d, zones, dir)
     const startedAt = now().toISOString()
     const undoOf = opts.undoOf !== undefined && RUN_ID_RE.test(opts.undoOf) ? opts.undoOf : undefined
-    const h: SnapshotHandle = { slug: agent.slug, runId, driver, dir, zones, startedAt, pre, touched: {}, ...(undoOf ? { undoOf } : {}) }
-    writeJson(path.join(dir, 'manifest.json'), { v: 1, runId, driver, startedAt, zones: zones.map((z) => ({ ...zoneInfo(z), dir: z.dir, target: z.target })), pre, ...(undoOf ? { undoOf } : {}) })
+    const h: SnapshotHandle = { slug: agent.slug, runId, driver, dir, zones, startedAt, pre, touched: {}, windowStartMs, ...(undoOf ? { undoOf } : {}) }
+    writeJson(path.join(dir, 'manifest.json'), { v: 1, runId, driver, startedAt, windowStartMs, zones: zones.map((z) => ({ ...zoneInfo(z), dir: z.dir, target: z.target })), pre, ...(undoOf ? { undoOf } : {}) })
     writeJson(path.join(d, PENDING), { runId })
     if (driver === 'overlay') {
       // Writes made while no run was active (e.g. an exec at idle) are committed now, as part of this run.
@@ -640,14 +675,19 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     const changes: SnapshotChange[] = []
     const filesChanged: FileChange[] = []
     let retainedBytes = 0
+    const windowEndMs = clockMs()
+    // Files whose mtime is in the run's window are compared by content (a same-size rewrite in one
+    // timestamp tick keeps size and mtime). Overlay: every file the run touched (copy-up keeps mtimes).
+    const since = h.windowStartMs !== undefined ? h.windowStartMs - margin : -Infinity
     for (const z of h.zones) {
       const pre = h.pre[z.key] ?? []
       const p = takeManifest(z.dir, { zone: z.key, hash: 'none' })
-      hashChanged(z.dir, pre, p)
-      post[z.key] = p
       const t = h.touched[z.key]
       const only = h.driver === 'overlay' ? { files: new Set(t?.files ?? []), dirs: new Set(t?.dirs ?? []) } : undefined
-      const diff: ManifestChange[] = diffManifests(pre, p, only)
+      const suspect = only ? (e: ManifestEntry) => inTouched(only, e.path) : mtimeSince(since)
+      hashChanged(z.dir, pre, p, suspect)
+      post[z.key] = p
+      const diff: ManifestChange[] = diffManifests(pre, p, only, suspect)
       const keep = new Set<string>()
       for (const c of diff) {
         const kind = (c.before ?? c.after)!.kind === 'symlink' ? 'symlink' : 'file'
@@ -676,10 +716,11 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
       v: 1, runId: h.runId, slug: h.slug, driver: h.driver, startedAt: h.startedAt, endedAt: now().toISOString(),
       ...(opts.recovered ? { recovered: true as const } : {}),
       zones: h.zones.map(zoneInfo), changes, retainedBytes, ...(h.undoOf ? { undoOf: h.undoOf } : {}),
+      ...(h.windowStartMs !== undefined ? { window: { startMs: h.windowStartMs, endMs: windowEndMs, marginMs: margin } } : {}),
     }
     writeJson(path.join(h.dir, 'post.json'), post)
     writeJson(path.join(h.dir, 'meta.json'), meta)
-    writeJson(path.join(d, INDEX), indexFrom(post))
+    writeJson(path.join(d, INDEX), indexFrom(post, windowEndMs))
     rmSync(path.join(h.dir, 'touched.json'), { force: true })
     const pend = readJson<{ runId?: string }>(path.join(d, PENDING))
     if (pend?.runId === h.runId) rmSync(path.join(d, PENDING), { force: true })
@@ -694,7 +735,7 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     const runId = pend.runId
     const d = path.dirname(file)
     const m = typeof runId === 'string' && RUN_ID_RE.test(runId)
-      ? readJson<{ driver: SnapshotDriver; startedAt: string; zones: (ZoneInfo & { dir: string; target: string })[]; pre: Record<string, ManifestEntry[]>; undoOf?: string }>(path.join(d, runId, 'manifest.json'))
+      ? readJson<{ driver: SnapshotDriver; startedAt: string; windowStartMs?: number; zones: (ZoneInfo & { dir: string; target: string })[]; pre: Record<string, ManifestEntry[]>; undoOf?: string }>(path.join(d, runId, 'manifest.json'))
       : null
     if (!m || !runId) {
       log(`snapshots: ${agent.slug}: dropping an unreadable pending marker`)
@@ -704,7 +745,8 @@ export function createSnapshotService(deps: SnapshotDeps): SnapshotService {
     const touched = readJson<SnapshotHandle['touched']>(path.join(d, runId, 'touched.json')) ?? {}
     log(`snapshots: ${agent.slug}: finishing the snapshot of run ${runId} (its end wasn't recorded)`)
     const undoOf = typeof m.undoOf === 'string' && RUN_ID_RE.test(m.undoOf) ? m.undoOf : undefined
-    return finish({ slug: agent.slug, runId, driver: m.driver, dir: path.join(d, runId), zones: m.zones, startedAt: m.startedAt, pre: m.pre, touched, ...(undoOf ? { undoOf } : {}) }, { recovered: true })
+    const windowStartMs = typeof m.windowStartMs === 'number' && Number.isFinite(m.windowStartMs) ? m.windowStartMs : undefined
+    return finish({ slug: agent.slug, runId, driver: m.driver, dir: path.join(d, runId), zones: m.zones, startedAt: m.startedAt, pre: m.pre, touched, ...(windowStartMs !== undefined ? { windowStartMs } : {}), ...(undoOf ? { undoOf } : {}) }, { recovered: true })
   }
 
   function read(slug: string, runId: string): SnapshotMeta | null {

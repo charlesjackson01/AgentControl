@@ -1,4 +1,5 @@
 import { chmodSync, copyFileSync, utimesSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync, readlinkSync, lstatSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -209,9 +210,17 @@ describe.each(['reflink', 'copy', 'overlay'] as const)('SnapshotService (%s)', (
     expect(snapshotOf(e.zone)).toEqual(before)
   })
 
-  it('a 10k-file workspace snapshot takes under 2 s', async () => {
+  it.each([
+    ['just written (every file in the mtime window: all compared by content)', 0],
+    ['written an hour ago (only the run\'s files in the window)', 3_600_000],
+  ])('a 10k-file workspace snapshot takes under 2 s: %s', async (_label, age) => {
     const e = makeEnv(driver)
-    for (let i = 0; i < 10_000; i++) put(path.join(e.zone, `d${i % 100}`, `f${i}.txt`), `file ${i}\n`)
+    const old = new Date(Date.now() - (age as number))
+    for (let i = 0; i < 10_000; i++) {
+      const f = path.join(e.zone, `d${i % 100}`, `f${i}.txt`)
+      put(f, `file ${i}\n`)
+      if (age) utimesSync(f, old, old)
+    }
     let t = performance.now()
     const h = (await e.svc.begin(agent, 'big-1'))!
     const beginMs = performance.now() - t
@@ -222,12 +231,75 @@ describe.each(['reflink', 'copy', 'overlay'] as const)('SnapshotService (%s)', (
     expect(out.filesChanged.map((c) => c.path)).toEqual(['workspace/d1/f1.txt'])
     expect(beginMs).toBeLessThan(2000)
     expect(finishMs).toBeLessThan(2000)
-    // The second snapshot uses the hash index (no rehash, copy: no new blobs).
+    // The second snapshot uses the hash index (copy: no new blobs) for files older than the window.
     t = performance.now()
     const h2 = (await e.svc.begin(agent, 'big-2'))!
+    const begin2Ms = performance.now() - t
     await e.svc.finish(h2)
-    expect(performance.now() - t).toBeLessThan(2000)
+    const second = performance.now() - t
+    expect(second).toBeLessThan(2000)
+    if (process.env.AC_SNAPSHOT_TIMING) console.log(`[timing] ${driver} age=${age}: begin ${beginMs.toFixed(0)} ms, finish ${finishMs.toFixed(0)} ms, second begin ${begin2Ms.toFixed(0)} ms, second begin+finish ${second.toFixed(0)} ms`)
   }, 30_000)
+
+  it('mtime window: a same-size rewrite that keeps the mtime is still a change (content compared); same bytes are not', async () => {
+    const e = makeEnv(driver)
+    seed(e)
+    const a = path.join(e.zone, 'a.txt')
+    const b = path.join(e.zone, 'b.txt')
+    // Whole seconds, so the restored mtime is exactly the pre-run one; it's within the window.
+    const sec = Math.floor(Date.now() / 1000)
+    utimesSync(a, sec, sec)
+    utimesSync(b, sec, sec)
+    const h = (await e.svc.begin(agent, 'run-1'))!
+    const bot = driver === 'overlay' ? e.svc.overlayDirs('analyst', 'workspace')!.upper : e.zone
+    e.bot.write('a.txt', 'ALPHA\n') // same size as 'alpha\n'
+    utimesSync(path.join(bot, 'a.txt'), sec, sec) // and the same mtime
+    e.bot.write('b.txt', 'bravo bravo\n') // same bytes, same mtime
+    utimesSync(path.join(bot, 'b.txt'), sec, sec)
+    const out = await e.svc.finish(h)
+    expect(statSync(a).size).toBe(6)
+    expect(Math.floor(statSync(a).mtimeMs)).toBe(sec * 1000)
+    expect(out.filesChanged.map((c) => [c.path, c.change])).toEqual([['workspace/a.txt', 'modified']])
+    applyUndo(e.svc.undoSource('analyst', 'run-1')!, e.zones)
+    expect(read(a)).toBe('alpha\n')
+    expect(e.svc.read('analyst', 'run-1')!.window).toMatchObject({ startMs: expect.any(Number), endMs: expect.any(Number), marginMs: 2000 })
+  })
+
+  it('mtime window: a same-size, same-mtime rewrite between runs isn\'t hidden by the hash index', async () => {
+    const e = makeEnv(driver)
+    seed(e)
+    const a = path.join(e.zone, 'a.txt')
+    const sec = Math.floor(Date.now() / 1000)
+    writeFileSync(a, 'one!!\n')
+    utimesSync(a, sec, sec)
+    const h1 = (await e.svc.begin(agent, 'run-1'))! // copy: stores a blob of 'one!!'
+    e.bot.write('b.txt', 'run 1 edits b\n')
+    await e.svc.finish(h1)
+    // Right after run-1 (the index holds 'one!!' for this size and mtime), the user rewrites it.
+    expect(Math.floor(statSync(a).mtimeMs)).toBe(sec * 1000)
+    writeFileSync(a, 'two!!\n')
+    utimesSync(a, sec, sec)
+    const h2 = (await e.svc.begin(agent, 'run-2'))!
+    e.bot.write('a.txt', 'three\n')
+    await e.svc.finish(h2)
+    const src = e.svc.undoSource('analyst', 'run-2')!.find((u) => u.rel === 'a.txt')!
+    expect(src.original?.kind === 'file' && read(src.original.file)).toBe('two!!\n')
+    expect(e.svc.read('analyst', 'run-2')!.changes.find((c) => c.path === 'a.txt')?.beforeSha).toBe(createHash('sha256').update('two!!\n').digest('hex'))
+  })
+
+  it('mtime window: files older than the window keep the fast size/mtime check (not re-read); overlay compares every touched file', async () => {
+    const e = makeEnv(driver)
+    seed(e)
+    const a = path.join(e.zone, 'a.txt')
+    const old = Math.floor(Date.now() / 1000) - 3600
+    utimesSync(a, old, old)
+    const h = (await e.svc.begin(agent, 'run-1'))!
+    const bot = driver === 'overlay' ? e.svc.overlayDirs('analyst', 'workspace')!.upper : e.zone
+    e.bot.write('a.txt', 'ALPHA\n')
+    utimesSync(path.join(bot, 'a.txt'), old, old) // an explicit set-back to an hour-old mtime
+    const out = await e.svc.finish(h)
+    expect(out.filesChanged.map((c) => c.path)).toEqual(driver === 'overlay' ? ['workspace/a.txt'] : [])
+  })
 })
 
 describe('SnapshotService: overlay details', () => {

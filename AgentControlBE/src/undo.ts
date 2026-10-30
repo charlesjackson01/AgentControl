@@ -102,7 +102,7 @@ export function createUndoService(deps: UndoDeps): UndoService {
   const log = deps.log ?? (() => {})
 
   /** R's undo source, or the 410/409 for its state. */
-  function source(agent: Agent, runId: string): { entries: UndoSourceEntry[]; zones: ZoneInfo[] } {
+  function source(agent: Agent, runId: string): { entries: UndoSourceEntry[]; zones: ZoneInfo[]; since: number } {
     const meta = deps.snapshots.read(agent.slug, runId)
     if (!meta) {
       // No record: never snapshotted, or pruned (outside the last 20 runs and older than 7 days).
@@ -115,11 +115,20 @@ export function createUndoService(deps: UndoDeps): UndoService {
     if (meta.undo?.state === 'done') failWithReason(409, 'already_undone', UNDO_ALREADY_DONE_TEXT)
     const entries = deps.snapshots.undoSource(agent.slug, runId)
     if (!entries) failWithReason(410, 'expired', undoUnavailableText({ reason: 'expired' }, agent.name, deps.perBotBytes?.() ?? 0))
-    return { entries, zones: meta.zones }
+    // Files whose mtime is in R's window (or later) are compared by content; a record without a
+    // window (taken before the window rule) compares every file by content.
+    const w = meta.window
+    const since = w && Number.isFinite(w.startMs) && Number.isFinite(w.marginMs) ? w.startMs - Math.max(0, w.marginMs) : -Infinity
+    return { entries, zones: meta.zones, since }
   }
 
-  /** Whether the file differs from what the run left (or, for a deleted file, whether something is there). */
-  function differs(fs: StorageBackend, w: ResolvedZone, parts: string[], e: UndoSourceEntry): boolean {
+  /**
+   * Whether the file differs from what the run left (or, for a deleted file, whether something is
+   * there). Same size and mtime is trusted only for an mtime older than R's window (`since`):
+   * otherwise a later same-size rewrite in the same timestamp tick would pass, so the content is
+   * compared by hash.
+   */
+  function differs(fs: StorageBackend, w: ResolvedZone, parts: string[], e: UndoSourceEntry, since: number): boolean {
     const full = [...w.sub, ...parts]
     let now: EntryInfo | null
     try {
@@ -133,14 +142,14 @@ export function createUndoService(deps: UndoDeps): UndoService {
     if (after.kind === 'symlink') return now.kind !== 'symlink' || now.target !== (after.target ?? now.target)
     if (now.kind !== 'file') return true
     if (after.size !== undefined && now.size !== after.size) return true
-    if (after.mtimeMs !== undefined && Math.floor(now.mtimeMs) === after.mtimeMs) return false
+    if (after.mtimeMs !== undefined && Math.floor(now.mtimeMs) === after.mtimeMs && after.mtimeMs < since) return false
     if (!e.afterSha) return after.mtimeMs !== undefined
     const hashed = fs.inspect(w.vol, full, { hash: true })
     return hashed?.kind !== 'file' || hashed.sha256 !== e.afterSha
   }
 
   function plan(agent: Agent, runId: string): { items: Planned[]; zones: ResolvedZone[] } {
-    const { entries, zones } = source(agent, runId)
+    const { entries, zones, since } = source(agent, runId)
     const fs = deps.storage()
     const resolved = new Map<string, ResolvedZone | null>()
     for (const z of zones) resolved.set(z.key, deps.zone(agent, z))
@@ -153,7 +162,7 @@ export function createUndoService(deps: UndoDeps): UndoService {
         fail(400, 'This run\'s undo record has a path that isn\'t valid, so it can\'t be undone.')
       }
       const w = resolved.get(e.zone) ?? null
-      items.push({ entry: e, where: w, parts, conflict: w === null || differs(fs, w, parts, e) })
+      items.push({ entry: e, where: w, parts, conflict: w === null || differs(fs, w, parts, e, since) })
     }
     return { items, zones: [...resolved.values()].filter((z): z is ResolvedZone => z !== null) }
   }

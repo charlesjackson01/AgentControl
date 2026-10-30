@@ -336,12 +336,28 @@ describe('FE-P2-7 browser for scripts (mockup 15)', () => {
   it('Open full settings does not carry the browser (GAP: the full form has no browser field)', () => {
     assert.equal('browser' in profilePrefill({ ...blankCard(defaults), name: 'A', browser: true }, defaults), false)
   })
-  it('507 low_disk creates nothing: the server message shows inline on the card (S9)', async () => {
+  it('409 low_disk creates nothing: the server message shows inline on the card (S9)', async () => {
     const message = 'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.'
-    const { api } = mockApi({ 'POST /api/agents': () => json(507, { statusCode: 507, error: 'Insufficient Storage', reason: 'low_disk', message }) })
+    const { calls, api } = mockApi({ 'POST /api/agents': () => json(409, { statusCode: 409, error: 'Conflict', reason: 'low_disk', message }) })
     const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
-    assert.equal(err.status, 507)
+    assert.equal(calls.length, 1)
+    assert.equal(err.status, 409)
     assert.equal(createFailureText('Analyst', err),
       'Couldn\u2019t create Analyst: the download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
+  })
+  it('409 low_disk with no message falls back to the plain conflict text, never blank', async () => {
+    const { api } = mockApi({ 'POST /api/agents': () => json(409, { statusCode: 409, error: 'Conflict', reason: 'low_disk' }) })
+    const err = await api.create(createBody({ ...blankCard(defaults), name: 'Analyst', browser: true }, defaults)).catch((e) => e)
+    assert.match(createFailureText('Analyst', err), /^Couldn\u2019t create Analyst: \S/)
+  })
+  it('M2 ruling: the model\'s /new draft can never pre-set browser:true', () => {
+    const raw = { ...DRAFT, browser: true, permissions: { browser: true } }
+    assert.equal('browser' in normalizeDraft(raw), false)
+    assert.equal(cardFromDraft(null, normalizeDraft(raw), defaults).browser, false)
+    const off = cardFromDraft(null, normalizeDraft(DRAFT), defaults)
+    assert.equal(cardFromDraft(off, normalizeDraft({ ...raw, name: 'Wanderer' }), defaults).browser, false)
+    assert.equal('browser' in previousOf({ ...off, browser: true }), false)
+    assert.equal('browser' in draftRequestBody('a bot', previousOf({ ...off, browser: true })), false)
+    assert.equal('browser' in createBody({ ...off, name: 'A' }, defaults), false)
   })
 })

@@ -171,7 +171,10 @@ export function blankCard(defaults: AgentDefaults | null): CardDraft {
   }
 }
 
-/** A draft response onto the card: the draft's fields replace the card's; model, internet, skills and browser stay. */
+/**
+ * A draft response onto the card: the draft's fields replace the card's; model, internet, skills and browser stay.
+ * M2 ruling: the model's draft can never pre-set browser:true; only the user's toggle does (a new card starts off).
+ */
 export function cardFromDraft(current: CardDraft | null, draft: DraftResponse, defaults: AgentDefaults | null): CardDraft {
   const base = current ?? blankCard(defaults)
   if (draft.warning) return { ...blankCard(defaults), endpointId: base.endpointId, modelId: base.modelId, internetPolicy: base.internetPolicy, sourcesOn: base.sourcesOn, browser: base.browser }
@@ -246,9 +249,10 @@ export type CreateBody = {
   avatar?: { kind: 'emoji'; value: string }
   skillIds?: string[]
   /**
-   * FE-P2-7, ASSUMED (draft M2 contract 16160ae on p2/be-m2-contract, BE-P2-15, not approved):
-   * AgentInput.browser, create only. true turns the browser on for the new bot (download/rebuild start);
-   * 507 `low_disk` creates nothing. Sent only when on; master ignores the key (the bot starts with it off).
+   * FE-P2-7 (M2 contract 16160ae as ruled in CONTRACT_REVIEW_16160ae, BE-P2-15): AgentInput.browser, create only.
+   * true turns the browser on for the new bot (download/rebuild start); 409 reason `low_disk` creates nothing and
+   * its `message` shows inline (S9). Sent only when the user switched it on: the model's /new draft never sets it
+   * (normalizeDraft drops any browser field). Master ignores the key (the bot starts with it off).
    */
   browser?: true
 }

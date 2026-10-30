@@ -18,7 +18,8 @@ const GENERIC_ERRORS = new Set([
   'bad gateway',
   'service unavailable',
   'gateway timeout',
-  // FE-P2-7: 507 `low_disk` (M2 contract draft: create with browser, PATCH vm, browser retry) shows `message`.
+  // Fastify's 507 phrase. M2 ruling (CONTRACT_REVIEW_16160ae blocker 1): low_disk is a 409 (`Conflict`, above),
+  // never a 507, so `message` shows either way.
   'insufficient storage',
 ])
 

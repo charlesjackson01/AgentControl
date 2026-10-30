@@ -17,26 +17,31 @@ import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, 
 import { join, posix } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { fail, failWithReason } from './http.js'
+import { capHostContacts } from './egress-service.js'
 import { NETWORK_UNAVAILABLE } from './podman-runner.js'
 import type { RunScriptRequest, RunScriptResult } from './runner.js'
-import { runMessageContent } from './run-messages.js'
+import { runMessageContent, TOOL_BUILD_CARD_NAME } from './run-messages.js'
 import type { RunLogs } from './snapshot-budget.js'
 import type { UndoApplyResult, UndoPartialRun } from './undo.js'
 import type {
+  ActiveToolBuild,
   Agent,
   ChatMessage,
   ChatRunSummary,
   Conversation,
   FileChange,
+  HostContact,
+  InternetUse,
   LiveEvent,
   QueuedReason,
   ScriptRun,
   ScriptRunKind,
+  ScriptRunPermission,
   ScriptRunStatus,
   ScriptRunSummary,
   ScriptRunUndo,
 } from './shared/types.js'
-import { SCRIPT_RUN_ACTIVE } from './shared/types.js'
+import { CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE, TOOL_BUILD_TIMEOUT_MS, type ToolBuildInfo } from './shared/types.js'
 
 /** Plan §5: new runs are blocked below 3 GB free on the machine (GiB, like the snapshot budget's 5 GB floor). */
 export const RUN_FREE_FLOOR_BYTES = 3 * 1024 ** 3
@@ -55,6 +60,14 @@ export const RESTART_QUEUED_TEXT = 'AgentControl restarted before this run start
 export const BUILD_ACTIVE_REASON = 'build_active'
 export const BUILD_ACTIVE_TEXT = "Wait for the bot's tools to finish building first."
 export const STOPPED_QUEUED_TEXT = 'The run was stopped before it started.'
+/** BE-P2-21: a live tool build's end texts (contract "BE-P2-21 Live tool builds with Stop"). */
+export const BUILD_STOPPED_REASON = 'build_stopped'
+export const BUILD_FAILED_REASON = 'build_failed'
+export const buildStoppedText = (bot: string, generation: number) => `Stopped. ${bot} keeps its current tools (version ${generation}).`
+export const buildFailedText = (bot: string, generation: number) => `The build failed, so ${bot} keeps its current tools (version ${generation}). Nothing else changed.`
+export const buildTimedOutText = (bot: string, generation: number) => `The build took longer than 20 minutes, so ${bot} keeps its current tools (version ${generation}).`
+/** BE-P2-21: run.updated for a build's progress and hosts at most this often (status changes always). */
+export const BUILD_UPDATE_MS = 1000
 export const LOG_EVICTED_TEXT = "This run's full output is no longer kept (older runs' logs are removed to save space)."
 /** Logs of runs without a snapshot: kept for the bot's last 20 runs or 7 days (as snapshots, plan §7.4 step 1). */
 export const LOG_KEEP_RUNS = 20
@@ -121,6 +134,43 @@ export interface RunServiceDeps {
   now?(): Date
   log?(msg: string): void
   flushMs?: number
+  /** BE-P2-21: tests only (default TOOL_BUILD_TIMEOUT_MS). */
+  toolBuildTimeoutMs?: number
+}
+
+/** BE-P2-21: what a live build's `build` callback gets (BotEnvService BuildOptions). */
+export interface ToolBuildControl {
+  signal: AbortSignal
+  onOutput(stream: 'stdout' | 'stderr', chunk: string): void
+  onProgress(progress: { step: number; steps: number; label: string }): void
+  onHosts(hosts: HostContact[]): void
+}
+
+/** BE-P2-21: a live tool build (Rebuild, vm_install), recorded as a ScriptRun kind 'tool_build' with a chat card. */
+export interface ToolBuildSpec {
+  agentId: string
+  /** The card's conversation (vm_install: where it was called), or a function that makes the bot's DM (called after the 409 checks). */
+  conversationId: string | (() => string)
+  context?: StartRunInput['context']
+  agentRunId?: string
+  via: ToolBuildInfo['via']
+  startedBy: ToolBuildInfo['startedBy']
+  argv: string[]
+  /** The full package list of the new generation, and what changes. */
+  packages: string[]
+  added: string[]
+  removed?: string[]
+  network: 'off' | 'on'
+  permissions: ScriptRunPermission[]
+  /**
+   * false (user Rebuild): 409 run_active while the bot has a run. true (vm_install): recorded `queued`
+   * (`queuedReason:'slot'`) and started once the bot's current runs end; runs queued after it wait for it.
+   */
+  waitForRuns: boolean
+  /** Checks after build_active / run_active (e.g. internet_never, proxy_unavailable); throw to refuse with no record. */
+  precheck?(agent: Agent): void | Promise<void>
+  /** The build itself, given the bot as it is when the build starts. A thrown `stopped` / `timedOut` error ends it that way. */
+  build(ctl: ToolBuildControl, agent: Agent): Promise<{ generation: number; log?: string; hosts?: HostContact[]; hostsTotal?: number }>
 }
 
 export interface RunListPage {
@@ -169,6 +219,14 @@ export interface RunService extends RunLogs {
    * generation it left. No run_active check (runs already going keep their container). Unrecorded.
    */
   withToolBuild<T>(agentId: string, fn: () => Promise<T>): Promise<T>
+  /**
+   * BE-P2-21: start a live tool build: 404, 409 build_active, 409 run_active (unless waitForRuns),
+   * the spec's precheck, 409 low_disk; then the record (queued or running) is returned at once.
+   * Stop it with stop(runId); it ends succeeded | failed | timed_out | stopped.
+   */
+  startToolBuild(spec: ToolBuildSpec): Promise<ScriptRunWithReason>
+  /** BE-P2-21: VmInfo.activeBuild / VmToolsInfo.activeBuild (null: no live build). */
+  activeBuild(agentId: string): ActiveToolBuild | null
   /** The 8 KB-per-stream view the model gets. */
   modelResult(run: ScriptRun): ModelRunResult
   recover(): Promise<number>
@@ -239,7 +297,21 @@ export function summaryOf(run: ScriptRun): ScriptRunSummary {
     ...(run.groupId ? { groupId: run.groupId } : {}),
     files: filesSplit(run.filesChanged),
     network: run.network,
+    // BE-P2-21: history rows of live builds ("internet once", up to 3 hosts, the build).
+    ...(run.build ? { build: run.build, internet: internetOf(run) } : {}),
+    ...(run.build && run.hostsContacted?.length ? { hosts: reachedHosts(run.hostsContacted).slice(0, 3) } : {}),
   }
+}
+
+/** BE-P2-21: "off" / "on (allowed once)" / "on (always allowed)" from the run's network and permissions. */
+export function internetOf(run: Pick<ScriptRun, 'network' | 'permissions'>): InternetUse {
+  if (run.network !== 'on') return 'off'
+  const p = (run.permissions ?? []).find((x) => x.type === 'internet')
+  return p && (p.decision === 'always' || p.source === 'policy') ? 'always' : 'once'
+}
+
+function reachedHosts(hosts: readonly HostContact[]): string[] {
+  return hosts.filter((h) => !h.blocked).map((h) => h.host)
 }
 
 const isActive = (s: ScriptRunStatus) => SCRIPT_RUN_ACTIVE.includes(s)
@@ -260,6 +332,20 @@ export function createRunService(deps: RunServiceDeps): RunService {
   const now = deps.now ?? (() => new Date())
   const log = deps.log ?? (() => {})
   const flushMs = deps.flushMs ?? OUTPUT_FLUSH_MS
+  /** BE-P2-21: each bot's live tool build (one at a time). */
+  interface BuildEntry {
+    l: Live
+    spec: ToolBuildSpec
+    /** The bot's runs live when it was recorded: the build waits for them, and they aren't held by it. */
+    waitFor: Set<string>
+    started: boolean
+    timedOut: boolean
+    lastEmit: number
+    tick?: ReturnType<typeof setTimeout>
+    vmDirty: boolean
+    limit?: ReturnType<typeof setTimeout>
+  }
+  const builds = new Map<string, BuildEntry>()
   /** Every known run (tails dropped once ended; the full record is on disk). */
   const index = new Map<string, { run: ScriptRunWithReason; slug: string }>()
   const live = new Map<string, Live>()
@@ -348,6 +434,27 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (run.exitCode !== undefined) s.exitCode = run.exitCode
     if (run.durationMs !== undefined) s.durationMs = run.durationMs
     if (run.runtime !== undefined) s.runtime = run.runtime
+    // BE-P2-21: the live build card ("Rebuild tools", progress, sites used so far, end text).
+    if (run.kind === 'tool_build' && run.build) {
+      delete s.scriptName
+      s.name = TOOL_BUILD_CARD_NAME
+      s.build = run.build
+      s.network = run.network
+      s.internet = internetOf(run)
+      if (run.startedAt) s.startedAt = run.startedAt
+      if (run.hostsContacted?.length) {
+        s.hostsContacted = run.hostsContacted.slice(0, CHAT_RUN_HOSTS_MAX)
+        const total = run.hostsContactedTotal ?? run.hostsContacted.length
+        if (total > s.hostsContacted.length) s.hostsContactedTotal = total
+      }
+      if (run.reason) s.reason = run.reason
+      if (run.error && !isActive(run.status)) s.error = run.error
+    }
+    // BE-P2-22: a run queued behind a live build names it ("runs on the new tools (version 3)").
+    if (run.status === 'queued' && run.queuedReason === 'tool_build') {
+      const b = builds.get(run.agentId)
+      if (b && b.l.run.build) s.afterBuild = { runId: b.l.run.id, generation: b.l.run.build.generation }
+    }
     if (run.kind === 'undo' && run.undoOfRunId) {
       const of = index.get(run.undoOfRunId)?.run
       const name = of ? scriptNameOf(of.argv) || (of.skillId ? deps.skillName?.(of.skillId) : undefined) : undefined
@@ -362,8 +469,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
   /** Create or update the run's card. `persist`: save the store (status changes only). */
   function syncCard(run: ScriptRun, persist: boolean): ChatRunSummary {
     const summary = chatSummary(run)
-    // BE-P2-17: tool builds are started from the VM tab; they show in its run history, not in chat.
-    if (run.kind === 'tool_build') return summary
+    // BE-P2-17: a rollback (no `build`) shows in the VM tab's history only; BE-P2-21: live builds get a card.
+    if (run.kind === 'tool_build' && !run.build) return summary
     const msgs = deps.messages()
     let msg = run.messageId ? msgs.find((m) => m.id === run.messageId) : undefined
     if (!msg) {
@@ -387,7 +494,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
     }
     if (msg) {
       msg.scriptRun = summary
-      msg.content = runMessageContent(summary)
+      msg.content = runMessageContent(summary, deps.getAgent(run.agentId)?.name)
     }
     if (persist) deps.save()
     return summary
@@ -401,6 +508,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
 
   /** Save + card + event on a status change. */
   function changed(entry: { run: ScriptRunWithReason; slug: string }): void {
+    const b = builds.get(entry.run.agentId)
+    if (b && b.l.run === entry.run) b.lastEmit = Date.now()
     write(entry.slug, entry.run)
     emit(entry.run, true)
     index.set(entry.run.id, { run: isActive(entry.run.status) ? entry.run : slim(entry.run), slug: entry.slug })
@@ -458,8 +567,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * Runs ahead of each queued one: those running now plus the queued before it (plan: "Queued · 1 ahead").
    * BE-P2-22: a tool build of the same bot counts as 1 ahead, and sets queuedReason 'tool_build'.
    */
-  function queueSpot(agentId: string, ahead: number): { pos: number; reason: QueuedReason } {
-    const b = isBuilding(agentId)
+  function queueSpot(agentId: string, ahead: number, runId?: string): { pos: number; reason: QueuedReason } {
+    const b = heldByBuild(agentId, runId)
     // Plus whatever holds the bot's slot outside RunService (an undo).
     return { pos: ahead + outside(agentId) + (b ? 1 : 0), reason: b ? 'tool_build' : 'slot' }
   }
@@ -468,7 +577,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
     for (const id of queue) {
       const l = live.get(id)
       if (!l) continue
-      const { pos, reason } = queueSpot(l.run.agentId, ahead)
+      // BE-P2-21: a queued build has its own position (the runs it waits for).
+      if (l.run.kind === 'tool_build') continue
+      const { pos, reason } = queueSpot(l.run.agentId, ahead, l.run.id)
       if (l.run.queuePosition !== pos || l.run.queuedReason !== reason) {
         l.run.queuePosition = pos
         l.run.queuedReason = reason
@@ -485,7 +596,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
    * queued runs wait while it's held and start when it's released (after the build's record).
    */
   const building = new Map<string, number>()
-  const isBuilding = (agentId: string) => (building.get(agentId) ?? 0) > 0
+  const isBuilding = (agentId: string) => (building.get(agentId) ?? 0) > 0 || builds.has(agentId)
+  /** BE-P2-21: whether the bot's build holds this run back (runs a vm_install build waits for are not held). */
+  function heldByBuild(agentId: string, runId?: string): boolean {
+    if ((building.get(agentId) ?? 0) > 0) return true
+    const b = builds.get(agentId)
+    return !!b && !(runId && b.waitFor.has(runId))
+  }
   function lockBuild(agentId: string): void {
     building.set(agentId, (building.get(agentId) ?? 0) + 1)
     updatePositions()
@@ -526,7 +643,15 @@ export function createRunService(deps: RunServiceDeps): RunService {
     delete run.queuedReason
     run.endedAt = run.endedAt ?? now().toISOString()
     if (run.durationMs === undefined && run.startedAt) run.durationMs = Math.max(0, Date.parse(run.endedAt) - Date.parse(run.startedAt))
+    const b = builds.get(run.agentId)
+    if (b && b.l === l) {
+      if (b.tick) clearTimeout(b.tick)
+      if (b.limit) clearTimeout(b.limit)
+      delete run.build?.progress
+    }
     changed({ run, slug: l.slug })
+    // BE-P2-21: gone before vm.updated, so VmInfo.activeBuild is cleared in it.
+    if (b && b.l === l) builds.delete(run.agentId)
     live.delete(run.id)
     running.delete(run.id)
     const qi = queue.indexOf(run.id)
@@ -628,7 +753,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       if (floor) return finish(l, { status: 'failed', error: floor.message, reason: floor.reason })
       // The bot's slot was taken while the floor was checked (e.g. an undo), or (BE-P2-22) its tools
       // started building (vm_install): wait without a machine slot.
-      if (outside(run.agentId) > 0 || isBuilding(run.agentId)) {
+      if (outside(run.agentId) > 0 || heldByBuild(run.agentId, run.id)) {
         requeue(l)
         void pump()
         return
@@ -722,12 +847,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
           if (!l) continue
           // A machine slot is taken only once the bot's own slot is free (its run or an undo).
           // BE-P2-22: nor while its tools are building (it starts on the generation the build leaves).
-          if (busy.has(l.run.agentId) || outside(l.run.agentId) > 0 || isBuilding(l.run.agentId)) continue
+          if (busy.has(l.run.agentId) || outside(l.run.agentId) > 0 || heldByBuild(l.run.agentId, l.run.id)) continue
           busy.add(l.run.agentId)
           queue.splice(queue.indexOf(id), 1)
           running.add(id)
           void track(launch(l))
         }
+        startBuilds()
         updatePositions()
       } while (again)
     } finally {
@@ -784,6 +910,144 @@ export function createRunService(deps: RunServiceDeps): RunService {
     } catch (err) {
       log(`runs: couldn't create logs for ${runId}: ${(err as Error).message}`)
     }
+  }
+
+  const botName = (agentId: string) => deps.getAgent(agentId)?.name?.trim() || 'The bot'
+
+  /** BE-P2-21: the runs a waiting build still waits for (its own runs from before it, plus an undo). */
+  function buildAhead(b: BuildEntry): number {
+    let n = outside(b.l.run.agentId)
+    for (const id of b.waitFor) if (live.has(id)) n++
+    return n
+  }
+
+  /** BE-P2-21: start each waiting build whose bot is free; update the others' positions. */
+  function startBuilds(): void {
+    for (const b of builds.values()) {
+      if (b.started) continue
+      const ahead = buildAhead(b)
+      if (ahead === 0) {
+        b.started = true
+        void track(runBuild(b))
+      } else if (b.l.run.queuePosition !== ahead) {
+        b.l.run.queuePosition = ahead
+        emit(b.l.run, false)
+      }
+    }
+  }
+
+  /** BE-P2-21: progress / hosts: run.updated at most once per BUILD_UPDATE_MS (and vm.updated on a step change). */
+  function buildTick(b: BuildEntry): void {
+    if (b.tick) return
+    const wait = Math.max(0, b.lastEmit + BUILD_UPDATE_MS - Date.now())
+    b.tick = setTimeout(() => {
+      b.tick = undefined
+      if (builds.get(b.l.run.agentId) !== b) return
+      b.lastEmit = Date.now()
+      emit(b.l.run, false)
+      if (b.vmDirty) {
+        b.vmDirty = false
+        deps.onRunsChanged?.(b.l.run.agentId)
+      }
+    }, wait)
+    b.tick.unref?.()
+  }
+
+  async function runBuild(b: BuildEntry): Promise<void> {
+    const { l, spec } = b
+    const run = l.run
+    const build = run.build!
+    try {
+      const agent = deps.getAgent(run.agentId)
+      if (!agent) return finish(l, { status: 'failed', error: 'Bot not found.' })
+      if (l.controller.signal.aborted) return finish(l, { status: 'stopped', reason: BUILD_STOPPED_REASON, error: buildStoppedText(botName(run.agentId), build.fromGeneration) })
+      // The generation it starts from (a queued build may have waited).
+      build.fromGeneration = agent.vm.image.generation
+      build.generation = build.fromGeneration + 1
+      build.base = agent.vm.image.base
+      const fds: Live['fds'] = {}
+      try {
+        mkdirSync(dirOf(l.slug), { recursive: true })
+        fds.stdout = openSync(fileOf(l.slug, run.id, 'stdout.log'), 'a')
+        fds.stderr = openSync(fileOf(l.slug, run.id, 'stderr.log'), 'a')
+      } catch (err) {
+        log(`runs: couldn't open logs for ${run.id}: ${(err as Error).message}`)
+      }
+      l.fds = fds
+      run.status = 'running'
+      run.startedAt = now().toISOString()
+      delete run.queuePosition
+      delete run.queuedReason
+      changed({ run, slug: l.slug })
+      deps.onRunsChanged?.(run.agentId)
+      b.limit = setTimeout(() => {
+        b.timedOut = true
+        l.controller.abort()
+      }, deps.toolBuildTimeoutMs ?? TOOL_BUILD_TIMEOUT_MS)
+      b.limit.unref?.()
+      const ctl: ToolBuildControl = {
+        signal: l.controller.signal,
+        onOutput: (stream, chunk) => onOutput(l, stream, chunk),
+        onProgress: (p) => {
+          if (!live.has(run.id)) return
+          const prev = build.progress
+          build.progress = { step: p.step, steps: p.steps, label: p.label }
+          if (!prev || prev.step !== p.step || prev.steps !== p.steps) b.vmDirty = true
+          buildTick(b)
+        },
+        onHosts: (hosts) => {
+          if (!live.has(run.id)) return
+          const c = capHostContacts(hosts)
+          run.hostsContacted = c.hosts
+          if (c.total !== undefined) run.hostsContactedTotal = c.total
+          else delete run.hostsContactedTotal
+          b.vmDirty = true
+          buildTick(b)
+        },
+      }
+      log(`runs: ${l.slug}: tool build ${run.id} (version ${build.generation}) started`)
+      let res: Awaited<ReturnType<ToolBuildSpec['build']>>
+      try {
+        res = await spec.build(ctl, agent)
+      } catch (err) {
+        const e = err as Error & { statusCode?: number; reason?: string; stopped?: boolean; timedOut?: boolean; buildLog?: string }
+        const bot = botName(run.agentId)
+        if (b.timedOut || e.timedOut) {
+          return finish(l, { status: 'timed_out', error: buildTimedOutText(bot, build.fromGeneration) })
+        }
+        if (e.stopped || l.controller.signal.aborted) {
+          return finish(l, { status: 'stopped', reason: BUILD_STOPPED_REASON, error: buildStoppedText(bot, build.fromGeneration) })
+        }
+        // The engine's own line goes to the log; the card shows the plain sentence.
+        if (!run.outputBytes && e.buildLog) onOutput(l, 'stdout', e.buildLog.endsWith('\n') ? e.buildLog : `${e.buildLog}\n`)
+        onOutput(l, 'stderr', `${e.message}\n`)
+        if (e.reason === 'proxy_unavailable') return finish(l, { status: 'failed', reason: e.reason, error: e.message })
+        return finish(l, { status: 'failed', reason: BUILD_FAILED_REASON, error: buildFailedText(bot, build.fromGeneration) })
+      }
+      if (!run.outputBytes && res.log) onOutput(l, 'stdout', res.log.endsWith('\n') ? res.log : `${res.log}\n`)
+      const patch: Partial<ScriptRunWithReason> = { status: 'succeeded', exitCode: 0 }
+      build.generation = res.generation
+      if (res.hosts) {
+        const c = capHostContacts(res.hosts)
+        patch.hostsContacted = c.hosts
+        const total = Math.max(res.hostsTotal ?? 0, c.total ?? 0)
+        if (total > c.hosts.length) patch.hostsContactedTotal = total
+      }
+      finish(l, patch)
+    } catch (err) {
+      if (live.has(run.id)) finish(l, { status: 'failed', reason: BUILD_FAILED_REASON, error: buildFailedText(botName(run.agentId), build.fromGeneration) })
+      log(`runs: tool build ${run.id} failed: ${(err as Error).message}`)
+    }
+  }
+
+  /** BE-P2-21: Stop on a build: a waiting one ends at once; a running one is killed (BotEnv removes the half-built image). */
+  function stopBuild(b: BuildEntry): boolean {
+    if (!b.started) {
+      finish(b.l, { status: 'stopped', reason: BUILD_STOPPED_REASON, error: buildStoppedText(botName(b.l.run.agentId), b.l.run.build!.fromGeneration) })
+      return true
+    }
+    b.l.controller.abort()
+    return false
   }
 
   // A bot's slot freed (or taken) outside RunService: start what can start, refresh positions.
@@ -891,11 +1155,13 @@ export function createRunService(deps: RunServiceDeps): RunService {
         if (!service.get(runId)) fail(404, 'Run not found.')
         failWithReason(409, 'not_active', "This run isn't queued or running.")
       }
-      if (queue.includes(runId)) {
+      const b = builds.get(l.run.agentId)
+      if (b && b.l === l) {
+        if (stopBuild(b)) return l.run
+      } else if (queue.includes(runId)) {
         finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
         return l.run
-      }
-      l.controller.abort()
+      } else l.controller.abort()
       const t = new Promise<null>((r) => setTimeout(() => r(null), 15_000).unref?.())
       return (await Promise.race([l.done, t])) ?? l.run
     },
@@ -904,7 +1170,9 @@ export function createRunService(deps: RunServiceDeps): RunService {
       for (const l of [...live.values()]) {
         if (l.run.agentId !== agentId) continue
         n++
-        if (queue.includes(l.run.id)) finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
+        const b = builds.get(agentId)
+        if (b && b.l === l) stopBuild(b)
+        else if (queue.includes(l.run.id)) finish(l, { status: 'stopped', error: STOPPED_QUEUED_TEXT })
         else l.controller.abort()
       }
       await Promise.resolve(deps.runner.stopRuns(agentId))
@@ -1038,6 +1306,71 @@ export function createRunService(deps: RunServiceDeps): RunService {
         unlockBuild(agentId)
       }
     },
+    async startToolBuild(spec) {
+      load()
+      const agent = deps.getAgent(spec.agentId)
+      if (!agent) fail(404, 'Bot not found.')
+      if (isBuilding(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
+      const waitFor = new Set<string>()
+      for (const l of live.values()) if (l.run.agentId === agent.id) waitFor.add(l.run.id)
+      if (!spec.waitForRuns && waitFor.size + outside(agent.id) > 0) failWithReason(409, 'run_active', "Wait for the bot's run to finish first.")
+      const missing = deps.filesMissing?.(agent)
+      if (missing) failWithReason(409, 'files_missing', missing)
+      await spec.precheck?.(agent)
+      const floor = await freeFloorBlock()
+      if (floor) failWithReason(409, floor.reason, floor.message)
+      // Again: the awaits above let another build in.
+      if (isBuilding(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
+      const conversationId = typeof spec.conversationId === 'function' ? spec.conversationId() : spec.conversationId
+      const id = deps.newRunId()
+      const run = baseRun(
+        { agentId: agent.id, conversationId, context: spec.context ?? { kind: 'dm' }, argv: spec.argv, cwd: 'workspace', why: TOOL_BUILD_WHY.rebuild, kind: 'tool_build', network: spec.network, ...(spec.agentRunId ? { agentRunId: spec.agentRunId } : {}) },
+        agent,
+        id,
+      )
+      run.permissions = spec.permissions.map((p) => ({ ...p }))
+      run.build = {
+        generation: agent.vm.image.generation + 1,
+        fromGeneration: agent.vm.image.generation,
+        packages: [...spec.packages],
+        added: [...spec.added],
+        ...(spec.removed?.length ? { removed: [...spec.removed] } : {}),
+        startedBy: spec.startedBy,
+        via: spec.via,
+        base: agent.vm.image.base,
+      }
+      const l = newLive(run, agent.slug)
+      const b: BuildEntry = { l, spec, waitFor, started: false, timedOut: false, lastEmit: 0, vmDirty: false }
+      createLogs(agent.slug, id)
+      live.set(id, l)
+      builds.set(agent.id, b)
+      const ahead = buildAhead(b)
+      if (ahead > 0) {
+        run.queuePosition = ahead
+        run.queuedReason = 'slot'
+      }
+      changed({ run, slug: agent.slug })
+      log(`runs: ${agent.slug}: tool build ${id} recorded (${spec.via}, ${ahead ? `waits for ${ahead} run(s)` : 'starting'})`)
+      // Queued runs of the bot now wait for it ("Queued · after tool build").
+      updatePositions()
+      deps.onRunsChanged?.(agent.id)
+      await pump()
+      return run
+    },
+    activeBuild(agentId) {
+      const b = builds.get(agentId)
+      const run = b?.l.run
+      const build = run?.build
+      if (!run || !build || !isActive(run.status)) return null
+      return {
+        runId: run.id,
+        status: run.status === 'running' ? 'running' : run.status === 'waiting_permission' ? 'waiting_permission' : 'queued',
+        ...(run.startedAt ? { startedAt: run.startedAt } : {}),
+        build: { ...build },
+        internet: internetOf(run),
+        hosts: reachedHosts(run.hostsContacted ?? []),
+      }
+    },
     modelResult(run) {
       return {
         status: run.status,
@@ -1076,6 +1409,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
         full.error = wasRunning ? RESTART_RUNNING_TEXT : RESTART_QUEUED_TEXT
         delete full.queuePosition
         delete full.queuedReason
+        // BE-P2-21: a build left by a restart keeps its generation (BotEnv saves only on success).
+        if (full.build) delete full.build.progress
         full.endedAt = now().toISOString()
         if (full.startedAt) full.durationMs = Math.max(0, Date.parse(full.endedAt) - Date.parse(full.startedAt))
         const o = recovered.get(full.id)

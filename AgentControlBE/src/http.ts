@@ -30,3 +30,8 @@ export function failWithReason(status: number, reason: string, message: string, 
 export function uid(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`
 }
+
+/** The one 409 `internet_never` text (approved mockup / FE-9 run card), word for word. */
+export function internetNeverText(botName: string): string {
+  return `Internet is set to Never for ${botName}, so this run didn't start. Change it in Settings › VM.`
+}

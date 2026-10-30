@@ -23,3 +23,19 @@ describe('runMessageContent', () => {
     expect(runMessageContent({ ...base, kind: 'undo', status: 'failed' })).toBe('Undo of export_report.py (failed)')
   })
 })
+
+describe('BE-P2-21: tool build cards', () => {
+  const build = { via: 'rebuild' as const, startedBy: 'user' as const, base: 'base' as const, generation: 3, fromGeneration: 2, packages: [] as string[], added: [] as string[] }
+  const tb = { kind: 'tool_build' as const, name: 'Rebuild tools', build }
+  it('names the bot and the version while building and when built', () => {
+    expect(runMessageContent({ ...tb, status: 'queued' }, 'Analyst')).toBe("Building Analyst's tools (version 3)")
+    expect(runMessageContent({ ...tb, status: 'running' }, 'Analyst')).toBe("Building Analyst's tools (version 3)")
+    expect(runMessageContent({ ...tb, status: 'succeeded' }, 'Analyst')).toBe("Built Analyst's tools (version 3)")
+    expect(runMessageContent({ ...tb, status: 'succeeded' })).toBe("Built the bot's tools (version 3)")
+  })
+  it('a build that did not finish', () => {
+    expect(runMessageContent({ ...tb, status: 'stopped' }, 'Analyst')).toBe('Tool build (stopped)')
+    expect(runMessageContent({ ...tb, status: 'failed' }, 'Analyst')).toBe('Tool build (failed)')
+    expect(runMessageContent({ ...tb, status: 'timed_out' }, 'Analyst')).toBe('Tool build (timed out)')
+  })
+})

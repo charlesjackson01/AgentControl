@@ -26,6 +26,10 @@ export const RUN_SCRIPT_TOOL_TIMEOUT_MS = RUN_SCRIPT_WAIT_MS + 60_000
  * extra minute lets the build's own limit end first. (BE-P2-13 landed this fix for BE-P2-21.)
  */
 export const VM_INSTALL_TOOL_TIMEOUT_MS = 31 * 60_000
+/** BE-P2-21: how long vm_install waits for its recorded build before it answers early with a note. */
+export const VM_INSTALL_WAIT_MS = 30 * 60_000
+export const VM_INSTALL_STILL_BUILDING =
+  'The build is still going (it is waiting for your current run, or still installing). Its card in the chat keeps updating; the packages are on your computer from the first run after it finishes.'
 /** Room for two 8 KB tails, JSON escaping and the other fields. */
 export const RUN_SCRIPT_RESULT_MAX_CHARS = 20_000
 export const MAX_SCRIPT_CHARS = 16_000
@@ -40,8 +44,15 @@ export interface VmToolHost {
   wait(runId: string): Promise<ScriptRun>
   stop(runId: string): Promise<unknown>
   modelResult(run: ScriptRun): ModelRunResult
-  /** BotEnvService.vmInstall (400 / 409 / 502 via fail()). */
-  vmInstall(agentId: string, packages: string[]): Promise<{ generation: number; log: string }>
+  /**
+   * BotEnvService.vmInstall (400 / 409 / 502 via fail()). BE-P2-21: an online build is recorded
+   * (a tool_build run with a card in `where.conversationId`) and returned as `{run}` to wait for.
+   */
+  vmInstall(
+    agentId: string,
+    packages: string[],
+    where?: { conversationId: string; context: { kind: 'dm' } | { kind: 'group'; groupId: string }; agentRunId?: string },
+  ): Promise<{ generation: number; log: string } | { run: ScriptRun }>
   /** Whether the tools are offered to this bot now (its runs aren't blocked on this machine). */
   offered(agentId: string): boolean
   /** The bot's DM conversation id (created if needed), for a DM run without one. */
@@ -191,7 +202,7 @@ function runResult(run: ScriptRun, host: VmToolHost, ctx: ToolContext): Record<s
   return fitResult(base, Math.min(ctx.resultMaxChars ?? RUN_SCRIPT_RESULT_MAX_CHARS, RUN_SCRIPT_RESULT_MAX_CHARS) - 50)
 }
 
-async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext): Promise<ScriptRun> {
+async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext, waitMs = RUN_SCRIPT_WAIT_MS): Promise<ScriptRun> {
   const signal = ctx.signal
   let timer: ReturnType<typeof setTimeout> | undefined
   let onAbort: (() => void) | undefined
@@ -199,7 +210,7 @@ async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext): Prom
     return await Promise.race([
       host.wait(run.id),
       new Promise<ScriptRun>((resolve) => {
-        timer = setTimeout(() => resolve(run), ctx.vmWaitMs ?? RUN_SCRIPT_WAIT_MS)
+        timer = setTimeout(() => resolve(run), ctx.vmWaitMs ?? waitMs)
         timer.unref?.()
       }),
       new Promise<ScriptRun>((resolve) => {
@@ -219,6 +230,23 @@ async function waitFor(host: VmToolHost, run: ScriptRun, ctx: ToolContext): Prom
 }
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+/** BE-P2-21: what vm_install answers for its recorded build (an ended build that didn't succeed is a tool error). */
+function buildResult(run: ScriptRun, apt: string[]): Record<string, unknown> {
+  const tail = (run.stdoutTail || '').slice(-2000)
+  if (run.status === 'succeeded') {
+    return {
+      installed: apt,
+      generation: run.build?.generation,
+      note: 'Installed. The packages are on your computer from your next run.',
+      ...(tail ? { logTail: tail } : {}),
+    }
+  }
+  if (SCRIPT_RUN_ACTIVE.includes(run.status)) {
+    return { installed: [], runId: run.id, status: run.status, generation: run.build?.generation, note: VM_INSTALL_STILL_BUILDING }
+  }
+  throw new Error(run.error || `The tool build ended ${run.status}.`)
+}
 
 export const vmTools: ToolEntry[] = [
   {
@@ -309,12 +337,19 @@ export const vmTools: ToolEntry[] = [
       const example = { apt: ['ffmpeg'] }
       const apt = readList(args, 'apt', { max: 100, example })
       if (!apt || apt.length === 0) throw argError('"apt" is required: a list of Debian package names.', example)
-      let built: { generation: number; log: string }
+      let result: Awaited<ReturnType<VmToolHost['vmInstall']>>
       try {
-        built = await host.vmInstall(ctx.agentId, apt)
+        const conversationId = ctx.group ? ctx.group.id : (ctx.conversationId ?? host.dmConversation(ctx.agentId))
+        result = await host.vmInstall(ctx.agentId, apt, {
+          conversationId,
+          context: ctx.group ? { kind: 'group', groupId: ctx.group.id } : { kind: 'dm' },
+          ...(ctx.runId ? { agentRunId: ctx.runId } : {}),
+        })
       } catch (err) {
         throw new Error(errText(err))
       }
+      if ('run' in result) return buildResult(await waitFor(host, result.run, ctx, VM_INSTALL_WAIT_MS), apt)
+      const built = result
       const log = built.log.length > 2000 ? built.log.slice(-2000) : built.log
       return {
         installed: apt,

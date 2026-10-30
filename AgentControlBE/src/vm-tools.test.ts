@@ -15,7 +15,7 @@ import type { Agent, AgentRun, ConversationSummary, ScriptRun, VmHostInfo } from
 import { createStore } from './store.js'
 import { builtinTools, executeToolCall } from './tools.js'
 import type { ToolContext } from './tools/types.js'
-import { BROWSER_NOT_ON, resolveCwd, RUN_SCRIPT_RESULT_MAX_CHARS, VM_INSTALL_TOOL_TIMEOUT_MS, vmToolNames, type VmToolHost } from './tools/vm.js'
+import { BROWSER_NOT_ON, resolveCwd, RUN_SCRIPT_RESULT_MAX_CHARS, VM_INSTALL_STILL_BUILDING, VM_INSTALL_TOOL_TIMEOUT_MS, vmToolNames, type VmToolHost } from './tools/vm.js'
 import { BUILD_TIMEOUT_MS } from './bot-env.js'
 import { BROWSER_LAUNCH_NOTE } from './vm-images.js'
 
@@ -341,5 +341,46 @@ describe('BE-P2-16 tool module', () => {
     expect(JSON.parse(out.content)).toMatchObject({ installed: ['jq'], generation: 3, logTail: 'Setting up jq' })
     expect(seen).toEqual([['jq']])
     expect((await call(base({ vm: h }), 'vm_install', {})).content).toContain('"apt" is required')
+  })
+
+  it('BE-P2-21: vm_install with a recorded build waits for it: succeeded → the generation; failed → a tool error; still going → a note', async () => {
+    const queued = { id: 'tb_1', kind: 'tool_build', status: 'queued', queuedReason: 'slot', build: { generation: 4 } } as unknown as ScriptRun
+    const where: unknown[] = []
+    let ended: ScriptRun = { ...queued, status: 'succeeded', stdoutTail: 'Step 2 of 3: apt-get install\n' }
+    const h = fakeHost({}, {
+      vmInstall: async (_id, _p, w) => (where.push(w), { run: queued }),
+      wait: async () => ended,
+    })
+    let out = await call(base({ vm: h }), 'vm_install', { apt: ['jq'] })
+    expect(out.ok).toBe(true)
+    expect(JSON.parse(out.content)).toMatchObject({ installed: ['jq'], generation: 4, logTail: expect.stringContaining('apt-get install') })
+    // The call's chat and agent run are the card's place.
+    expect(where).toEqual([{ conversationId: 'dm_x', context: { kind: 'dm' }, agentRunId: 'run_x' }])
+    await call(base({ vm: h, group: { id: 'g1', slug: 'crew' } } as Partial<ToolContext>), 'vm_install', { apt: ['jq'] })
+    expect(where[1]).toMatchObject({ conversationId: 'g1', context: { kind: 'group', groupId: 'g1' } })
+
+    ended = { ...queued, status: 'failed', reason: 'build_failed', error: 'The build failed, so Analyst keeps its current tools (version 3). Nothing else changed.' } as ScriptRun
+    out = await call(base({ vm: h }), 'vm_install', { apt: ['jq'] })
+    expect(out.ok).toBe(false)
+    expect(out.content).toContain('keeps its current tools (version 3)')
+
+    const slow = fakeHost({}, { vmInstall: async () => ({ run: queued }) })
+    out = await call(base({ vm: slow, vmWaitMs: 5 }), 'vm_install', { apt: ['jq'] })
+    expect(out.ok).toBe(true)
+    expect(JSON.parse(out.content)).toMatchObject({ installed: [], runId: 'tb_1', status: 'queued', note: VM_INSTALL_STILL_BUILDING })
+    expect(slow.stopped).toEqual([])
+
+    // The user stops the reply: its build is stopped too (one Stop route).
+    const ac = new AbortController()
+    const stopping = fakeHost({}, { vmInstall: async () => ({ run: queued }) })
+    stopping.stop = async (id) => (stopping.stopped.push(id), { ...queued, status: 'stopped' } as ScriptRun)
+    let calls = 0
+    stopping.wait = async () => (calls++ === 0 ? new Promise<ScriptRun>(() => {}) : ({ ...queued, status: 'stopped', error: 'Stopped. Analyst keeps its current tools (version 3).' } as ScriptRun))
+    const p = call(base({ vm: stopping, signal: ac.signal } as Partial<ToolContext>), 'vm_install', { apt: ['jq'] })
+    await new Promise((r) => setTimeout(r, 5))
+    ac.abort()
+    const stopped = await p
+    expect(stopping.stopped).toEqual(['tb_1'])
+    expect(stopped.content).toContain('keeps its current tools')
   })
 })

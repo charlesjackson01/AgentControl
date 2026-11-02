@@ -10,9 +10,11 @@ npm install
 npm run dev      # tsx watch on http://127.0.0.1:3001
 npm run build    # tsc -> dist/ and copy SKILL.md seeds (cross-platform)
 npm start        # node dist/index.js
-npm test         # vitest (hermetic, no network)
+npm test         # vitest (hermetic, no network; fails any test that runs podman/docker, see below)
 npm run typecheck
 ```
+
+Unit tests never call the host's container engine: `src/engine-guard.test-setup.ts` (vitest `setupFiles`) fails any test that starts `podman` or `docker` through `node:child_process`, so a missing fake shows up on every machine, not only on one with a real engine. It is off for `AC_VM_TESTS=1` runs and in `*.vm.test.ts` files; see `vm/README.md` for those.
 
 ## Configuration (environment variables)
 

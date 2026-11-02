@@ -8,5 +8,7 @@ export default defineConfig({
     // @vm suites (AC_VM_TESTS=1) share one engine and check that no probe containers are left over,
     // so they run one file at a time; the unit suites stay parallel.
     fileParallelism: process.env.AC_VM_TESTS !== '1',
+    // Unit tests fail on any podman/docker call (off for AC_VM_TESTS=1 and *.vm.test.ts).
+    setupFiles: ['./src/engine-guard.test-setup.ts'],
   },
 })

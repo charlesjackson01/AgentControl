@@ -6,7 +6,8 @@
  *   AC_E2E_PORT=3099 node e2e/fake-be.mjs
  *
  * Cookie `ac-e2e-scene` is `mac` (default), `linux`, or `windows` (storage.backend === 'wsl').
- * Cookie `ac-e2e-restore=tools-fail` makes POST .../restore return tools:'failed' for each bot.
+ * Cookie `ac-e2e-restore=tools-fail` makes each restore agent a mixed toolResults:
+ * apt started, pip failed, npm not_needed, opt not_restorable.
  * POST /__e2e/reset restores the in-memory world between tests.
  */
 import http from 'node:http'
@@ -31,10 +32,37 @@ function sceneOf(req) {
   return 'mac'
 }
 
-/** Settings › VMs specs set this so a restore answers with tools:'failed' and a toolsMessage. */
+/** Settings › VMs specs set this so a restore mixes started, failed, and not_restorable tools. */
 function restoreToolsFail(req) {
   const cookie = req.headers.cookie ?? ''
   return /(?:^|;\s*)ac-e2e-restore=tools-fail(?:;|$)/.test(cookie)
+}
+
+const PIP_FAIL = "Internet is set to Never for Analyst, so this build didn't start. Change it in Settings › VM."
+const OPT_FAIL = "These programs in /opt/bot/bin can't be reinstalled from a backup: ffmpeg, yt-dlp. Ask the bot to set them up again."
+
+/** Always apt, pip, npm, opt. The quiet path is all not_needed; the cookie path is mixed. */
+function toolResultsFor(fail) {
+  if (!fail) {
+    return [
+      { kind: 'apt', status: 'not_needed', items: [] },
+      { kind: 'pip', status: 'not_needed', items: [] },
+      { kind: 'npm', status: 'not_needed', items: [] },
+      { kind: 'opt', status: 'not_needed', items: [] },
+    ]
+  }
+  return [
+    { kind: 'apt', status: 'started', items: ['curl', 'git'], runId: 'run-apt' },
+    { kind: 'pip', status: 'failed', items: ['requests==2.32.0'], message: PIP_FAIL },
+    { kind: 'npm', status: 'not_needed', items: [] },
+    { kind: 'opt', status: 'not_restorable', items: ['ffmpeg', 'yt-dlp'], message: OPT_FAIL },
+  ]
+}
+
+function restoreAgent(agentId, fail) {
+  const toolResults = toolResultsFor(fail)
+  if (!fail) return { agentId, files: 4, tools: 'not_needed', toolResults }
+  return { agentId, files: 4, tools: 'failed', toolsMessage: `${PIP_FAIL} ${OPT_FAIL}`, toolResults }
 }
 
 /** Settings › VMs specs set this so a waiting permission doesn't count as an active run. */
@@ -223,11 +251,7 @@ async function handle(req, res) {
     const agentIds = found.agentIds?.length ? found.agentIds : [AGENT_ID]
     return send(res, 200, {
       backupId: found.id,
-      agents: agentIds.map((agentId) => (
-        fail
-          ? { agentId, files: 4, tools: 'failed', toolsMessage: "the tool rebuild didn't start (libssl missing)." }
-          : { agentId, files: 4, tools: 'not_needed' }
-      )),
+      agents: agentIds.map((agentId) => restoreAgent(agentId, fail)),
     })
   }
 

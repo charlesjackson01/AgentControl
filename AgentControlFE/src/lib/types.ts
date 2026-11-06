@@ -1258,3 +1258,26 @@ export const PERMISSION_DECISIONS: Readonly<Record<PermissionType, readonly Perm
 export interface BrowserRetryRequest {
   agentId?: string
 }
+
+/* ───────────────────────── Phase 2 M3 (FE-P2-6): backups. Not in BE shared/types.ts until BE-P2-18. Re-sync this block when that lands. ───────────────────────── */
+
+/** One host backup (GET /api/vm/backups, newest first). */
+export interface BackupInfo {
+  id: string
+  createdAt: string
+  trigger: 'nightly' | 'manual' | 'pre_reset' | 'pre_upgrade'
+  agentIds: string[]
+  bytes: number
+  path: string
+  status: 'complete' | 'failed' | 'in_progress'
+  error?: string
+}
+/** POST /api/vm/backups. Empty or omitted agentIds backs up every bot. */
+export interface BackupCreateBody {
+  agentIds?: string[]
+}
+/** POST /api/vm/backups/:id/restore. confirm:true is required (400 without). */
+export interface BackupRestoreBody {
+  agentIds?: string[]
+  confirm: true
+}

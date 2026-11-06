@@ -9,7 +9,9 @@ import { MAX_OUTPUT_TOKENS_HINT, MAX_OUTPUT_TOKENS_PLACEHOLDER, maxOutputTokensL
 import { DISABLE_THINKING_HINT, disableThinkingPatch } from '../lib/run-reply'
 import { MASKED_PROXY_HINT, PROXY_URL_HINT, endpointTestNote, isMaskedProxy, maskedProxyWarning, proxyUrlPatch, validateProxyUrl } from '../lib/endpoint-proxy'
 import UserProfileForm from '../components/UserProfileForm'
+import VmsSection from '../components/settings/VmsSection'
 import { useProfile } from '../state/profile-context'
+import { ACCOUNT_SECTIONS, SETTINGS_SUBTITLE, SETTINGS_TITLE, accountSection, type AccountSection } from '../lib/vms-page'
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
@@ -401,16 +403,37 @@ function EndpointsSection() {
   )
 }
 
-/** "Profile & endpoints" from the account menu (FE-1): today's Settings, as a modal. */
-export default function SettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+/** Account settings (FE-1, FE-P2-6): left nav, one section at a time. VMs is Settings › VMs. */
+export default function SettingsDialog({ open, section, onSection, onClose }: { open: boolean; section: AccountSection; onSection: (section: AccountSection) => void; onClose: () => void }) {
   return (
-    <Dialog open={open} title="Profile & endpoints" subtitle="Your profile, model endpoints, and appearance." size="lg" onClose={onClose}>
-      {open && <SettingsContent />}
+    <Dialog open={open} title={SETTINGS_TITLE} subtitle={SETTINGS_SUBTITLE} size="lg" panelClassName="dialog--settings" onClose={onClose}>
+      {open && (
+        <div className="settings-layout">
+          <nav className="settings-nav" aria-label="Settings sections">
+            {ACCOUNT_SECTIONS.map((s) => (
+              <button key={s.id} type="button" className={`settings-nav__item${section === s.id ? ' settings-nav__item--on' : ''}`} aria-current={section === s.id ? 'page' : undefined} onClick={() => onSection(s.id)}>
+                {s.label}
+              </button>
+            ))}
+          </nav>
+          <div className="settings-main">
+            <SettingsContent section={section} />
+            <label className="settings-jump">
+              Section
+              <select value={section} onChange={(e) => onSection(accountSection(e.target.value))}>
+                {ACCOUNT_SECTIONS.map((s) => (
+                  <option key={s.id} value={s.id}>{s.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </div>
+      )}
     </Dialog>
   )
 }
 
-function SettingsContent() {
+function SettingsContent({ section }: { section: AccountSection }) {
   const { theme, setTheme } = useTheme()
   const [autoRun, setAutoRun] = useState(true)
   const [notify, setNotify] = useState(true)
@@ -418,10 +441,10 @@ function SettingsContent() {
 
   return (
     <div className="cf-settings">
-      <ProfileSection />
-      <EndpointsSection />
+      {section === 'profile' && <ProfileSection />}
+      {section === 'endpoints' && <EndpointsSection />}
 
-      <section className="section">
+      {section === 'appearance' && <section className="section">
         <div className="section__head">
           <h2 className="section__title">Appearance</h2>
         </div>
@@ -457,9 +480,11 @@ function SettingsContent() {
             </div>
           </div>
         </div>
-      </section>
+      </section>}
 
-      <section className="section">
+      {section === 'vms' && <VmsSection />}
+
+      {section === 'runtime' && <section className="section">
         <div className="section__head">
           <h2 className="section__title">Runtime</h2>
         </div>
@@ -492,9 +517,9 @@ function SettingsContent() {
             </div>
           </div>
         </div>
-      </section>
+      </section>}
 
-      <section className="section">
+      {section === 'danger' && <section className="section">
         <div className="section__head">
           <h2 className="section__title">Danger zone</h2>
         </div>
@@ -511,7 +536,7 @@ function SettingsContent() {
             </div>
           </div>
         </div>
-      </section>
+      </section>}
     </div>
   )
 }

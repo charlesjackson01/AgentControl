@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Outlet, useMatch, useNavigate } from 'react-router-dom'
+import { Outlet, useMatch, useNavigate, useSearchParams } from 'react-router-dom'
 import ChatList from './shell/ChatList'
 import CommandPalette from './shell/CommandPalette'
 import NewBotDialog from './NewBotDialog'
@@ -16,6 +16,7 @@ import { useProfile } from '../state/profile-context'
 import { useConversations } from '../state/conversations-context'
 import { ShellContext, type ShellState } from '../state/shell-context'
 import { needsOnboarding } from '../lib/profile'
+import { accountSection, type AccountSection } from '../lib/vms-page'
 import { commandAction, type CommandContext, type CommandName } from '../lib/commands'
 import { chatListUnread, readChatListOpen, shellShortcut, writeChatListOpen } from '../lib/shell'
 import { MOBILE_BACK_PATH, MOBILE_QUERY } from '../lib/mobile'
@@ -71,7 +72,9 @@ function Shell() {
   const narrow = useNarrow()
   const [desktopOpen, setDesktopOpen] = useState(() => readChatListOpen(storage()))
   const [switcherOpen, setSwitcherOpen] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [params] = useSearchParams()
+  const [settingsOpen, setSettingsOpen] = useState(() => params.get('settings') != null)
+  const [settingsSection, setSettingsSection] = useState<AccountSection>(() => accountSection(params.get('settings')))
   const [newBotOpen, setNewBotOpen] = useState(false)
   const [newGroupOpen, setNewGroupOpen] = useState(false)
   const muted = useMutedGroups()
@@ -96,7 +99,10 @@ function Shell() {
 
   const openSwitcher = useCallback(() => setSwitcherOpen(true), [])
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), [])
-  const openSettings = useCallback(() => setSettingsOpen(true), [])
+  const openSettings = useCallback((section?: AccountSection) => {
+    setSettingsSection(accountSection(section))
+    setSettingsOpen(true)
+  }, [])
   const openNewBotForm = useCallback((prefill?: AgentPrefill) => {
     setSwitcherOpen(false)
     setPaletteOpen(false)
@@ -169,7 +175,7 @@ function Shell() {
           {paletteOpen && <CommandPalette ctx={commandCtx} />}
         </div>
       </div>
-      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsDialog open={settingsOpen} section={settingsSection} onSection={setSettingsSection} onClose={() => setSettingsOpen(false)} />
       <NewBotDialog open={newBotOpen} prefill={newBotPrefill} onClose={() => setNewBotOpen(false)} />
       <NewGroupDialog open={newGroupOpen} onClose={() => setNewGroupOpen(false)} />
     </ShellContext.Provider>

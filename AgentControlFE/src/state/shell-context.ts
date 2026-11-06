@@ -1,5 +1,6 @@
 import type { AgentPrefill } from '../components/AgentProfile'
 import type { CommandName } from '../lib/commands'
+import type { AccountSection } from '../lib/vms-page'
 import { createContext, useContext } from 'react'
 
 export type ShellState = {
@@ -22,7 +23,8 @@ export type ShellState = {
    * once it has run (dialog opened / navigated).
    */
   runCommand: (name: CommandName, args?: string) => string | null
-  openSettings: () => void
+  /** Opens account Settings. A section jumps straight there (the per-bot VM tab uses 'vms'). */
+  openSettings: (section?: AccountSection) => void
   openNewBot: () => void
   /** FE-5: the full New bot form, prefilled from the /new draft card. */
   openNewBotForm: (prefill?: AgentPrefill) => void

@@ -70,13 +70,22 @@ describe('vm api routes', () => {
     await api.getProbe()
     await api.recheckProbe()
     await api.growMachine(80)
+    await api.listBackups()
+    await api.createBackup({})
+    await api.restoreBackup('b/1', { confirm: true })
     assert.deepEqual(calls, [
       ['GET', '/api/vm/host', undefined],
       ['GET', '/api/vm/settings', undefined],
       ['PATCH', '/api/vm/settings', { snapshotBudget: { perBotMb: 2048 } }],
       ['GET', '/api/vm/probe', undefined],
       ['POST', '/api/vm/probe', undefined],
+      ['headers', { 'x-agentcontrol-confirm': '1' }],
       ['POST', '/api/vm/machine/grow', { toGb: 80 }],
+      ['GET', '/api/vm/backups', undefined],
+      ['POST', '/api/vm/backups', {}],
+      ['headers', { 'x-agentcontrol-confirm': '1' }],
+      ['POST', '/api/vm/backups/b%2F1/restore', { confirm: true }],
+      ['headers', { 'x-agentcontrol-confirm': '1' }],
     ])
   })
   it('permissions: the pending list, and answers carry the CSRF header', async () => {

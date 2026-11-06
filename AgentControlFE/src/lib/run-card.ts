@@ -202,9 +202,14 @@ export const HOST_BLOCKED_TEXT: Record<HostBlockReason, string> = {
 }
 
 /** Card error copy when the run carries a reason but no `error` text (the BE's text is shown as is otherwise). */
+/** M3 decision 4: a tool build's 409 internet_never names the build, not the run. */
+export function internetNeverText(botName: string, build = false): string {
+  return `Internet is set to Never for ${botName}, so this ${build ? 'build' : 'run'} didn't start. Change it in Settings › VM.`
+}
+
 export function reasonErrorText(
   reason: string | undefined,
-  ctx: { botName?: string; browser?: boolean; hosts?: readonly HostContact[]; build?: ToolBuildInfo; status?: ScriptRunStatus },
+  ctx: { botName?: string; browser?: boolean; hosts?: readonly HostContact[]; build?: ToolBuildInfo; status?: ScriptRunStatus; kind?: ScriptRunKind },
 ): string | null {
   const bot = ctx.botName || 'The bot'
   const kept = ctx.build ? ` (version ${ctx.build.fromGeneration})` : ''
@@ -214,7 +219,7 @@ export function reasonErrorText(
     case 'permission_timeout':
       return "No answer in 10 minutes, so this run didn't start. No files changed."
     case 'internet_never':
-      return `Internet is set to Never for ${bot}, so this run didn't start. Change it in Settings › VM.`
+      return internetNeverText(bot, Boolean(ctx.build) || ctx.kind === 'tool_build')
     case 'network_off':
       return `This run was started with the internet off, so connecting failed. ${bot} can run it again with the internet on.`
     case 'proxy_unavailable':
@@ -558,10 +563,14 @@ export function runCardView(input: RunCardInput): RunCardView {
   const out = input.output ?? { stdout: run.stdoutTail, stderr: run.stderrTail }
   const stdout = out.stdout.trim() ? tailLines(out.stdout) : ''
   const stderr = out.stderr.trim() ? tailLines(out.stderr) : ''
+  const reasonCtx = { botName: input.botName, browser: run.browser, hosts: run.hostsContacted ?? summary?.hostsContacted, build, status, kind }
+  // Decision 4: a tool build's stored run-sentence is rewritten to the build sentence.
+  const buildNever = reason === 'internet_never' && (kind === 'tool_build' || build) ? reasonErrorText(reason, reasonCtx) : null
   const errText =
+    buildNever ||
     run.error?.trim() ||
     summary?.error?.trim() ||
-    reasonErrorText(reason, { botName: input.botName, browser: run.browser, hosts: run.hostsContacted ?? summary?.hostsContacted, build, status }) ||
+    reasonErrorText(reason, reasonCtx) ||
     null
   let log: RunLog | null = null
   let error: string | null = null

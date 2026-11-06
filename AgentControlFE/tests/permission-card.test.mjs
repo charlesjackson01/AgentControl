@@ -282,7 +282,7 @@ describe('browser card (mockups 03, 04, 05, 09)', () => {
     assert.equal(text(v.title), 'Not enough space to turn on the browser')
     assert.equal(text(v.sub), 'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
     assert.deepEqual([v.pill, v.buttons.map((b) => [b.label, b.cls])], ['✕ Low disk', [['Try again', 'plain']]])
-    assert.equal(text(failed({ ...e, neededBytes: 1343e6, freeBytes: 2.5 * 1024 ** 3 }).sub), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free.')
+    assert.equal(text(failed({ ...e, neededBytes: 1343e6, freeBytes: 2.5 * 1024 ** 3 }).sub), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free. Free some space, then try again.')
     assert.equal(text(failed({ ...e, reused: true, freeBytes: 1 * 1024 ** 3 }).sub), LOW_DISK_TEXT)
     assert.equal(text(failed(e).sub), 'server text')
   })

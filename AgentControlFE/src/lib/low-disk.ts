@@ -3,7 +3,8 @@
  * shared by the /new card (FE-P2-7, 409 low_disk), the browser permission card (FE-P2-3, setup error) and the
  * VM tab's browser row (FE-P2-10, setup error; browserLowDiskText):
  * - free < the download (1343 MB): the mockup 09 sentence;
- * - download ≤ free < download + the 3 GB run floor: the 2nd sentence, exactly as written (no "Free some space…");
+ * - download ≤ free < download + the 3 GB run floor: the 2nd sentence, plus "Free some space, then try again."
+ *   (M3 decision 4; M2 had left that ending off the 2nd sentence);
  * - download already here (`reused`): only the floor counts; under it, M1's run-floor text (LOW_DISK_TEXT);
  * - no free-space figure: null, and the caller shows the server's `message` (which carries the same text).
  * Sizes compare in bytes; the free figure is bytes ÷ 1024³, one decimal, rounded down; the download stays "about 1.3 GB".
@@ -40,8 +41,16 @@ export function lowDiskText(f: LowDiskFigures | null | undefined): string | null
   const needed = num(f.neededBytes) ?? BROWSER_DOWNLOAD_BYTES
   const has = freeGbText(free)
   if (free < needed) return `The download needs about 1.3 GB and this computer has ${has} free. Free some space, then try again.`
-  if (free < needed + RUN_FREE_FLOOR_BYTES) return `The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has ${has} free.`
+  if (free < needed + RUN_FREE_FLOOR_BYTES) return finishLowDiskSentence(`The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has ${has} free.`)
   return null
+}
+
+/** M3 decision 4: the 2nd low-disk sentence ends "Free some space, then try again." A message that already ends that way is left as it is. */
+export function finishLowDiskSentence(message: string): string {
+  const m = message.trim()
+  if (/Free some space, then try again\.$/.test(m)) return m
+  const floor = m.match(/^(The download needs about 1\.3 GB, plus 3 GB kept free for runs, and this computer has \d+\.\d GB free)\.?$/)
+  return floor ? `${floor[1]}. Free some space, then try again.` : m
 }
 
 /** A 409 body (or a BrowserError) with reason low_disk → the sentence; anything else → null. */
@@ -56,7 +65,7 @@ export function lowDiskTextOf(body: unknown): string | null {
  * `freeBytes` (a figure below 0 counts as 0), else M1's floor text. `reused`: BrowserSetup.download.reused.
  */
 export function browserLowDiskText(e: Pick<BrowserError, 'message' | 'freeBytes'> | undefined, reused = false): string {
-  if (e?.message?.trim()) return e.message.trim()
+  if (e?.message?.trim()) return finishLowDiskSentence(e.message.trim())
   const free = typeof e?.freeBytes === 'number' ? Math.max(0, e.freeBytes) : undefined
   return (free !== undefined ? lowDiskText({ freeBytes: free, reused }) : null) ?? LOW_DISK_TEXT
 }

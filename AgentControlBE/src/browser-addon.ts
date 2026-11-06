@@ -62,7 +62,7 @@ export function lowDiskProblem(freeBytes: number | null, reused: boolean): { mes
     return { message: `The download needs about 1.3 GB and this computer has ${freeGbText(freeBytes)} free. Free some space, then try again.`, neededBytes: needed, freeBytes }
   }
   if (freeBytes < needed) {
-    return { message: `The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has ${freeGbText(freeBytes)} free.`, neededBytes: needed, freeBytes }
+    return { message: `The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has ${freeGbText(freeBytes)} free. Free some space, then try again.`, neededBytes: needed, freeBytes }
   }
   return null
 }

@@ -15,6 +15,7 @@ import {
 import { renderVmTab, type EnvEditor, type VmBusy, type VmTabUi } from '../../lib/vm-tab-render'
 import { useLive } from '../../state/live-context'
 import { useConversations } from '../../state/conversations-context'
+import { useShell } from '../../state/shell-context'
 
 type Opened = { kind: 'undo' | 'output'; run: ScriptRun } | null
 
@@ -26,6 +27,7 @@ type Opened = { kind: 'undo' | 'output'; run: ScriptRun } | null
  */
 export default function VmTab({ agent }: { agent: Agent }) {
   const { state, loadVm, loadRun, putRun, putVm, putBrowser, vmReply } = useLive()
+  const shell = useShell()
   const { conversations } = useConversations()
   const vm = state.vms[agent.id]
   const [loadFailed, setLoadFailed] = useState(false)
@@ -286,6 +288,7 @@ export default function VmTab({ agent }: { agent: Agent }) {
         setHost(await api.vm.growMachine(toGb))
       }),
     onStopBuild,
+    onOpenVms: () => shell.openSettings('vms'),
     onBrowser,
     onBrowserRetry,
     onBrowserRemove,

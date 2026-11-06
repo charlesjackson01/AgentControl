@@ -1028,3 +1028,82 @@ button.rc-head:focus-visible { outline: 2px solid var(--c-accent-ring); outline-
 .vm-blocked{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:4px}
 .vm-blocked li{font-family:var(--font-mono);font-size:10.5px;padding:1px 6px;border-radius:999px;background:var(--c-bg-sunk);color:var(--c-text-3)}
 .vm-note--build{margin-top:4px;font-size:11px}
+.vm-vmslink{border:0;background:none;box-shadow:none;height:auto;padding:4px 0;color:var(--c-accent);font-size:12.5px}
+.vm-vmslink:hover{background:none;text-decoration:underline}
+
+/* FE-P2-6 Settings › VMs (mockups m3-01…m3-10). */
+.dialog--settings{max-width:980px;width:min(980px,calc(100vw - 48px));height:min(900px,calc(100vh - 24px))}
+.dialog--settings .dialog__body{padding:0;display:flex;min-height:0;flex:1}
+.settings-layout{display:flex;min-height:0;flex:1;width:100%}
+.settings-nav{width:168px;flex:none;padding:12px 10px;border-right:1px solid var(--c-border);display:flex;flex-direction:column;gap:2px;background:var(--c-surface)}
+.settings-nav__item{text-align:left;border:0;background:transparent;border-radius:8px;padding:8px 12px;font:inherit;font-size:13.5px;color:var(--c-text-2);cursor:pointer}
+.settings-nav__item:hover{background:var(--c-bg-sunk);color:var(--c-text)}
+.settings-nav__item--on{background:var(--c-bg-sunk);color:var(--c-text);font-weight:600}
+.settings-main{flex:1;min-width:0;overflow-y:auto;padding:16px 18px 28px;background:var(--c-bg)}
+.settings-jump{display:none;margin-top:18px;font-size:12.5px;color:var(--c-text-2);gap:8px;align-items:center}
+.settings-jump select{margin-left:8px;font:inherit;padding:6px 8px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)}
+.vms{display:flex;flex-direction:column;gap:12px}
+.vms-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:14px 16px}
+.vms-card__hd{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.vms-card__title{margin:0;font-size:14.5px;font-weight:650;letter-spacing:-0.01em}
+.vms-card__sub{margin:6px 0 0;font-size:12.5px;color:var(--c-text-2);line-height:1.45}
+.vms-disk{display:flex;justify-content:space-between;margin-top:12px;font-size:12.5px;color:var(--c-text-2)}
+.vms-bar{height:6px;border-radius:99px;background:var(--c-border);margin-top:6px;overflow:hidden}
+.vms-bar span{display:block;height:100%;background:#5d6d7e;border-radius:99px}
+.vms-act{display:flex;align-items:center;gap:12px;margin-top:12px}
+.vms-hint{margin:0;font-size:12px;color:var(--c-text-3)}
+.vms-hint--block{margin-top:8px}
+.vms .btn:disabled{background:#c5cad1;color:#fff;border-color:transparent;box-shadow:none;opacity:1;cursor:default}
+.vms-split{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;padding-top:12px;border-top:1px solid var(--c-border)}
+.vms-split__t{margin:0;font-size:13px;font-weight:600}
+.vms-split__s{margin:2px 0 0;font-size:12.5px;color:var(--c-text-2)}
+.vms-budgets{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:14px}
+.vms-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.vms-field__l{font-size:12.5px;color:var(--c-text-2)}
+.vms-field .input{max-width:148px}
+.vms-field__err{color:var(--c-danger);font-size:12px;line-height:1.35}
+.vms-field__hint{color:var(--c-text-3);font-size:11.5px}
+.vms-switch{display:flex;align-items:center;gap:8px}
+.vms-switch__l{font-size:12.5px;color:var(--c-text-2)}
+.vms-backs{list-style:none;margin:12px 0 0;padding:0;border:1px solid var(--c-border);border-radius:10px;overflow:hidden}
+.vms-back{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:12px;align-items:center;padding:10px 12px;border-top:1px solid var(--c-border)}
+.vms-back:first-child{border-top:0}
+.vms-back__when{margin:0;font-weight:600;font-size:13px}
+.vms-back__sub{margin:2px 0 0;font-size:12px;color:var(--c-text-3)}
+.vms-back__size{font-size:12.5px;color:var(--c-text-2);font-variant-numeric:tabular-nums}
+.vms-empty{margin:12px 0 0;padding:18px 12px;text-align:center;color:var(--c-text-3);font-size:12.5px;border:1px dashed var(--c-border-strong);border-radius:10px}
+.vms-downs{list-style:none;margin:8px 0 0;padding:0}
+.vms-down{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--c-border)}
+.vms-down:first-child{border-top:0}
+.vms-down__n{margin:0;font-weight:600;font-size:13px}
+.vms-down__s{margin:2px 0 0;font-size:12px;color:var(--c-text-3)}
+.vms-warn{background:#fbf3e4;border:1px solid #e6c98a;color:#8a4b12;border-radius:12px;padding:12px 14px;font-size:12.5px;line-height:1.45}
+.vms-warn__title{margin:0 0 6px;font-size:13.5px;font-weight:650}
+.vms-warn p,.vms-warn ul{margin:0}
+.vms-warn ul{margin-top:8px;padding:0;list-style:none}
+.vms-warn li{margin-top:4px}
+.vms-warn li span{font-family:var(--font-mono);font-size:12px}
+.vms-setup__list{margin:8px 0 0;padding-left:18px;font-size:12.5px;color:var(--c-text-2)}
+.vms-alert{margin:8px 0 0;color:var(--c-danger);font-size:12.5px;white-space:pre-line}
+.vms-loaderr{border:1px solid var(--c-danger-border);background:color-mix(in srgb,var(--c-danger-soft) 70%,var(--c-surface));border-radius:12px;padding:36px 16px;text-align:center}
+.vms-loaderr__title{margin:0;color:var(--c-danger);font-weight:650;font-size:15px}
+.vms-loaderr__text{margin:6px 0 14px;color:var(--c-text-2);font-size:13px}
+.vms-confirm{max-width:460px}
+.vms-confirm .dialog__foot{background:var(--c-surface)}
+.vms-confirm__body{margin:0;font-size:13.5px;line-height:1.5;color:var(--c-text)}
+.btn--fill-danger{color:#fff;background:var(--c-danger);border-color:transparent}
+.btn--fill-danger:hover{color:#fff;background:var(--c-danger);filter:brightness(.94);border-color:transparent}
+@media (max-width:759px){
+  .dialog--settings{width:calc(100vw - 16px);height:calc(100vh - 16px);max-width:none}
+  .settings-nav{display:none}
+  .settings-jump{display:flex}
+  .vms-split{flex-direction:column;align-items:stretch}
+  .vms-split > .btn{align-self:flex-start}
+  .vms-split .segmented{width:100%}
+  .vms-split .segmented__opt{flex:1}
+  .vms-budgets{grid-template-columns:1fr}
+  .vms-field .input{max-width:none}
+  .vms-back{grid-template-columns:minmax(0,1fr) auto}
+  .vms-back__size{grid-column:1}
+  .vms-act{flex-direction:column;align-items:flex-start}
+}

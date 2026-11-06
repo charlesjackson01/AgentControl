@@ -14,10 +14,11 @@
  */
 import {
   CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE,
-  type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type InternetUse, type LiveEvent, type PermissionRequest, type ScriptRun,
+  type BackupInfo, type BrowserAddonInfo, type ChatMessage, type ChatRunSummary, type FileChange, type InternetUse, type LiveEvent, type PermissionRequest, type ScriptRun,
   type ScriptRunStatus, type ScriptRunSummary, type VmInfo,
 } from './types.ts'
 import type { LiveConnectionStatus } from './live-events.ts'
+import { mergeBackupRecord } from './vms-page.ts'
 
 /** Same as the BE's kept tail per stream. */
 export const OUTPUT_TAIL_CHARS = 64 * 1024
@@ -46,9 +47,14 @@ export type LiveState = {
    * and the VM tab's browser row (FE-P2-10). Absent until loaded.
    */
   browser?: BrowserAddonInfo
+  /**
+   * BE-P2-18: backups carried on `vm.updated` (`backup?`), keyed by backup id, so Settings › VMs
+   * can refresh the list and an in-progress row's progress without waiting for the next GET.
+   */
+  backups: Record<string, BackupInfo>
 }
 
-export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0, clockSkewMs: 0 }
+export const initialLiveState: LiveState = { connection: 'idle', runs: {}, output: {}, summaries: {}, vms: {}, permissions: {}, resets: 0, clockSkewMs: 0, backups: {} }
 
 export type LiveAction =
   | { type: 'connection'; status: LiveConnectionStatus }
@@ -294,8 +300,13 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
         }
         case 'browser.updated':
           return { ...state, browser: ev.browser }
-        case 'vm.updated':
-          return { ...state, vms: { ...state.vms, [ev.agentId]: ev.vm } }
+        case 'vm.updated': {
+          const vms = { ...state.vms, [ev.agentId]: ev.vm }
+          const backup = ev.backup
+          if (!backup || typeof backup.id !== 'string') return { ...state, vms }
+          const backups = mergeBackupRecord(state.backups, backup)
+          return backups === state.backups ? { ...state, vms } : { ...state, vms, backups }
+        }
         default:
           return state
       }

@@ -7,6 +7,8 @@ type DialogProps = {
   title: string
   subtitle?: string
   size?: 'sm' | 'md' | 'lg'
+  /** Extra class on the panel (Settings uses dialog--settings). */
+  panelClassName?: string
   onClose: () => void
   footer?: ReactNode
   children: ReactNode
@@ -14,7 +16,7 @@ type DialogProps = {
   returnFocus?: () => HTMLElement | null
 }
 
-export default function Dialog({ open, title, subtitle, size = 'md', onClose, footer, children, returnFocus }: DialogProps) {
+export default function Dialog({ open, title, subtitle, size = 'md', panelClassName, onClose, footer, children, returnFocus }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null)
   useDialogFocus(open, panelRef, onClose, returnFocus)
 
@@ -30,7 +32,7 @@ export default function Dialog({ open, title, subtitle, size = 'md', onClose, fo
         onClose()
       }}
     >
-      <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef} tabIndex={-1}>
+      <div className={`dialog${size === 'sm' ? ' dialog--sm' : size === 'lg' ? ' dialog--lg' : ''}${panelClassName ? ` ${panelClassName}` : ''}`} role="dialog" aria-modal="true" aria-label={title} ref={panelRef} tabIndex={-1}>
         <div className="dialog__head">
           <div>
             <p className="dialog__title">{title}</p>

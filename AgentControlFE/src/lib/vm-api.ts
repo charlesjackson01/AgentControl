@@ -7,7 +7,7 @@
  */
 import {
   PERMISSION_CSRF_HEADER,
-  type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type BackupCreateBody, type BackupInfo, type BackupRestoreBody, type BackupRestoreResult, type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
   type ToolBuildAccepted,
   type ScriptRun, type ScriptRunSummary, type UndoConflict, type UndoGone, type UndoPreview, type UndoRequest, type UndoResult,
   type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
@@ -96,9 +96,16 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     getHost: () => request<VmHostInfo>('/api/vm/host'),
     getSettings: () => request<VmSettingsView>('/api/vm/settings'),
     updateSettings: (body: VmSettingsPatch) => request<VmSettingsView>('/api/vm/settings', patch(body)),
-    /** Last probe result; POST re-checks and answers when done. */
+    /** Last probe result; POST re-checks and answers when done (confirm header required). */
     getProbe: () => request<VmProbeResult>('/api/vm/probe'),
-    recheckProbe: () => request<VmProbeResult>('/api/vm/probe', post()),
+    recheckProbe: () => request<VmProbeResult>('/api/vm/probe', { method: 'POST', headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
+    /** BE-P2-18: newest first. 202 with status in_progress on create (decision 5). */
+    listBackups: () => request<BackupInfo[]>('/api/vm/backups'),
+    createBackup: (body: BackupCreateBody = {}) =>
+      request<BackupInfo>('/api/vm/backups', { method: 'POST', body: JSON.stringify(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
+    /** 200 BackupRestoreResult. Needs confirm:true and the confirm header. 400/403 confirm_required, 404, 409 backup_incomplete / runs_active. */
+    restoreBackup: (id: string, body: BackupRestoreBody) =>
+      request<BackupRestoreResult>(`/api/vm/backups/${enc(id)}/restore`, { method: 'POST', body: JSON.stringify(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
     /** 409 while runs are active, 400 when the host disk is low. */
     growMachine: (toGb: number) => request<VmHostInfo>('/api/vm/machine/grow', post({ toGb })),
 

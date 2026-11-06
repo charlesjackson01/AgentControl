@@ -5,6 +5,7 @@ import {
   type BrowserRowView, type EnvErrors, type HistoryRowView, type MeterView, type VmTabModel,
 } from './vm-tab.ts'
 import type { InternetPolicy, RuntimeMode } from './types.ts'
+import { OPEN_VMS_LABEL } from './vms-page.ts'
 
 export type VmBusy = null | 'start' | 'stop' | 'reset' | 'internet' | 'gvisor' | 'probe' | 'env' | 'grow' | 'more'
   /* FE-P2-10 */ | 'stopbuild' | 'browser' | 'retry' | 'remove'
@@ -52,6 +53,8 @@ export type VmTabHandlers = {
   onBrowserRemove?: () => void
   /** "Build log": the build run's output. */
   onBuildLog?: () => void
+  /** FE-P2-6: Open Settings › VMs, under the files card. */
+  onOpenVms?: () => void
 }
 
 function prog(p: { pct: number | null; text: string }): ReactNode {
@@ -378,7 +381,7 @@ function noticesCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
   )
 }
 
-function filesCard(m: VmTabModel, ui: VmTabUi): ReactNode {
+function filesCard(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers): ReactNode {
   const f = m.files
   return h(
     'section',
@@ -388,6 +391,7 @@ function filesCard(m: VmTabModel, ui: VmTabUi): ReactNode {
     f.backup
       ? h('div', { className: 'vm-row vm-row--mt' }, h('div', { className: 'vm-row__txt' }, h('div', { className: 'vm-row__t' }, 'Backup'), h('div', { className: 'vm-row__s' }, f.backup)))
       : null,
+    x.onOpenVms ? h('div', { className: 'vm-btnrow' }, h('button', { type: 'button', className: 'btn btn--ghost vm-vmslink', onClick: () => x.onOpenVms?.() }, OPEN_VMS_LABEL)) : null,
     f.exportLabel && ui.exportHref ? h('div', { className: 'vm-btnrow' }, h('a', { className: 'btn', href: ui.exportHref, download: true }, f.exportLabel)) : null,
     err(ui.errors.files),
   )
@@ -431,7 +435,7 @@ export function renderVmTab(m: VmTabModel, ui: VmTabUi, x: VmTabHandlers = {}): 
     noticesCard(m, ui, x),
     permsCard(m, ui, x),
     isolationCard(m, ui, x),
-    filesCard(m, ui),
+    filesCard(m, ui, x),
     envCard(m, ui, x),
     historyCard(m, ui, x),
   )

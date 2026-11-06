@@ -39,7 +39,7 @@ describe('BE-P2-15 texts', () => {
   it('low disk: download size, plus the run floor, or only the floor when reused (GB rounded down)', () => {
     expect(freeGbText(0.69 * GB)).toBe('0.6 GB')
     expect(lowDiskProblem(0.6 * GB, false)?.message).toBe('The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.')
-    expect(lowDiskProblem(3.5 * GB, false)?.message).toBe('The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 3.5 GB free.')
+    expect(lowDiskProblem(3.5 * GB, false)?.message).toBe('The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 3.5 GB free. Free some space, then try again.')
     expect(lowDiskProblem(3.5 * GB, false)).toMatchObject({ neededBytes: BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES, freeBytes: 3.5 * GB })
     expect(lowDiskProblem(10 * GB, false)).toBeNull()
     expect(lowDiskProblem(3.5 * GB, true)).toBeNull()
@@ -318,7 +318,7 @@ describe('createBrowserAddon', () => {
     const on = agentOf({ internetPolicy: 'never', vm: { ...defaultAgentVm(), packages: ['jq'], permissions: { browser: true } } })
     await expect(h.addon.checkChange(on, false)).rejects.toMatchObject({ statusCode: 409, reason: 'internet_never' })
     await expect(h.addon.checkChange(agentOf(), true)).rejects.toMatchObject({
-      statusCode: 409, reason: 'low_disk', message: 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 3.5 GB free.',
+      statusCode: 409, reason: 'low_disk', message: 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 3.5 GB free. Free some space, then try again.',
     })
     // Already downloaded: only the 3 GB floor.
     h.setPresent(true)
@@ -478,7 +478,7 @@ describe('BE-P2-15 routes', () => {
     free = 3.5 * GB
     const res = await inject('PATCH', `/api/agents/${a.id}/vm`, { permissions: { browser: true } })
     expect(res.statusCode).toBe(409)
-    expect(res.json()).toMatchObject({ reason: 'low_disk', message: 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 3.5 GB free.' })
+    expect(res.json()).toMatchObject({ reason: 'low_disk', message: 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 3.5 GB free. Free some space, then try again.' })
     expect(stored(a.id).vm.permissions.browser).toBe(false)
     expect((await inject('PATCH', `/api/agents/${a.id}/vm`, { permissions: { browser: 'yes' } })).statusCode).toBe(400)
   })

@@ -58,3 +58,34 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # FE-P2-8. Decision 2: Playwright on PRs and master. No @vm, @win, or @mac job.
+  # The @vm smoke stays skipped: this job does not set AC_VM_TESTS.
+  frontend-e2e:
+    name: Frontend (Playwright E2E)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: AgentControlFE
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: AgentControlFE/package-lock.json
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Playwright E2E
+        run: npm run e2e
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-screenshots
+          path: |
+            AgentControlFE/e2e/artifacts/**
+            AgentControlFE/test-results/**
+          if-no-files-found: warn

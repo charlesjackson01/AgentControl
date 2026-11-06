@@ -93,7 +93,7 @@ export default function ChatList({ screen = false }: { screen?: boolean }) {
       {screen ? (
         <div className="cf-mlist__top">
           {/* GAP-B2: 05a doesn't say what the avatar opens; it opens Profile & endpoints, like the desktop list footer. */}
-          <button type="button" className="cf-mlist__me" onClick={shell.openSettings} aria-label="Profile & endpoints">
+          <button type="button" className="cf-mlist__me" onClick={() => shell.openSettings()} aria-label="Profile & endpoints">
             <UserAvatar profile={profile} name={name} size="md" />
           </button>
           <span className="cf-sp" />
@@ -157,7 +157,7 @@ export default function ChatList({ screen = false }: { screen?: boolean }) {
 
       {!screen && (
         <div className="cf-side__foot">
-          <button type="button" className="cf-me" onClick={shell.openSettings} aria-label="Profile & endpoints">
+          <button type="button" className="cf-me" onClick={() => shell.openSettings()} aria-label="Profile & endpoints">
             <UserAvatar profile={profile} name={name} size="md" />
             <span className="cf-me__col">
               <span className="cf-me__nm">{name}</span>

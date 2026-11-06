@@ -12,7 +12,7 @@ const SRC = dirname(fileURLToPath(import.meta.url))
 /** The §13 rows, in plan order. */
 const PLAN_ROWS = ['bot_bot', 'host_files', 'memory_profile', 'network', 'resources', 'privilege', 'engine_storage', 'secrets', 'permissions', 'windows_volume']
 /** Rows still being filled on this branch (BE-P2-19); must end empty. */
-const NOT_YET = ['engine_storage']
+const NOT_YET: string[] = []
 const source = (file: string) => readFileSync(join(SRC, file), 'utf8')
 const titles = (text: string): string[] => [...text.matchAll(/\b(?:it|describe)(?:\.each\([^\n]*?\))?(?:\.skipIf\([^\n]*?\))?\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g)].map((m) => m[2]!.replace(/\\(['"`\\])/g, '$1'))
 

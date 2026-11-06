@@ -39,6 +39,7 @@ export const MAC_TESTS = process.env.AC_MAC_TESTS === '1' && process.platform ==
 
 const vm = (file: string, title: string): SecurityTestRef => ({ tag: '@vm', file, title })
 const unit = (file: string, title: string): SecurityTestRef => ({ tag: 'unit', file, title })
+const sec = (title: string): SecurityTestRef => vm('security.vm.test.ts', title)
 const win = (title: string): SecurityTestRef => ({ tag: '@win', file: 'security.win.test.ts', title })
 const mac = (title: string): SecurityTestRef => ({ tag: '@mac', file: 'security.mac.test.ts', title })
 
@@ -52,6 +53,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
       vm('isolation.vm.test.ts', 'distinct host uids per bot (idmap only)'),
       vm('isolation.vm.test.ts', "mounting another bot's folder throws before the engine is called"),
       vm('egress.vm.test.ts', "a credential is bound to its bot's network"),
+      sec("bot ↔ bot: another bot's snapshots aren't mounted or findable"),
       unit('isolation.test.ts', 'symlink escapes are refused'),
       mac('bot ↔ bot: two bots in the agentcontrol machine'),
       win('bot ↔ bot: two bots in the agentcontrol machine'),
@@ -64,6 +66,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
     tests: [
       vm('isolation.vm.test.ts', 'read-only mounts and the root fs give EROFS; nothing reaches the host'),
       vm('podman-runner.vm.test.ts', 'read-only mounts and root fs give EROFS; workspace writes reach the host'),
+      sec('script → host files: a symlink a script makes is not followed by the BE'),
       unit('files.test.ts', 'every traversal and symlink attack returns 400 or 403 on every route'),
       unit('files.test.ts', 'refuses any symlink segment, even one pointing inside the root'),
       unit('file-tools.test.ts', 'refuses to read or write through a symlink'),
@@ -78,6 +81,8 @@ export const SECURITY_ROWS: SecurityRow[] = [
     tests: [
       vm('podman-runner.vm.test.ts', '/bot has no memory and no BOT.md anywhere'),
       vm('isolation.vm.test.ts', 'read-only mounts and the root fs give EROFS'),
+      sec('script → memory/profile with the product mounts: no memory or profile; inputs read-only'),
+      unit('security.test.ts', 'memory/profile: the product mounts never include memory, BOT.md, another bot or snapshots'),
     ],
   },
   {
@@ -103,6 +108,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
       vm('podman-runner.vm.test.ts', 'limits: a fork bomb stops at the 256-process limit with a clear status'),
       vm('podman-runner.vm.test.ts', '300 MB of output is cut at 200 MB and the run stopped'),
       vm('podman-runner.vm.test.ts', 'timeout stops the run (and the container)'),
+      sec('resources: a full /tmp gives ENOSPC and the run fails with a clear status'),
       vm('snapshot-budget.vm.test.ts', 'over the personal limit, the run is blocked with personal_quota'),
     ],
   },
@@ -112,6 +118,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
     checks: '`mount`, raw sockets and `capsh` fail',
     tests: [
       vm('bot-env.vm.test.ts', 'container: uid 1000, read-only root, no network'),
+      sec('privilege: mount, raw sockets, setuid and capability raising all fail; no capabilities'),
     ],
   },
   {
@@ -119,6 +126,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
     boundary: 'Engine and storage helper',
     checks: 'not reachable from a bot (`/run/podman`, the helper name)',
     tests: [
+      sec('engine and storage helper: no engine socket, no engine variables, no ac-storaged name'),
       win('ac-storaged: no network, not reachable from a bot'),
     ],
   },
@@ -128,6 +136,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
     checks: '`env` shows no `GITHUB_TOKEN`, `TS_AUTHKEY` or LLM keys',
     tests: [
       vm('bot-env.vm.test.ts', 'env injected (PATH_APPEND, no host env)'),
+      sec("secrets: the server's tokens and LLM keys reach neither the container nor the runner's log"),
       vm('egress.vm.test.ts', 'B4: curl -v through the proxy prints the credential in every form'),
       unit('bot-env.test.ts', 'env: always NAME=VALUE, PATH_APPEND extends the image PATH, reserved names dropped'),
       unit('bot-env-routes.test.ts', 'PATCH 400s: reserved names'),
@@ -142,6 +151,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
       unit('permission-routes.test.ts', "user-only: the bot side (a VM network address or the proxy's Via) gets 403 user_only"),
       unit('permission-gate.test.ts', 'answer: 404 not_found, 400 bad_decision'),
       vm('permission-gate.vm.test.ts', "user-only: the bot side can't answer a card"),
+      unit('security.test.ts', 'permissions: no model tool answers, approves or changes a permission'),
     ],
   },
   {

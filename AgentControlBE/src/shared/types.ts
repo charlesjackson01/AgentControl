@@ -960,15 +960,14 @@ export interface BackupRestoreAgent {
   /** Files restored (workspace, shared inputs, memory, BOT.md). */
   files: number
   /**
-   * Tools after the restore: 'started' (a tool build from the manifest's packages is running),
-   * 'not_needed' (no system packages), 'failed' (it couldn't start; `toolsMessage` says why).
+   * All four tool types (apt, pip, npm, opt in `toolResults`) summed up: 'failed' if any type
+   * failed, else 'started' if any type's build or install run started, else 'not_needed' (opt's
+   * 'not_restorable' alone counts as 'not_needed'). `toolsMessage`: the failed and not_restorable
+   * types' messages, joined with a space.
    */
   tools: 'started' | 'not_needed' | 'failed'
   toolsMessage?: string
-  /**
-   * BE-P2-18 follow-up (Needs OK): one entry per tool type in the manifest, always apt, pip, npm,
-   * opt in that order. `tools` sums them up: 'failed' if any failed, else 'started' if any started.
-   */
+  /** BE-P2-18: one entry per tool type, always apt, pip, npm, opt in that order (approved). */
   toolResults: BackupRestoreTool[]
 }
 /** apt: the image layer (a Rebuild tool_build); pip/npm: an install script run; opt: /opt/bot/bin. */

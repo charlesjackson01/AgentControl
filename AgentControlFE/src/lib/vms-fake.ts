@@ -5,7 +5,7 @@
  */
 import {
   VM_MACHINE_DEFAULTS,
-  type BackupInfo, type BrowserAddonInfo, type VmHostInfo, type VmProbeResult, type VmSettingsView,
+  type BackupInfo, type BackupRestoreTool, type BrowserAddonInfo, type VmHostInfo, type VmProbeResult, type VmSettingsView,
 } from './types.ts'
 
 export type VmsScene = 'default' | 'empty' | 'runs' | 'windows' | 'linux' | 'progress' | 'failed'
@@ -199,11 +199,17 @@ export function fakeVmsDispatch(state: FakeVmsState, method: string, url: string
         : "This backup didn't finish, so it can't be restored. Pick another one.")
     }
     if (state.runsActive) return err(409, 'runs_active', 'Scripts are running. Wait for them to finish, then restore.')
+    const toolResults: BackupRestoreTool[] = [
+      { kind: 'apt', status: 'not_needed', items: [] },
+      { kind: 'pip', status: 'not_needed', items: [] },
+      { kind: 'npm', status: 'not_needed', items: [] },
+      { kind: 'opt', status: 'not_needed', items: [] },
+    ]
     return {
       status: 200,
       body: {
         backupId: found.id,
-        agents: found.agentIds.map((agentId) => ({ agentId, files: 4, tools: 'not_needed' as const })),
+        agents: found.agentIds.map((agentId) => ({ agentId, files: 4, tools: 'not_needed' as const, toolResults })),
       },
     }
   }

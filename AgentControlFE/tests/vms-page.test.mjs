@@ -121,19 +121,86 @@ describe('Settings › VMs view (FE-P2-6)', () => {
     assert.equal(row.detail, 'Back up now · 3 bots · 1 of 3')
   })
 
-  it('a restore result names only the bots whose tools failed', () => {
+  it('restore toolResults: rebuilding, the Never message as sent, and opt that cannot be restored', () => {
     const names = new Map([['primary', 'Primary'], ['analyst', 'Analyst']])
+    const never = "Internet is set to Never for Analyst, so this build didn't start. Change it in Settings › VM."
+    const optMessage = "These programs in /opt/bot/bin can't be reinstalled from a backup: ffmpeg, yt-dlp. Ask the bot to set them up again."
     const note = restoreToolsNote({
       backupId: 'bk-today',
       agents: [
-        { agentId: 'primary', files: 4, tools: 'started' },
-        { agentId: 'analyst', files: 4, tools: 'failed', toolsMessage: 'the tool rebuild didn\'t start (libssl missing).' },
-        { agentId: 'summarizer', files: 2, tools: 'not_needed' },
+        {
+          agentId: 'primary',
+          files: 4,
+          tools: 'not_needed',
+          toolsMessage: 'SHOULD NOT APPEAR',
+          toolResults: [
+            { kind: 'apt', status: 'not_needed', items: ['curl'] },
+            { kind: 'pip', status: 'not_needed', items: [] },
+            { kind: 'npm', status: 'not_needed', items: [] },
+            { kind: 'opt', status: 'not_needed', items: ['ffmpeg'] },
+          ],
+        },
+        {
+          agentId: 'analyst',
+          files: 4,
+          tools: 'failed',
+          toolsMessage: `SHOULD NOT APPEAR ${never} ${optMessage}`,
+          toolResults: [
+            { kind: 'apt', status: 'started', items: ['curl', 'git'], runId: 'run-apt' },
+            { kind: 'pip', status: 'failed', items: ['requests==2.32.0'], message: never },
+            { kind: 'npm', status: 'not_needed', items: [] },
+            { kind: 'opt', status: 'not_restorable', items: ['ffmpeg', 'yt-dlp'], message: optMessage },
+          ],
+        },
       ],
     }, names)
-    assert.equal(note, "Analyst: the tool rebuild didn't start (libssl missing).")
-    assert.equal(restoreToolsNote({ backupId: 'bk', agents: [{ agentId: 'primary', files: 1, tools: 'not_needed' }] }, names), null)
+    assert.equal(note, [
+      'Analyst · apt: rebuilding 2 packages',
+      `Analyst · pip: ${never}`,
+      "Analyst · opt: can't be restored (ffmpeg, yt-dlp)",
+    ].join('\n'))
+    assert.equal(note.includes('SHOULD NOT APPEAR'), false)
+    assert.equal(note.includes('Primary'), false)
+    assert.equal(note.includes('npm'), false)
+    const messageOnly = restoreToolsNote({
+      backupId: 'bk',
+      agents: [{
+        agentId: 'analyst',
+        files: 1,
+        tools: 'not_needed',
+        toolResults: [
+          { kind: 'apt', status: 'not_needed', items: [] },
+          { kind: 'pip', status: 'not_needed', items: [] },
+          { kind: 'npm', status: 'not_needed', items: [] },
+          { kind: 'opt', status: 'not_restorable', items: [], message: optMessage },
+        ],
+      }],
+    }, names)
+    assert.equal(messageOnly, `Analyst · opt: ${optMessage}`)
+    assert.equal(restoreToolsNote({
+      backupId: 'bk',
+      agents: [{ agentId: 'primary', files: 1, tools: 'not_needed', toolResults: [
+        { kind: 'apt', status: 'not_needed', items: [] },
+        { kind: 'pip', status: 'not_needed', items: [] },
+        { kind: 'npm', status: 'not_needed', items: [] },
+        { kind: 'opt', status: 'not_needed', items: [] },
+      ] }],
+    }, names), null)
     assert.equal(restoreToolsNote({ backupId: 'bk', agents: [{ agentId: 'ghost', files: 1, tools: 'failed' }] }, names), "ghost: tools didn't start after the restore.")
+    assert.equal(restoreToolsNote({
+      backupId: 'bk',
+      agents: [{
+        agentId: 'analyst',
+        files: 1,
+        tools: 'started',
+        toolResults: [
+          { kind: 'apt', status: 'started', items: ['curl'] },
+          { kind: 'pip', status: 'not_needed', items: ['requests==2.32.0'] },
+          { kind: 'npm', status: 'not_needed', items: [] },
+          { kind: 'opt', status: 'not_needed', items: [] },
+        ],
+      }],
+    }, names), 'Analyst · apt: rebuilding 1 package\nAnalyst · pip: nothing to reinstall')
   })
 
   it('vm.updated backup merges into the list and replaces progress for the same id', () => {
@@ -198,7 +265,9 @@ describe('fake VMs routes (stand-in until BE-P2-18)', () => {
     assert.equal(restored.status, 200)
     assert.equal(restored.body.backupId, 'bk-today')
     assert.deepEqual(restored.body.agents.map((a) => a.tools), ['not_needed', 'not_needed', 'not_needed'])
+    assert.deepEqual(restored.body.agents[0].toolResults.map((t) => t.kind), ['apt', 'pip', 'npm', 'opt'])
     assert.equal(restored.body.agents[0].files, 4)
+    assert.equal(restoreToolsNote(restored.body, new Map([['primary', 'Primary']])), null)
     const grow = fakeVmsDispatch(busy, 'POST', '/api/vm/machine/grow', { toGb: 90 })
     assert.equal(grow.status, 409)
   })

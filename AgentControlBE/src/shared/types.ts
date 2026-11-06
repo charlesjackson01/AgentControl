@@ -975,9 +975,9 @@ export type BackupToolKind = 'apt' | 'pip' | 'npm' | 'opt'
 export interface BackupRestoreTool {
   kind: BackupToolKind
   /**
-   * 'started': its build or install run is queued or running (`runId`; it may wait for an internet
-   * card under Ask). 'not_needed': nothing listed, or the bot already has all of it. 'failed': it
-   * couldn't start (`message`). 'not_restorable': /opt/bot/bin programs, which have no source to
+   * 'started': its build or install run is queued or running (`runId`; the restore click is its
+   * one-time internet grant, so no internet card). 'not_needed': nothing listed, or the bot already
+   * has all of it. 'failed': it couldn't start (`message`; under Never, Rebuild's internet_never text). 'not_restorable': /opt/bot/bin programs, which have no source to
    * reinstall from (`message` names them).
    */
   status: 'started' | 'not_needed' | 'failed' | 'not_restorable'
@@ -1180,7 +1180,8 @@ export interface ScriptRunPermission {
   requestId?: string
   /**
    * 'card': answered on a card; 'policy': the bot's rule (Always, or browser already on); 'rebuild': a user click that
-   * grants one build's internet: Rebuild, or turning the browser on/off (card enable, VM tab, create).
+   * grants one build's internet: Rebuild, or turning the browser on/off (card enable, VM tab, create), and (BE-P2-18)
+   * a confirmed restore, for that restore's own pip/npm install runs only.
    */
   source?: 'card' | 'policy' | 'rebuild'
 }

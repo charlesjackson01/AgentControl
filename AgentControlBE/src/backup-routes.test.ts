@@ -14,6 +14,15 @@ import { botMounts, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
 import { EGRESS_VIA } from './egressd.js'
 import { fakeRunner } from './run-service.fake.js'
+import { downEgress } from './egress-service.fake.js'
+import type { EgressService } from './egress-service.js'
+import { internetNeverBuildText } from './http.js'
+import { PROXY_UNAVAILABLE } from './egress-service.js'
+
+/** An egress proxy that is up (no engine behind it; the fake runner never connects). */
+function upEgress(): EgressService {
+  return { ...downEgress(), available: async () => ({ ok: true }), grant: async () => ({ id: 'g', url: 'http://g:s@127.0.0.1:1' }) as never, revoke: async () => [] }
+}
 import type { RuntimeProbe } from './runtime-probe.js'
 import { PERMISSION_CSRF_HEADER, UNDO_MACHINE_RESTORED_TEXT, type Agent, type BackupInfo, type BackupRestoreResult, type ScriptRun, type VmHostInfo, type VmInfo } from './shared/types.js'
 import { FILES_MISMATCH_TEXT, MARKER_FILE, storageFor } from './storage/index.js'
@@ -39,7 +48,7 @@ let free: number | null = null
 let clock = new Date(2026, 10, 6, 10, 0, 0)
 let engineCalls: string[][] = []
 
-async function boot(o: { runner?: boolean } = {}): Promise<void> {
+async function boot(o: { runner?: boolean; egress?: 'up' | 'down' } = {}): Promise<void> {
   if (app) await app.close()
   store = createStore(join(dir, 'store.json'))
   const vmHost: VmHostService = { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host }
@@ -54,7 +63,7 @@ async function boot(o: { runner?: boolean } = {}): Promise<void> {
     saveVm: storeSaveVm(store),
     activeRuns: () => 0,
   })
-  app = buildApp(store, { vmHost, botEnv, runtimeProbe: probe, ...(o.runner ? { vmRunner: fakeRunner() } : {}), backups: { freeBytes: () => free, now: () => new Date(clock) } })
+  app = buildApp(store, { vmHost, botEnv, runtimeProbe: probe, ...(o.runner ? { vmRunner: fakeRunner() } : {}), ...(o.egress ? { egress: o.egress === 'up' ? upEgress() : downEgress() } : {}), backups: { freeBytes: () => free, now: () => new Date(clock) } })
 }
 
 const inject = (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: unknown, headers: Record<string, string> = {}) =>
@@ -214,7 +223,7 @@ describe('POST /api/vm/backups/:id/restore', () => {
   })
 
   it('pip and npm come back through install runs in the bot\'s DM, opt is named; the manifest is the one stored at backup time', async () => {
-    await boot({ runner: true })
+    await boot({ runner: true, egress: 'up' })
     const a = await makeBot('Analyst')
     const tools = { pip: ['requests==2.32.3'], npm: ['cowsay@1.6.0'], optBin: ['mytool'], updatedAt: '2026-11-06T09:00:00.000Z' }
     store.agents = store.agents.map((x) => (x.id === a.id ? { ...x, internetPolicy: 'always', vm: { ...x.vm, tools } } : x))
@@ -229,13 +238,71 @@ describe('POST /api/vm/backups/:id/restore', () => {
     expect(out.toolResults.map((r) => [r.kind, r.items])).toEqual([['apt', []], ['pip', tools.pip], ['npm', tools.npm], ['opt', tools.optBin]])
     expect(out.toolResults[3]).toMatchObject({ status: 'not_restorable' })
     for (const r of out.toolResults.slice(1, 3)) {
-      // Recorded runs (the gate decides the internet: no proxy here, so they end proxy_unavailable).
-      expect(r.runId, JSON.stringify(r)).toBeTruthy()
+      expect(r, JSON.stringify(r)).toMatchObject({ status: 'started' })
+      expect(r.runId).toBeTruthy()
       const run = (await inject('GET', `/api/runs/${r.runId}`)).json() as ScriptRun
       expect(run).toMatchObject({ agentId: a.id, kind: 'script', network: 'on' })
       expect(run.argv.slice(0, 3)).toEqual(r.kind === 'pip' ? ['python3', '-m', 'pip'] : ['npm', 'install', '-g'])
       expect(run.argv.at(-1)).toBe(r.items[0])
     }
+  })
+
+  describe('the restore click is a one-time internet grant for its own pip/npm runs, like Rebuild', () => {
+    const tools = { pip: ['requests==2.32.3'], npm: ['cowsay@1.6.0'], optBin: [], updatedAt: '2026-11-06T09:00:00.000Z' }
+    async function restoreWith(policy: Agent['internetPolicy'], egress: 'up' | 'down') {
+      await boot({ runner: true, egress })
+      const a = await makeBot('Analyst')
+      store.agents = store.agents.map((x) => (x.id === a.id ? { ...x, internetPolicy: policy, vm: { ...x.vm, tools } } : x))
+      store.save()
+      const b = await backUp()
+      store.agents = store.agents.map((x) => (x.id === a.id ? { ...x, vm: { ...x.vm, tools: undefined } } : x))
+      store.save()
+      const res = await inject('POST', `/api/vm/backups/${b.id}/restore`, { confirm: true }, confirm)
+      expect(res.statusCode).toBe(200)
+      return { a, out: (res.json() as BackupRestoreResult).agents[0]! }
+    }
+    const runsOf = (agentId: string) => (app as unknown as { vmRuns: { list(id: string, o: { limit: number }): { runs: unknown[] } } }).vmRuns.list(agentId, { limit: 50 }).runs
+    const pending = () => (app as unknown as { vmPermissions: { list(): { requests: { status: string; runId?: string }[] } } }).vmPermissions.list().requests.filter((r) => r.status === 'pending')
+
+    it('Ask: both runs carry allow_once/rebuild and raise no card; a later run still asks', async () => {
+      const { a, out } = await restoreWith('ask', 'up')
+      const [, pip, npm] = out.toolResults
+      expect(pip).toMatchObject({ kind: 'pip', status: 'started' })
+      expect(npm).toMatchObject({ kind: 'npm', status: 'started' })
+      let conversationId = ''
+      for (const r of [pip!, npm!]) {
+        const run = (await inject('GET', `/api/runs/${r.runId}`)).json() as ScriptRun
+        conversationId = run.conversationId
+        expect(run.status).not.toBe('waiting_permission')
+        expect(run.permissions).toEqual([{ type: 'internet', decision: 'allow_once', source: 'rebuild' }])
+      }
+      expect(pending()).toEqual([])
+      // The grant is on those two runs only: the bot's next online run asks as usual.
+      const later = await (app as unknown as { vmRuns: { start(i: object): Promise<ScriptRun> } }).vmRuns.start({
+        agentId: a.id, conversationId, context: { kind: 'dm' }, argv: ['python3', '-m', 'pip', 'install', '--user', 'numpy==2.1.0'], network: 'on',
+      })
+      expect(later.status).toBe('waiting_permission')
+      expect(later.permissions.some((p) => p.type === 'internet' && p.source === 'rebuild')).toBe(false)
+      expect(pending().map((r) => r.runId)).toEqual([later.id])
+      expect(store.agents.find((x) => x.id === a.id)!.internetPolicy).toBe('ask')
+    })
+
+    it('Never: refused like Rebuild (its 409 text, no run recorded, no card)', async () => {
+      const { a, out } = await restoreWith('never', 'up')
+      const text = internetNeverBuildText('Analyst')
+      expect(out.toolResults[1]).toEqual({ kind: 'pip', status: 'failed', items: tools.pip, message: text })
+      expect(out.toolResults[2]).toEqual({ kind: 'npm', status: 'failed', items: tools.npm, message: text })
+      expect(out).toMatchObject({ tools: 'failed', toolsMessage: `${text} ${text}` })
+      expect(runsOf(a.id)).toEqual([])
+      expect(pending()).toEqual([])
+    })
+
+    it('proxy down: refused like Rebuild (proxy_unavailable text, no run recorded)', async () => {
+      const { a, out } = await restoreWith('ask', 'down')
+      expect(out.toolResults[1]).toMatchObject({ status: 'failed', message: PROXY_UNAVAILABLE })
+      expect(out.toolResults[1]!.runId).toBeUndefined()
+      expect(runsOf(a.id)).toEqual([])
+    })
   })
 
   it('a missing volume marker: restore brings the files and the marker back; a mismatched one refuses', async () => {

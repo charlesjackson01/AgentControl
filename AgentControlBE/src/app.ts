@@ -2281,8 +2281,13 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
           return await restoreTools(agent, manifest, {
             current: (id) => store.agents.find((a) => a.id === id),
             startRebuild: (a) => startRebuildRun(a),
-            startInstall: (a, argv, why, hosts) =>
-              runs.start({ agentId: a.id, conversationId: ensureDm(store, a.id).id, context: { kind: 'dm' }, argv, why, network: 'on', hosts, timeoutSec: 1800 }),
+            // The restore click is these runs' one-time internet grant, exactly like Rebuild: Never and a
+            // down proxy refuse with Rebuild's 409 texts and no record; otherwise no internet card.
+            startInstall: async (a, argv, why, hosts) => {
+              if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverBuildText(a.name))
+              await buildProxyCheck()
+              return runs.start({ agentId: a.id, conversationId: ensureDm(store, a.id).id, context: { kind: 'dm' }, argv, why, network: 'on', hosts, timeoutSec: 1800, internetGrant: 'rebuild' })
+            },
           })
         } finally {
           publishVm(agent.id)

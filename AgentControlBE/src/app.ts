@@ -464,7 +464,7 @@ export interface BuildAppOptions {
    * BE-P2-18: test-only backups folder (default backupsRootFor: <data>/backups, Windows
    * %LOCALAPPDATA%\AgentControl\backups), free space and clock.
    */
-  backups?: { root?: string; freeBytes?: (path: string) => number | null; now?: () => Date }
+  backups?: { root?: string; freeBytes?: (path: string) => number | null; now?: () => Date; /** Nightly check interval (default 60 s); false: no timer. */ nightlyMs?: number | false }
 }
 
 declare module 'fastify' {
@@ -1607,6 +1607,23 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   app.decorate('liveEvents', liveEvents)
   // BE-P2-9: set once the runtime probe exists (below).
   let snapshotDriverNow: () => SnapshotDriver | null = () => null
+  // BE-P2-18: the backup service (created further down); the grow and base-upgrade hooks use it.
+  let backupsRef: BackupService | null = null
+  const preUpgradeBackup = async (agentIds?: string[]): Promise<void> => {
+    if (!backupsRef || store.agents.length === 0) return
+    // A base upgrade runs inside the bot's engine lock, which a restore in progress may be waiting
+    // for (it stops the bot first): never wait behind one there; that bot was just backed up or restored.
+    if (agentIds && backupsRef.busy()) {
+      app.log.warn('backups: no pre-upgrade backup: a backup or restore is already running')
+      return
+    }
+    try {
+      const b = await backupsRef.run({ trigger: 'pre_upgrade', ...(agentIds ? { agentIds } : {}) })
+      if (b.status !== 'complete') app.log.warn(`backups: the pre-upgrade backup ${b.id} failed: ${b.error ?? ''}`)
+    } catch (err) {
+      app.log.warn(`backups: no pre-upgrade backup: ${(err as Error).message}`)
+    }
+  }
   // BE-P2-2: engine and the `agentcontrol` machine.
   const vmHost =
     opts.vmHost ??
@@ -1620,6 +1637,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
         if (store.settings.vm) store.settings.vm.machine = { diskGb }
         store.save()
       },
+      // BE-P2-18: back every bot up before the machine disk grows (best effort: logged, the grow goes on).
+      beforeGrow: () => preUpgradeBackup(),
     })
   app.get('/api/vm/host', async () => vmHost.hostInfo())
   app.post('/api/vm/machine/grow', async (request) => {
@@ -1769,6 +1788,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       },
       enforceLimits: () => runtimeProbe.current()?.standard?.limitsAccepted ?? true,
       activeRuns: activeOf,
+      // BE-P2-18: back the bot up before its layer is rebuilt on a new shared base.
+      beforeBaseUpgrade: (agent) => preUpgradeBackup([agent.id]),
       // BE-P2-13: builds stay offline (buildNetwork 'none') until BE-P2-14 wires the build permission.
       egress,
       log: (msg) => app.log.info(msg),
@@ -2250,8 +2271,14 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     log: (msg) => app.log.info(msg),
   })
   app.decorate('vmBackups', backups)
+  backupsRef = backups
+  // BE-P2-18: nightly at settings.vm.backups.time local, when enabled (checked every minute).
+  const stopNightly = opts.backups?.nightlyMs === false
+    ? null
+    : backups.startNightly(() => store.settings.vm?.backups ?? DEFAULT_VM_SETTINGS.backups, opts.backups?.nightlyMs)
   // A backup or restore in progress finishes before the server closes.
   app.addHook('onClose', async () => {
+    stopNightly?.()
     await backups.idle()
   })
   registerBackupRoutes(app, store, backups, {
@@ -2304,6 +2331,11 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     activeBuild: (agentId) => runs.activeBuild(agentId),
     // BE-P2-18: VmInfo.storage.lastBackupAt.
     lastBackupAt: (agentId) => backups.lastBackupAt(agentId),
+    // BE-P2-18: Reset VM always backs the bot up first; no reset without a finished backup.
+    beforeReset: async (agent) => {
+      const b = await backups.run({ trigger: 'pre_reset', agentIds: [agent.id] })
+      if (b.status !== 'complete') failWithReason(409, 'backup_failed', `${agent.name}'s computer wasn't reset because the backup before the reset didn't finish. ${b.error ?? ''}`.trim())
+    },
     // BE-P2-15: the browser add-on (PATCH permissions.browser, VmInfo.browser / browserState).
     browser: addon,
   })

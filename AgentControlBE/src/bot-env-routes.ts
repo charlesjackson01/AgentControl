@@ -5,7 +5,7 @@
  *   PATCH /api/agents/:id/vm            → VmInfo (internetPolicy, permissions.browser, gvisor, env)
  *   POST  /api/agents/:id/vm/start      → VmInfo
  *   POST  /api/agents/:id/vm/stop       → VmInfo
- *   POST  /api/agents/:id/vm/reset      → VmInfo ({confirm:true}; M1: no backup)
+ *   POST  /api/agents/:id/vm/reset      → VmInfo ({confirm:true}; BE-P2-18: a pre_reset backup first)
  *   GET   /api/agents/:id/vm/tools      → VmToolsInfo
  *
  *   POST  /api/agents/:id/vm/tools/rebuild   → ScriptRun (kind tool_build; BE-P2-17)
@@ -176,6 +176,8 @@ export interface BotEnvRouteDeps {
   browser?: Pick<BrowserAddon, 'sharedState' | 'botInfo' | 'checkChange' | 'changed'>
   /** BE-P2-18: the bot's newest complete backup (VmInfo.storage.lastBackupAt). */
   lastBackupAt?: (agentId: string) => string | undefined
+  /** BE-P2-18: the pre-reset backup; a throw (507 low disk, 409 backup_failed) stops the reset before anything changes. */
+  beforeReset?: (agent: Agent) => Promise<void>
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -377,6 +379,8 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     assertBotFilesAvailable(store, agent)
     // BE-P2-22: not during a tool build (its queued runs are left waiting for it).
     if (deps.buildActive?.(agent.id)) failWithReason(409, BUILD_ACTIVE_REASON, BUILD_ACTIVE_TEXT)
+    // BE-P2-18: always back the bot up first (even with nightly backups off).
+    await deps.beforeReset?.(agent)
     deps.runner?.stopRuns(agent.id)
     await botEnv.reset(agent)
     return vmInfo(agentOf(agent.id))

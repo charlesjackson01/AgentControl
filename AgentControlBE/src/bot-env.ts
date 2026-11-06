@@ -317,6 +317,11 @@ export interface BotEnvDeps {
   saveVm: (agentId: string, vm: AgentVm) => boolean
   /** Runs queued/running for this bot right now (BE-P2-8 wires the real count). */
   activeRuns?: (agentId: string) => number
+  /**
+   * BE-P2-18: before the layer is rebuilt on a new shared base (base image upgrade): the bot's
+   * pre-upgrade backup. Best effort: a failure is logged and the upgrade goes ahead.
+   */
+  beforeBaseUpgrade?: (agent: Agent) => Promise<void>
   now?: () => Date
   log?: (msg: string) => void
 }
@@ -739,6 +744,13 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     // the next build; otherwise the base-upgrade rebuild would undo the rollback right away.
     if (have && vm.image.previous === undefined) return ref
     // Base upgrade (or a lost layer): rebuild from vm.packages as a new generation. Volumes stay.
+    if (have && deps.beforeBaseUpgrade) {
+      try {
+        await deps.beforeBaseUpgrade(agent)
+      } catch (err) {
+        log(`bot-env: ${agent.slug}: the backup before the base upgrade failed, upgrading anyway: ${(err as Error).message}`)
+      }
+    }
     try {
       log(`bot-env: ${agent.slug}: ${have ? 'base changed' : 'layer missing'}, rebuilding from ${from}`)
       const res = await buildNext(agent, vm.packages)

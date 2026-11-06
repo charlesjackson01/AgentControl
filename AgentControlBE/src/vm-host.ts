@@ -95,6 +95,11 @@ export interface VmHostDeps {
   storage?: () => { driver: SnapshotDriver | null; volumeState: 'ok' | 'missing' | 'mismatch' }
   /** How long GET results are reused (ms). */
   cacheMs?: number
+  /**
+   * BE-P2-18: runs once a grow passed its checks, before the machine is changed (the pre-upgrade
+   * backup). Errors are logged by the caller's hook; a throw here stops the grow.
+   */
+  beforeGrow?: () => Promise<void>
   now?: () => number
 }
 
@@ -330,6 +335,8 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     }
     busy = true
     try {
+      // BE-P2-18: the pre-upgrade backup, while the grow holds the machine (a second grow gets machine_busy).
+      await deps.beforeGrow?.()
       if (os === 'darwin') {
         const wasRunning = m.state === 'running' || m.state === 'starting'
         if (wasRunning) await run('stop')

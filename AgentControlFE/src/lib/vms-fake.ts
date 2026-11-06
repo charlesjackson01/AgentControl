@@ -81,7 +81,10 @@ function backupsFor(scene: VmsScene, now: Date): BackupInfo[] {
     { id: 'bk-reset', createdAt: at(now, -2, 16, 12), trigger: 'pre_reset', agentIds: ['primary'], bytes: 210 * MB, path: 'data/backups/reset', status: 'complete' },
   ]
   if (scene === 'progress') {
-    rows.unshift({ id: 'bk-now', createdAt: at(now, 0, 16, 40), trigger: 'manual', agentIds: ids, bytes: 120 * MB, path: 'data/backups/now', status: 'in_progress' })
+    rows.unshift({
+      id: 'bk-now', createdAt: at(now, 0, 16, 40), trigger: 'manual', agentIds: ids, bytes: 120 * MB,
+      path: 'data/backups/now', status: 'in_progress', progress: { done: 1, total: ids.length },
+    })
   }
   if (scene === 'failed') {
     rows.unshift({ id: 'bk-fail', createdAt: at(now, 0, 15, 2), trigger: 'manual', agentIds: ['analyst'], bytes: 40 * MB, path: 'data/backups/fail', status: 'failed', error: 'The disk filled up before the archive was finished.' })
@@ -108,9 +111,15 @@ export function createFakeVmsState(scene: VmsScene = 'default', now: Date = new 
 
 type Reply = { status: number; body: unknown }
 
-function err(status: number, reason: string, message: string): Reply {
-  return { status, body: { statusCode: status, error: 'Request Error', reason, message } }
+function err(status: number, reason: string | undefined, message: string): Reply {
+  const body: { statusCode: number; error: string; message: string; reason?: string } = { statusCode: status, error: 'Request Error', message }
+  if (reason) body.reason = reason
+  return { status, body }
 }
+
+const LOW_DISK_MESSAGE = 'Not enough free disk space for a backup: it needs about 8 GB free and 2 GB is free. Free some space, then try again.'
+
+export type FakeBackupFault = 'low_disk' | 'low_disk_bare' | 'no_bots' | 'backup_incomplete' | 'backup_failed'
 
 function pathOf(url: string): string {
   const q = url.indexOf('?')
@@ -121,7 +130,7 @@ function pathOf(url: string): string {
  * One fake call. Mutates `state` for writes. null when the path isn't one this layer stands in for.
  * `backupListFails` models the backups card's own error (the rest of the page still loads).
  */
-export function fakeVmsDispatch(state: FakeVmsState, method: string, url: string, body: unknown, opts: { backupListFails?: boolean } = {}): Reply | null {
+export function fakeVmsDispatch(state: FakeVmsState, method: string, url: string, body: unknown, opts: { backupListFails?: boolean; fault?: FakeBackupFault } = {}): Reply | null {
   const path = pathOf(url)
   const m = method.toUpperCase()
   if (path === '/api/vm/settings' && m === 'GET') return { status: 200, body: state.settings }
@@ -158,16 +167,21 @@ export function fakeVmsDispatch(state: FakeVmsState, method: string, url: string
     return { status: 200, body: state.backups }
   }
   if (path === '/api/vm/backups' && m === 'POST') {
+    if (opts.fault === 'low_disk') return err(507, 'low_disk', LOW_DISK_MESSAGE)
+    if (opts.fault === 'low_disk_bare') return err(507, undefined, LOW_DISK_MESSAGE)
+    if (opts.fault === 'no_bots' || state.agents.length === 0) return err(400, 'no_bots', 'There are no bots to back up yet.')
     if (state.backups.some((b) => b.status === 'in_progress')) return err(409, 'backup_in_progress', 'A backup is already running.')
     const ids = (body as { agentIds?: string[] } | null)?.agentIds
+    const agentIds = ids && ids.length ? ids : state.agents.map((a) => a.id)
     const row: BackupInfo = {
       id: `bk-${state.backups.length + 1}`,
       createdAt: new Date().toISOString(),
       trigger: 'manual',
-      agentIds: ids && ids.length ? ids : state.agents.map((a) => a.id),
+      agentIds,
       bytes: 0,
       path: 'data/backups/manual',
       status: 'in_progress',
+      progress: { done: 0, total: agentIds.length },
     }
     state.backups = [row, ...state.backups]
     return { status: 202, body: row }
@@ -178,8 +192,20 @@ export function fakeVmsDispatch(state: FakeVmsState, method: string, url: string
     const found = state.backups.find((b) => b.id === id)
     if (!found) return err(404, 'not_found', 'That backup is gone.')
     if ((body as { confirm?: unknown } | null)?.confirm !== true) return err(400, 'confirm_required', 'Restoring a backup needs confirm: true.')
+    if (opts.fault === 'backup_failed') return err(409, 'backup_failed', "Primary's computer wasn't reset because the backup before the reset didn't finish.")
+    if (opts.fault === 'backup_incomplete' || found.status !== 'complete') {
+      return err(409, 'backup_incomplete', found.status === 'in_progress'
+        ? 'This backup is still running. Restore it when it finishes.'
+        : "This backup didn't finish, so it can't be restored. Pick another one.")
+    }
     if (state.runsActive) return err(409, 'runs_active', 'Scripts are running. Wait for them to finish, then restore.')
-    return { status: 200, body: found }
+    return {
+      status: 200,
+      body: {
+        backupId: found.id,
+        agents: found.agentIds.map((agentId) => ({ agentId, files: 4, tools: 'not_needed' as const })),
+      },
+    }
   }
   if (path === '/api/agents' && m === 'GET') return { status: 200, body: state.agents.map((a) => ({ id: a.id, name: a.name })) }
   const runs = /^\/api\/agents\/([^/]+)\/script-runs$/.exec(path)

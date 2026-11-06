@@ -7,7 +7,7 @@
  */
 import {
   PERMISSION_CSRF_HEADER,
-  type BackupCreateBody, type BackupInfo, type BackupRestoreBody, type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
+  type BackupCreateBody, type BackupInfo, type BackupRestoreBody, type BackupRestoreResult, type BrowserAddonInfo, type BrowserRetryRequest, type PermissionAlreadyResolved, type PermissionAnswer, type PermissionDecision, type PermissionListResponse, type PermissionRequest,
   type ToolBuildAccepted,
   type ScriptRun, type ScriptRunSummary, type UndoConflict, type UndoGone, type UndoPreview, type UndoRequest, type UndoResult,
   type VmHostInfo, type VmInfo, type VmPatch, type VmProbeResult, type VmSettingsPatch, type VmSettingsView, type VmToolsInfo,
@@ -103,9 +103,9 @@ export function createVmApi(request: JsonRequest, requestText: TextRequest) {
     listBackups: () => request<BackupInfo[]>('/api/vm/backups'),
     createBackup: (body: BackupCreateBody = {}) =>
       request<BackupInfo>('/api/vm/backups', { method: 'POST', body: JSON.stringify(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
-    /** 400 without confirm:true, 409 while runs are active, 404 unknown id. */
+    /** 200 BackupRestoreResult. Needs confirm:true and the confirm header. 400/403 confirm_required, 404, 409 backup_incomplete / runs_active. */
     restoreBackup: (id: string, body: BackupRestoreBody) =>
-      request<BackupInfo>(`/api/vm/backups/${enc(id)}/restore`, { method: 'POST', body: JSON.stringify(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
+      request<BackupRestoreResult>(`/api/vm/backups/${enc(id)}/restore`, { method: 'POST', body: JSON.stringify(body), headers: { [PERMISSION_CSRF_HEADER]: '1' } }),
     /** 409 while runs are active, 400 when the host disk is low. */
     growMachine: (toGb: number) => request<VmHostInfo>('/api/vm/machine/grow', post({ toGb })),
 

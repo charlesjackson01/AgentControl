@@ -9,7 +9,7 @@ import { useLive } from '../../state/live-context'
 import {
   BACKUP_LIST_ERROR, BUDGET_HINTS, BUDGET_INTRO, DOWNLOADS_INTRO, GROW_BUSY_HINT, GROW_HINT, GVISOR_HINT, GVISOR_MODE_OPTIONS, GVISOR_MODE_SUB,
   LOAD_ERROR_TEXT, LOAD_ERROR_TITLE, REMOVE_DOWNLOAD_BODY, RESTORE_BODY,
-  backupRow, backupsEmptyText, backupsIntro, budgetDraftFrom, budgetErrors, budgetPatch, diskFraction, diskUsedText,
+  backupCardError, backupRow, backupsEmptyText, backupsIntro, budgetDraftFrom, budgetErrors, budgetPatch, diskFraction, diskUsedText, mergeBackupList, restoreToolsNote,
   growButtonLabel, growConfirmBody, growConfirmLabel, growConfirmTitle, gvisorBadge, linuxNativeText, machineStateLabel, machineSubtitle,
   probeSummary, restoreSubtitle, runsLookActive, scheduleLine, sharedDownloads, undoneSetup, windowsWarning,
   type BudgetDraft,
@@ -35,6 +35,19 @@ function messageOf(err: unknown, fallback: string): string {
   if (err instanceof ApiError && err.message.trim() && err.message !== 'Something went wrong.') return err.message.trim()
   if (err instanceof Error && err.message.trim() && err.message !== 'Failed to fetch') return err.message.trim()
   return fallback
+}
+
+function statusOf(err: unknown): number | undefined {
+  return err && typeof err === 'object' && typeof (err as { status?: unknown }).status === 'number' ? (err as { status: number }).status : undefined
+}
+
+function bodyOf(err: unknown): unknown {
+  return err && typeof err === 'object' && 'body' in err ? (err as { body: unknown }).body : undefined
+}
+
+/** Server text for a backup action. A 507 (reason low_disk, or no reason yet) uses Grow's inline low-disk treatment. */
+function backupActionText(err: unknown, fallback: string): string {
+  return backupCardError(statusOf(err), bodyOf(err)) ?? messageOf(err, fallback)
 }
 
 async function loadVms(liveRuns: readonly { status?: string }[]): Promise<Loaded> {
@@ -180,14 +193,15 @@ export default function VmsSection() {
   const confirmRestore = () => {
     if (!restoreId) return
     setRestoreBusy(true)
+    const names = new Map((data?.agents ?? []).map((a) => [a.id, a.name]))
     void vmApi.restoreBackup(restoreId, { confirm: true }).then(
-      () => {
+      (result) => {
         setRestoreId(null)
         setRestoreBusy(false)
-        setRestoreError(null)
+        setRestoreError(restoreToolsNote(result, names))
       },
       (err: unknown) => {
-        setRestoreError(messageOf(err, "Couldn't restore that backup."))
+        setRestoreError(backupActionText(err, "Couldn't restore that backup."))
         setRestoreId(null)
         setRestoreBusy(false)
       },
@@ -203,7 +217,7 @@ export default function VmsSection() {
         setBackupBusy(false)
       },
       (err: unknown) => {
-        setBackupActionError(messageOf(err, "Couldn't start a backup."))
+        setBackupActionError(backupActionText(err, "Couldn't start a backup."))
         setBackupBusy(false)
       },
     )
@@ -255,7 +269,8 @@ export default function VmsSection() {
   }
 
   const names = new Map(data.agents.map((a) => [a.id, a.name]))
-  const rows = data.backups.map((b) => backupRow(b, names, now))
+  const backups = mergeBackupList(data.backups, Object.values(live.state.backups))
+  const rows = backups.map((b) => backupRow(b, names, now))
   const draft = budget ?? budgetDraftFrom(data.settings)
   const errors = budgetErrors(draft)
   const warn = windowsWarning(data.host)
@@ -380,7 +395,7 @@ export default function VmsSection() {
             <p className="vms-split__t">Schedule</p>
             <p className="vms-split__s">{scheduleLine(data.settings)}</p>
           </div>
-          <button type="button" className="btn btn--primary" disabled={backupBusy || data.backups.some((b) => b.status === 'in_progress')} onClick={backUpNow}>{backupBusy ? 'Starting…' : 'Back up now'}</button>
+          <button type="button" className="btn btn--primary" disabled={backupBusy || backups.some((b) => b.status === 'in_progress')} onClick={backUpNow}>{backupBusy ? 'Starting…' : 'Back up now'}</button>
         </div>
         {data.backupError ? (
           <p className="vms-alert" role="alert">{data.backupError}</p>

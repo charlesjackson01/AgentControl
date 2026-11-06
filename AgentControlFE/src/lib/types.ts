@@ -553,7 +553,7 @@ export type FileListing = {
 }
 
 /*
- * Hand-copied from AgentControlBE/src/shared/types.ts @ 86af67b (int/phase2-m2: M2 contract fec4670 + BE-22/13/21), section "Phase 2" to the end,
+ * Hand-copied from AgentControlBE/src/shared/types.ts @ e9bee1f (BE-P2-18, branch p2/m3-backup), section "Phase 2" to the end,
  * verbatim so a diff against the BE stays empty. Contract: docs/phase2-contract.md.
  * Phase 1's RunStatus/AgentRun are model turns; script runs use ScriptRunStatus/ScriptRun.
  */
@@ -899,6 +899,51 @@ export const SNAPSHOT_BUDGET_BOUNDS = {
 } as const
 export const BACKUP_KEEP_BOUNDS = { min: 1, max: 30 } as const
 
+/**
+ * BE-P2-18 (M3 plan §4.1): one backup. A backup holds one `tar.zst` per bot under
+ * `<backups>/<id>/` (Mac/Linux `<data>/backups/<id>/`, Windows `%LOCALAPPDATA%\AgentControl\backups\<id>\`).
+ */
+export type BackupTrigger = 'nightly' | 'manual' | 'pre_reset' | 'pre_upgrade'
+export type BackupStatus = 'complete' | 'failed' | 'in_progress'
+export interface BackupInfo {
+  /** e.g. "2026-11-06T09-00-00Z" (UTC stamp; also the folder name). */
+  id: string
+  /** ISO */
+  createdAt: string
+  trigger: BackupTrigger
+  /** Bots included (while in progress: the bots being backed up). Keep-N pruning removes a bot's oldest archives. */
+  agentIds: string[]
+  /** Total archive size on disk. */
+  bytes: number
+  /** Host path of the backup folder, for display (not a download URL). */
+  path: string
+  status: BackupStatus
+  /** Plain-language reason when status is 'failed'. */
+  error?: string
+  /** BE-P2-18 (additive, Needs OK): while in progress, bots finished of the total. */
+  progress?: { done: number; total: number }
+  /** BE-P2-18 (additive, Needs OK): ISO time the backup finished (complete or failed). */
+  finishedAt?: string
+}
+export interface BackupCreateBody { agentIds?: string[] }
+export interface BackupRestoreBody { agentIds?: string[]; confirm: true }
+/** BE-P2-18 (Needs OK): POST /api/vm/backups/:id/restore 200 body. */
+export interface BackupRestoreResult {
+  backupId: string
+  agents: BackupRestoreAgent[]
+}
+export interface BackupRestoreAgent {
+  agentId: string
+  /** Files restored (workspace, shared inputs, memory, BOT.md). */
+  files: number
+  /**
+   * Tools after the restore: 'started' (a tool build from the manifest's packages is running),
+   * 'not_needed' (no system packages), 'failed' (it couldn't start; `toolsMessage` says why).
+   */
+  tools: 'started' | 'not_needed' | 'failed'
+  toolsMessage?: string
+}
+
 /** GET /api/vm/host. */
 export interface VmHostInfo {
   engine: 'podman' | 'docker' | null
@@ -1001,7 +1046,8 @@ export type LiveEvent =
   | { type: 'permission.resolved'; conversationId: string; request: PermissionRequest }
   /** M2 contract (BE-P2-15, approved 2026-10-30): the request changed after it resolved (setup / setupError snapshot). */
   | { type: 'permission.updated'; conversationId: string; request: PermissionRequest }
-  | { type: 'vm.updated'; agentId: string; vm: VmInfo }
+  /** BE-P2-18 (additive, Needs OK): `backup` is set while a backup that includes this bot runs and when it ends. */
+  | { type: 'vm.updated'; agentId: string; vm: VmInfo; backup?: BackupInfo }
   /** M2 contract (BE-P2-15, approved 2026-10-30): the shared Chromium download; sent to every subscriber (no filter applies). */
   | { type: 'browser.updated'; browser: BrowserAddonInfo }
 
@@ -1257,27 +1303,4 @@ export const PERMISSION_DECISIONS: Readonly<Record<PermissionType, readonly Perm
 /** POST /api/vm/browser/retry body: no agentId retries the shared download; with agentId, that bot's failed step. */
 export interface BrowserRetryRequest {
   agentId?: string
-}
-
-/* ───────────────────────── Phase 2 M3 (FE-P2-6): backups. Not in BE shared/types.ts until BE-P2-18. Re-sync this block when that lands. ───────────────────────── */
-
-/** One host backup (GET /api/vm/backups, newest first). */
-export interface BackupInfo {
-  id: string
-  createdAt: string
-  trigger: 'nightly' | 'manual' | 'pre_reset' | 'pre_upgrade'
-  agentIds: string[]
-  bytes: number
-  path: string
-  status: 'complete' | 'failed' | 'in_progress'
-  error?: string
-}
-/** POST /api/vm/backups. Empty or omitted agentIds backs up every bot. */
-export interface BackupCreateBody {
-  agentIds?: string[]
-}
-/** POST /api/vm/backups/:id/restore. confirm:true is required (400 without). */
-export interface BackupRestoreBody {
-  agentIds?: string[]
-  confirm: true
 }

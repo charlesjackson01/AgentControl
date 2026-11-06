@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { SECURITY_ROWS } from './security-coverage.js'
+import { SECURITY_GAPS, SECURITY_ROWS } from './security-coverage.js'
 
 const SRC = dirname(fileURLToPath(import.meta.url))
 /** The §13 rows, in plan order. */
@@ -51,6 +51,14 @@ describe('BE-P2-19 §13 coverage map', () => {
       if (f.endsWith('.vm.test.ts')) expect(text, f).toMatch(/AC_VM_TESTS|VM_TESTS/)
       if (f.endsWith('.win.test.ts')) expect(text, f).toMatch(/describe\.skipIf\(!WIN_TESTS\)\('@win/)
       if (f.endsWith('.mac.test.ts')) expect(text, f).toMatch(/describe\.skipIf\(!MAC_TESTS\)\('@mac/)
+    }
+  })
+
+  it('every gap belongs to a row and is listed in docs/vm.md', () => {
+    const doc = readFileSync(join(SRC, '..', '..', 'docs', 'vm.md'), 'utf8')
+    for (const g of SECURITY_GAPS) {
+      expect(PLAN_ROWS, g.row).toContain(g.row)
+      expect(doc, g.gap).toContain(g.gap)
     }
   })
 })

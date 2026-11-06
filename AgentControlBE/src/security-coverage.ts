@@ -110,6 +110,8 @@ export const SECURITY_ROWS: SecurityRow[] = [
       vm('podman-runner.vm.test.ts', '300 MB of output is cut at 200 MB and the run stopped'),
       vm('podman-runner.vm.test.ts', 'timeout stops the run (and the container)'),
       sec('resources: a full /tmp gives ENOSPC and the run fails with a clear status'),
+      unit('run-service.test.ts', 'under 3 GB free refuses the run (409 low_disk), and nothing is recorded'),
+      unit('run-service.test.ts', 'space dropping under 3 GB while queued fails the run at its turn (reason low_disk)'),
       vm('snapshot-budget.vm.test.ts', 'over the personal limit, the run is blocked with personal_quota'),
     ],
   },
@@ -166,4 +168,18 @@ export const SECURITY_ROWS: SecurityRow[] = [
       win('Windows volume: the live helper sees the volume marker'),
     ],
   },
+]
+
+/**
+ * Checks that aren't automated here, by row. Each one is listed in docs/vm.md (the coverage test
+ * checks that), so nothing is skipped silently.
+ */
+export const SECURITY_GAPS: { row: string; gap: string }[] = [
+  { row: 'bot_bot', gap: 'Distinct host uids need idmapped mounts; on keep-id hosts (rootless here) that test skips and all bots share the user\'s uid on the host.' },
+  { row: 'resources', gap: 'OOM and fork-bomb limits need cgroup limits; on rootless cgroupfs hosts (this dev box) those tests skip with the probe\'s reason and runs need AC_ALLOW_UNLIMITED_RUNS=1.' },
+  { row: 'resources', gap: 'A real full machine disk is not filled; the 3 GB floor is tested with a fake free-space reading and the full-disk check fills only the 512 MB /tmp.' },
+  { row: 'network', gap: 'gvproxy on Mac and Windows: the @mac/@win network tests have never run (no Mac or Windows test machine).' },
+  { row: 'engine_storage', gap: 'ac-storaged runs only on Windows: the @win test has never run.' },
+  { row: 'windows_volume', gap: 'A real wsl --unregister followed by files_missing and restore needs a throwaway Windows machine; manual only.' },
+  { row: 'privilege', gap: 'gVisor (runsc) runs of the suite depend on the host: with AC_VM_GVISOR=force_on on a host where runsc passes the probe.' },
 ]

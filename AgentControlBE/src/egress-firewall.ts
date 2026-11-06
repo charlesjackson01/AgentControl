@@ -2,9 +2,11 @@
  * BE-P2-13 (Charles, M2 steering): the nftables layer under the egress proxy. A one-shot helper
  * container joins ac-egressd's network namespace (`--network container:ac-egressd`) with only
  * NET_ADMIN, loads the `inet ac_egressd` table below and exits; the proxy itself stays
- * `--cap-drop ALL`. The table drops every NEW outbound connection from the proxy's namespace to
+ * `--cap-drop ALL`. The table refuses every NEW outbound connection from the proxy's namespace to
  * the always-blocked ranges (this computer, loopback, home network, Tailscale, metadata, reserved,
- * local model servers), so a bug in the proxy's own rules can't reach them. Replies on connections
+ * local model servers), so a bug in the proxy's own rules can't reach them. BE-P2-19: refused with
+ * an ICMP admin-prohibited reject rather than a silent drop, so the proxy's connect fails at once
+ * (EHOSTUNREACH → 502) instead of waiting out its 15 s connect timeout; nothing gets through either way. Replies on connections
  * the bots opened to the proxy (established) and DNS (port 53, to the proxy's resolvers and the
  * outbound network's gateway only) still pass. AC_EGRESS_TEST_ALLOW never changes this table.
  *
@@ -118,8 +120,8 @@ export function firewallRuleset(input: FirewallInput): string {
     '    ct state established,related accept',
     '    ip daddr @dns4 meta l4proto { tcp, udp } th dport 53 accept',
     '    ip6 daddr @dns6 meta l4proto { tcp, udp } th dport 53 accept',
-    '    ip daddr @drop4 counter drop',
-    '    ip6 daddr @drop6 counter drop',
+    '    ip daddr @drop4 counter reject with icmpx type admin-prohibited',
+    '    ip6 daddr @drop6 counter reject with icmpx type admin-prohibited',
     '  }',
     '}',
     '',

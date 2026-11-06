@@ -445,3 +445,63 @@ describe('item 3: model servers through the proxy', () => {
     }
   })
 })
+
+describe('BE-P2-19: upstream connect failures answer 502 (refused at once, a silent drop after connectTimeoutMs)', () => {
+  /** A proxy whose upstream sockets are fakes: `mode` decides what each one does. */
+  async function fakeDialProxy(mode: 'refused' | 'silent', connectTimeoutMs: number) {
+    const made: net.Socket[] = []
+    const p = createEgressProxy({
+      config: { hostAddresses: [] },
+      resolve: async () => [PUBLIC],
+      connect: () => {
+        // An unconnected socket stands in for the upstream: it never connects by itself.
+        const s = new net.Socket()
+        made.push(s)
+        if (mode === 'refused') setImmediate(() => s.emit('error', Object.assign(new Error('connect EHOSTUNREACH 93.184.216.34:443'), { code: 'EHOSTUNREACH' })))
+        return s
+      },
+      connectTimeoutMs,
+      sweepMs: 0,
+    })
+    p.grant(cred())
+    await new Promise<void>((r) => p.server.listen(0, '127.0.0.1', r))
+    return { p, made, port: (p.server.address() as net.AddressInfo).port }
+  }
+  const connectThrough = (port: number) =>
+    new Promise<{ status: number; body: string; ms: number }>((resolve, reject) => {
+      const t0 = Date.now()
+      const s = net.connect({ host: '127.0.0.1', port })
+      let buf = ''
+      s.on('error', reject)
+      s.on('connect', () => s.write(`CONNECT site.example.com:443 HTTP/1.1\r\nHost: site.example.com:443\r\nProxy-Authorization: ${A}\r\n\r\n`))
+      s.on('data', (c) => (buf += c.toString('latin1')))
+      s.on('end', () => resolve({ status: Number(/^HTTP\/1\.1 (\d{3})/.exec(buf)?.[1]), body: buf.slice(buf.indexOf('\r\n\r\n') + 4), ms: Date.now() - t0 }))
+    })
+
+  it('a refused connect (the firewall\'s reject) is a 502 at once, without waiting for the timeout', async () => {
+    const { p, port } = await fakeDialProxy('refused', 60_000)
+    try {
+      const r = await connectThrough(port)
+      expect(r.status).toBe(502)
+      expect(r.body).toContain("Couldn't connect to site.example.com: connect EHOSTUNREACH")
+      expect(r.ms).toBeLessThan(2_000)
+    } finally {
+      await p.close()
+    }
+  })
+
+  it('a connect that never answers is a 502 after connectTimeoutMs, and its socket is destroyed', async () => {
+    const { p, made, port } = await fakeDialProxy('silent', 300)
+    try {
+      const r = await connectThrough(port)
+      expect(r.status).toBe(502)
+      expect(r.body).toContain('connect timeout')
+      expect(r.ms).toBeGreaterThanOrEqual(250)
+      expect(r.ms).toBeLessThan(5_000)
+      expect(made).toHaveLength(1)
+      expect(made[0]!.destroyed).toBe(true)
+    } finally {
+      await p.close()
+    }
+  })
+})

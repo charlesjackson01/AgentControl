@@ -12,7 +12,7 @@ describe('egress firewall ruleset', () => {
     },
     dns: ['10.89.0.1', '[fd00::1]:53', '1.1.1.1:5353', 'bogus; drop'],
   })
-  it('replaces the table in one transaction, drops new outbound connections to the blocked sets, keeps replies and DNS', () => {
+  it('replaces the table in one transaction, refuses new outbound connections to the blocked sets, keeps replies and DNS', () => {
     expect(rs.split('\n').slice(0, 3)).toEqual([`add table inet ${FIREWALL_TABLE}`, `delete table inet ${FIREWALL_TABLE}`, `table inet ${FIREWALL_TABLE} {`])
     const chain = rs.slice(rs.indexOf('chain output'))
     const lines = chain.split('\n').map((l) => l.trim())
@@ -21,8 +21,9 @@ describe('egress firewall ruleset', () => {
       'ct state established,related accept',
       'ip daddr @dns4 meta l4proto { tcp, udp } th dport 53 accept',
       'ip6 daddr @dns6 meta l4proto { tcp, udp } th dport 53 accept',
-      'ip daddr @drop4 counter drop',
-      'ip6 daddr @drop6 counter drop',
+      // BE-P2-19: refused at once (EHOSTUNREACH), not silently dropped (a 15 s connect timeout).
+      'ip daddr @drop4 counter reject with icmpx type admin-prohibited',
+      'ip6 daddr @drop6 counter reject with icmpx type admin-prohibited',
     ])
   })
   it('drops every deny-table range, this computer, and local model servers given as addresses', () => {

@@ -10,7 +10,7 @@
  *   tool builds) and ac-egressd are on it. No gateway, no DNS: the proxy is the only peer.
  * - `ac-egress-out`: a normal bridge only ac-egressd is on; its traffic leaves through the engine
  *   (pasta/netavark). The proxy's hard-deny list keeps it off this computer and the home network,
- *   and under it an nftables table in the proxy's namespace (egress-firewall.ts) drops new
+ *   and under it an nftables table in the proxy's namespace (egress-firewall.ts) refuses new
  *   connections to those ranges whatever the proxy does. Loaded by a one-shot NET_ADMIN helper
  *   when the proxy is created or restarts; no table, no internet (409 proxy_unavailable).
  * - The bot container is never on `host` or the default network.
@@ -670,7 +670,7 @@ export function createEgressService(deps: EgressServiceDeps): EgressService {
         // Charles (M2): the firewall table under the proxy must be there.
         const fw = await cli(firewallArgs(['list', 'table', 'inet', FIREWALL_TABLE], false), { timeoutMs: 60_000 })
         if (fw.code !== 0) bad.push(`the firewall rules aren't loaded (${(await firewallFailure(fw, 'read')).replace(/^couldn't read the proxy's firewall rules: /, '')})`)
-        else if (!/set drop4/.test(fw.stdout) || !/@drop4[^\n]*drop/.test(fw.stdout)) bad.push('the firewall table is there but has no drop rules')
+        else if (!/set drop4/.test(fw.stdout) || !/@drop4[^\n]*\b(drop|reject)\b/.test(fw.stdout)) bad.push('the firewall table is there but has no drop rules')
         // Review B2: say so whenever the test allow list is in effect.
         const allow = currentConfig().testAllow ?? []
         const note = allow.length ? ` Test allow list active (${EGRESS_TEST_ALLOW_ENV}: ${allow.join(', ')}).` : ''

@@ -430,7 +430,7 @@ PY`
     const table = nft('list', 'table', 'inet', FIREWALL_TABLE)
     expect(table.code).toBe(0)
     expect(table.out).toMatch(/hook output/)
-    expect(table.out).toMatch(/ip daddr @drop4 counter packets \d+ bytes \d+ drop/)
+    expect(table.out).toMatch(/ip daddr @drop4 counter packets \d+ bytes \d+ reject with icmpx (type )?admin-prohibited/)
     for (const c of ['10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16']) expect(table.out).toContain(c)
     expect(table.out).not.toContain(LAN_IP)
     const on = raw()
@@ -439,8 +439,12 @@ PY`
     for (const k of ['loopback', 'lan', 'metadata']) expect(on[k]).not.toBe('connected')
     // Through the proxy (the rules allow it): the firewall still drops it.
     const g1 = await egress.grant(SLUG_A, 'probe')
-    const proxied = client(SLUG_A, `curl -s -m 30 -o /dev/null -w %{http_code} http://${LAN_IP}/hello`, { http_proxy: g1.env.find((e) => e.name === 'HTTP_PROXY')!.value })
-    expect(proxied.out).toBe('502')
+    const tProxied = Date.now()
+    const proxied = client(SLUG_A, `curl -s -m 30 -o /dev/null -w '%{http_code} %{time_total}' http://${LAN_IP}/hello`, { http_proxy: g1.env.find((e) => e.name === 'HTTP_PROXY')!.value })
+    console.log(`[be13 firewall proxied] ${proxied.out} (client ${Date.now() - tProxied} ms)`)
+    expect(proxied.out.split(' ')[0]).toBe('502')
+    // BE-P2-19: the firewall refuses (not a silent drop), so the 502 comes at once, not after the proxy's 15 s connect timeout.
+    expect(Number(proxied.out.split(' ')[1])).toBeLessThan(5)
     // Counterfactual: without the table the same connects work, so the drops above are the firewall's.
     expect(nft('delete', 'table', 'inet', FIREWALL_TABLE).code).toBe(0)
     const off = raw()

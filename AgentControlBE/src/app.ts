@@ -39,6 +39,7 @@ import { backupsRootFor, createBackupService, type BackupService } from './backu
 import { registerBackupRoutes } from './backup-routes.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import type { StreamRunner } from './stream-runner.js'
+import { coreSkillId } from './db/seed.js'
 import { APT_PACKAGE, baseImageFor, botImageRef, egressdNftBuildArgv, egressdNftImageRef, sharedImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
@@ -928,6 +929,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       if (!browserAddon) fail(400, BROWSER_NOT_YET)
       await browserAddon.checkChange(agent, true)
       agent.vm = { ...agent.vm, permissions: { ...agent.vm.permissions, browser: true } }
+      // BE-P2-18 (decision 3): with the browser-basics skill.
+      agent.skillIds = withBrowserSkill(agent).skillIds
     }
     store.agents = [agent, ...store.agents]
     store.save()
@@ -2009,6 +2012,27 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId, vm }))
       .catch(() => {})
   }
+  const BROWSER_SKILL_ID = coreSkillId('browser-basics')
+  // BE-P2-18 (M3 decision 3): turning a bot's browser on attaches the browser-basics skill (when it
+  // is in the library and not attached yet). Turning it off leaves the bot's skills as they are.
+  const withBrowserSkill = (a: Agent): Agent => {
+    if (!store.skills.some((s) => s.id === BROWSER_SKILL_ID) || a.skillIds.includes(BROWSER_SKILL_ID)) return a
+    return { ...a, skillIds: [...a.skillIds, BROWSER_SKILL_ID] }
+  }
+  const attachBrowserSkill = (agentId: string): void => {
+    const a = store.agents.find((x) => x.id === agentId)
+    if (!a || !a.vm.permissions.browser) return
+    const next = withBrowserSkill(a)
+    if (next === a) return
+    const previous = store.agents
+    store.agents = store.agents.map((x) => (x.id === agentId ? next : x))
+    if (!store.save()) {
+      store.agents = previous
+      app.log.warn(`browser: ${agentId}: couldn't attach the ${BROWSER_SKILL_ID} skill`)
+      return
+    }
+    try { ensureBotFolder(store, next) } catch { /* BOT.md catches up on the next change or boot */ }
+  }
   // BE-P2-15: the browser add-on: shared botvm-browser download, per-bot on/off rebuilds and Chromium check.
   const addon = createBrowserAddon({
     dataDir: () => store.dataDir,
@@ -2016,7 +2040,11 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     agents: () => store.agents,
     saveBrowser: (agentId, on) => {
       const previous = store.agents
-      store.agents = store.agents.map((a) => (a.id === agentId ? { ...a, vm: { ...a.vm, permissions: { ...a.vm.permissions, browser: on } } } : a))
+      store.agents = store.agents.map((a) => {
+        if (a.id !== agentId) return a
+        const next = { ...a, vm: { ...a.vm, permissions: { ...a.vm.permissions, browser: on } } }
+        return on ? withBrowserSkill(next) : next
+      })
       if (!store.save()) {
         store.agents = previous
         throw new Error("couldn't save")
@@ -2330,6 +2358,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     onProbeInputChange: (what) => probeLater(what === 'mode' ? 'refresh' : 'ensureFresh'),
     // BE-P2-14: an internet policy / browser change decides the bot's pending card.
     onPolicyChange: (agentId, before) => {
+      if (!before.browser) attachBrowserSkill(agentId)
       void gate.settingsChanged(agentId, before).catch(() => {})
     },
     personal,

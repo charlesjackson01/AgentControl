@@ -501,6 +501,30 @@ describe('BE-P2-15 routes', () => {
     expect(store.agents.filter((x) => x.name === 'Analyst')).toHaveLength(0)
   })
 
+  it('BE-P2-18 decision 3: turning the browser on attaches browser-basics once; off keeps it; gone from the library: nothing', async () => {
+    const skill = 'core/browser-basics'
+    const a = (await makeAgent({ skillIds: [] })).json() as Agent
+    expect(stored(a.id).skillIds).toEqual([])
+    expect((await inject('PATCH', `/api/agents/${a.id}/vm`, { permissions: { browser: true } })).statusCode).toBe(200)
+    expect(stored(a.id).skillIds).toEqual([skill])
+    await app.vmBrowser.idle()
+    expect((await inject('PATCH', `/api/agents/${a.id}/vm`, { permissions: { browser: false } })).statusCode).toBe(200)
+    await app.vmBrowser.idle()
+    expect(stored(a.id).skillIds).toEqual([skill])
+    expect((await inject('PATCH', `/api/agents/${a.id}/vm`, { permissions: { browser: true } })).statusCode).toBe(200)
+    await app.vmBrowser.idle()
+    expect(stored(a.id).skillIds).toEqual([skill])
+    // Created with the browser on: attached alongside the chosen skills.
+    const b = (await makeAgent({ name: 'Scout', skillIds: ['core/summarization'], browser: true })).json() as Agent
+    expect(b.skillIds).toEqual(['core/summarization', skill])
+    await app.vmBrowser.idle()
+    // Not in the library (deleted): nothing is attached.
+    store.skills = store.skills.filter((x) => x.id !== skill)
+    const c = (await makeAgent({ name: 'Ranger', skillIds: [] })).json() as Agent
+    expect((await inject('PATCH', `/api/agents/${c.id}/vm`, { permissions: { browser: true } })).statusCode).toBe(200)
+    expect(stored(c.id).skillIds).toEqual([])
+  })
+
   it('turn on (PATCH): download, tool_build via browser onto the browser base, check → ready; off rebuilds onto the base; then DELETE', async () => {
     const a = (await makeAgent()).json() as Agent
     const on = await inject('PATCH', `/api/agents/${a.id}/vm`, { permissions: { browser: true } })

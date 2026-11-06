@@ -16,3 +16,9 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+
+# Playwright (FE-P2-8). Screenshots are CI artifacts, not source.
+/test-results/
+/playwright-report/
+/blob-report/
+/e2e/artifacts/

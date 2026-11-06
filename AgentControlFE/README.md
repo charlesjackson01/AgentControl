@@ -45,6 +45,8 @@ host; requests then go cross-origin and the BE's CORS applies.
 | `npm run typecheck` | `tsc -b --noEmit` |
 | `npm run lint` | Oxlint |
 | `npm test` | Hermetic parser parity, SKILL.md export round trip, tool selection, skill and note search, prompt-size message, and project chat (thread order, plan placement and selection, blocked rows, polling, resync) tests (Node 22.6+) |
+| `npm run e2e` | Playwright against the fake runner in `e2e/fake-be.mjs` (no podman). Install the browser once with `npx playwright install chromium`. Viewport 1280×800, timezone UTC. Screenshots land in `e2e/artifacts/` and are not a pixel-diff gate. |
+| `npm run e2e:vm` | The `@vm` smoke only. It stays skipped unless `AC_VM_TESTS=1` (`AC_VM_TESTS=1 npm run e2e:vm`). It is not part of `npm run e2e`'s pass and not part of CI. |
 
 ## Skills and notes
 

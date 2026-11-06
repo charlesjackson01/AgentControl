@@ -13,8 +13,9 @@ import { createBotEnvService } from './bot-env.js'
 import { botMounts, storeSaveVm } from './bot-env-routes.js'
 import { fakeEngine } from './bot-env.fake.js'
 import { EGRESS_VIA } from './egressd.js'
+import { fakeRunner } from './run-service.fake.js'
 import type { RuntimeProbe } from './runtime-probe.js'
-import { PERMISSION_CSRF_HEADER, UNDO_MACHINE_RESTORED_TEXT, type Agent, type BackupInfo, type BackupRestoreResult, type VmHostInfo, type VmInfo } from './shared/types.js'
+import { PERMISSION_CSRF_HEADER, UNDO_MACHINE_RESTORED_TEXT, type Agent, type BackupInfo, type BackupRestoreResult, type ScriptRun, type VmHostInfo, type VmInfo } from './shared/types.js'
 import { FILES_MISMATCH_TEXT, MARKER_FILE, storageFor } from './storage/index.js'
 import { createStore, type WorkspaceStore } from './store.js'
 import type { VmHostService } from './vm-host.js'
@@ -38,7 +39,7 @@ let free: number | null = null
 let clock = new Date(2026, 10, 6, 10, 0, 0)
 let engineCalls: string[][] = []
 
-async function boot(): Promise<void> {
+async function boot(o: { runner?: boolean } = {}): Promise<void> {
   if (app) await app.close()
   store = createStore(join(dir, 'store.json'))
   const vmHost: VmHostService = { hostInfo: async () => host, ensureMachine: async () => host, grow: async () => host }
@@ -53,7 +54,7 @@ async function boot(): Promise<void> {
     saveVm: storeSaveVm(store),
     activeRuns: () => 0,
   })
-  app = buildApp(store, { vmHost, botEnv, runtimeProbe: probe, backups: { freeBytes: () => free, now: () => new Date(clock) } })
+  app = buildApp(store, { vmHost, botEnv, runtimeProbe: probe, ...(o.runner ? { vmRunner: fakeRunner() } : {}), backups: { freeBytes: () => free, now: () => new Date(clock) } })
 }
 
 const inject = (method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload?: unknown, headers: Record<string, string> = {}) =>
@@ -125,7 +126,7 @@ describe('POST/GET /api/vm/backups', () => {
     expect(((await inject('GET', '/api/vm/backups')).json() as BackupInfo[]).map((b) => b.id)).toEqual([one.id, started.id])
   })
 
-  it('400 for a bad body or unknown bot, 409 backup_in_progress, 507 low disk (no reason on 5xx)', async () => {
+  it('400 for a bad body or unknown bot, 409 backup_in_progress, 507 low_disk (the approved 5xx reason)', async () => {
     expect((await inject('POST', '/api/vm/backups')).json()).toMatchObject({ statusCode: 400, reason: 'no_bots', message: 'There are no bots to back up yet.' })
     const a = await makeBot('Analyst')
     expect((await inject('POST', '/api/vm/backups', [1])).statusCode).toBe(400)
@@ -140,7 +141,7 @@ describe('POST/GET /api/vm/backups', () => {
     free = 10
     const low = await inject('POST', '/api/vm/backups')
     expect(low.statusCode).toBe(507)
-    expect(low.json()).toEqual({ statusCode: 507, error: 'Internal Server Error', message: expect.stringMatching(/^Not enough free disk space for a backup: .* Free some space, then try again\.$/) })
+    expect(low.json()).toEqual({ statusCode: 507, error: 'Internal Server Error', reason: 'low_disk', message: expect.stringMatching(/^Not enough free disk space for a backup: .* Free some space, then try again\.$/) })
   })
 
   it('403 user_only from the bot side on every backup and export route', async () => {
@@ -184,7 +185,7 @@ describe('POST /api/vm/backups/:id/restore', () => {
     engineCalls = []
     const res = await inject('POST', `/api/vm/backups/${b.id}/restore`, { confirm: true, agentIds: [a.id] }, confirm)
     expect(res.statusCode).toBe(200)
-    expect(res.json() as BackupRestoreResult).toEqual({ backupId: b.id, agents: [{ agentId: a.id, files: 3, tools: 'not_needed' }] }) // workspace/a.txt, memory/MEMORY.md, BOT.md
+    expect(res.json() as BackupRestoreResult).toEqual({ backupId: b.id, agents: [{ agentId: a.id, files: 3, tools: 'not_needed', toolResults: (['apt', 'pip', 'npm', 'opt'] as const).map((kind) => ({ kind, status: 'not_needed', items: [] })) }] }) // workspace/a.txt, memory/MEMORY.md, BOT.md
     expect(readFileSync(join(botDir(a), 'workspace', 'a.txt'), 'utf8')).toBe('hi from Analyst')
     expect(existsSync(join(botDir(a), 'workspace', 'later.txt'))).toBe(false)
     expect(readFileSync(join(botDir(w), 'workspace', 'a.txt'), 'utf8')).toBe('writer changed')
@@ -210,6 +211,31 @@ describe('POST /api/vm/backups/:id/restore', () => {
     // Internet is Never for this bot, so the online tool build couldn't start: the plain 409 text.
     expect(out.toolsMessage).toBe("Internet is set to Never for Analyst, so this build didn't start. Change it in Settings › VM.")
     expect(store.agents.find((x) => x.id === a.id)!.vm.packages).toEqual(['jq'])
+  })
+
+  it('pip and npm come back through install runs in the bot\'s DM, opt is named; the manifest is the one stored at backup time', async () => {
+    await boot({ runner: true })
+    const a = await makeBot('Analyst')
+    const tools = { pip: ['requests==2.32.3'], npm: ['cowsay@1.6.0'], optBin: ['mytool'], updatedAt: '2026-11-06T09:00:00.000Z' }
+    store.agents = store.agents.map((x) => (x.id === a.id ? { ...x, internetPolicy: 'always', vm: { ...x.vm, tools } } : x))
+    store.save()
+    const b = await backUp()
+    // A reset since: the tools volumes (and vm.tools) are gone.
+    store.agents = store.agents.map((x) => (x.id === a.id ? { ...x, vm: { ...x.vm, tools: undefined } } : x))
+    store.save()
+    const res = await inject('POST', `/api/vm/backups/${b.id}/restore`, { confirm: true }, confirm)
+    expect(res.statusCode).toBe(200)
+    const out = (res.json() as BackupRestoreResult).agents[0]!
+    expect(out.toolResults.map((r) => [r.kind, r.items])).toEqual([['apt', []], ['pip', tools.pip], ['npm', tools.npm], ['opt', tools.optBin]])
+    expect(out.toolResults[3]).toMatchObject({ status: 'not_restorable' })
+    for (const r of out.toolResults.slice(1, 3)) {
+      // Recorded runs (the gate decides the internet: no proxy here, so they end proxy_unavailable).
+      expect(r.runId, JSON.stringify(r)).toBeTruthy()
+      const run = (await inject('GET', `/api/runs/${r.runId}`)).json() as ScriptRun
+      expect(run).toMatchObject({ agentId: a.id, kind: 'script', network: 'on' })
+      expect(run.argv.slice(0, 3)).toEqual(r.kind === 'pip' ? ['python3', '-m', 'pip'] : ['npm', 'install', '-g'])
+      expect(run.argv.at(-1)).toBe(r.items[0])
+    }
   })
 
   it('a missing volume marker: restore brings the files and the marker back; a mismatched one refuses', async () => {

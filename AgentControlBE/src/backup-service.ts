@@ -32,6 +32,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { dataEntry, extractTar, fileEntry, tarStream, walkEntries, zipStream, zstdCompress, zstdDecompress, type ArchiveEntry } from './backup-archive.js'
 import { fail, failWithReason } from './http.js'
+import { LOW_DISK_REASON } from './run-service.js'
 import { RUN_BLOCK_FREE_MB, type Agent, type BackupInfo, type BackupRestoreAgent, type BackupRestoreResult, type BackupTrigger, type ToolManifest } from './shared/types.js'
 
 export const BACKUP_FILE = 'backup.json'
@@ -57,7 +58,7 @@ export interface BackupManifest {
   createdAt: string
   /** apt packages (vm.packages): the bot's image layer is rebuilt from these on restore. */
   packages: string[]
-  /** pip / npm / opt-bin as last read from the bot's tools volumes (listed only; not reinstalled). */
+  /** pip / npm / opt-bin as last read from the bot's tools volumes; a restore reinstalls pip and npm from it. */
   tools?: ToolManifest
   image: { base: 'base' | 'browser'; generation: number }
   browser: boolean
@@ -107,7 +108,7 @@ export interface RestoreHooks {
   /** Still in the bot's run slot, after the files are in place: snapshots → machine_restored, the manifest's packages saved. */
   after?(agent: Agent, manifest: BackupManifest): Promise<void>
   /** Out of the run slot (a tool build takes the slot itself): rebuild the tools from the manifest. */
-  rebuildTools?(agent: Agent, manifest: BackupManifest): Promise<Pick<BackupRestoreAgent, 'tools' | 'toolsMessage'>>
+  rebuildTools?(agent: Agent, manifest: BackupManifest): Promise<Pick<BackupRestoreAgent, 'tools' | 'toolsMessage' | 'toolResults'>>
   /** Run the restore of one bot in its run slot (ContainerRunner.exclusive), so no run starts meanwhile. */
   exclusive?<T>(agentId: string, fn: () => Promise<T>): Promise<T>
 }
@@ -118,6 +119,11 @@ export interface BackupServiceDeps {
   agents: () => readonly Agent[]
   /** Host path of the bot's folder (bots/<slug>), or null when there is none (WslFs). */
   botDir: (agent: Agent) => string | null
+  /**
+   * Re-read the bot's pip/npm/opt tools right before its archive (best effort; only when its
+   * container is already running). Returns the bot as saved, or null to keep the stored manifest.
+   */
+  refreshTools?: (agent: Agent) => Promise<Agent | null>
   /** Group shared folders for the full export (host paths). */
   groupDirs?: () => { slug: string; name: string; dir: string }[]
   keep: () => number
@@ -143,7 +149,7 @@ export interface BackupService {
   get(id: string): BackupInfo | null
   /**
    * Start a backup and answer at once with status 'in_progress' (POST /api/vm/backups → 202).
-   * 400 for unknown bots or none at all, 409 backup_in_progress, 507 low disk, 501 no host path.
+   * 400 for unknown bots or none at all, 409 backup_in_progress, 507 low_disk (with its reason), 501 no host path.
    */
   start(opts: CreateOptions): BackupInfo
   /** A backup that waits for one in progress first and resolves when it ends (pre-reset / pre-upgrade). */
@@ -343,7 +349,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     const need = bots.reduce((n, b) => n + folderBytes(b.dir), 0) + FLOOR_BYTES
     const free = deps.freeBytes?.(backupsRoot) ?? null
     if (free !== null && free < need) {
-      fail(507, `Not enough free disk space for a backup: it needs about ${Math.ceil(need / 1024 ** 3)} GB free and ${Math.floor(free / 1024 ** 3)} GB is free. Free some space, then try again.`)
+      failWithReason(507, LOW_DISK_REASON, `Not enough free disk space for a backup: it needs about ${Math.ceil(need / 1024 ** 3)} GB free and ${Math.floor(free / 1024 ** 3)} GB is free. Free some space, then try again.`)
     }
     const at = now()
     const id = newId(at)
@@ -384,7 +390,13 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         const file = `${agent.slug}.tar.zst`
         const target = join(info.path, file)
         const tmp = `${target}.tmp`
-        const entries = botEntries(dir, manifestOf(agent, now()))
+        let fresh = agent
+        try {
+          fresh = (await deps.refreshTools?.(agent)) ?? agent
+        } catch (err) {
+          log(`backups: ${agent.slug}: couldn't read the tool list, using the last one: ${errText(err)}`)
+        }
+        const entries = botEntries(dir, manifestOf(fresh, now()))
         await pipeline(Readable.from(tarStream(entries)), zstdCompress(), createWriteStream(tmp, { mode: 0o600 }))
         renameSync(tmp, target)
         records.push({
@@ -567,15 +579,15 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         const job = () => restoreOne(r, bot, agent)
         const done = await (deps.restore?.exclusive ? deps.restore.exclusive(agent.id, job) : job())
         log(`backups: restored ${agent.slug} from ${id}`)
-        let tools: Pick<BackupRestoreAgent, 'tools' | 'toolsMessage'> = { tools: 'not_needed' }
+        let tools: Pick<BackupRestoreAgent, 'tools' | 'toolsMessage' | 'toolResults'> = { tools: 'not_needed', toolResults: [] }
         if (deps.restore?.rebuildTools) {
           try {
             tools = await deps.restore.rebuildTools(agent, done.manifest)
           } catch (err) {
-            tools = { tools: 'failed', toolsMessage: errText(err) }
+            tools = { tools: 'failed', toolsMessage: errText(err), toolResults: [] }
           }
         } else if (done.manifest.packages.length) {
-          tools = { tools: 'failed', toolsMessage: "The bot's tools weren't rebuilt." }
+          tools = { tools: 'failed', toolsMessage: "The bot's tools weren't rebuilt.", toolResults: [] }
         }
         agents.push({ agentId: agent.id, files: done.files, ...tools })
       }

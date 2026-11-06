@@ -965,6 +965,27 @@ export interface BackupRestoreAgent {
    */
   tools: 'started' | 'not_needed' | 'failed'
   toolsMessage?: string
+  /**
+   * BE-P2-18 follow-up (Needs OK): one entry per tool type in the manifest, always apt, pip, npm,
+   * opt in that order. `tools` sums them up: 'failed' if any failed, else 'started' if any started.
+   */
+  toolResults: BackupRestoreTool[]
+}
+/** apt: the image layer (a Rebuild tool_build); pip/npm: an install script run; opt: /opt/bot/bin. */
+export type BackupToolKind = 'apt' | 'pip' | 'npm' | 'opt'
+export interface BackupRestoreTool {
+  kind: BackupToolKind
+  /**
+   * 'started': its build or install run is queued or running (`runId`; it may wait for an internet
+   * card under Ask). 'not_needed': nothing listed, or the bot already has all of it. 'failed': it
+   * couldn't start (`message`). 'not_restorable': /opt/bot/bin programs, which have no source to
+   * reinstall from (`message` names them).
+   */
+  status: 'started' | 'not_needed' | 'failed' | 'not_restorable'
+  /** What the backup's manifest lists for this type (apt packages, pip `name==version`, npm `name@version`, opt file names). */
+  items: string[]
+  runId?: string
+  message?: string
 }
 
 /** GET /api/vm/host. */

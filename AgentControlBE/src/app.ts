@@ -37,12 +37,14 @@ import { BROWSER_INTERNET_NEVER_TEXT, createBrowserAddon, type BrowserAddon } fr
 import { registerBrowserRoutes } from './browser-routes.js'
 import { backupsRootFor, createBackupService, type BackupService } from './backup-service.js'
 import { registerBackupRoutes } from './backup-routes.js'
+import { restoreTools, restoredPackages, samePackages } from './backup-tools.js'
+import { LOW_DISK_REASON } from './run-service.js'
 import { botVol } from './files.js'
 import { groupRoot } from './group-files.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import type { StreamRunner } from './stream-runner.js'
 import { coreSkillId } from './db/seed.js'
-import { APT_PACKAGE, baseImageFor, botImageRef, egressdNftBuildArgv, egressdNftImageRef, sharedImageRef } from './vm-images.js'
+import { baseImageFor, botImageRef, egressdNftBuildArgv, egressdNftImageRef, sharedImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
@@ -419,16 +421,6 @@ function parseSkillInput(body: unknown): SkillInput {
   }
 }
 
-/** BE-P2-18: a backup manifest's apt packages, cleaned (strings only, unique, sorted). */
-function restoredPackages(raw: unknown): string[] {
-  return Array.isArray(raw) ? [...new Set(raw.filter((p): p is string => typeof p === 'string' && APT_PACKAGE.test(p)))].sort() : []
-}
-const samePackages = (a: readonly string[], b: readonly string[]): boolean => {
-  const x = [...a].sort()
-  const y = [...b].sort()
-  return x.length === y.length && x.every((p, i) => p === y[i])
-}
-
 export interface BuildAppOptions {
   /** BE-P2-2: engine/machine service; tests inject one with a fake CommandRunner. */
   vmHost?: VmHostService
@@ -541,6 +533,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       message,
       // BE-P2-6: 409/410 carry a machine-readable reason (e.g. 'files_missing').
       ...(typeof err.reason === 'string' && status < 500 ? { reason: err.reason } : {}),
+      // BE-P2-18 (approved exception to no reason on 5xx): a backup's 507 carries reason 'low_disk'.
+      ...(status === 507 && err.reason === LOW_DISK_REASON ? { reason: LOW_DISK_REASON } : {}),
       // BE-P2-11: undo's 409 'conflicts' lists the files (UndoConflict.conflicts).
       ...(typeof err.reason === 'string' && status < 500 && Array.isArray(err.conflicts) ? { conflicts: err.conflicts } : {}),
       // BE-P2-14: 409 already_resolved carries the request as it is now.
@@ -1964,6 +1958,12 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     personal: (agent) => personal.check(agent),
     publish: (event) => {
       liveEvents.publish(event)
+      // BE-P2-18: an online script run that succeeded may have installed pip/npm/opt tools; re-read
+      // the list (for the backup manifest) while the container is still up. Never starts it.
+      if (event.type === 'run.updated' && event.run.kind === 'script' && event.run.network === 'on' && event.run.status === 'succeeded') {
+        const a = store.agents.find((x) => x.id === event.run.agentId)
+        if (a) void botEnv.refreshTools(a, { onlyIfRunning: true }).catch(() => {})
+      }
     },
     onRunsChanged: (agentId) => {
       const agent = store.agents.find((a) => a.id === agentId)
@@ -2227,6 +2227,12 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     root: () => opts.backups?.root ?? backupsRootFor(process.platform, store.dataDir),
     agents: () => store.agents,
     botDir: (agent) => storageFor(store).backend.hostPath(botVol(agent)),
+    // The manifest's pip/npm/opt list, read again when the bot's container is running.
+    refreshTools: async (agent) => {
+      if (activeOf(agent.id) > 0) return null
+      await botEnv.refreshTools(agent, { onlyIfRunning: true })
+      return store.agents.find((a) => a.id === agent.id) ?? null
+    },
     groupDirs: () =>
       store.conversations
         .filter((c): c is Extract<typeof c, { kind: 'group' }> => c.kind === 'group' && typeof c.slug === 'string' && /^[a-z0-9-]{1,40}$/.test(c.slug))
@@ -2271,16 +2277,13 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       },
       // Out of the run slot: the tool build queues in it like Rebuild does.
       rebuildTools: async (agent, manifest) => {
-        const fresh = store.agents.find((a) => a.id === agent.id) ?? agent
-        const packages = restoredPackages(manifest.packages)
         try {
-          if (!samePackages(packages, fresh.vm.packages)) return { tools: 'failed', toolsMessage: "Couldn't save the bot's package list from the backup." }
-          // Nothing to install, or the layer for these packages is already there.
-          if (packages.length === 0 || (fresh.vm.image.generation > 0 && samePackages(manifest.packages, agent.vm.packages))) return { tools: 'not_needed' }
-          await startRebuildRun(fresh)
-          return { tools: 'started' }
-        } catch (err) {
-          return { tools: 'failed', toolsMessage: (err as Error).message }
+          return await restoreTools(agent, manifest, {
+            current: (id) => store.agents.find((a) => a.id === id),
+            startRebuild: (a) => startRebuildRun(a),
+            startInstall: (a, argv, why, hosts) =>
+              runs.start({ agentId: a.id, conversationId: ensureDm(store, a.id).id, context: { kind: 'dm' }, argv, why, network: 'on', hosts, timeoutSec: 1800 }),
+          })
         } finally {
           publishVm(agent.id)
         }

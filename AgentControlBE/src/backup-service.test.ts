@@ -167,7 +167,7 @@ describe('create', () => {
   it('507 when the disk is too full, before anything is written', () => {
     free = 1024
     const svc = service()
-    expect(() => svc.start({ trigger: 'manual' })).toThrow(expect.objectContaining({ statusCode: 507, message: expect.stringMatching(/Not enough free disk space for a backup.*Free some space, then try again\./) }))
+    expect(() => svc.start({ trigger: 'manual' })).toThrow(expect.objectContaining({ statusCode: 507, reason: 'low_disk', message: expect.stringMatching(/Not enough free disk space for a backup.*Free some space, then try again\./) }))
     expect(existsSync(join(data, 'backups')) ? readdirSync(join(data, 'backups')) : []).toEqual([])
   })
 
@@ -254,7 +254,7 @@ describe('restore', () => {
         },
         rebuildTools: async (a, manifest) => {
           calls.push(`tools ${a.slug}`)
-          return { tools: manifest.packages.length ? 'started' : 'not_needed' }
+          return { tools: manifest.packages.length ? 'started' : 'not_needed', toolResults: [] }
         },
         exclusive: async (id, fn) => {
           calls.push(`slot ${id}`)
@@ -274,8 +274,8 @@ describe('restore', () => {
     expect(res).toEqual({
       backupId: b.id,
       agents: [
-        { agentId: 'a_1', files: 5, tools: 'started' },
-        { agentId: 'a_2', files: 5, tools: 'not_needed' },
+        { agentId: 'a_1', files: 5, tools: 'started', toolResults: [] },
+        { agentId: 'a_2', files: 5, tools: 'not_needed', toolResults: [] },
       ],
     })
     expect(hashes('analyst')).toEqual(before.analyst)

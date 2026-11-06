@@ -439,8 +439,12 @@ export interface BotEnvService {
   rollback(agent: Agent): Promise<AgentVm>
   /** M1 Reset: container, both volumes and the layer go; files, env and history stay. No backup. */
   reset(agent: Agent): Promise<AgentVm>
-  /** Re-read pip/npm/opt-bin from the container and store it in vm.tools. */
-  refreshTools(agent: Agent): Promise<AgentVm>
+  /**
+   * Re-read pip/npm/opt-bin from the container and store it in vm.tools. `onlyIfRunning`
+   * (BE-P2-18: backups, after an online run): never start or recreate the container; a container
+   * that isn't running leaves vm.tools as it is.
+   */
+  refreshTools(agent: Agent, opts?: { onlyIfRunning?: boolean }): Promise<AgentVm>
   /**
    * BE-P2-10: bytes in the bot's tools volumes (du in the container; only while it's running)
    * and its own image layer (layer image size minus the base). Parts it couldn't measure are left out.
@@ -907,9 +911,11 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
         return vm
       }),
 
-    refreshTools: (agent) =>
+    refreshTools: (agent, opts = {}) =>
       serial(agent.slug, async () => {
-        await ensureLocked(agent, true)
+        if (opts.onlyIfRunning) {
+          if ((await containerStatus(agent.slug)).state !== 'running') return agent.vm
+        } else await ensureLocked(agent, true)
         const lines = (r: CommandResult) => (r.code === 0 ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [])
         const pip = lines(await exec(agent, ['python3', '-m', 'pip', 'list', '--user', '--format=freeze', '--disable-pip-version-check']))
         const npmR = await exec(agent, ['npm', 'ls', '-g', '--depth=0', '--json'])

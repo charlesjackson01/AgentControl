@@ -15,8 +15,8 @@ import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.j
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, failWithReason, internetNeverText, uid } from './http.js'
-import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
-import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
+import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, botVol, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
+import { groupRoot, listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
@@ -35,13 +35,15 @@ import { createRunService, type RunRunner, type RunService } from './run-service
 import { createPermissionGate, type PermissionGate } from './permission-gate.js'
 import { BROWSER_INTERNET_NEVER_TEXT, createBrowserAddon, type BrowserAddon } from './browser-addon.js'
 import { registerBrowserRoutes } from './browser-routes.js'
+import { backupsRootFor, createBackupService, type BackupService } from './backup-service.js'
+import { registerBackupRoutes } from './backup-routes.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import type { StreamRunner } from './stream-runner.js'
-import { baseImageFor, botImageRef } from './vm-images.js'
+import { APT_PACKAGE, baseImageFor, botImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
-import { checkVolume, LocalFs, storageFor } from './storage/index.js'
+import { checkVolume, FILES_MISMATCH_TEXT, LocalFs, storageFor } from './storage/index.js'
 import { KEEP_ID_NOTE, type UidMapping } from './isolation.js'
 import { FILE_TOOL_NAMES } from './tools/files.js'
 import { bindVmTools, vmToolNames } from './tools/vm.js'
@@ -413,6 +415,16 @@ function parseSkillInput(body: unknown): SkillInput {
   }
 }
 
+/** BE-P2-18: a backup manifest's apt packages, cleaned (strings only, unique, sorted). */
+function restoredPackages(raw: unknown): string[] {
+  return Array.isArray(raw) ? [...new Set(raw.filter((p): p is string => typeof p === 'string' && APT_PACKAGE.test(p)))].sort() : []
+}
+const samePackages = (a: readonly string[], b: readonly string[]): boolean => {
+  const x = [...a].sort()
+  const y = [...b].sort()
+  return x.length === y.length && x.every((p, i) => p === y[i])
+}
+
 export interface BuildAppOptions {
   /** BE-P2-2: engine/machine service; tests inject one with a fake CommandRunner. */
   vmHost?: VmHostService
@@ -448,6 +460,11 @@ export interface BuildAppOptions {
   browserExec?: CommandRunner
   /** BE-P2-15: test-only wait between "is the bot idle yet" checks (default 1 s). */
   browserIdlePollMs?: number
+  /**
+   * BE-P2-18: test-only backups folder (default backupsRootFor: <data>/backups, Windows
+   * %LOCALAPPDATA%\AgentControl\backups), free space and clock.
+   */
+  backups?: { root?: string; freeBytes?: (path: string) => number | null; now?: () => Date }
 }
 
 declare module 'fastify' {
@@ -476,6 +493,8 @@ declare module 'fastify' {
     /** BE-P2-14: permission requests (internet / browser cards) and their answers. */
     vmPermissions: PermissionGate
     vmBrowser: BrowserAddon
+    /** BE-P2-18: backups (nightly, before reset / grow / base upgrade, Back up now), restore and export. */
+    vmBackups: BackupService
   }
 }
 
@@ -2138,6 +2157,121 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   // BE-P2-17: undo preview/apply (app.vmUndo via RunService.undo, which records the undo run).
   registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => { assertBotFilesAvailable(store, agent); return undo.preview(agent, runId) }, activeRuns: activeOf })
 
+  // BE-P2-21: Rebuild is a live build (202 {run}); a non-empty package list is its own one-build internet grant.
+  // BE-P2-18: a restore rebuilds the bot's tools from the backup's manifest the same way.
+  const startRebuildRun = (agent: Agent) => {
+    const online = agent.vm.packages.length > 0
+    return runs.startToolBuild({
+      agentId: agent.id,
+      conversationId: () => ensureDm(store, agent.id).id,
+      context: { kind: 'dm' },
+      via: 'rebuild',
+      startedBy: 'user',
+      argv: ['rebuild'],
+      packages: [...agent.vm.packages],
+      added: [],
+      network: online ? 'on' : 'off',
+      permissions: online ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
+      waitForRuns: false,
+      precheck: async (a) => {
+        if (!online) return
+        if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverText(a.name))
+        await buildProxyCheck()
+      },
+      build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', ...ctl })),
+    })
+  }
+
+  // BE-P2-18: backups, restore and zip export (M3 plan §3–4).
+  const backups = createBackupService({
+    root: () => opts.backups?.root ?? backupsRootFor(process.platform, store.dataDir),
+    agents: () => store.agents,
+    botDir: (agent) => storageFor(store).backend.hostPath(botVol(agent)),
+    groupDirs: () =>
+      store.conversations
+        .filter((c): c is Extract<typeof c, { kind: 'group' }> => c.kind === 'group' && typeof c.slug === 'string' && /^[a-z0-9-]{1,40}$/.test(c.slug))
+        .map((g) => ({ slug: g.slug, name: g.name, dir: join(groupRoot(store, g.slug), 'shared') })),
+    keep: () => store.settings.vm?.backups.keep ?? DEFAULT_VM_SETTINGS.backups.keep,
+    freeBytes: opts.backups?.freeBytes ?? ((p) => freeBytesAt(p)),
+    activeRuns: activeOf,
+    // Progress and the end: vm.updated for each bot in it, with the backup (and lastBackupAt).
+    onProgress: (info, agentIds) => {
+      for (const agentId of agentIds) {
+        const a = store.agents.find((x) => x.id === agentId)
+        if (!a) continue
+        void botEnvRoutesRef
+          ?.vmInfo(a)
+          .then((vm) => liveEvents.publish({ type: 'vm.updated', agentId, vm, backup: info }))
+          .catch(() => {})
+      }
+    },
+    restore: {
+      // In the bot's run slot, so no run starts while its folders are swapped.
+      exclusive: (agentId, fn) => vmRunnerNow.exclusive(agentId, fn),
+      // Its folders are bind-mounted: the bot's computer stops first (an engine error stops the restore).
+      before: async (agent) => {
+        const host = await vmHost.hostInfo().catch(() => null)
+        if (host?.engine) await botEnv.stop(agent)
+      },
+      after: async (agent, manifest) => {
+        // Undo snapshots from before the restore no longer match the files (UNDO_MACHINE_RESTORED_TEXT).
+        try {
+          for (const m of snapshots.list(agent.slug)) {
+            if (m.undo?.state !== 'unavailable' && m.undo?.state !== 'done') snapshots.evict(agent.slug, m.runId, 'machine_restored')
+          }
+        } catch (err) {
+          app.log.warn(`backups: ${agent.slug}: couldn't mark snapshots as restored: ${(err as Error).message}`)
+        }
+        // The manifest's apt packages become vm.packages (the layer is rebuilt from them below).
+        const fresh = store.agents.find((a) => a.id === agent.id) ?? agent
+        const packages = restoredPackages(manifest.packages)
+        if (!samePackages(packages, fresh.vm.packages) && !storeSaveVm(store)(agent.id, { ...fresh.vm, packages })) {
+          app.log.warn(`backups: ${agent.slug}: couldn't save the package list from the backup`)
+        }
+      },
+      // Out of the run slot: the tool build queues in it like Rebuild does.
+      rebuildTools: async (agent, manifest) => {
+        const fresh = store.agents.find((a) => a.id === agent.id) ?? agent
+        const packages = restoredPackages(manifest.packages)
+        try {
+          if (!samePackages(packages, fresh.vm.packages)) return { tools: 'failed', toolsMessage: "Couldn't save the bot's package list from the backup." }
+          // Nothing to install, or the layer for these packages is already there.
+          if (packages.length === 0 || (fresh.vm.image.generation > 0 && samePackages(manifest.packages, agent.vm.packages))) return { tools: 'not_needed' }
+          await startRebuildRun(fresh)
+          return { tools: 'started' }
+        } catch (err) {
+          return { tools: 'failed', toolsMessage: (err as Error).message }
+        } finally {
+          publishVm(agent.id)
+        }
+      },
+    },
+    now: opts.backups?.now,
+    log: (msg) => app.log.info(msg),
+  })
+  app.decorate('vmBackups', backups)
+  // A backup or restore in progress finishes before the server closes.
+  app.addHook('onClose', async () => {
+    await backups.idle()
+  })
+  registerBackupRoutes(app, store, backups, {
+    assertBotFiles: (agent) => assertBotFilesAvailable(store, agent),
+    volume: () => storageFor(store).volume,
+    mismatchText: FILES_MISMATCH_TEXT,
+    // The user confirmed a restore into a volume without its marker: put the marker back.
+    volumeRestored: () => {
+      const id = store.settings.vm?.volumeId
+      const state = storageFor(store)
+      if (!id || state.volume !== 'missing') return
+      try {
+        state.backend.writeMarker(id)
+        state.volume = 'ok'
+      } catch (err) {
+        app.log.warn(`backups: couldn't write the volume marker after the restore: ${(err as Error).message}`)
+      }
+    },
+  })
+
   botEnvRoutesRef = registerBotEnvRoutes(app, store, {
     botEnv,
     hostInfo: () => vmHost.hostInfo(),
@@ -2166,30 +2300,10 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     toolBuild: (agent, action, build) => runs.toolBuild(agent.id, action, build),
     // BE-P2-22: reset answers 409 build_active while the bot's tools are building.
     buildActive: (agentId) => runs.buildActive(agentId),
-    // BE-P2-21: Rebuild is a live build (202 {run}); a non-empty package list is its own one-build internet grant.
-    startRebuild: (agent) => {
-      const online = agent.vm.packages.length > 0
-      return runs.startToolBuild({
-        agentId: agent.id,
-        conversationId: () => ensureDm(store, agent.id).id,
-        context: { kind: 'dm' },
-        via: 'rebuild',
-        startedBy: 'user',
-        argv: ['rebuild'],
-        packages: [...agent.vm.packages],
-        added: [],
-        network: online ? 'on' : 'off',
-        permissions: online ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
-        waitForRuns: false,
-        precheck: async (a) => {
-          if (!online) return
-          if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverText(a.name))
-          await buildProxyCheck()
-        },
-        build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', ...ctl })),
-      })
-    },
+    startRebuild: (agent) => startRebuildRun(agent),
     activeBuild: (agentId) => runs.activeBuild(agentId),
+    // BE-P2-18: VmInfo.storage.lastBackupAt.
+    lastBackupAt: (agentId) => backups.lastBackupAt(agentId),
     // BE-P2-15: the browser add-on (PATCH permissions.browser, VmInfo.browser / browserState).
     browser: addon,
   })

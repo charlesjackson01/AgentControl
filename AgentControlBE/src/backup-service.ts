@@ -104,8 +104,10 @@ export function lastScheduled(now: Date, time: string): Date {
 export interface RestoreHooks {
   /** Before any file changes: stop the bot's computer (its folders are bind-mounted). */
   before?(agent: Agent): Promise<void>
-  /** After the files are in place: snapshots → machine_restored, the manifest applied, tools rebuilt. */
-  after?(agent: Agent, manifest: BackupManifest): Promise<Pick<BackupRestoreAgent, 'tools' | 'toolsMessage'>>
+  /** Still in the bot's run slot, after the files are in place: snapshots → machine_restored, the manifest's packages saved. */
+  after?(agent: Agent, manifest: BackupManifest): Promise<void>
+  /** Out of the run slot (a tool build takes the slot itself): rebuild the tools from the manifest. */
+  rebuildTools?(agent: Agent, manifest: BackupManifest): Promise<Pick<BackupRestoreAgent, 'tools' | 'toolsMessage'>>
   /** Run the restore of one bot in its run slot (ContainerRunner.exclusive), so no run starts meanwhile. */
   exclusive?<T>(agentId: string, fn: () => Promise<T>): Promise<T>
 }
@@ -410,7 +412,11 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       info.error = `The backup didn't finish: ${errText(err)}`
       delete info.progress
       info.finishedAt = now().toISOString()
-      for (const n of readdirSync(info.path)) if (n.endsWith('.tmp')) rmSync(join(info.path, n), { force: true })
+      try {
+        for (const n of readdirSync(info.path)) if (n.endsWith('.tmp')) rmSync(join(info.path, n), { force: true })
+      } catch {
+        // the folder itself is gone
+      }
       try {
         save()
       } catch (e) {
@@ -483,7 +489,7 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
     return track(execute(info, bots))
   }
 
-  async function restoreOne(r: BackupRecord, bot: BackupBotRecord, agent: Agent): Promise<BackupRestoreAgent> {
+  async function restoreOne(r: BackupRecord, bot: BackupBotRecord, agent: Agent): Promise<{ files: number; manifest: BackupManifest }> {
     const archive = join(dirOf(r.info.id), bot.file)
     if (!existsSync(archive)) fail(409, `${agent.name}'s archive in this backup is missing, so nothing was restored.`)
     if ((await sha256File(archive)) !== bot.sha256) fail(409, `${agent.name}'s archive in this backup is damaged (its checksum doesn't match), so nothing was restored.`)
@@ -530,8 +536,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
         }
         throw err
       }
-      const after = (await deps.restore?.after?.(agent, manifest)) ?? { tools: manifest.packages.length ? 'failed' as const : 'not_needed' as const }
-      return { agentId: agent.id, files, ...after }
+      await deps.restore?.after?.(agent, manifest)
+      return { files, manifest }
     } finally {
       rmSync(staging, { recursive: true, force: true })
       rmSync(old, { recursive: true, force: true })
@@ -559,8 +565,19 @@ export function createBackupService(deps: BackupServiceDeps): BackupService {
       const agents: BackupRestoreAgent[] = []
       for (const { bot, agent } of pairs) {
         const job = () => restoreOne(r, bot, agent)
-        agents.push(await (deps.restore?.exclusive ? deps.restore.exclusive(agent.id, job) : job()))
+        const done = await (deps.restore?.exclusive ? deps.restore.exclusive(agent.id, job) : job())
         log(`backups: restored ${agent.slug} from ${id}`)
+        let tools: Pick<BackupRestoreAgent, 'tools' | 'toolsMessage'> = { tools: 'not_needed' }
+        if (deps.restore?.rebuildTools) {
+          try {
+            tools = await deps.restore.rebuildTools(agent, done.manifest)
+          } catch (err) {
+            tools = { tools: 'failed', toolsMessage: errText(err) }
+          }
+        } else if (done.manifest.packages.length) {
+          tools = { tools: 'failed', toolsMessage: "The bot's tools weren't rebuilt." }
+        }
+        agents.push({ agentId: agent.id, files: done.files, ...tools })
       }
       return { backupId: id, agents }
     })())

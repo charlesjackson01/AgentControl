@@ -251,6 +251,9 @@ describe('restore', () => {
         },
         after: async (a, manifest) => {
           calls.push(`after ${a.slug} ${manifest.packages.join(',')}`)
+        },
+        rebuildTools: async (a, manifest) => {
+          calls.push(`tools ${a.slug}`)
           return { tools: manifest.packages.length ? 'started' : 'not_needed' }
         },
         exclusive: async (id, fn) => {
@@ -277,7 +280,7 @@ describe('restore', () => {
     })
     expect(hashes('analyst')).toEqual(before.analyst)
     expect(hashes('writer')).toEqual(before.writer)
-    expect(calls).toEqual(['slot a_1', 'stop analyst', 'after analyst jq', 'slot a_2', 'stop writer', 'after writer '])
+    expect(calls).toEqual(['slot a_1', 'stop analyst', 'after analyst jq', 'tools analyst', 'slot a_2', 'stop writer', 'after writer ', 'tools writer'])
     // Nothing left over beside the bots.
     expect(readdirSync(join(data, 'bots')).sort()).toEqual(['analyst', 'writer'])
   })

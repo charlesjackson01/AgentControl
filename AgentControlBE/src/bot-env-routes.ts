@@ -174,6 +174,8 @@ export interface BotEnvRouteDeps {
    * come from it. Absent: M1 (browser:true → 400, browserState 'absent').
    */
   browser?: Pick<BrowserAddon, 'sharedState' | 'botInfo' | 'checkChange' | 'changed'>
+  /** BE-P2-18: the bot's newest complete backup (VmInfo.storage.lastBackupAt). */
+  lastBackupAt?: (agentId: string) => string | undefined
 }
 
 /** BE-P2-12: what the routes give back (vm.updated events reuse vmInfo). */
@@ -238,6 +240,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
     const idleStopAt = deps.runner?.idleStopAt(agent.id)
     const isolationNote = deps.isolationNote?.(agent, host?.engine ?? null)
     const vm = agent.vm
+    const lastBackupAt = deps.lastBackupAt?.(agent.id)
     return {
       agentId: agent.id,
       state,
@@ -266,7 +269,7 @@ export function registerBotEnvRoutes(app: FastifyInstance, store: WorkspaceStore
       image: vm.image,
       ...(idleStopAt && state === 'running' ? { idleStopAt } : {}),
       ...(isolationNote ? { isolationNote } : {}),
-      storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root },
+      storage: { backend: host?.storage.backend ?? 'local', driver: host?.storage.driver ?? null, location: root, ...(lastBackupAt ? { lastBackupAt } : {}) },
       ...runsOf(agent),
       ...activeBuildOf(agent),
     }

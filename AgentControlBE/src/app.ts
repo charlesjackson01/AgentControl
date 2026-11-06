@@ -39,7 +39,7 @@ import { backupsRootFor, createBackupService, type BackupService } from './backu
 import { registerBackupRoutes } from './backup-routes.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import type { StreamRunner } from './stream-runner.js'
-import { APT_PACKAGE, baseImageFor, botImageRef } from './vm-images.js'
+import { APT_PACKAGE, baseImageFor, botImageRef, egressdNftBuildArgv, egressdNftImageRef, sharedImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
@@ -76,6 +76,7 @@ import {
   SKILL_SOURCE_IDS,
   type SnapshotDriver,
   type WorkspaceSettings,
+  PERMISSION_CSRF_HEADER,
 } from './shared/types.js'
 import { isVendoredSkillId, vendoredLibrary } from './db/vendored-skills.js'
 
@@ -1639,8 +1640,16 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       },
       // BE-P2-18: back every bot up before the machine disk grows (best effort: logged, the grow goes on).
       beforeGrow: () => preUpgradeBackup(),
+      // BE-P2-18 (M2 gap 1): the egress proxy's firewall helper image is a setup step.
+      firewall: { image: egressdNftImageRef(), baseImage: sharedImageRef('botvm'), buildArgv: egressdNftBuildArgv },
     })
   app.get('/api/vm/host', async () => vmHost.hostInfo())
+  // BE-P2-18 (gap 1, Needs OK): build the firewall helper now (the step shows its progress); 202 VmHostInfo.
+  app.post('/api/vm/setup/firewall-image', async (request, reply) => {
+    if (request.headers[PERMISSION_CSRF_HEADER] !== '1') failWithReason(403, 'confirm_required', `Setting up the firewall helper needs the ${PERMISSION_CSRF_HEADER}: 1 header.`)
+    if (!vmHost.buildFirewall) fail(404, 'The firewall helper setup isn\'t available here.')
+    return reply.code(202).send(await vmHost.buildFirewall())
+  })
   app.post('/api/vm/machine/grow', async (request) => {
     const body = request.body as { toGb?: unknown } | null | undefined
     return vmHost.grow(body && typeof body === 'object' ? body.toGb : undefined)
@@ -1739,6 +1748,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
         await runtimeProbe.refresh()
       })().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
       stopProbeTimer = runtimeProbe.startTimer()
+      // BE-P2-18 (M2 gap 1): first run builds the firewall helper image when it's missing.
+      void vmHost.buildFirewall?.().catch((err: Error) => app.log.info(`firewall helper not set up yet: ${err.message}`))
     })
     app.addHook('onClose', async () => {
       stopProbeTimer?.()

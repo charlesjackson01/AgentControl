@@ -42,6 +42,7 @@ import {
   botLayerContainerfile,
   botOptVolume,
   botToolsVolume,
+  imageMissingText,
 } from './vm-images.js'
 
 /** PATH inside botvm (its Containerfile ENV). PATH_APPEND is added after it. */
@@ -646,7 +647,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     const pm = (args: string[], o?: Parameters<CommandRunner>[2]) => run(cli, [...e.globalArgs, ...args], o)
     const inspect = await pm(['image', 'inspect', '--format', '{{json .Config}}', from])
     // Item 2 (Charles): same condition as M1's ensure (line ~601), so the same reason and text.
-    if (inspect.code !== 0) failWithReason(409, 'image_missing', `The bot image ${from} isn't built yet. Finish the setup steps in Settings › VMs first.`)
+    if (inspect.code !== 0) failWithReason(409, 'image_missing', imageMissingText(from))
     const cfg = JSON.parse(inspect.stdout) as { User?: string; Entrypoint?: string[] | null; Cmd?: string[] | null }
     let grant: EgressGrant
     try {
@@ -738,7 +739,7 @@ export function createBotEnvService(deps: BotEnvDeps): BotEnvService {
     const vm = agent.vm
     const from = baseImageFor(vm.image.base, baseVersion())
     if (vm.image.generation === 0) {
-      if (!(await imageInfo(from))) failWithReason(409, 'image_missing', `The bot image ${from} isn't built yet. Finish the setup steps in Settings › VMs first.`)
+      if (!(await imageInfo(from))) failWithReason(409, 'image_missing', imageMissingText(from))
       return from
     }
     const ref = botImageRef(agent.slug, vm.image.generation)

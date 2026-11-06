@@ -57,6 +57,8 @@ import { CHAT_RUN_HOSTS_MAX, SCRIPT_RUN_ACTIVE, TOOL_BUILD_TIMEOUT_MS, type Host
 /** Plan §5: new runs are blocked below 3 GB free on the machine (GiB, like the snapshot budget's 5 GB floor). */
 export const RUN_FREE_FLOOR_BYTES = 3 * 1024 ** 3
 export const LOW_DISK_REASON = 'low_disk'
+/** BE-P2-19: a run that failed because a shared bot image isn't built (ScriptRun.reason, additive). */
+export const IMAGE_MISSING_REASON = 'image_missing'
 export const LOW_DISK_TEXT = "This computer is almost out of disk space (less than 3 GB free), so scripts can't run until some space is freed."
 /** The model gets the last 8 KB of each stream (plan §3.1 step 8). */
 export const MODEL_TAIL_BYTES = 8 * 1024
@@ -905,6 +907,8 @@ export function createRunService(deps: RunServiceDeps): RunService {
     if (block) patch.reason = block.reason
     // BE-P2-13: the proxy was down, so the online run never started.
     else if (res.reason === 'proxy_unavailable') patch.reason = res.reason
+    // BE-P2-19: a shared bot image is missing (after an update); `error` points at the setup step.
+    else if (res.reason === IMAGE_MISSING_REASON) patch.reason = res.reason
     if (res.hostsContacted) {
       patch.hostsContacted = res.hostsContacted
       if (res.hostsContactedTotal !== undefined) patch.hostsContactedTotal = res.hostsContactedTotal

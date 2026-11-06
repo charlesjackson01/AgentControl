@@ -133,6 +133,14 @@ export function botLayerContainerfile(opts: { slug: string; generation: number; 
 export function vmDir(): string {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'vm')
 }
+/**
+ * BE-P2-19: the run / build failure (and the firewall setup's) when a shared bot image isn't there
+ * (409 image_missing), typically after an update changed BOTVM_VERSION. Points at the bot-images
+ * setup step (vm-host.ts BOT_IMAGES_STEP_ID).
+ */
+export const imageMissingText = (ref: string) =>
+  `AgentControl needs to rebuild its bot images: ${ref} isn't built yet (this happens after an update). Open Settings › VMs and run setup to rebuild them.`
+
 export function containerfilePath(kind: SharedImageKind): string {
   return path.join(vmDir(), 'images', kind, 'Containerfile')
 }

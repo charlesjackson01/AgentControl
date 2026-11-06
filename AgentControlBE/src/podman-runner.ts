@@ -343,6 +343,8 @@ export function createContainerRunner(deps: ContainerRunnerDeps): ContainerRunne
       // BE-P2-13: an online run moves it to the bot's egress network; the next offline run moves it back to none.
       await deps.botEnv.ensure(agent, { start: true, forRun: true, network: grant ? 'egress' : 'none' })
     } catch (x) {
+      // BE-P2-19: a missing shared image (after an update) says what to do, with its reason.
+      if ((x as { reason?: unknown }).reason === 'image_missing') return err(t0, scrub((x as Error).message), { runtime: rt.effective, reason: 'image_missing' })
       return err(t0, `The bot's VM couldn't start: ${scrub((x as Error).message)}`, { runtime: rt.effective })
     }
     lastActivity.set(agent.id, now().getTime())

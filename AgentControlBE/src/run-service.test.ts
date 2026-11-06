@@ -8,6 +8,7 @@ import {
   STOPPED_QUEUED_TEXT, tailUtf8, type RunService, type RunServiceDeps, type ToolBuildSpec,
 } from './run-service.js'
 import { fakeRunner, until, type FakeRunner } from './run-service.fake.js'
+import { imageMissingText } from './vm-images.js'
 import type { Agent, ChatMessage, Conversation, HostContact, LiveEvent, ScriptRunUndo } from './shared/types.js'
 
 /** BE-P2-12: RunService with a fake runner (no Podman). */
@@ -255,6 +256,14 @@ describe('blocks', () => {
     await until(() => runner.pending.length === 1)
     runner.pending[0]!.end({ status: 'error', outcome: 'failed', reason: 'snapshot_failed', error: "Undo couldn't be prepared." })
     expect(await svc.wait(a.id)).toMatchObject({ status: 'failed', reason: 'snapshot_failed' })
+  })
+
+  it('BE-P2-19: a runner result with reason image_missing is recorded with that reason and its text', async () => {
+    const a = await start()
+    await until(() => runner.pending.length === 1)
+    const text = imageMissingText('localhost/agentcontrol/botvm:9.9.9')
+    runner.pending[0]!.end({ status: 'error', outcome: 'failed', reason: 'image_missing', error: text })
+    expect(await svc.wait(a.id)).toMatchObject({ status: 'failed', reason: 'image_missing', error: text })
   })
 
   it('the personal 10 GB limit → 409 personal_quota', async () => {

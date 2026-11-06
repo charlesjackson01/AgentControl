@@ -648,12 +648,15 @@ All routes are user-session only (the `user_only` hook: 403 from the bot side). 
 | GET | `/api/vm/export` | zip `agentcontrol-all-YYYY-MM-DD.zip`: `bots/<slug>/…`, `groups/<slug>/shared/…`, `agentcontrol-export.json` | — |
 | GET | `/api/agents/:id/export` | zip `agentcontrol-<slug>-YYYY-MM-DD.zip` | 404, 409 `files_missing` |
 | POST | `/api/vm/setup/firewall-image` + confirm header | 202 `VmHostInfo` | 403 `confirm_required`, 409 `engine_missing` / `machine_stopped` / `image_missing` / `setup_busy` |
+| POST | `/api/vm/setup/bot-images` + confirm header (BE-P2-19) | 202 `VmHostInfo` | 403 `confirm_required`, 404 when not wired, 409 `engine_missing` / `machine_stopped` / `setup_busy` |
 
 **Restore:** stops the bot's container, extracts to a staging folder, swaps the zones in (rolled back on failure), evicts the bot's undo snapshots with `machine_restored` (`UNDO_MACHINE_RESTORED_TEXT`), puts the manifest's apt packages back on the bot and starts a tool rebuild (a `tool_build` run) unless the tools already match. A missing volume marker is written back; a different volume refuses.
 
 **Reset VM** now backs the bot up first (`pre_reset`); a failed backup → 409 `backup_failed` and nothing is reset. Grow and base-upgrade backups are best effort (logged; the change goes on). `VmInfo.storage.lastBackupAt` is the bot's newest finished backup.
 
 **M2 gap 1:** `VmHostInfo.setupSteps` gains `{id:'firewall-image'}` while `agentcontrol/egressd-nft` is missing (Podman; Mac/Windows once our machine runs). The server builds it on start when the bot image is there; failures show the last build line and `vm/build-images.sh --only egressd-nft`.
+
+**BE-P2-19 (bot images after an update, Needs OK):** `VmHostInfo.setupSteps` gains `{id:'bot-images'}` (before `firewall-image`) while `agentcontrol/botvm:<BOTVM_VERSION>` is missing, plus `agentcontrol/botvm-browser` while a bot uses the browser base (Podman; Mac/Windows once our machine runs). Texts: after an update (another version of the image is there) "AgentControl was updated and needs to rebuild its bot images (agentcontrol/botvm). Run setup in Settings › VMs to rebuild them."; first install "Build the bot images (agentcontrol/botvm), so bots can run scripts."; while building "Rebuilding the bot images (agentcontrol/botvm). Scripts can run again when this is done…" ("Building" on a first install); on failure "The bot images (agentcontrol/botvm) couldn't be built: <last build line>. Try again with Run setup in Settings › VMs, or run npm run vm:images." (both images are named "agentcontrol/botvm and agentcontrol/botvm-browser"). The server builds them on start (then the firewall helper, which is FROM botvm), and `POST /api/vm/setup/bot-images` builds them now. Every `image_missing` (run, tool build, vm_install, firewall setup) says "AgentControl needs to rebuild its bot images: <image> isn't built yet (this happens after an update). Open Settings › VMs and run setup to rebuild them."; a run that fails this way has `ScriptRun.reason:'image_missing'` (new, additive) and that text as `error` (no "The bot's VM couldn't start:" prefix).
 
 **M3 decision 3:** turning a bot's browser on (PATCH `permissions.browser`, `POST /api/agents` `browser:true`, or the bot's own request) adds `core/browser-basics` to its `skillIds` when that skill is in the library and not attached. Turning it off leaves skills alone.
 
@@ -671,6 +674,7 @@ All routes are user-session only (the `user_only` hook: 403 from the bot side). 
 11. Nightly has no catch-up for missed nights.
 12. `POST /api/vm/setup/firewall-image` and the `firewall-image` setup step (and its texts) are new.
 13. Decision 3 adds the skill on every turn-on path, including bot creation with `browser:true`, and never removes it.
+14. BE-P2-19: the `bot-images` setup step and its texts, `POST /api/vm/setup/bot-images`, building the bot images on start, `ScriptRun.reason:'image_missing'`, and the new `image_missing` text.
 
 **Follow-up: restore rebuilds every tool type (approved default 6; shape and order approved by Team lead 2026-11-06).** `BackupRestoreAgent.toolResults` lists `{kind:'apt'|'pip'|'npm'|'opt', status:'started'|'not_needed'|'failed'|'not_restorable', items, runId?, message?}` in that order. **`tools` summarizes all four types** (decided 2026-11-06): 'failed' if any type failed, else 'started' if any type's build or install run started, else 'not_needed' (opt's `not_restorable` alone counts as 'not_needed'); `toolsMessage` joins the failed and not_restorable messages with a space. The 200 row above lists the fields.
 - **apt:** the manifest's packages become `vm.packages` and a Rebuild `tool_build` starts (as before).

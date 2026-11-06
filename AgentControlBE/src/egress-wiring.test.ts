@@ -17,6 +17,7 @@ import type { StreamRunner } from './stream-runner.js'
 import { createUserOnlyCheck, USER_ONLY_MESSAGE, userOnlyExtraCidrs } from './user-only.js'
 import { defaultAgentVm } from './vm-defaults.js'
 import { VM_LIMITS } from './shared/types.js'
+import { imageMissingText, sharedImageRef } from './vm-images.js'
 import { BUILD_TIMEOUT_MS } from './bot-env.js'
 import type { Agent } from './shared/types.js'
 
@@ -29,7 +30,7 @@ const URL_ = `http://ac1:${SECRET}@10.89.3.2:3128`
 const BASIC = Buffer.from(`ac1:${SECRET}`).toString('base64')
 const grantOf = (): EgressGrant => ({ id: 'ac1', slug: 'analyst', network: 'ac-egress-analyst', proxyAddress: '10.89.3.2', env: [{ name: 'HTTPS_PROXY', value: URL_ }], secret: SECRET, secrets: credentialForms('ac1', SECRET, URL_) })
 
-function setup(o: { egress?: Partial<EgressService> | null; out?: string; ensureThrows?: boolean } = {}) {
+function setup(o: { egress?: Partial<EgressService> | null; out?: string; ensureThrows?: boolean; ensureError?: Error } = {}) {
   const streamed: string[][] = []
   const envs: (NodeJS.ProcessEnv | undefined)[] = []
   const chunks: string[] = []
@@ -47,6 +48,7 @@ function setup(o: { egress?: Partial<EgressService> | null; out?: string; ensure
   const exec: CommandRunner = async () => ({ code: 0, stdout: '', stderr: '' })
   const botEnv = {
     ensure: vi.fn(async () => {
+      if (o.ensureError) throw o.ensureError
       if (o.ensureThrows) throw new Error(`couldn't attach (${URL_})`)
       return agent.vm
     }),
@@ -259,14 +261,20 @@ describe('online tool build (run + commit through the proxy)', () => {
     expect(flags).toContain('--cap-drop ALL --cap-add CHOWN,DAC_OVERRIDE,FOWNER,FSETID,SETUID,SETGID,SYS_CHROOT,KILL')
     expect(flags).toContain(`--memory ${VM_LIMITS.memoryMb}m --memory-swap ${VM_LIMITS.memoryMb}m --cpus ${VM_LIMITS.cpus} --pids-limit ${VM_LIMITS.pids}`)
   })
-  it('item 2: a missing base image is M1\'s image_missing, word for word', async () => {
+  it('BE-P2-19: a run that meets a missing bot image fails with reason image_missing and the setup pointer, no prefix', async () => {
+    const ensureError = Object.assign(new Error(imageMissingText('localhost/agentcontrol/botvm:9.9.9')), { statusCode: 409, reason: 'image_missing' })
+    const r = await setup({ ensureError, egress: null }).runner.run(req())
+    expect(r).toMatchObject({ status: 'error', outcome: 'failed', reason: 'image_missing', error: imageMissingText('localhost/agentcontrol/botvm:9.9.9') })
+  })
+  it('item 2 (BE-P2-19 wording): a missing base image is image_missing with the setup pointer', async () => {
     const { createBotEnvService } = await import('./bot-env.js')
     const exec: CommandRunner = async (_cmd, args) => (args[0] === 'image' && args[1] === 'inspect' ? { code: 125, stdout: '', stderr: 'Error: image not known' } : { code: 0, stdout: '', stderr: '' })
     const egress = { grant: vi.fn(), revoke: vi.fn() }
     const svc = createBotEnvService({ exec, engine: async () => ({ cli: 'podman', globalArgs: [] }), mounts: () => [], saveVm: () => true, buildNetwork: () => 'egress', egress: egress as unknown as EgressService })
     const err = await svc.vmInstall({ ...agent, internetPolicy: 'ask' } as Agent, ['be13-hello']).catch((e: unknown) => e as Error & { statusCode: number; reason: string })
     expect(err).toMatchObject({ statusCode: 409, reason: 'image_missing' })
-    expect((err as Error).message).toMatch(/^The bot image localhost\/agentcontrol\/botvm[^ ]* isn't built yet\. Finish the setup steps in Settings › VMs first\.$/)
+    expect((err as Error).message).toBe(imageMissingText(sharedImageRef('botvm')))
+    expect((err as Error).message).toMatch(/^AgentControl needs to rebuild its bot images: localhost\/agentcontrol\/botvm:[^ ]+ isn't built yet \(this happens after an update\)\. Open Settings › VMs and run setup to rebuild them\.$/)
     expect(egress.grant).not.toHaveBeenCalled()
   })
 })

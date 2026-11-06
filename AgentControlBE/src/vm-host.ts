@@ -15,6 +15,8 @@ import { statfs } from 'node:fs/promises'
 import { homedir, totalmem } from 'node:os'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import { fail, failWithReason } from './http.js'
+import { imageMissingText, type SharedImageKind } from './vm-images.js'
+export { imageMissingText }
 import { RUN_BLOCK_FREE_MB, VM_MACHINE_DEFAULTS, type SnapshotDriver, type StorageBackendKind, type VmHostInfo } from './shared/types.js'
 
 export type HostOs = VmHostInfo['os']
@@ -107,6 +109,13 @@ export interface VmHostDeps {
    * `baseImage` (botvm, its FROM) is there. Absent: no step (route tests).
    */
   firewall?: { image: string; baseImage: string; buildArgv: () => string[] }
+  /**
+   * BE-P2-19: the shared bot images (botvm, and botvm-browser while a bot uses the browser base) as
+   * a setup step, typically pending after an update changed BOTVM_VERSION. `images()` lists the
+   * ones needed now, in build order; each is checked with `image exists` (Podman only) and built
+   * with `buildArgv(kind)`. Absent: no step (route tests).
+   */
+  botImages?: { images: () => { kind: SharedImageKind; ref: string }[]; buildArgv: (kind: SharedImageKind) => string[] }
 }
 
 /** BE-P2-18: the setup step id and texts for the firewall helper image (gap 1). */
@@ -116,6 +125,22 @@ export const FIREWALL_STEP_BUILDING_TEXT = 'Setting up the internet firewall hel
 export const firewallStepErrorText = (detail: string) =>
   `The internet firewall helper (agentcontrol/egressd-nft) couldn't be set up: ${detail} Try again, or run vm/build-images.sh --only egressd-nft.`
 const FIREWALL_BUILD_TIMEOUT_MS = 20 * 60_000
+
+/**
+ * BE-P2-19: the setup step id and texts for the shared bot images. "Outdated" means an image of
+ * another version is there (an update changed BOTVM_VERSION); otherwise it's a first install.
+ */
+export const BOT_IMAGES_STEP_ID = 'bot-images'
+const imageNames = (refs: readonly string[]) => refs.map((r) => r.replace(/^localhost\//, '').replace(/:[^:/]+$/, '')).join(' and ')
+export const botImagesStepText = (refs: readonly string[], outdated: boolean) =>
+  outdated
+    ? `AgentControl was updated and needs to rebuild its bot images (${imageNames(refs)}). Run setup in Settings › VMs to rebuild them.`
+    : `Build the bot images (${imageNames(refs)}), so bots can run scripts.`
+export const botImagesBuildingText = (refs: readonly string[], outdated: boolean) =>
+  `${outdated ? 'Rebuilding' : 'Building'} the bot images (${imageNames(refs)}). Scripts can run again when this is done…`
+export const botImagesErrorText = (refs: readonly string[], detail: string) =>
+  `The bot images (${imageNames(refs)}) couldn't be built: ${detail} Try again with Run setup in Settings › VMs, or run npm run vm:images.`
+const BOT_IMAGE_BUILD_TIMEOUT_MS = 30 * 60_000
 
 export interface VmHostService {
   /** GET /api/vm/host. `fresh` skips the short cache. */
@@ -132,6 +157,14 @@ export interface VmHostService {
   buildFirewall?(): Promise<VmHostInfo>
   /** Resolves when no firewall build is running (tests). */
   firewallIdle?(): Promise<void>
+  /**
+   * BE-P2-19: build the missing shared bot images (POST /api/vm/setup/bot-images, and on start),
+   * then the firewall helper if its step isn't done (it's built FROM botvm). Answers at once with
+   * the host info. 409 engine_missing / machine_stopped / setup_busy.
+   */
+  buildBotImages?(): Promise<VmHostInfo>
+  /** Resolves when no bot image build is running (tests). */
+  botImagesIdle?(): Promise<void>
 }
 
 export async function statfsFreeBytes(path: string): Promise<number | null> {
@@ -160,6 +193,10 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
   let busy = false
   let fwBuild: Promise<void> | null = null
   let fwError: string | null = null
+  let imgBuild: Promise<void> | null = null
+  let imgError: string | null = null
+  /** The refs and outdated flag of the build in progress (its step text). */
+  let imgBuilding: { refs: string[]; outdated: boolean } | null = null
   const conn = (): string[] => (os === 'linux' ? [] : ['--connection', MACHINE_NAME])
 
   const podmanMachine = (verb: string, args: readonly string[] = [], timeoutMs = 30_000) =>
@@ -261,7 +298,35 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     return { id: FIREWALL_STEP_ID, text, done }
   }
 
-  function setupSteps(engine: EngineInfo, machine: MachineInfo | null, extra: SetupStep | null = null): SetupStep[] {
+  /** The shared images still missing, and whether another version of one is there (an update). */
+  async function missingBotImages(): Promise<{ refs: string[]; kinds: SharedImageKind[]; outdated: boolean } | null> {
+    const bi = deps.botImages
+    if (!bi) return null
+    const refs: string[] = []
+    const kinds: SharedImageKind[] = []
+    let outdated = false
+    for (const img of bi.images()) {
+      if ((await exec('podman', [...conn(), 'image', 'exists', img.ref])).code === 0) continue
+      refs.push(img.ref)
+      kinds.push(img.kind)
+      const repo = img.ref.replace(/:[^:/]+$/, '')
+      const ls = await exec('podman', [...conn(), 'image', 'ls', '--format', '{{.Tag}}', repo])
+      if (ls.code === 0 && ls.stdout.split('\n').some((t) => t.trim() && t.trim() !== '<none>')) outdated = true
+    }
+    return { refs, kinds, outdated }
+  }
+
+  /** The bot images step (Podman, and the machine running on Mac/Windows), or null when it can't be checked yet. */
+  async function botImagesStep(engine: EngineInfo, machine: MachineInfo | null): Promise<SetupStep | null> {
+    if (!deps.botImages || engine.engine !== 'podman' || (os !== 'linux' && machine?.state !== 'running')) return null
+    const all = deps.botImages.images().map((i) => i.ref)
+    if (imgBuilding) return { id: BOT_IMAGES_STEP_ID, text: botImagesBuildingText(imgBuilding.refs, imgBuilding.outdated), done: false }
+    const m = await missingBotImages()
+    if (!m || m.refs.length === 0) return { id: BOT_IMAGES_STEP_ID, text: botImagesStepText(all, false), done: true }
+    return { id: BOT_IMAGES_STEP_ID, text: imgError ? botImagesErrorText(m.refs, imgError) : botImagesStepText(m.refs, m.outdated), done: false }
+  }
+
+  function setupSteps(engine: EngineInfo, machine: MachineInfo | null, ...extra: (SetupStep | null)[]): SetupStep[] {
     const steps: SetupStep[] = []
     const hasEngine = engine.engine !== null
     steps.push({
@@ -283,7 +348,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       steps.push({ id: 'create-machine', text: 'Create AgentControl’s machine “agentcontrol” (6 GB memory, 4 CPUs, 60 GB disk).', done: machine !== null && machine.state !== 'missing' })
       steps.push({ id: 'start-machine', text: 'Start the “agentcontrol” machine.', done: machine?.state === 'running' })
     }
-    if (extra) steps.push(extra)
+    for (const x of extra) if (x) steps.push(x)
     return steps.every((s) => s.done) ? [] : steps
   }
 
@@ -300,6 +365,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       }
     }
     const s = storage()
+    const imgs = await botImagesStep(engine, machine)
     const fw = await firewallStep(engine, machine)
     return {
       engine: engine.engine,
@@ -309,7 +375,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       machine,
       storage: { driver: s.driver, backend, volumeState: s.volumeState },
       concurrency: hostConcurrency(os, totalMem()),
-      setupSteps: setupSteps(engine, machine, fw),
+      setupSteps: setupSteps(engine, machine, imgs, fw),
     }
   }
 
@@ -405,7 +471,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     if (!step || step.done) return info
     if (fwBuild) failWithReason(409, 'setup_busy', 'The internet firewall helper is already being set up.')
     const base = await exec('podman', [...conn(), 'image', 'exists', fw.baseImage])
-    if (base.code !== 0) failWithReason(409, 'image_missing', `The bot image ${fw.baseImage} isn't built yet. Finish the setup steps in Settings › VMs first.`)
+    if (base.code !== 0) failWithReason(409, 'image_missing', imageMissingText(fw.baseImage))
     fwError = null
     const job = (async () => {
       try {
@@ -423,11 +489,54 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     return hostInfo(true)
   }
 
+  async function buildBotImages(): Promise<VmHostInfo> {
+    const bi = deps.botImages
+    if (!bi) fail(404, 'The bot image setup isn\'t available here.')
+    const info = await hostInfo(true)
+    if (info.engine !== 'podman') failWithReason(409, 'engine_missing', 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.')
+    if (os !== 'linux' && info.machine?.state !== 'running') failWithReason(409, 'machine_stopped', 'Start the “agentcontrol” machine first.')
+    if (imgBuild) failWithReason(409, 'setup_busy', 'The bot images are already being built.')
+    const m = await missingBotImages()
+    if (!m || m.refs.length === 0) {
+      // Nothing to build: the firewall helper may still be missing (its own step).
+      void buildFirewall().catch(() => {})
+      return info
+    }
+    imgError = null
+    imgBuilding = { refs: m.refs, outdated: m.outdated }
+    const job = (async () => {
+      try {
+        for (const kind of m.kinds) {
+          const r = await exec('podman', [...conn(), ...bi.buildArgv(kind)], { timeoutMs: BOT_IMAGE_BUILD_TIMEOUT_MS })
+          if (r.code !== 0) {
+            imgError = `${(r.stderr || r.stdout).trim().split('\n').filter(Boolean).at(-1)?.slice(0, 300) ?? `exit ${r.code}`}.`
+            return
+          }
+        }
+      } catch (err) {
+        imgError = `${(err as Error).message.slice(0, 300)}.`
+      } finally {
+        imgBuilding = null
+        imgBuild = null
+        cache = null
+      }
+      // The firewall helper is built FROM botvm: set it up now if its step is pending.
+      if (!imgError) await buildFirewall().catch(() => {})
+    })()
+    imgBuild = job
+    cache = null
+    return hostInfo(true)
+  }
+
   return {
     hostInfo,
     ensureMachine,
     grow,
     buildFirewall,
+    buildBotImages,
+    botImagesIdle: async () => {
+      while (imgBuild) await imgBuild
+    },
     firewallIdle: async () => {
       while (fwBuild) await fwBuild
     },

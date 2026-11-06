@@ -44,7 +44,7 @@ import { groupRoot } from './group-files.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import type { StreamRunner } from './stream-runner.js'
 import { coreSkillId } from './db/seed.js'
-import { baseImageFor, botImageRef, egressdNftBuildArgv, egressdNftImageRef, sharedImageRef } from './vm-images.js'
+import { baseImageFor, botImageRef, egressdNftBuildArgv, egressdNftImageRef, imageBuildArgv, sharedImageRef } from './vm-images.js'
 import { registerPermissionRoutes } from './permission-routes.js'
 import { createLiveEvents, registerLiveEventRoutes, type LiveEventBus } from './live-events.js'
 import { createPersonalUsage, PERSONAL_MEASURE_MS } from './personal-usage.js'
@@ -1641,6 +1641,15 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       beforeGrow: () => preUpgradeBackup(),
       // BE-P2-18 (M2 gap 1): the egress proxy's firewall helper image is a setup step.
       firewall: { image: egressdNftImageRef(), baseImage: sharedImageRef('botvm'), buildArgv: egressdNftBuildArgv },
+      // BE-P2-19: the shared bot images are a setup step (pending after an update changes BOTVM_VERSION);
+      // the browser image only while a bot uses the browser base.
+      botImages: {
+        images: () => [
+          { kind: 'botvm' as const, ref: sharedImageRef('botvm') },
+          ...(store.agents.some((a) => a.vm?.image?.base === 'browser') ? [{ kind: 'botvm-browser' as const, ref: sharedImageRef('botvm-browser') }] : []),
+        ],
+        buildArgv: imageBuildArgv,
+      },
     })
   app.get('/api/vm/host', async () => vmHost.hostInfo())
   // BE-P2-18 (gap 1, Needs OK): build the firewall helper now (the step shows its progress); 202 VmHostInfo.
@@ -1648,6 +1657,12 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     if (request.headers[PERMISSION_CSRF_HEADER] !== '1') failWithReason(403, 'confirm_required', `Setting up the firewall helper needs the ${PERMISSION_CSRF_HEADER}: 1 header.`)
     if (!vmHost.buildFirewall) fail(404, 'The firewall helper setup isn\'t available here.')
     return reply.code(202).send(await vmHost.buildFirewall())
+  })
+  // BE-P2-19 (Needs OK): build the missing bot images now (the step shows its progress), then the firewall helper; 202 VmHostInfo.
+  app.post('/api/vm/setup/bot-images', async (request, reply) => {
+    if (request.headers[PERMISSION_CSRF_HEADER] !== '1') failWithReason(403, 'confirm_required', `Building the bot images needs the ${PERMISSION_CSRF_HEADER}: 1 header.`)
+    if (!vmHost.buildBotImages) fail(404, 'The bot image setup isn\'t available here.')
+    return reply.code(202).send(await vmHost.buildBotImages())
   })
   app.post('/api/vm/machine/grow', async (request) => {
     const body = request.body as { toGb?: unknown } | null | undefined
@@ -1748,7 +1763,10 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       })().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
       stopProbeTimer = runtimeProbe.startTimer()
       // BE-P2-18 (M2 gap 1): first run builds the firewall helper image when it's missing.
-      void vmHost.buildFirewall?.().catch((err: Error) => app.log.info(`firewall helper not set up yet: ${err.message}`))
+      // BE-P2-19: the bot images first (after an update they're missing), which then builds the
+      // firewall helper (FROM botvm); without the bot-images step, the firewall helper directly.
+      if (vmHost.buildBotImages) void vmHost.buildBotImages().catch((err: Error) => app.log.info(`bot images not built yet: ${err.message}`))
+      else void vmHost.buildFirewall?.().catch((err: Error) => app.log.info(`firewall helper not set up yet: ${err.message}`))
     })
     app.addHook('onClose', async () => {
       stopProbeTimer?.()

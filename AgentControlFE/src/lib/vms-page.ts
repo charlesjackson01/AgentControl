@@ -7,7 +7,7 @@
 import { humanSize } from './file-format.ts'
 import {
   SCRIPT_RUN_ACTIVE, SNAPSHOT_BUDGET_BOUNDS, VM_MACHINE_DEFAULTS,
-  type BackupInfo, type BackupRestoreResult, type BrowserAddonInfo, type GlobalRuntimeMode, type ScriptRunStatus, type VmHostInfo, type VmProbeResult, type VmSettingsView,
+  type BackupInfo, type BackupRestoreResult, type BackupRestoreTool, type BackupToolKind, type BrowserAddonInfo, type GlobalRuntimeMode, type ScriptRunStatus, type VmHostInfo, type VmProbeResult, type VmSettingsView,
 } from './types.ts'
 
 export const VMS_PAGE_GAPS = {
@@ -19,7 +19,7 @@ export const VMS_PAGE_GAPS = {
   G6: 'Phone settings section switcher sits at the bottom of the pane (the 390 mockup has no nav)',
   G7: 'A failed backup row: pill "Failed" and the error, no Restore',
   G8: 'Undone host setup steps (including a future firewall-image step) listed above the cards',
-  G9: "Restore answered 200 with BackupRestoreResult tools:'failed': the bot name and toolsMessage under the backup list",
+  G9: "Restore toolResults under the backup list: one line per apt/pip/npm/opt that has items or is not not_needed. started is rebuilding or installing with the count, failed is the server message, opt not_restorable is can't be restored plus the program names. A bot whose kinds are all not_needed is left off. toolsMessage is not repeated.",
 } as const
 
 export const SETTINGS_TITLE = 'Settings'
@@ -159,16 +159,57 @@ export function mergeBackupRecord(record: Readonly<Record<string, BackupInfo>>, 
   return { ...record, [backup.id]: backup }
 }
 
+/** A kind is worth a line when it lists items, or it is not a plain 'not_needed'. */
+function restoreToolVisible(tool: BackupRestoreTool): boolean {
+  return tool.items.length > 0 || tool.status !== 'not_needed'
+}
+
+function restoreToolText(tool: BackupRestoreTool): string {
+  const kind: BackupToolKind = tool.kind
+  if (tool.status === 'started') {
+    const verb = kind === 'apt' ? 'rebuilding' : 'installing'
+    const n = tool.items.length
+    if (n === 0) return `${kind}: ${verb}`
+    const noun = kind === 'opt' ? (n === 1 ? 'program' : 'programs') : (n === 1 ? 'package' : 'packages')
+    return `${kind}: ${verb} ${n} ${noun}`
+  }
+  if (tool.status === 'failed') {
+    const message = tool.message?.trim()
+    return message ? `${kind}: ${message}` : `${kind}: didn't start`
+  }
+  if (tool.status === 'not_restorable') {
+    if (tool.items.length > 0) return `${kind}: can't be restored (${tool.items.join(', ')})`
+    const message = tool.message?.trim()
+    return message ? `${kind}: ${message}` : `${kind}: can't be restored`
+  }
+  return `${kind}: nothing to reinstall`
+}
+
 /**
- * Shown under the backup list after a 200 restore when a bot's tools did not come back.
- * No mockup (GAP-G9). `null` when every bot is 'started' or 'not_needed'.
+ * Lines under the backup list after a 200 restore (GAP-G9, no mockup).
+ * One line per tool kind that has items or is not 'not_needed'. A bot whose kinds are all
+ * 'not_needed' is left off. When `toolResults` is present, `toolsMessage` is not repeated.
+ * `null` when there is nothing to show.
  */
 export function restoreToolsNote(result: BackupRestoreResult, names: ReadonlyMap<string, string>): string | null {
-  const lines = result.agents.filter((a) => a.tools === 'failed').map((a) => {
-    const name = names.get(a.agentId) ?? a.agentId
-    const why = a.toolsMessage?.trim()
-    return why ? `${name}: ${why}` : `${name}: tools didn't start after the restore.`
-  })
+  const lines: string[] = []
+  for (const agent of result.agents) {
+    const name = names.get(agent.agentId) ?? agent.agentId
+    const results = agent.toolResults
+    if (!results || results.length === 0) {
+      if (agent.tools === 'not_needed') continue
+      if (agent.tools === 'started') {
+        lines.push(`${name}: rebuilding`)
+        continue
+      }
+      const why = agent.toolsMessage?.trim()
+      lines.push(why ? `${name}: ${why}` : `${name}: tools didn't start after the restore.`)
+      continue
+    }
+    const visible = results.filter(restoreToolVisible)
+    if (visible.length === 0 || visible.every((tool) => tool.status === 'not_needed')) continue
+    for (const tool of visible) lines.push(`${name} · ${restoreToolText(tool)}`)
+  }
   return lines.length ? lines.join('\n') : null
 }
 

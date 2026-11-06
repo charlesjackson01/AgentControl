@@ -5,7 +5,7 @@ import * as vmTab from '../src/lib/vm-tab.ts'
 
 const GiB = 1024 ** 3
 const MOCKUP = 'The download needs about 1.3 GB and this computer has 0.6 GB free. Free some space, then try again.'
-const FLOOR = 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free.'
+const FLOOR = 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free. Free some space, then try again.'
 
 describe('low-disk sentences (contract fec4670, Charles + Team lead 2026-10-30)', () => {
   it('free < the download: the mockup 09 sentence with the real figure', () => {
@@ -13,10 +13,10 @@ describe('low-disk sentences (contract fec4670, Charles + Team lead 2026-10-30)'
     assert.equal(lowDiskText({ freeBytes: 0 }), MOCKUP.replace('0.6', '0.0'))
     assert.match(lowDiskText({ freeBytes: BROWSER_DOWNLOAD_BYTES - 1 }), /^The download needs about 1\.3 GB and this computer has 1\.2 GB free\./)
   })
-  it('download ≤ free < download + floor: the 2nd sentence exactly, no "Free some space" ending', () => {
+  it('download ≤ free < download + floor: the 2nd sentence, ending "Free some space, then try again." (M3 decision 4)', () => {
     assert.equal(lowDiskText({ freeBytes: 2.5 * GiB }), FLOOR)
-    assert.match(lowDiskText({ freeBytes: BROWSER_DOWNLOAD_BYTES }), /and this computer has 1\.2 GB free\.$/)
-    assert.match(lowDiskText({ freeBytes: BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES - 1 }), /plus 3 GB kept free for runs, and this computer has 4\.2 GB free\.$/)
+    assert.match(lowDiskText({ freeBytes: BROWSER_DOWNLOAD_BYTES }), /and this computer has 1\.2 GB free\. Free some space, then try again\.$/)
+    assert.match(lowDiskText({ freeBytes: BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES - 1 }), /plus 3 GB kept free for runs, and this computer has 4\.2 GB free\. Free some space, then try again\.$/)
   })
   it('compares in bytes; neededBytes from the body sets the edge', () => {
     assert.equal(BROWSER_DOWNLOAD_BYTES, 1343 * 1000 ** 2)
@@ -69,10 +69,10 @@ describe('low disk, VM tab browser row (FE-P2-10; contract fec4670; Charles 2026
   it('under the download: the mockup sentence, with its ending', () => {
     assert.equal(ld(BROWSER_DOWNLOAD_BYTES - 1), 'The download needs about 1.3 GB and this computer has 1.2 GB free. Free some space, then try again.')
   })
-  it('download fits but not the floor: the floor sentence exactly, no ending', () => {
-    assert.equal(ld(BROWSER_DOWNLOAD_BYTES), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 1.2 GB free.')
-    assert.equal(ld(BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES - 1), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 4.2 GB free.')
-    assert.doesNotMatch(ld(4 * GB), /Free some space/)
+  it('download fits but not the floor: the floor sentence, with the decision 4 ending', () => {
+    assert.equal(ld(BROWSER_DOWNLOAD_BYTES), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 1.2 GB free. Free some space, then try again.')
+    assert.equal(ld(BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES - 1), 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 4.2 GB free. Free some space, then try again.')
+    assert.match(ld(4 * GB), /Free some space, then try again\.$/)
   })
   it('compared in bytes: exactly download + floor is enough', () => {
     assert.equal(ld(BROWSER_DOWNLOAD_BYTES + RUN_FREE_FLOOR_BYTES), null)
@@ -85,7 +85,7 @@ describe('low disk, VM tab browser row (FE-P2-10; contract fec4670; Charles 2026
   })
   it('BrowserError low_disk: server message first, else from freeBytes, else M1', () => {
     assert.equal(browserLowDiskText({ message: ' Server says. ', freeBytes: 1 }), 'Server says.')
-    assert.match(browserLowDiskText({ message: '', freeBytes: 2 * GB }), /plus 3 GB kept free for runs, and this computer has 2\.0 GB free\.$/)
+    assert.match(browserLowDiskText({ message: '', freeBytes: 2 * GB }), /plus 3 GB kept free for runs, and this computer has 2\.0 GB free\. Free some space, then try again\.$/)
     assert.equal(browserLowDiskText({ message: '', freeBytes: 2 * GB }, true), LOW_DISK_TEXT)
     assert.equal(browserLowDiskText(undefined), LOW_DISK_TEXT)
   })

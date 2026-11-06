@@ -34,7 +34,12 @@ export function uid(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().slice(0, 8)}`
 }
 
-/** The one 409 `internet_never` text (approved mockup / FE-9 run card), word for word. */
+/** The one 409 `internet_never` text for a script run (approved mockup / FE-9 run card), word for word. */
 export function internetNeverText(botName: string): string {
   return `Internet is set to Never for ${botName}, so this run didn't start. Change it in Settings › VM.`
+}
+
+/** M3 decision 4: a tool build (vm_install, Rebuild) names the build, not the run. */
+export function internetNeverBuildText(botName: string): string {
+  return `Internet is set to Never for ${botName}, so this build didn't start. Change it in Settings › VM.`
 }

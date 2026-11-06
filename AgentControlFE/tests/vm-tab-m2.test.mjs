@@ -90,7 +90,7 @@ describe('browser row (mockup 12 + GAPs)', () => {
   })
   it('low disk (GAP-V15) and build failed (GAP-V16) use the server message', () => {
     const l = row('low_disk')
-    assert.equal(l.error, 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free.')
+    assert.equal(l.error, 'The download needs about 1.3 GB, plus 3 GB kept free for runs, and this computer has 2.5 GB free. Free some space, then try again.')
     assert.equal(l.gap, 'V15')
     const b = row('build_failed')
     assert.equal(b.error, 'Stopped. Analyst keeps its current tools (version 3).')

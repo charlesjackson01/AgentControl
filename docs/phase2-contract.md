@@ -633,3 +633,50 @@ Approved with changes by Team lead 2026-10-30; each is now contract text above.
 
 ### Not in this change
 No server code: the routes and events above don't exist yet (they 404 / aren't sent). `types.ts` only gains types, constants and optional fields; `tsc --noEmit` passes. `ScriptRun.permissions[].requestId` became optional (no code read it). `QueuedReason` is defined here to match BE-P2-22 (`p2/be-22-build-queue`), which adds `ScriptRun.queuedReason` and the `queuePosition`/`queuedReason` `Pick` on `ScriptRunSummary`; on merge keep one `QueuedReason` and one `ChatRunSummary.queuedReason`.
+
+## BE-P2-18 (M3): backups, restore and export (on `p2/m3-backup`; additive; contract accepted by Team lead 2026-11-06 at e9bee1f, follow-ups below)
+All routes are user-session only (the `user_only` hook: 403 from the bot side). Errors use the M1 shape `{statusCode,error,reason,message}`; 5xx carry no `reason`.
+
+**When backups run:** nightly at `backups.time` (default 03:00, server local time; `backups.enabled:false` turns it off; no catch-up for nights the server was down), before Reset VM, before a machine disk grow and before a bot's base image upgrade, and on demand. Each run writes one `<slug>/<stamp>.tar.zst` per bot (`workspace/`, `shared/`, `memory/`, `BOT.md`, `manifest.json`; symlinks skipped) under the backups folder: `<data>/backups` on Linux/Mac, `%LOCALAPPDATA%\AgentControl\backups` on Windows. The newest `backups.keep` (default 7) are kept per bot, counting every trigger. Tool volumes are never backed up: `manifest.json` lists packages/tools/image so a restore rebuilds them. No encryption at rest.
+
+**Routes**
+| Method | Path | Answer | Errors |
+|---|---|---|---|
+| GET | `/api/vm/backups` | `BackupInfo[]` newest first | — |
+| POST | `/api/vm/backups` `{agentIds?: string[]}` (omitted = every bot) | 202 `BackupInfo` (`status:'in_progress'`); progress as `vm.updated` with `backup` per bot | 400 unknown key `"<k>" can't be set here.`, 400 unknown bot, 400 `no_bots`, 409 `backup_in_progress`, 507 `low_disk` "Not enough free disk space for a backup: … Free some space, then try again." (approved exception: this 5xx carries `reason`, so the FE shows the same copy as Grow), 501 when the storage has no host path |
+| POST | `/api/vm/backups/:id/restore` `{confirm:true, agentIds?}` + header `x-agentcontrol-confirm: 1` | 200 `BackupRestoreResult` `{backupId, agents:[{agentId, files, tools:'started'\|'not_needed'\|'failed' (all four types summed up), toolsMessage?, toolResults: BackupRestoreTool[]}]}` | 400 `confirm_required` (body), 403 `confirm_required` (header), 404, 409 `backup_incomplete`, 409 `backup_in_progress`, 409 `runs_active` "Scripts are running. Wait for them to finish, then restore.", 409 damaged archive (sha256), 409 `files_missing` (volume mismatch), 400 bot not in the backup / no longer exists |
+| GET | `/api/vm/export` | zip `agentcontrol-all-YYYY-MM-DD.zip`: `bots/<slug>/…`, `groups/<slug>/shared/…`, `agentcontrol-export.json` | — |
+| GET | `/api/agents/:id/export` | zip `agentcontrol-<slug>-YYYY-MM-DD.zip` | 404, 409 `files_missing` |
+| POST | `/api/vm/setup/firewall-image` + confirm header | 202 `VmHostInfo` | 403 `confirm_required`, 409 `engine_missing` / `machine_stopped` / `image_missing` / `setup_busy` |
+
+**Restore:** stops the bot's container, extracts to a staging folder, swaps the zones in (rolled back on failure), evicts the bot's undo snapshots with `machine_restored` (`UNDO_MACHINE_RESTORED_TEXT`), puts the manifest's apt packages back on the bot and starts a tool rebuild (a `tool_build` run) unless the tools already match. A missing volume marker is written back; a different volume refuses.
+
+**Reset VM** now backs the bot up first (`pre_reset`); a failed backup → 409 `backup_failed` and nothing is reset. Grow and base-upgrade backups are best effort (logged; the change goes on). `VmInfo.storage.lastBackupAt` is the bot's newest finished backup.
+
+**M2 gap 1:** `VmHostInfo.setupSteps` gains `{id:'firewall-image'}` while `agentcontrol/egressd-nft` is missing (Podman; Mac/Windows once our machine runs). The server builds it on start when the bot image is there; failures show the last build line and `vm/build-images.sh --only egressd-nft`.
+
+**M3 decision 3:** turning a bot's browser on (PATCH `permissions.browser`, `POST /api/agents` `browser:true`, or the bot's own request) adds `core/browser-basics` to its `skillIds` when that skill is in the library and not attached. Turning it off leaves skills alone.
+
+**Needs OK**
+1. ~~Low disk on create is 507 with no `reason`.~~ **Decided (Team lead, 2026-11-06):** 507 with `reason:'low_disk'`, an approved exception to the no-reason-on-5xx rule (only for this 507).
+2. `vm.updated` gains optional `backup?: BackupInfo`; `BackupInfo` gains optional `progress {done,total}` and `finishedAt`.
+3. Restore answers synchronously (200 `BackupRestoreResult`); the tool rebuild runs afterwards.
+4. Restore needs both `confirm:true` (400) and the confirm header (403); create needs neither.
+5. New reasons: `no_bots` (400), `backup_incomplete` (409), `backup_failed` (409 on reset).
+6. Reset is blocked when its backup fails; grow and base-upgrade backups don't block.
+7. Reset keeps the M1 behavior (stops runs) rather than 409 while runs are active.
+8. `keep` counts per bot across every trigger; failed records are kept up to `keep`.
+9. A restore onto a missing volume writes the marker back; a mismatched volume refuses with `files_missing`.
+10. Full export includes group shared folders and an index; it leaves out `store.json`, the vault, snapshots and backups.
+11. Nightly has no catch-up for missed nights.
+12. `POST /api/vm/setup/firewall-image` and the `firewall-image` setup step (and its texts) are new.
+13. Decision 3 adds the skill on every turn-on path, including bot creation with `browser:true`, and never removes it.
+
+**Follow-up: restore rebuilds every tool type (approved default 6; shape and order approved by Team lead 2026-11-06).** `BackupRestoreAgent.toolResults` lists `{kind:'apt'|'pip'|'npm'|'opt', status:'started'|'not_needed'|'failed'|'not_restorable', items, runId?, message?}` in that order. **`tools` summarizes all four types** (decided 2026-11-06): 'failed' if any type failed, else 'started' if any type's build or install run started, else 'not_needed' (opt's `not_restorable` alone counts as 'not_needed'); `toolsMessage` joins the failed and not_restorable messages with a space. The 200 row above lists the fields.
+- **apt:** the manifest's packages become `vm.packages` and a Rebuild `tool_build` starts (as before).
+- **pip / npm:** a script run in the bot's DM, the same way a bot installs them: `python3 -m pip install --user --disable-pip-version-check --no-input <name==version…>` and `npm install -g --no-fund --no-audit <name@version…>` (into `~/.local`), `network:'on'` with `hosts` (`pypi.org`, `files.pythonhosted.org` / `registry.npmjs.org`), why "Reinstall the bot's Python packages from the backup" / "… npm packages …", 30 min timeout. **The restore click is these runs' one-time internet grant, exactly like Rebuild (Team lead, 2026-11-06):** each install run starts with `{type:'internet', decision:'allow_once', source:'rebuild'}` on its own record, so no internet card is raised under Ask; under Always the gate records its `always`/`policy` as for any run. As Rebuild's precheck does, Never refuses before anything is recorded (no run, no card; `failed` with "Internet is set to Never for <name>, so this build didn't start. Change it in Settings › VM.") and so does a proxy that is down (`failed` with the `proxy_unavailable` text). The grant is on those two runs only: `internetPolicy` is unchanged and the bot's later online runs ask as usual. The runs queue behind the apt build (BE-P2-22). Only plain pins go on the command line (at most 200); anything else (`-e …`, `name @ url`, flags) is named in `message` as "Not reinstalled (not a plain name and version): …".
+- **opt:** `/opt/bot/bin` programs have no source to reinstall from: `not_restorable`, message "These programs in /opt/bot/bin can't be reinstalled from a backup: <names>. Ask the bot to set them up again."
+- A type the bot still has in full (its `vm.tools` lists every entry: the tool volumes survived) is `not_needed`.
+- **Where the manifest's tool list comes from:** `vm.tools`, now re-read (pip/npm/opt) right before each bot's archive and after every online script run that succeeded, only while the bot's container is already running (never started for it; skipped while runs are active).
+
+**Gaps:** opt programs aren't restored (names only); the tool list is only as fresh as the last time the container was seen running; Windows (WslFs has no host path → 501) untested; zip32 only (> 4 GB or 65,535 files → error); archives of deleted bots aren't pruned; zstd needs Node ≥ 22.15; `StorageBackend.exportZip` stays a stub; no `agent.updated` event after decision 3 changes `skillIds` (the FE sees it on its next agent fetch).

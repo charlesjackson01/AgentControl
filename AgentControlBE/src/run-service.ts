@@ -121,6 +121,13 @@ export interface StartRunInput {
   kind?: Exclude<ScriptRunKind, 'undo'>
   /** BE-P2-14: run_script `hosts` (shown on the internet card; never enforced). */
   hosts?: string[]
+  /**
+   * BE-P2-18: a confirmed user click's internet for this one run (a restore's pip/npm installs),
+   * like Rebuild's: the run starts with `{internet, allow_once, source:'rebuild'}` on its own record,
+   * so the gate queues it under Ask with no card. Nothing else is granted; later runs ask as usual.
+   * The caller checks Never and the proxy first, as Rebuild's precheck does. Never set from a bot's input.
+   */
+  internetGrant?: 'rebuild'
 }
 
 export interface RunRunner {
@@ -981,7 +988,7 @@ export function createRunService(deps: RunServiceDeps): RunService {
       network: input.network === 'on' ? 'on' : 'off',
       browser: input.browser === true,
       runtime: null,
-      permissions: [],
+      permissions: input.internetGrant === 'rebuild' && input.network === 'on' ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
       status: 'queued',
       queuedAt: now().toISOString(),
       stdoutTail: '',

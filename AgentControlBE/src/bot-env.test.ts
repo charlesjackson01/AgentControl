@@ -548,6 +548,27 @@ describe('BotEnvService (fake engine)', () => {
     expect(a.vm.tools).toEqual({ pip: ['cowsay==6.1', 'requests==2.32.0'], npm: ['left-pad@1.3.0'], optBin: ['tool'], updatedAt: '2026-10-27T12:00:00.000Z' })
   })
 
+  it('BE-P2-18: refreshTools onlyIfRunning never starts the container; a running one is read', async () => {
+    const e = fakeEngine()
+    e.execHandler.fn = (argv) => {
+      const cmd = argv.slice(argv.indexOf('ac-bot-analyst') + 1)
+      if (cmd[0] === 'python3') return ok('requests==2.32.0\n')
+      if (cmd[0] === 'npm') return ok('{}')
+      if (cmd[0] === 'ls') return ok('')
+      return err('?', 1)
+    }
+    const svc = service(e)
+    const a = agent()
+    const execs = () => e.calls.filter((c) => c.includes('exec')).length
+    await svc.refreshTools(a, { onlyIfRunning: true })
+    expect(a.vm.tools).toBeUndefined()
+    expect(e.calls.some((c) => c[1] === 'start' || c.includes('start'))).toBe(false)
+    expect(execs()).toBe(0)
+    await svc.start(a)
+    await svc.refreshTools(a, { onlyIfRunning: true })
+    expect(a.vm.tools?.pip).toEqual(['requests==2.32.0'])
+  })
+
   it('serializes engine work per bot', async () => {
     const e = fakeEngine()
     let inFlight = 0

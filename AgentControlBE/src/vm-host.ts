@@ -95,8 +95,27 @@ export interface VmHostDeps {
   storage?: () => { driver: SnapshotDriver | null; volumeState: 'ok' | 'missing' | 'mismatch' }
   /** How long GET results are reused (ms). */
   cacheMs?: number
+  /**
+   * BE-P2-18: runs once a grow passed its checks, before the machine is changed (the pre-upgrade
+   * backup). Errors are logged by the caller's hook; a throw here stops the grow.
+   */
+  beforeGrow?: () => Promise<void>
   now?: () => number
+  /**
+   * BE-P2-18 (M2 gap 1): the egress proxy's firewall helper image as a setup step. `image` is
+   * checked with `image exists` (Podman only); `buildFirewall()` builds it from `buildArgv()` once
+   * `baseImage` (botvm, its FROM) is there. Absent: no step (route tests).
+   */
+  firewall?: { image: string; baseImage: string; buildArgv: () => string[] }
 }
+
+/** BE-P2-18: the setup step id and texts for the firewall helper image (gap 1). */
+export const FIREWALL_STEP_ID = 'firewall-image'
+export const FIREWALL_STEP_TEXT = 'Set up the internet firewall helper (agentcontrol/egressd-nft), so bots can use the internet when you allow it.'
+export const FIREWALL_STEP_BUILDING_TEXT = 'Setting up the internet firewall helper (agentcontrol/egressd-nft)…'
+export const firewallStepErrorText = (detail: string) =>
+  `The internet firewall helper (agentcontrol/egressd-nft) couldn't be set up: ${detail} Try again, or run vm/build-images.sh --only egressd-nft.`
+const FIREWALL_BUILD_TIMEOUT_MS = 20 * 60_000
 
 export interface VmHostService {
   /** GET /api/vm/host. `fresh` skips the short cache. */
@@ -105,6 +124,14 @@ export interface VmHostService {
   ensureMachine(): Promise<VmHostInfo>
   /** POST /api/vm/machine/grow. Throws 400, 409 (reason 'runs_active' while runs are in progress, 'machine_busy' while the machine is being changed) or 502 via fail(). */
   grow(toGb: unknown): Promise<VmHostInfo>
+  /**
+   * BE-P2-18 (gap 1): start building the firewall helper image when its setup step isn't done
+   * (first run, and POST /api/vm/setup/firewall-image). Answers at once with the host info (the
+   * step shows it is being set up). 409 engine_missing / machine_stopped / image_missing / setup_busy.
+   */
+  buildFirewall?(): Promise<VmHostInfo>
+  /** Resolves when no firewall build is running (tests). */
+  firewallIdle?(): Promise<void>
 }
 
 export async function statfsFreeBytes(path: string): Promise<number | null> {
@@ -131,6 +158,9 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
   const backend: StorageBackendKind = os === 'win32' ? 'wsl' : 'local'
   let cache: { at: number; info: VmHostInfo } | null = null
   let busy = false
+  let fwBuild: Promise<void> | null = null
+  let fwError: string | null = null
+  const conn = (): string[] => (os === 'linux' ? [] : ['--connection', MACHINE_NAME])
 
   const podmanMachine = (verb: string, args: readonly string[] = [], timeoutMs = 30_000) =>
     exec('podman', ['machine', verb, ...args, MACHINE_NAME], { timeoutMs })
@@ -221,7 +251,17 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     return info
   }
 
-  function setupSteps(engine: EngineInfo, machine: MachineInfo | null): SetupStep[] {
+  /** The firewall step (Podman, and the machine running on Mac/Windows), or null when it can't be checked yet. */
+  async function firewallStep(engine: EngineInfo, machine: MachineInfo | null): Promise<SetupStep | null> {
+    const fw = deps.firewall
+    if (!fw || engine.engine !== 'podman' || (os !== 'linux' && machine?.state !== 'running')) return null
+    const r = await exec('podman', [...conn(), 'image', 'exists', fw.image])
+    const done = r.code === 0
+    const text = done ? FIREWALL_STEP_TEXT : fwBuild ? FIREWALL_STEP_BUILDING_TEXT : fwError ? firewallStepErrorText(fwError) : FIREWALL_STEP_TEXT
+    return { id: FIREWALL_STEP_ID, text, done }
+  }
+
+  function setupSteps(engine: EngineInfo, machine: MachineInfo | null, extra: SetupStep | null = null): SetupStep[] {
     const steps: SetupStep[] = []
     const hasEngine = engine.engine !== null
     steps.push({
@@ -243,6 +283,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       steps.push({ id: 'create-machine', text: 'Create AgentControl’s machine “agentcontrol” (6 GB memory, 4 CPUs, 60 GB disk).', done: machine !== null && machine.state !== 'missing' })
       steps.push({ id: 'start-machine', text: 'Start the “agentcontrol” machine.', done: machine?.state === 'running' })
     }
+    if (extra) steps.push(extra)
     return steps.every((s) => s.done) ? [] : steps
   }
 
@@ -259,6 +300,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       }
     }
     const s = storage()
+    const fw = await firewallStep(engine, machine)
     return {
       engine: engine.engine,
       version: engine.version,
@@ -267,7 +309,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       machine,
       storage: { driver: s.driver, backend, volumeState: s.volumeState },
       concurrency: hostConcurrency(os, totalMem()),
-      setupSteps: setupSteps(engine, machine),
+      setupSteps: setupSteps(engine, machine, fw),
     }
   }
 
@@ -330,6 +372,8 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     }
     busy = true
     try {
+      // BE-P2-18: the pre-upgrade backup, while the grow holds the machine (a second grow gets machine_busy).
+      await deps.beforeGrow?.()
       if (os === 'darwin') {
         const wasRunning = m.state === 'running' || m.state === 'starting'
         if (wasRunning) await run('stop')
@@ -351,5 +395,41 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     return hostInfo(true)
   }
 
-  return { hostInfo, ensureMachine, grow }
+  async function buildFirewall(): Promise<VmHostInfo> {
+    const fw = deps.firewall
+    if (!fw) fail(404, 'The firewall helper setup isn\'t available here.')
+    const info = await hostInfo(true)
+    if (info.engine !== 'podman') failWithReason(409, 'engine_missing', 'Podman isn\'t installed yet. Finish the setup steps in Settings › VMs first.')
+    if (os !== 'linux' && info.machine?.state !== 'running') failWithReason(409, 'machine_stopped', 'Start the “agentcontrol” machine first.')
+    const step = info.setupSteps.find((x) => x.id === FIREWALL_STEP_ID)
+    if (!step || step.done) return info
+    if (fwBuild) failWithReason(409, 'setup_busy', 'The internet firewall helper is already being set up.')
+    const base = await exec('podman', [...conn(), 'image', 'exists', fw.baseImage])
+    if (base.code !== 0) failWithReason(409, 'image_missing', `The bot image ${fw.baseImage} isn't built yet. Finish the setup steps in Settings › VMs first.`)
+    fwError = null
+    const job = (async () => {
+      try {
+        const r = await exec('podman', [...conn(), ...fw.buildArgv()], { timeoutMs: FIREWALL_BUILD_TIMEOUT_MS })
+        if (r.code !== 0) fwError = `${(r.stderr || r.stdout).trim().split('\n').filter(Boolean).at(-1)?.slice(0, 300) ?? `exit ${r.code}`}.`
+      } catch (err) {
+        fwError = `${(err as Error).message.slice(0, 300)}.`
+      } finally {
+        fwBuild = null
+        cache = null
+      }
+    })()
+    fwBuild = job
+    cache = null
+    return hostInfo(true)
+  }
+
+  return {
+    hostInfo,
+    ensureMachine,
+    grow,
+    buildFirewall,
+    firewallIdle: async () => {
+      while (fwBuild) await fwBuild
+    },
+  }
 }

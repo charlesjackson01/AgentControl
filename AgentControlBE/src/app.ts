@@ -15,8 +15,8 @@ import { fetchModels, PROXY_PROTOCOLS, redactUrlCredentials } from './upstream.j
 import { listToolInfo, resolveToolDeclarations } from './tools.js'
 import { agentInstructions, attachedSkills, estimateTokens, planPrompt, replyReserve } from './prompt.js'
 import { fail, failWithReason, internetNeverBuildText, uid } from './http.js'
-import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, botVol, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
-import { groupRoot, listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
+import { archiveBotFolder, assertBotFilesAvailable, botFilesMissingMessage, createBotFolder, ensureAllBotFolders, ensureBotFolder, listFolder, listShared, makeFolder, MAX_UPLOAD_BYTES, movePath, quotaBytes, readContent, setPersonalExtraBytes, trashPath, writeContent, type FileContent } from './files.js'
+import { listGroupFolder, listGroupShared, makeGroupFolder, moveGroupPath, readGroupContent, trashGroupPath, writeGroupContent } from './group-files.js'
 import { attachmentPrompt, resolveAttachments, uploadAttachment } from './attachments.js'
 import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFromGroups, updateGroup } from './groups.js'
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
@@ -25,7 +25,7 @@ import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host
 import { createBotEnvService, planInstall, type BotEnvService, type BuildResult, type EngineRef } from './bot-env.js'
 import { chromiumProbeArgv, createRuntimeProbe, parseChromiumOutput, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
-import { BROWSER_NOT_YET, botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRoutes } from './bot-env-routes.js'
+import { BROWSER_NOT_YET, botMountAllowList, botMounts, personalFolderParts, registerBotEnvRoutes, snapshotZones, storeSaveVm, undoZone, type BotEnvRouteDeps, type BotEnvRoutes } from './bot-env-routes.js'
 import { registerRunRoutes } from './run-routes.js'
 import { registerVmSettingsRoutes } from './vm-settings-routes.js'
 import { createSnapshotService, newRunId } from './snapshot.js'
@@ -37,6 +37,8 @@ import { BROWSER_INTERNET_NEVER_TEXT, createBrowserAddon, type BrowserAddon } fr
 import { registerBrowserRoutes } from './browser-routes.js'
 import { backupsRootFor, createBackupService, type BackupService } from './backup-service.js'
 import { registerBackupRoutes } from './backup-routes.js'
+import { botVol } from './files.js'
+import { groupRoot } from './group-files.js'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import type { StreamRunner } from './stream-runner.js'
 import { coreSkillId } from './db/seed.js'
@@ -2217,30 +2219,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   // BE-P2-17: undo preview/apply (app.vmUndo via RunService.undo, which records the undo run).
   registerRunRoutes(app, store, runs, { undoPreview: (agent, runId) => { assertBotFilesAvailable(store, agent); return undo.preview(agent, runId) }, activeRuns: activeOf })
 
-  // BE-P2-21: Rebuild is a live build (202 {run}); a non-empty package list is its own one-build internet grant.
-  // BE-P2-18: a restore rebuilds the bot's tools from the backup's manifest the same way.
-  const startRebuildRun = (agent: Agent) => {
-    const online = agent.vm.packages.length > 0
-    return runs.startToolBuild({
-      agentId: agent.id,
-      conversationId: () => ensureDm(store, agent.id).id,
-      context: { kind: 'dm' },
-      via: 'rebuild',
-      startedBy: 'user',
-      argv: ['rebuild'],
-      packages: [...agent.vm.packages],
-      added: [],
-      network: online ? 'on' : 'off',
-      permissions: online ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
-      waitForRuns: false,
-      precheck: async (a) => {
-        if (!online) return
-        if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverBuildText(a.name))
-        await buildProxyCheck()
-      },
-      build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', ...ctl })),
-    })
-  }
+  // BE-P2-18: a restore rebuilds the bot's tools from the backup's manifest the same way as Rebuild.
+  const startRebuildRun = (agent: Agent) => botEnvDeps.startRebuild!(agent)
 
   // BE-P2-18: backups, restore and zip export (M3 plan §3–4).
   const backups = createBackupService({
@@ -2338,7 +2318,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     },
   })
 
-  botEnvRoutesRef = registerBotEnvRoutes(app, store, {
+  const botEnvDeps: BotEnvRouteDeps = {
     botEnv,
     hostInfo: () => vmHost.hostInfo(),
     runtime: (agent) => {
@@ -2367,7 +2347,29 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     toolBuild: (agent, action, build) => runs.toolBuild(agent.id, action, build),
     // BE-P2-22: reset answers 409 build_active while the bot's tools are building.
     buildActive: (agentId) => runs.buildActive(agentId),
-    startRebuild: (agent) => startRebuildRun(agent),
+    // BE-P2-21: Rebuild is a live build (202 {run}); a non-empty package list is its own one-build internet grant.
+    startRebuild: (agent) => {
+      const online = agent.vm.packages.length > 0
+      return runs.startToolBuild({
+        agentId: agent.id,
+        conversationId: () => ensureDm(store, agent.id).id,
+        context: { kind: 'dm' },
+        via: 'rebuild',
+        startedBy: 'user',
+        argv: ['rebuild'],
+        packages: [...agent.vm.packages],
+        added: [],
+        network: online ? 'on' : 'off',
+        permissions: online ? [{ type: 'internet', decision: 'allow_once', source: 'rebuild' }] : [],
+        waitForRuns: false,
+        precheck: async (a) => {
+          if (!online) return
+          if (a.internetPolicy === 'never') failWithReason(409, 'internet_never', internetNeverBuildText(a.name))
+          await buildProxyCheck()
+        },
+        build: async (ctl, a) => builtOf(await botEnv.rebuild(a, { network: a.vm.packages.length ? 'egress' : 'none', ...ctl })),
+      })
+    },
     activeBuild: (agentId) => runs.activeBuild(agentId),
     // BE-P2-18: VmInfo.storage.lastBackupAt.
     lastBackupAt: (agentId) => backups.lastBackupAt(agentId),
@@ -2378,7 +2380,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
     },
     // BE-P2-15: the browser add-on (PATCH permissions.browser, VmInfo.browser / browserState).
     browser: addon,
-  })
+  }
+  botEnvRoutesRef = registerBotEnvRoutes(app, store, botEnvDeps)
 
   // BE-P2-17: GET/PATCH /api/vm/settings.
   registerVmSettingsRoutes(app, store, {

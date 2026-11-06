@@ -1,8 +1,7 @@
 /*
- * FE-P2-6: in-memory stand-in for the VMs routes until BE-P2-18 serves /api/vm/backups*.
- * Same paths and bodies as createVmApi. A live 2xx is used as-is; a missing route (404 "Route …")
- * or a dead proxy falls through to this store. Drop the fallback in vmsRequest when BE-P2-18 is on.
- * Tests: tests/vms-page.test.mjs.
+ * FE-P2-6: in-memory stand-in for the VMs routes, for tests and for mockup screenshots.
+ * Same paths and bodies as createVmApi. The page never calls this unless VITE_VMS_FAKE=1
+ * (see vms-client.ts). Tests: tests/vms-page.test.mjs.
  */
 import {
   VM_MACHINE_DEFAULTS,
@@ -198,7 +197,7 @@ export function resetFakeVms(scene: VmsScene = 'default', now?: Date): void {
   store = createFakeVmsState(scene, now)
 }
 
-/** The store vmsRequest falls back to. */
+/** The store the VITE_VMS_FAKE=1 path reads. */
 export function currentFakeVms(): FakeVmsState {
   return store
 }

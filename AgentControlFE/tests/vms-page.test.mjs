@@ -2,7 +2,8 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { internetNeverText } from '../src/lib/run-card.ts'
 import { finishLowDiskSentence } from '../src/lib/low-disk.ts'
-import { createFakeVmsState, fakeVmsDispatch } from '../src/lib/vms-fake.ts'
+import { createFakeVmsState, fakeVmsDispatch, resetFakeVms } from '../src/lib/vms-fake.ts'
+import { vmsFakeEnabled, vmsRequestWith } from '../src/lib/vms-fallback.ts'
 import {
   ACCOUNT_SECTIONS, BACKUP_LIST_ERROR, BUDGET_HINTS, GROW_BUSY_HINT, LOAD_ERROR_TEXT, LOAD_ERROR_TITLE, RESTORE_BODY, VMS_PAGE_GAPS,
   accountSection, backupRow, backupWhen, backupsEmptyText, backupsIntro, budgetErrors, budgetPatch, clockFromHHMM, diskUsedText,
@@ -146,6 +147,61 @@ describe('fake VMs routes (stand-in until BE-P2-18)', () => {
     assert.equal(patched.body.snapshotBudget.perBotMb, 2048)
     const grow = fakeVmsDispatch(state, 'POST', '/api/vm/machine/grow', { toGb: 90 })
     assert.equal(grow.status, 400)
+  })
+})
+
+function httpError(status, message, body) {
+  const err = new Error(message)
+  err.status = status
+  if (body !== undefined) err.body = body
+  return err
+}
+
+describe('VITE_VMS_FAKE (off unless the flag is the string 1)', () => {
+  const liveBackups = async () => [{ id: 'live', status: 'complete', trigger: 'nightly' }]
+
+  it('flag off + 404 route -> the real error, not fake backups', async () => {
+    assert.equal(vmsFakeEnabled(undefined), false)
+    assert.equal(vmsFakeEnabled(''), false)
+    const err = httpError(404, 'Route GET:/api/vm/backups not found', { message: 'Route GET:/api/vm/backups not found' })
+    await assert.rejects(
+      () => vmsRequestWith('/api/vm/backups', undefined, () => { throw err }, undefined),
+      (e) => e === err,
+    )
+  })
+
+  it('flag off + network failure -> the real error', async () => {
+    const err = new TypeError('Failed to fetch')
+    await assert.rejects(
+      () => vmsRequestWith('/api/vm/settings', undefined, () => { throw err }, undefined),
+      (e) => e === err,
+    )
+  })
+
+  it('flag off + empty 5xx -> the real error', async () => {
+    const err = httpError(502, 'Bad gateway')
+    await assert.rejects(
+      () => vmsRequestWith('/api/vm/host', undefined, () => { throw err }, ''),
+      (e) => e === err,
+    )
+  })
+
+  it('flag off + 200 -> the real payload', async () => {
+    const got = await vmsRequestWith('/api/vm/backups', undefined, liveBackups, undefined)
+    assert.deepEqual(got, [{ id: 'live', status: 'complete', trigger: 'nightly' }])
+  })
+
+  it('flag on + a missing route -> fake data; a real 200 still wins', async () => {
+    assert.equal(vmsFakeEnabled('1'), true)
+    resetFakeVms('default', NOW)
+    const missing = httpError(404, 'Route GET:/api/vm/backups not found', { message: 'Route GET:/api/vm/backups not found' })
+    const fake = await vmsRequestWith('/api/vm/backups', undefined, () => { throw missing }, '1')
+    assert.equal(Array.isArray(fake), true)
+    assert.equal(fake.length, 3)
+    assert.equal(fake[0].trigger, 'nightly')
+    assert.equal(fake[0].id, 'bk-today')
+    const real = await vmsRequestWith('/api/vm/backups', undefined, liveBackups, '1')
+    assert.deepEqual(real, [{ id: 'live', status: 'complete', trigger: 'nightly' }])
   })
 })
 

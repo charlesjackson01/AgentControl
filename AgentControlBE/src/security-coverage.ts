@@ -91,6 +91,7 @@ export const SECURITY_ROWS: SecurityRow[] = [
     checks: 'with policy `always`: 192.168.x, 10.x, 100.64.x, `fd7a:115c:a1e0::/48`, the host, the model server and the metadata IP all fail; direct sockets fail',
     tests: [
       vm('egress.vm.test.ts', 'a granted run reaches the local server through the proxy (HTTP and CONNECT); everything else is blocked and logged'),
+      vm('egress.vm.test.ts', 'BE-P2-19 network under always: home network, Tailscale, this computer, the model server and metadata all 403; direct sockets fail'),
       vm('egress.vm.test.ts', 'firewall: with the proxy'),
       vm('egress.vm.test.ts', "user-only: an Always-policy run can't reach the BE"),
       vm('egress.vm.test.ts', 'the next offline run moves the container back to network none'),

@@ -66,6 +66,8 @@ const WEB = `${T}-web`
 const LAN_NET = `${T}-lan`
 const LAN_SUBNET = '10.89.252.0/24'
 const LAN_IP = '10.89.252.10'
+/** BE-P2-19: a model server address on the LAN (nothing listens there; the proxy refuses it first). */
+const MODEL_IP = '192.168.1.50'
 const LAN_WEB = `${T}-lan-web`
 const NFT_IMAGE = firewallImageRef()
 let builtNft = false
@@ -214,7 +216,8 @@ Promise.all(Object.entries(t).map(([k, a]) => new Promise((done) => {
       addHosts: [`web.be13.test:${WEB_IP}`, `apt.be13.test:${WEB_IP}`, `be.be13.test:${BE_HOST}`],
       // The LAN server is on the test allow list, so the proxy's own rules would let it through:
       // only the firewall layer stops it (the 'firewall' row below).
-      config: () => ({ hostAddresses: hostInterfaceAddresses(), modelServers: [], testAllow: [`${LAN_IP}/32`] }),
+      // BE-P2-19: one model server on the LAN (the network row's model-server check).
+      config: () => ({ hostAddresses: hostInterfaceAddresses(), modelServers: [{ host: MODEL_IP, port: 443 }], testAllow: [`${LAN_IP}/32`] }),
       log: (m) => console.log(`[be13 egress] ${m}`),
     })
     // Record every credential minted, to prove none is left in images, records or logs.
@@ -321,6 +324,46 @@ Promise.all(Object.entries(t).map(([k, a]) => new Promise((done) => {
     expect(r.stdout).toContain('offline')
     expect(JSON.parse(pm('container', 'inspect', `ac-bot-${SLUG_A}`)!)[0].HostConfig.NetworkMode).toBe('none')
   }, 180_000)
+
+  it('BE-P2-19 network under always: home network, Tailscale, this computer, the model server and metadata all 403; direct sockets fail', async () => {
+    const hostIp = hostInterfaceAddresses().find((x) => !x.includes(':') && !x.startsWith('127.')) ?? BE_HOST
+    const targets: [string, string][] = [
+      ['h192', 'http://192.168.0.10/'], ['h10', 'http://10.0.0.1/'], ['h172', 'http://172.20.0.1/'], ['ts', 'http://100.64.0.1/'], ['tsv6', 'http://[fd7a:115c:a1e0::1]/'],
+      ['host', `http://${hostIp}/`], ['be', `http://${BE_HOST}:${bePort}/api/health`], ['loop', 'http://127.0.0.1:11434/'], ['model', `https://${MODEL_IP}/v1/models`], // CONNECT: the proxy's answer is the tunnel's status
+      ['meta', 'http://169.254.169.254/latest/meta-data/'], ['metav6', 'http://[fd00:ec2::254]/'],
+    ]
+    const direct = `python3 - <<'PY'
+import socket
+def tcp(fam, addr):
+    s = socket.socket(fam, socket.SOCK_STREAM); s.settimeout(3)
+    try: s.connect(addr); return 'connected'
+    except OSError as e: return 'fail:' + type(e).__name__
+    finally: s.close()
+def udp():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3)
+    try: s.sendto(b'\\x00' * 12, ('8.8.8.8', 53)); s.recvfrom(512); return 'answered'
+    except OSError as e: return 'fail:' + type(e).__name__
+for k, fam, a in [('dweb', socket.AF_INET, ('${WEB_IP}', 80)), ('dnet', socket.AF_INET, ('1.1.1.1', 443)), ('dlan', socket.AF_INET, ('${LAN_IP}', 80)), ('dhost', socket.AF_INET, ('${hostIp}', 22)), ('dts', socket.AF_INET6, ('fd7a:115c:a1e0::1', 443))]:
+    print(k + '=' + tcp(fam, a))
+print('dudp=' + udp())
+PY`
+    const r = await run(A, [...targets.map(([k, u]) => `echo "${k}=$(curl -s -m 10 -o /dev/null -w %{${u.startsWith('https:') ? 'http_connect' : 'http_code'}} ${u})"`), direct].join('; '))
+    console.log(`[be19 network] ${JSON.stringify({ stdout: r.stdout, hosts: r.hostsContacted })}`)
+    expect(r.outcome).toBe('succeeded')
+    const line = (k: string) => new RegExp(`^${k}=(.*)$`, 'm').exec(r.stdout)?.[1]
+    for (const [k] of targets) expect(line(k), k).toBe('403')
+    for (const k of ['dweb', 'dnet', 'dlan', 'dhost', 'dts', 'dudp']) expect(line(k), k).toMatch(/^fail:/)
+    const reason = (h: string) => (r.hostsContacted ?? []).find((x) => x.host === h && x.blocked)?.reason
+    expect(reason('192.168.0.10')).toBe('home_network')
+    expect(reason('10.0.0.1')).toBe('home_network')
+    expect(reason('172.20.0.1')).toBe('home_network')
+    expect(reason('100.64.0.1')).toBe('tailscale')
+    expect(reason('fd7a:115c:a1e0::1')).toBe('tailscale')
+    expect(reason(hostIp)).toBe('this_computer')
+    expect(reason('127.0.0.1')).toBe('this_computer')
+    expect(reason(MODEL_IP)).toBe('model_server')
+    expect(reason('169.254.169.254')).toBe('metadata')
+  }, 300_000)
 
   it('B4: curl -v through the proxy prints the credential in every form; the run record and live output show none of them', async () => {
     const live: string[] = []

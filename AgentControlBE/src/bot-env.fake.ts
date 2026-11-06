@@ -3,7 +3,7 @@
  */
 import { readFileSync } from 'node:fs'
 import type { CommandResult, CommandRunner } from './command-runner.js'
-import { baseImageFor } from './vm-images.js'
+import { baseImageFor, BOTVM_VERSION } from './vm-images.js'
 
 export const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' })
 export const err = (stderr: string, code = 125): CommandResult => ({ code, stdout: '', stderr })
@@ -19,7 +19,8 @@ export function fakeEngine(opts: { globalArgs?: string[]; failBuild?: boolean } 
   const calls: string[][] = []
   let nextId = 1
   const newId = () => (nextId++).toString(16).padStart(64, '0')
-  for (const v of ['1.0.0', '1.1.0']) {
+  // The current version plus the two fixed ones the upgrade tests use.
+  for (const v of new Set([BOTVM_VERSION, '1.0.0', '1.1.0'])) {
     images.set(baseImageFor('base', v), { id: newId(), labels: { 'io.agentcontrol.version': v } })
   }
   const g = opts.globalArgs ?? []

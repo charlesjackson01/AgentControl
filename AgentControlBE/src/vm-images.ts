@@ -17,7 +17,7 @@ import path from 'node:path'
 
 /** Pinned versions (mirror of vm/images/versions.env). */
 export const BOTVM_PINS = {
-  BOTVM_VERSION: '1.0.0',
+  BOTVM_VERSION: '1.0.1',
   BASE_IMAGE: 'docker.io/library/python:3.12.16-slim-bookworm@sha256:6dd8b6dab6b3adc7812bab69eca5dbdc1a5cc690ad28306d234ffb4ef8ac9753',
   PYTHON_VERSION: '3.12.16',
   NODE_VERSION: '22.23.4',

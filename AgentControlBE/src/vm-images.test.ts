@@ -153,6 +153,14 @@ describe.each(SHARED_IMAGE_KINDS)('%s Containerfile', (kind) => {
     expect(body).not.toMatch(/HTTPS?_PROXY|NO_PROXY/)
   })
 
+  it('BE-P2-19: botvm and botvm-browser strip setuid/setgid bits in their last root RUN, and check none remain', () => {
+    if (kind !== 'botvm' && kind !== 'botvm-browser') return
+    const lastUser = instrs[kind].findLastIndex((i) => i.op === 'USER')
+    const lastRun = instrs[kind].slice(0, lastUser).findLast((i) => i.op === 'RUN')!
+    expect(lastRun.args).toContain('find / -xdev -perm /6000 -type f -exec chmod a-s {} +')
+    expect(lastRun.args).toContain('test -z "$(find / -xdev -perm /6000 -type f -print -quit)"')
+  })
+
   it('cleans apt lists in every RUN that installs packages', () => {
     for (const r of of(kind, 'RUN').filter((i) => /apt-get install|--with-deps/.test(i.args))) {
       expect(r.args).toContain('rm -rf /var/lib/apt/lists/*')
@@ -360,7 +368,7 @@ describe.skipIf(process.platform === 'win32')('vm/build-images.sh', () => {
       ['podman', ...egressdNftBuildArgv()].join(' '),
       `podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --entrypoint nft ${egressdNftImageRef()} --version`,
     ])
-    expect(egressdNftBuildArgv()).toEqual(expect.arrayContaining(['--tag', 'localhost/agentcontrol/egressd-nft:1.0.0', `BOTVM_IMAGE=${sharedImageRef('botvm')}`]))
+    expect(egressdNftBuildArgv()).toEqual(expect.arrayContaining(['--tag', 'localhost/agentcontrol/egressd-nft:1.0.1', `BOTVM_IMAGE=${sharedImageRef('botvm')}`]))
     const cf = readFileSync(path.join(vmDir(), 'images', 'egressd-nft', 'Containerfile'), 'utf8')
     expect(cf).toMatch(/^FROM \$\{BOTVM_IMAGE\}$/m)
     expect(cf).toMatch(/apt-get install -y --no-install-recommends nftables/)

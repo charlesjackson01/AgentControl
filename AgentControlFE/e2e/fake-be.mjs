@@ -6,6 +6,7 @@
  *   AC_E2E_PORT=3099 node e2e/fake-be.mjs
  *
  * Cookie `ac-e2e-scene` is `mac` (default), `linux`, or `windows` (storage.backend === 'wsl').
+ * Cookie `ac-e2e-restore=tools-fail` makes POST .../restore return tools:'failed' for each bot.
  * POST /__e2e/reset restores the in-memory world between tests.
  */
 import http from 'node:http'
@@ -28,6 +29,12 @@ function sceneOf(req) {
   const value = match ? decodeURIComponent(match[1]) : 'mac'
   if (value === 'linux' || value === 'windows' || value === 'mac') return value
   return 'mac'
+}
+
+/** Settings › VMs specs set this so a restore answers with tools:'failed' and a toolsMessage. */
+function restoreToolsFail(req) {
+  const cookie = req.headers.cookie ?? ''
+  return /(?:^|;\s*)ac-e2e-restore=tools-fail(?:;|$)/.test(cookie)
 }
 
 /** Settings › VMs specs set this so a waiting permission doesn't count as an active run. */
@@ -203,6 +210,7 @@ async function handle(req, res) {
       bytes: 0,
       path: 'data/backups/manual',
       status: 'in_progress',
+      progress: { done: 0, total: 1 },
     })
   }
   const restore = /^\/api\/vm\/backups\/([^/]+)\/restore$/.exec(path)
@@ -211,7 +219,16 @@ async function handle(req, res) {
     if (body?.confirm !== true) return send(res, 400, { error: 'Request Error', reason: 'confirm_required', message: 'Restoring a backup needs confirm: true.' })
     const found = backups.find((row) => row.id === decodeURIComponent(restore[1]))
     if (!found) return send(res, 404, { error: 'Not Found', reason: 'not_found', message: 'That backup is gone.' })
-    return send(res, 200, found)
+    const fail = restoreToolsFail(req)
+    const agentIds = found.agentIds?.length ? found.agentIds : [AGENT_ID]
+    return send(res, 200, {
+      backupId: found.id,
+      agents: agentIds.map((agentId) => (
+        fail
+          ? { agentId, files: 4, tools: 'failed', toolsMessage: "the tool rebuild didn't start (libssl missing)." }
+          : { agentId, files: 4, tools: 'not_needed' }
+      )),
+    })
   }
 
   if (method === 'GET' && path === '/api/permissions') {

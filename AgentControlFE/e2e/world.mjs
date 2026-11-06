@@ -423,6 +423,7 @@ export const backups = [
     bytes: 842 * MB,
     path: 'data/backups/2026-11-04',
     status: 'complete',
+    finishedAt: '2026-11-04T03:12:00.000Z',
   },
 ]
 

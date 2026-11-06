@@ -32,6 +32,20 @@ test('Mac Settings › VMs shows machine, gVisor, budgets, backups and downloads
   await expect(confirm).toBeHidden()
 })
 
+test("a restore that fails a bot's tools shows the message under the list", async ({ page }) => {
+  await openVms(page, 'mac')
+  // openVms clears cookies first. Path must be `/` so the restore POST to /api carries this.
+  await page.context().addCookies([{ name: 'ac-e2e-restore', value: 'tools-fail', url: 'http://127.0.0.1:4174' }])
+  const settings = page.getByRole('dialog', { name: 'Settings' })
+  await settings.getByRole('button', { name: 'Restore…' }).click()
+  const confirm = page.getByRole('dialog', { name: 'Restore backup?' })
+  await confirm.getByRole('button', { name: 'Restore backup' }).click()
+  await expect(confirm).toBeHidden()
+  const note = settings.getByRole('alert').filter({ hasText: "Analyst: the tool rebuild didn't start (libssl missing)." })
+  await expect(note).toBeVisible()
+  await shot(settings, 'vms-restore-tools-failed')
+})
+
 test('Linux Settings › VMs has no machine disk to grow', async ({ page }) => {
   await openVms(page, 'linux')
   const settings = page.getByRole('dialog', { name: 'Settings' })

@@ -82,7 +82,7 @@ export function fakePodman(fo: FakePodmanOptions = {}) {
     }
     if (verb === 'image' && sub === 'exists') return state.fwImage ? ok() : fail('', 1)
     if (verb === 'run' && flag('--entrypoint') === 'nft') {
-      if (!state.fwImage) return fail('Error: localhost/agentcontrol/egressd-nft:1.0.0: image not known')
+      if (!state.fwImage) return fail('Error: localhost/agentcontrol/egressd-nft:1.0.1: image not known')
       if (!daemon?.running) return fail('Error: cannot join network namespace of a stopped container')
       if (a.includes('-f')) {
         if (state.fwFails) return fail('Error: Could not process rule: Operation not permitted', 1)

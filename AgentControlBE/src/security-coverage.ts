@@ -122,6 +122,8 @@ export const SECURITY_ROWS: SecurityRow[] = [
     tests: [
       vm('bot-env.vm.test.ts', 'container: uid 1000, read-only root, no network'),
       sec('privilege: mount, raw sockets, setuid and capability raising all fail; no capabilities'),
+      sec('privilege: the shared %s image has no setuid or setgid files'),
+      unit('vm-images.test.ts', 'BE-P2-19: botvm and botvm-browser strip setuid/setgid bits in their last root RUN, and check none remain'),
     ],
   },
   {

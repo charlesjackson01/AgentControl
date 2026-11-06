@@ -252,7 +252,7 @@ describe('firewall (nftables layer under the proxy)', () => {
     const r = fwRuns()[0]!
     expect(r[r.indexOf('--network') + 1]).toBe(`container:${EGRESS_DAEMON_NAME}`)
     expect(r.join(' ')).toContain('--cap-drop ALL --cap-add NET_ADMIN')
-    expect(r).toEqual(expect.arrayContaining(['--rm', '-i', '--pull=never', '--read-only', 'no-new-privileges', '--entrypoint', 'nft', 'localhost/agentcontrol/egressd-nft:1.0.0', '-f', '-']))
+    expect(r).toEqual(expect.arrayContaining(['--rm', '-i', '--pull=never', '--read-only', 'no-new-privileges', '--entrypoint', 'nft', 'localhost/agentcontrol/egressd-nft:1.0.1', '-f', '-']))
     expect(r.join(' ')).not.toMatch(/--privileged|--network[= ]host|NET_RAW|SYS_ADMIN/)
     // The proxy itself keeps no capabilities.
     const d = fake.daemon!.args
@@ -301,7 +301,7 @@ describe('firewall (nftables layer under the proxy)', () => {
   it('a missing helper image says how to build it', async () => {
     fake.state.fwImage = false
     const r = await make().available()
-    expect(r).toEqual({ ok: false, message: 'the proxy\'s firewall helper image localhost/agentcontrol/egressd-nft:1.0.0 isn\'t built yet (vm/build-images.sh --only egressd-nft)' })
+    expect(r).toEqual({ ok: false, message: 'the proxy\'s firewall helper image localhost/agentcontrol/egressd-nft:1.0.1 isn\'t built yet (vm/build-images.sh --only egressd-nft)' })
   })
   it('the probe checks the table is there and says so; it fails when it is gone', async () => {
     const svc = make()

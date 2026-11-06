@@ -9,10 +9,10 @@
 # path Playwright uses by default at the same full Chromium binary.
 # Browsers live read-only in /opt/ms-playwright; downloads into volumes are blocked.
 
-ARG BOTVM_IMAGE=localhost/agentcontrol/botvm:1.0.0
+ARG BOTVM_IMAGE=localhost/agentcontrol/botvm:1.0.1
 FROM ${BOTVM_IMAGE}
 
-ARG BOTVM_VERSION=1.0.0
+ARG BOTVM_VERSION=1.0.1
 ARG PLAYWRIGHT_VERSION=1.64.1
 
 LABEL org.opencontainers.image.title="agentcontrol/botvm-browser" \
@@ -47,6 +47,11 @@ RUN export HOME=/root PIP_USER=0 NPM_CONFIG_PREFIX=/usr/local \
 COPY link-headless-shell.sh /usr/local/lib/agentcontrol/link-headless-shell.sh
 RUN sh /usr/local/lib/agentcontrol/link-headless-shell.sh \
  && rm -rf /usr/local/lib/agentcontrol
+
+# BE-P2-19 hardening, as in botvm: the --with-deps apt step must not bring setuid/setgid
+# files back (Chromium runs with --no-sandbox, so no setuid sandbox helper is needed).
+RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + \
+ && test -z "$(find / -xdev -perm /6000 -type f -print -quit)"
 
 # Node resolves the global playwright; no further browser downloads (rootfs is
 # read-only at run time, and volumes must not hold browsers).

@@ -8,7 +8,8 @@
  * - bot ↔ bot: another bot's snapshots aren't mounted or findable
  * - script → host files: a symlink a script makes isn't followed by the BE's file reads
  * - script → memory/profile with the product mounts: no memory, BOT.md or MEMORY.md; inputs EROFS
- * - privilege: mount, raw sockets, capability raising, setuid; no capabilities at all
+ * - privilege: mount, raw sockets, capability raising, setuid; no capabilities at all; no setuid or
+ *   setgid files in the bot container or the shared botvm / botvm-browser images
  * - engine and storage helper: no engine socket, no DOCKER_HOST/CONTAINER_HOST, no `ac-storaged` name
  * - secrets: the server's GITHUB_TOKEN, TS_AUTHKEY, LLM keys and endpoint key reach neither the
  *   container (env, /proc/1/environ, the engine's Config.Env) nor the runner's log
@@ -186,7 +187,7 @@ describe.skipIf(!engineReady)('@vm BE-P2-19 security suite', () => {
       'python3 -c "import os\ntry:\n  os.setuid(0); print(\'SETUID_OK\')\nexcept OSError as e: print(\'SETUID_FAIL\', e.errno)"',
       'grep -E "^(CapInh|CapPrm|CapEff|CapBnd|CapAmb|NoNewPrivs|Seccomp):" /proc/self/status',
       'if command -v capsh >/dev/null; then capsh --caps="cap_sys_admin+eip" -- -c true >/dev/null 2>&1 && echo CAPSH_OK || echo CAPSH_FAIL; else echo CAPSH_ABSENT; fi',
-      'find / -xdev -perm -4000 -type f 2>/dev/null | head -5 | sed "s/^/SUID /"',
+      'find / -xdev -perm /6000 -type f 2>/dev/null | sed "s/^/SUID /"',
     ].join('; '))
     expect(r.status, r.stderr).toBe('ok')
     const out = r.stdout
@@ -199,8 +200,21 @@ describe.skipIf(!engineReady)('@vm BE-P2-19 security suite', () => {
     expect(out).toMatch(/CAPSH_(FAIL|ABSENT)/)
     for (const k of ['CapInh', 'CapPrm', 'CapEff', 'CapBnd', 'CapAmb']) expect(out, k).toMatch(new RegExp(`^${k}:\\s+0+$`, 'm'))
     expect(out).toMatch(/^NoNewPrivs:\s+1$/m)
-    // A setuid file can't help: no_new_privileges and an empty bounding set. Logged, not failed.
-    if (/^SUID /m.test(out)) console.log(`[be19] setuid files in the image (inert here): ${out.match(/^SUID .*$/gm)!.join(', ')}`)
+    // BE-P2-19 hardening: the images strip every setuid/setgid bit, so none may be left.
+    expect(out.match(/^SUID .*$/gm) ?? []).toEqual([])
+  }, 240_000)
+
+  it.each(['botvm', 'botvm-browser'] as const)('privilege: the shared %s image has no setuid or setgid files', (kind) => {
+    const ref = sharedImageRef(kind)
+    if (pm('image', 'inspect', '--format', '{{.Id}}', ref) === null) {
+      // botvm is required for this file; the browser image is optional on a test store.
+      expect(kind, `${ref} is missing`).toBe('botvm-browser')
+      console.log(`[be19] ${ref} isn't built in this store: its setuid check didn't run`)
+      return
+    }
+    const out = pm('run', '--rm', '--network', 'none', '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--user', '1000:1000',
+      '--entrypoint', 'sh', ref, '-c', 'find / -xdev -perm /6000 -type f 2>/dev/null; echo done')
+    expect(out).toBe('done')
   }, 240_000)
 
   it('engine and storage helper: no engine socket, no engine variables, no ac-storaged name', async () => {

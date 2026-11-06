@@ -7,11 +7,11 @@
 import { humanSize } from './file-format.ts'
 import {
   SCRIPT_RUN_ACTIVE, SNAPSHOT_BUDGET_BOUNDS, VM_MACHINE_DEFAULTS,
-  type BackupInfo, type BrowserAddonInfo, type GlobalRuntimeMode, type ScriptRunStatus, type VmHostInfo, type VmProbeResult, type VmSettingsView,
+  type BackupInfo, type BackupRestoreResult, type BrowserAddonInfo, type GlobalRuntimeMode, type ScriptRunStatus, type VmHostInfo, type VmProbeResult, type VmSettingsView,
 } from './types.ts'
 
 export const VMS_PAGE_GAPS = {
-  G1: 'Backup row while status is in_progress: pill "In progress", no Restore',
+  G1: 'Backup row while status is in_progress: pill "In progress", "N of M" in the detail when progress is set, no Restore',
   G2: 'A failed restore shows the server message under the backup list (inline, not a toast)',
   G3: 'Grow 400 (low disk and the other grow refusals) shows the server message under the Grow button',
   G4: 'Remove download confirm for the shared Chromium image',
@@ -19,6 +19,7 @@ export const VMS_PAGE_GAPS = {
   G6: 'Phone settings section switcher sits at the bottom of the pane (the 390 mockup has no nav)',
   G7: 'A failed backup row: pill "Failed" and the error, no Restore',
   G8: 'Undone host setup steps (including a future firewall-image step) listed above the cards',
+  G9: "Restore answered 200 with BackupRestoreResult tools:'failed': the bot name and toolsMessage under the backup list",
 } as const
 
 export const SETTINGS_TITLE = 'Settings'
@@ -115,8 +116,79 @@ export function backupWho(b: Pick<BackupInfo, 'agentIds'>, names: ReadonlyMap<st
   return `${b.agentIds.length} bots`
 }
 
+/** "1 of 3" while a backup is running and the server sent progress. */
+export function backupProgressText(b: Pick<BackupInfo, 'status' | 'progress'>): string | null {
+  if (b.status !== 'in_progress' || !b.progress) return null
+  const { done, total } = b.progress
+  if (!Number.isFinite(done) || !Number.isFinite(total) || total <= 0) return null
+  return `${done} of ${total}`
+}
+
 export function backupDetail(b: BackupInfo, names: ReadonlyMap<string, string>): string {
-  return `${TRIGGER_LABEL[b.trigger]} · ${backupWho(b, names)}`
+  const base = `${TRIGGER_LABEL[b.trigger]} · ${backupWho(b, names)}`
+  const progress = backupProgressText(b)
+  return progress ? `${base} · ${progress}` : base
+}
+
+function backupEqual(a: BackupInfo, b: BackupInfo): boolean {
+  return a.id === b.id && a.createdAt === b.createdAt && a.trigger === b.trigger && a.bytes === b.bytes
+    && a.path === b.path && a.status === b.status && a.error === b.error && a.finishedAt === b.finishedAt
+    && a.progress?.done === b.progress?.done && a.progress?.total === b.progress?.total
+    && a.agentIds.length === b.agentIds.length && a.agentIds.every((id, i) => id === b.agentIds[i])
+}
+
+/** Newest first. An incoming row replaces the same id (live progress) or is inserted. */
+export function mergeBackupList(list: readonly BackupInfo[], incoming: readonly BackupInfo[]): BackupInfo[] {
+  if (incoming.length === 0) return list as BackupInfo[]
+  const byId = new Map(list.map((b) => [b.id, b]))
+  let changed = false
+  for (const b of incoming) {
+    const prev = byId.get(b.id)
+    if (prev && backupEqual(prev, b)) continue
+    byId.set(b.id, b)
+    changed = true
+  }
+  if (!changed) return list as BackupInfo[]
+  return [...byId.values()].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+}
+
+/** The live store's backup map: same id, unchanged row keeps the previous record. */
+export function mergeBackupRecord(record: Readonly<Record<string, BackupInfo>>, backup: BackupInfo): Record<string, BackupInfo> {
+  const prev = record[backup.id]
+  if (prev && backupEqual(prev, backup)) return record
+  return { ...record, [backup.id]: backup }
+}
+
+/**
+ * Shown under the backup list after a 200 restore when a bot's tools did not come back.
+ * No mockup (GAP-G9). `null` when every bot is 'started' or 'not_needed'.
+ */
+export function restoreToolsNote(result: BackupRestoreResult, names: ReadonlyMap<string, string>): string | null {
+  const lines = result.agents.filter((a) => a.tools === 'failed').map((a) => {
+    const name = names.get(a.agentId) ?? a.agentId
+    const why = a.toolsMessage?.trim()
+    return why ? `${name}: ${why}` : `${name}: tools didn't start after the restore.`
+  })
+  return lines.length ? lines.join('\n') : null
+}
+
+/**
+ * The low-disk sentence when a backup can't start (507, with reason `low_disk` or with no reason —
+ * BE-P2-18 still answers 507 with no reason). Same inline treatment as Grow: the server's sentence.
+ * `no_bots` / `backup_incomplete` / `backup_failed` use the server message. Anything else is null
+ * so the caller keeps its own fallback.
+ */
+export const BACKUP_LOW_DISK_FALLBACK = 'Not enough free disk space for a backup. Free some space, then try again.'
+
+const BACKUP_CARD_REASONS = new Set(['no_bots', 'backup_incomplete', 'backup_failed'])
+
+export function backupCardError(status: number | undefined, body: unknown): string | null {
+  const rec = body && typeof body === 'object' ? body as { reason?: unknown; message?: unknown } : undefined
+  const reason = typeof rec?.reason === 'string' ? rec.reason : undefined
+  const message = typeof rec?.message === 'string' ? rec.message.trim() : ''
+  if (status === 507 || reason === 'low_disk') return message || BACKUP_LOW_DISK_FALLBACK
+  if (reason && BACKUP_CARD_REASONS.has(reason)) return message || null
+  return null
 }
 
 export type BackupRowView = {

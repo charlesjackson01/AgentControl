@@ -5,11 +5,12 @@ import { finishLowDiskSentence } from '../src/lib/low-disk.ts'
 import { createFakeVmsState, fakeVmsDispatch, resetFakeVms } from '../src/lib/vms-fake.ts'
 import { vmsFakeEnabled, vmsRequestWith } from '../src/lib/vms-fallback.ts'
 import {
-  ACCOUNT_SECTIONS, BACKUP_LIST_ERROR, BUDGET_HINTS, GROW_BUSY_HINT, LOAD_ERROR_TEXT, LOAD_ERROR_TITLE, RESTORE_BODY, VMS_PAGE_GAPS,
-  accountSection, backupRow, backupWhen, backupsEmptyText, backupsIntro, budgetErrors, budgetPatch, clockFromHHMM, diskUsedText,
-  growButtonLabel, growConfirmBody, growConfirmLabel, growConfirmTitle, gvisorBadge, linuxNativeText, machineSubtitle, probeSummary,
-  restoreSubtitle, runsLookActive, scheduleLine, sharedDownloads, windowsWarning,
+  ACCOUNT_SECTIONS, BACKUP_LIST_ERROR, BACKUP_LOW_DISK_FALLBACK, BUDGET_HINTS, GROW_BUSY_HINT, LOAD_ERROR_TEXT, LOAD_ERROR_TITLE, RESTORE_BODY, VMS_PAGE_GAPS,
+  accountSection, backupCardError, backupRow, backupWhen, backupsEmptyText, backupsIntro, budgetErrors, budgetPatch, clockFromHHMM, diskUsedText,
+  growButtonLabel, growConfirmBody, growConfirmLabel, growConfirmTitle, gvisorBadge, linuxNativeText, machineSubtitle, mergeBackupList, probeSummary,
+  restoreSubtitle, restoreToolsNote, runsLookActive, scheduleLine, sharedDownloads, windowsWarning,
 } from '../src/lib/vms-page.ts'
+import { initialLiveState, liveReducer } from '../src/lib/live-store.ts'
 
 const NOW = new Date(2026, 10, 6, 16, 0, 0)
 const iso = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi, 0, 0).toISOString()
@@ -108,6 +109,74 @@ describe('Settings › VMs view (FE-P2-6)', () => {
     assert.match(LOAD_ERROR_TEXT, /try again/)
     assert.match(BACKUP_LIST_ERROR, /Couldn't load backups/)
     assert.equal(typeof VMS_PAGE_GAPS.G1, 'string')
+    assert.equal(typeof VMS_PAGE_GAPS.G9, 'string')
+  })
+
+  it('an in-progress row shows done of total', () => {
+    const state = createFakeVmsState('progress', NOW)
+    const names = new Map(state.agents.map((a) => [a.id, a.name]))
+    const row = backupRow(state.backups[0], names, NOW)
+    assert.equal(row.status, 'in_progress')
+    assert.equal(row.canRestore, false)
+    assert.equal(row.detail, 'Back up now · 3 bots · 1 of 3')
+  })
+
+  it('a restore result names only the bots whose tools failed', () => {
+    const names = new Map([['primary', 'Primary'], ['analyst', 'Analyst']])
+    const note = restoreToolsNote({
+      backupId: 'bk-today',
+      agents: [
+        { agentId: 'primary', files: 4, tools: 'started' },
+        { agentId: 'analyst', files: 4, tools: 'failed', toolsMessage: 'the tool rebuild didn\'t start (libssl missing).' },
+        { agentId: 'summarizer', files: 2, tools: 'not_needed' },
+      ],
+    }, names)
+    assert.equal(note, "Analyst: the tool rebuild didn't start (libssl missing).")
+    assert.equal(restoreToolsNote({ backupId: 'bk', agents: [{ agentId: 'primary', files: 1, tools: 'not_needed' }] }, names), null)
+    assert.equal(restoreToolsNote({ backupId: 'bk', agents: [{ agentId: 'ghost', files: 1, tools: 'failed' }] }, names), "ghost: tools didn't start after the restore.")
+  })
+
+  it('vm.updated backup merges into the list and replaces progress for the same id', () => {
+    const nightly = {
+      id: 'bk-today', createdAt: '2026-11-06T03:00:00.000Z', trigger: 'nightly', agentIds: ['primary'],
+      bytes: 100, path: 'p', status: 'complete',
+    }
+    const running = {
+      id: 'bk-now', createdAt: '2026-11-06T16:40:00.000Z', trigger: 'manual', agentIds: ['primary', 'analyst'],
+      bytes: 0, path: 'n', status: 'in_progress', progress: { done: 1, total: 2 },
+    }
+    const merged = mergeBackupList([nightly], [running])
+    assert.deepEqual(merged.map((b) => b.id), ['bk-now', 'bk-today'])
+    assert.equal(mergeBackupList(merged, [running]), merged)
+    const finished = { ...running, status: 'complete', bytes: 50, progress: undefined, finishedAt: '2026-11-06T16:45:00.000Z' }
+    const next = mergeBackupList(merged, [finished])
+    assert.equal(next[0].status, 'complete')
+    assert.equal(next[0].finishedAt, '2026-11-06T16:45:00.000Z')
+    assert.equal(next[0].progress, undefined)
+    const vm = { agentId: 'primary', state: 'running', generation: 1 }
+    const live = liveReducer(initialLiveState, { type: 'event', event: { type: 'vm.updated', agentId: 'primary', vm, backup: running } })
+    assert.equal(live.vms.primary, vm)
+    assert.equal(live.backups['bk-now'].progress.done, 1)
+    const again = liveReducer(live, { type: 'event', event: { type: 'vm.updated', agentId: 'primary', vm, backup: running } })
+    assert.equal(again.backups, live.backups)
+    const ended = liveReducer(live, { type: 'event', event: { type: 'vm.updated', agentId: 'primary', vm, backup: finished } })
+    assert.equal(ended.backups['bk-now'].status, 'complete')
+    assert.equal(ended.backups['bk-now'].finishedAt, '2026-11-06T16:45:00.000Z')
+  })
+
+  it('507 is low disk with a reason and without one', () => {
+    const message = 'Not enough free disk space for a backup: it needs about 8 GB free and 2 GB is free. Free some space, then try again.'
+    assert.equal(backupCardError(507, { reason: 'low_disk', message }), message)
+    assert.equal(backupCardError(507, { message }), message)
+    assert.equal(backupCardError(507, {}), BACKUP_LOW_DISK_FALLBACK)
+    assert.equal(backupCardError(507, { statusCode: 507 }), BACKUP_LOW_DISK_FALLBACK)
+  })
+
+  it('no_bots, backup_incomplete and backup_failed show the server message', () => {
+    assert.equal(backupCardError(400, { reason: 'no_bots', message: 'There are no bots to back up yet.' }), 'There are no bots to back up yet.')
+    assert.equal(backupCardError(409, { reason: 'backup_incomplete', message: 'This backup is still running. Restore it when it finishes.' }), 'This backup is still running. Restore it when it finishes.')
+    assert.equal(backupCardError(409, { reason: 'backup_failed', message: "Primary's computer wasn't reset because the backup before the reset didn't finish." }), "Primary's computer wasn't reset because the backup before the reset didn't finish.")
+    assert.equal(backupCardError(409, { reason: 'runs_active', message: 'Scripts are running.' }), null)
   })
 })
 
@@ -125,6 +194,11 @@ describe('fake VMs routes (stand-in until BE-P2-18)', () => {
     const blocked = fakeVmsDispatch(busy, 'POST', '/api/vm/backups/bk-today/restore', { confirm: true })
     assert.equal(blocked.status, 409)
     assert.equal(blocked.body.reason, 'runs_active')
+    const restored = fakeVmsDispatch(state, 'POST', '/api/vm/backups/bk-today/restore', { confirm: true })
+    assert.equal(restored.status, 200)
+    assert.equal(restored.body.backupId, 'bk-today')
+    assert.deepEqual(restored.body.agents.map((a) => a.tools), ['not_needed', 'not_needed', 'not_needed'])
+    assert.equal(restored.body.agents[0].files, 4)
     const grow = fakeVmsDispatch(busy, 'POST', '/api/vm/machine/grow', { toGb: 90 })
     assert.equal(grow.status, 409)
   })
@@ -135,6 +209,7 @@ describe('fake VMs routes (stand-in until BE-P2-18)', () => {
     assert.equal(created.status, 202)
     assert.equal(created.body.status, 'in_progress')
     assert.equal(created.body.trigger, 'manual')
+    assert.deepEqual(created.body.progress, { done: 0, total: 3 })
     const again = fakeVmsDispatch(state, 'POST', '/api/vm/backups', {})
     assert.equal(again.status, 409)
     assert.equal(again.body.reason, 'backup_in_progress')
@@ -147,6 +222,31 @@ describe('fake VMs routes (stand-in until BE-P2-18)', () => {
     assert.equal(patched.body.snapshotBudget.perBotMb, 2048)
     const grow = fakeVmsDispatch(state, 'POST', '/api/vm/machine/grow', { toGb: 90 })
     assert.equal(grow.status, 400)
+  })
+
+  it('create 507 low_disk with and without a reason, and the three backup reasons', () => {
+    const state = createFakeVmsState('empty', NOW)
+    const withReason = fakeVmsDispatch(state, 'POST', '/api/vm/backups', {}, { fault: 'low_disk' })
+    assert.equal(withReason.status, 507)
+    assert.equal(withReason.body.reason, 'low_disk')
+    assert.equal(backupCardError(withReason.status, withReason.body), withReason.body.message)
+    const bare = fakeVmsDispatch(state, 'POST', '/api/vm/backups', {}, { fault: 'low_disk_bare' })
+    assert.equal(bare.status, 507)
+    assert.equal(bare.body.reason, undefined)
+    assert.equal(backupCardError(bare.status, bare.body), bare.body.message)
+    const none = fakeVmsDispatch(state, 'POST', '/api/vm/backups', {}, { fault: 'no_bots' })
+    assert.equal(none.status, 400)
+    assert.equal(none.body.reason, 'no_bots')
+    assert.equal(backupCardError(none.status, none.body), 'There are no bots to back up yet.')
+    const running = createFakeVmsState('progress', NOW)
+    const incomplete = fakeVmsDispatch(running, 'POST', '/api/vm/backups/bk-now/restore', { confirm: true })
+    assert.equal(incomplete.status, 409)
+    assert.equal(incomplete.body.reason, 'backup_incomplete')
+    assert.match(backupCardError(incomplete.status, incomplete.body), /still running/)
+    const failed = fakeVmsDispatch(createFakeVmsState('default', NOW), 'POST', '/api/vm/backups/bk-today/restore', { confirm: true }, { fault: 'backup_failed' })
+    assert.equal(failed.status, 409)
+    assert.equal(failed.body.reason, 'backup_failed')
+    assert.match(backupCardError(failed.status, failed.body), /wasn't reset/)
   })
 })
 

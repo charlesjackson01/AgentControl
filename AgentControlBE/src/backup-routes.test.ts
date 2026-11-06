@@ -208,7 +208,7 @@ describe('POST /api/vm/backups/:id/restore', () => {
     const out = (res.json() as BackupRestoreResult).agents[0]!
     expect(out).toMatchObject({ agentId: a.id, tools: 'failed' })
     // Internet is Never for this bot, so the online tool build couldn't start: the plain 409 text.
-    expect(out.toolsMessage).toBe("Internet is set to Never for Analyst, so this run didn't start. Change it in Settings › VM.")
+    expect(out.toolsMessage).toBe("Internet is set to Never for Analyst, so this build didn't start. Change it in Settings › VM.")
     expect(store.agents.find((x) => x.id === a.id)!.vm.packages).toEqual(['jq'])
   })
 

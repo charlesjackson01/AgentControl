@@ -1,15 +1,16 @@
 /**
  * BE-P2-19: missing or outdated shared bot images (botvm, botvm-browser) are a setup step, built
- * from POST /api/vm/setup/bot-images (and on start), then the firewall helper; a run that meets a
+ * only from POST /api/vm/setup/bot-images (never on start), then the firewall helper; a run that meets a
  * missing image fails with image_missing and the same pointer. A fake podman CLI only.
  */
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from './app.js'
 import type { CommandResult, CommandRunner } from './command-runner.js'
 import { PERMISSION_CSRF_HEADER, type VmHostInfo } from './shared/types.js'
+import type { RuntimeProbe } from './runtime-probe.js'
 import { createStore } from './store.js'
 import { imageMissingText } from './vm-images.js'
 import {
@@ -173,6 +174,40 @@ describe('POST /api/vm/setup/bot-images', () => {
       cli.release()
       await vmHost.botImagesIdle!()
       expect(step(await vmHost.hostInfo(true))).toBeUndefined()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+describe('BE-P2-19: server start', () => {
+  let dir = ''
+  afterEach(() => {
+    if (dir) rmSync(dir, { recursive: true, force: true })
+    dir = ''
+  })
+
+  it('never builds the bot images on start (the step stays until Run setup); the firewall helper start is as before', async () => {
+    dir = mkdtempSync(join(tmpdir(), 'ac-imgs-start-'))
+    const cli = fakePodman({ have: [FW], old: { 'localhost/agentcontrol/botvm': ['1.0.1'] } })
+    const vmHost = svc(cli)
+    const botImages = vi.spyOn(vmHost, 'buildBotImages')
+    const firewall = vi.spyOn(vmHost, 'buildFirewall')
+    const probe: RuntimeProbe = {
+      current: () => null,
+      refresh: async () => { throw new Error('no probe in this test') },
+      ensureFresh: async () => { throw new Error('no probe in this test') },
+      restore: async () => null,
+      startTimer: () => () => {},
+    }
+    const app = await buildApp(createStore(join(dir, 'store.json')), { vmHost, runtimeProbe: probe, probeOnStart: true, backups: { root: join(dir, 'backups'), nightlyMs: false } })
+    try {
+      await app.ready()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(botImages).not.toHaveBeenCalled()
+      expect(firewall).toHaveBeenCalledTimes(1)
+      expect(cli.calls.some((c) => c.startsWith('podman build'))).toBe(false)
+      expect(step(await vmHost.hostInfo(true))).toMatchObject({ done: false, text: botImagesStepText([BOTVM], true) })
     } finally {
       await app.close()
     }

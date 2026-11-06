@@ -15,6 +15,7 @@ import { statfs } from 'node:fs/promises'
 import { homedir, totalmem } from 'node:os'
 import { execCommandRunner, type CommandRunner } from './command-runner.js'
 import { fail, failWithReason } from './http.js'
+import { createImageBuildLock, type ImageBuildLock } from './image-build-lock.js'
 import { imageMissingText, type SharedImageKind } from './vm-images.js'
 export { imageMissingText }
 import { RUN_BLOCK_FREE_MB, VM_MACHINE_DEFAULTS, type SnapshotDriver, type StorageBackendKind, type VmHostInfo } from './shared/types.js'
@@ -116,6 +117,11 @@ export interface VmHostDeps {
    * with `buildArgv(kind)`. Absent: no step (route tests).
    */
   botImages?: { images: () => { kind: SharedImageKind; ref: string }[]; buildArgv: (kind: SharedImageKind) => string[] }
+  /**
+   * BE-P2-19: the lock shared with the browser add-on's own botvm-browser download, so the bot-images
+   * build and that download take turns. Absent: a lock of its own (nothing to take turns with).
+   */
+  imageLock?: ImageBuildLock
 }
 
 /** BE-P2-18: the setup step id and texts for the firewall helper image (gap 1). */
@@ -158,8 +164,8 @@ export interface VmHostService {
   /** Resolves when no firewall build is running (tests). */
   firewallIdle?(): Promise<void>
   /**
-   * BE-P2-19: build the missing shared bot images (POST /api/vm/setup/bot-images, and on start),
-   * then the firewall helper if its step isn't done (it's built FROM botvm). Answers at once with
+   * BE-P2-19: build the missing shared bot images (POST /api/vm/setup/bot-images only: never on
+   * start), taking turns with the browser add-on's download (`imageLock`), then the firewall helper if its step isn't done (it's built FROM botvm). Answers at once with
    * the host info. 409 engine_missing / machine_stopped / setup_busy.
    */
   buildBotImages?(): Promise<VmHostInfo>
@@ -177,6 +183,7 @@ export async function statfsFreeBytes(path: string): Promise<number | null> {
 }
 
 export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
+  const imageLock = deps.imageLock ?? createImageBuildLock()
   const exec = deps.exec ?? execCommandRunner
   const os = hostOs(deps.platform ?? process.platform)
   const totalMem = deps.totalMemBytes ?? totalmem
@@ -504,9 +511,11 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
     }
     imgError = null
     imgBuilding = { refs: m.refs, outdated: m.outdated }
-    const job = (async () => {
+    const job = imageLock.run(async (waited) => {
       try {
-        for (const kind of m.kinds) {
+        // Waited for the browser add-on's download: build only what is still missing now.
+        const kinds = waited ? ((await missingBotImages())?.kinds ?? []) : m.kinds
+        for (const kind of kinds) {
           const r = await exec('podman', [...conn(), ...bi.buildArgv(kind)], { timeoutMs: BOT_IMAGE_BUILD_TIMEOUT_MS })
           if (r.code !== 0) {
             imgError = `${(r.stderr || r.stdout).trim().split('\n').filter(Boolean).at(-1)?.slice(0, 300) ?? `exit ${r.code}`}.`
@@ -522,7 +531,7 @@ export function createVmHostService(deps: VmHostDeps = {}): VmHostService {
       }
       // The firewall helper is built FROM botvm: set it up now if its step is pending.
       if (!imgError) await buildFirewall().catch(() => {})
-    })()
+    })
     imgBuild = job
     cache = null
     return hostInfo(true)

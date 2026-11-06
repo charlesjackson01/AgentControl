@@ -22,6 +22,7 @@ import { archiveGroup, createGroup, groupOr404, postGroupMessage, removeAgentFro
 import { runAgent, RUNS_PER_SCOPE } from './runs.js'
 import { registerSandboxRoutes } from './sandbox.js'
 import { createVmHostService, MACHINE_NAME, type VmHostService } from './vm-host.js'
+import { createImageBuildLock } from './image-build-lock.js'
 import { createBotEnvService, planInstall, type BotEnvService, type BuildResult, type EngineRef } from './bot-env.js'
 import { chromiumProbeArgv, createRuntimeProbe, parseChromiumOutput, registerProbeRoutes, resolveRuntime, runtimeBlockMessage, type ResolvedRuntime, type RuntimeProbe } from './runtime-probe.js'
 import { createContainerRunner, type ContainerRunner } from './podman-runner.js'
@@ -1624,6 +1625,8 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       app.log.warn(`backups: no pre-upgrade backup: ${(err as Error).message}`)
     }
   }
+  // BE-P2-19: the bot-images setup step and the browser add-on's download take turns on this lock.
+  const imageBuildLock = createImageBuildLock()
   // BE-P2-2: engine and the `agentcontrol` machine.
   const vmHost =
     opts.vmHost ??
@@ -1641,6 +1644,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       beforeGrow: () => preUpgradeBackup(),
       // BE-P2-18 (M2 gap 1): the egress proxy's firewall helper image is a setup step.
       firewall: { image: egressdNftImageRef(), baseImage: sharedImageRef('botvm'), buildArgv: egressdNftBuildArgv },
+      imageLock: imageBuildLock,
       // BE-P2-19: the shared bot images are a setup step (pending after an update changes BOTVM_VERSION);
       // the browser image only while a bot uses the browser base.
       botImages: {
@@ -1763,10 +1767,9 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
       })().catch((err: Error) => app.log.warn(`runtime probe failed: ${err.message}`))
       stopProbeTimer = runtimeProbe.startTimer()
       // BE-P2-18 (M2 gap 1): first run builds the firewall helper image when it's missing.
-      // BE-P2-19: the bot images first (after an update they're missing), which then builds the
-      // firewall helper (FROM botvm); without the bot-images step, the firewall helper directly.
-      if (vmHost.buildBotImages) void vmHost.buildBotImages().catch((err: Error) => app.log.info(`bot images not built yet: ${err.message}`))
-      else void vmHost.buildFirewall?.().catch((err: Error) => app.log.info(`firewall helper not set up yet: ${err.message}`))
+      // BE-P2-19: the bot images are never built on start, only by Run setup
+      // (POST /api/vm/setup/bot-images); their step shows until then.
+      void vmHost.buildFirewall?.().catch((err: Error) => app.log.info(`firewall helper not set up yet: ${err.message}`))
     })
     app.addHook('onClose', async () => {
       stopProbeTimer?.()
@@ -2055,6 +2058,7 @@ export function buildApp(store: WorkspaceStore = createStore(), opts: BuildAppOp
   }
   // BE-P2-15: the browser add-on: shared botvm-browser download, per-bot on/off rebuilds and Chromium check.
   const addon = createBrowserAddon({
+    imageLock: imageBuildLock,
     dataDir: () => store.dataDir,
     getAgent: (agentId) => store.agents.find((a) => a.id === agentId),
     agents: () => store.agents,

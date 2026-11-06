@@ -17,6 +17,7 @@ import { join } from 'node:path'
 import type { EngineRef } from './bot-env.js'
 import { execCommandRunner, type CommandResult, type CommandRunner } from './command-runner.js'
 import { fail, failWithReason } from './http.js'
+import { createImageBuildLock, type ImageBuildLock } from './image-build-lock.js'
 import type { BrowserSetupStatus } from './permission-gate.js'
 import { LOW_DISK_REASON, LOW_DISK_TEXT, RUN_FREE_FLOOR_BYTES } from './run-service.js'
 import type {
@@ -127,6 +128,11 @@ export interface BrowserAddonDeps {
   log?(msg: string): void
   tickMs?: number
   idlePollMs?: number
+  /**
+   * BE-P2-19: the lock shared with the bot-images setup step (VmHostService.buildBotImages), so the
+   * shared download and that build take turns. Absent: a lock of its own.
+   */
+  imageLock?: ImageBuildLock
 }
 
 interface BotState {
@@ -170,6 +176,7 @@ export interface BrowserAddon {
 
 export function createBrowserAddon(deps: BrowserAddonDeps): BrowserAddon {
   const run = deps.exec ?? execCommandRunner
+  const imageLock = deps.imageLock ?? createImageBuildLock()
   const now = () => (deps.now ? deps.now() : new Date())
   const log = deps.log ?? (() => {})
   const tickMs = deps.tickMs ?? TICK_MS
@@ -282,19 +289,23 @@ export function createBrowserAddon(deps: BrowserAddonDeps): BrowserAddon {
     let rest = ''
     d.promise = track(
       (async () => {
-        const r = await cli(imageBuildArgv('botvm-browser'), BROWSER_DOWNLOAD_TIMEOUT_MS, {
-          onOutput: (_s, chunk) => {
-            const text = rest + chunk
-            const lines = text.split('\n')
-            rest = lines.pop() ?? ''
-            for (const line of lines) {
-              const m = /^STEP (\d+)\/(\d+):/.exec(line.trim()) ?? /^Step (\d+)\/(\d+) :/.exec(line.trim())
-              if (m) {
-                d.step = Number(m[1])
-                d.steps = Number(m[2])
+        // Takes turns with the bot-images setup step; when it waited, that build may have made it.
+        const r = await imageLock.run(async (waited): Promise<CommandResult> => {
+          if (waited && (await imagePresent(true))) return { code: 0, stdout: '', stderr: '' }
+          return cli(imageBuildArgv('botvm-browser'), BROWSER_DOWNLOAD_TIMEOUT_MS, {
+            onOutput: (_s, chunk) => {
+              const text = rest + chunk
+              const lines = text.split('\n')
+              rest = lines.pop() ?? ''
+              for (const line of lines) {
+                const m = /^STEP (\d+)\/(\d+):/.exec(line.trim()) ?? /^Step (\d+)\/(\d+) :/.exec(line.trim())
+                if (m) {
+                  d.step = Number(m[1])
+                  d.steps = Number(m[2])
+                }
               }
-            }
-          },
+            },
+          })
         })
         const ok = r.code === 0 && (await imagePresent(true))
         const est = progressNow()
